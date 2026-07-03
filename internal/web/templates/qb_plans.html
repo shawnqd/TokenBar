@@ -1,0 +1,153 @@
+{{define "content"}}
+<div class="app">
+    <main id="main-content" class="main-content">
+        <div class="welcome-banner">
+            <h1 class="welcome-title">套餐管理</h1>
+        </div>
+
+        {{range .Platforms}}
+        {{$platID := .ID}}
+        <section class="insights-panel">
+            <header class="section-header">
+                <h3 class="section-title">
+                    <svg class="section-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="7" width="20" height="14" rx="2" ry="2"/><path d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16"/></svg>
+                    {{.Name}} <span class="badge">{{.Vendor}}</span>
+                </h3>
+                <span style="font-size:12px;color:var(--text-muted)">{{if .IsActive}}启用{{else}}停用{{end}}</span>
+                <div style="display:flex;gap:6px;margin-left:auto">
+                    <a href="{{$.BasePath}}/qb/platform/edit?id={{.ID}}" class="btn-sm" style="font-size:12px;padding:4px 10px;border:1px solid var(--border-default);border-radius:var(--radius-sm);text-decoration:none;color:var(--text-secondary);background:var(--surface-card-alt)">编辑</a>
+                    <button onclick="deletePlatform({{$.BasePath | js}}, {{.ID}})" class="btn-sm" style="font-size:12px;padding:4px 10px;border:1px solid var(--status-danger);border-radius:var(--radius-sm);color:var(--status-danger);background:transparent;cursor:pointer">删除</button>
+                </div>
+            </header>
+
+            <div style="display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap">
+                <a href="{{$.BasePath}}/qb/plan/new?platform_id={{.ID}}" class="btn-sm" style="font-size:12px;padding:4px 12px;background:var(--accent-teal);color:#fff;border-radius:var(--radius-sm);text-decoration:none">+ 新增套餐</a>
+            </div>
+
+            {{$hasPlan := false}}
+            {{range $.Plans}}
+            {{if eq .PlatformID $platID}}
+            {{$hasPlan = true}}
+            <div style="margin-bottom:16px;padding:12px;background:var(--surface-card-alt);border-radius:var(--radius-md)">
+                <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+                    <div>
+                        <span style="font-weight:600;font-size:14px">{{.Name}}</span>
+                        <span class="badge" style="margin-left:8px">{{.PlanType}}</span>
+                    </div>
+                    <div style="display:flex;align-items:center;gap:8px">
+                        {{if eq .Status "active"}}<span class="status-badge" data-status="healthy">活跃</span>
+                        {{else if eq .Status "expired"}}<span class="status-badge" data-status="danger">已过期</span>
+                        {{else}}<span class="badge">{{.Status}}</span>{{end}}
+                        <a href="{{$.BasePath}}/qb/plan/edit?id={{.ID}}" class="btn-sm" style="font-size:11px;padding:3px 8px;border:1px solid var(--border-default);border-radius:var(--radius-sm);text-decoration:none;color:var(--text-secondary);background:var(--surface-card)">编辑</a>
+                        <button onclick="deletePlan({{$.BasePath | js}}, {{.ID}})" class="btn-sm" style="font-size:11px;padding:3px 8px;border:1px solid var(--status-danger);border-radius:var(--radius-sm);color:var(--status-danger);background:transparent;cursor:pointer">删除</button>
+                    </div>
+                </div>
+                <div style="display:flex;gap:16px;font-size:12px;color:var(--text-muted);margin-bottom:8px;flex-wrap:wrap">
+                    <span>到期: {{.ExpiresAt}}</span>
+                    <span>优先级: {{.Priority}}</span>
+                    <span>类型: {{.RenewalPolicy}}</span>
+                </div>
+
+                <div style="display:flex;gap:8px;margin-bottom:8px">
+                    <a href="{{$.BasePath}}/qb/bucket/new?plan_id={{.ID}}" class="btn-sm" style="font-size:11px;padding:3px 10px;background:var(--accent-teal);color:#fff;border-radius:var(--radius-sm);text-decoration:none">+ 新增额度桶</a>
+                </div>
+
+                {{$buckets := index $.BucketsByPlan .ID}}
+                {{if $buckets}}
+                <div class="table-wrapper">
+                    <table class="data-table">
+                        <thead>
+                            <tr>
+                                <th>范围</th>
+                                <th>指标</th>
+                                <th>剩余</th>
+                                <th>总量</th>
+                                <th>重置</th>
+                                <th style="width:50px"></th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {{range $buckets}}
+                            <tr>
+                                <td>{{.Scope}}</td>
+                                <td>{{.Metric}}</td>
+                                <td>{{.RemainingValue}}</td>
+                                <td>{{.LimitValue}}</td>
+                                <td>{{.ResetAt}}</td>
+                                <td style="display:flex;gap:4px"><a href="{{$.BasePath}}/qb/bucket/edit?id={{.ID}}" class="btn-sm" style="font-size:11px;padding:2px 6px;border:1px solid var(--border-default);border-radius:var(--radius-sm);text-decoration:none;color:var(--text-secondary);background:transparent">编辑</a><button onclick="deleteBucket({{$.BasePath | js}}, {{.ID}})" class="btn-sm" style="font-size:11px;padding:2px 6px;border:1px solid var(--status-danger);border-radius:var(--radius-sm);color:var(--status-danger);background:transparent;cursor:pointer">删</button></td>
+                            </tr>
+                            {{end}}
+                        </tbody>
+                    </table>
+                </div>
+                {{else}}
+                <div class="empty-state" style="padding:8px">暂无额度桶</div>
+                {{end}}
+            </div>
+            {{end}}
+            {{end}}
+            {{if not $hasPlan}}
+            <div class="empty-state">该平台暂无套餐</div>
+            {{end}}
+
+            {{$models := index $.ModelsByPlatform $platID}}
+            {{if $models}}
+            <div style="margin-top:16px">
+                <div style="font-size:13px;font-weight:500;color:var(--text-secondary);margin-bottom:8px">模型列表</div>
+                <div class="table-wrapper">
+                    <table class="data-table">
+                        <thead>
+                            <tr>
+                                <th>显示名称</th>
+                                <th>模型 ID</th>
+                                <th>系列</th>
+                                <th>状态</th>
+                                <th style="width:90px"></th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {{range $models}}
+                            <tr>
+                                <td>{{.DisplayName}}{{if .IsCurrent}} <span class="badge" style="background:var(--accent-teal);color:#fff;font-size:11px">当前</span>{{end}}</td>
+                                <td style="font-size:12px;color:var(--text-muted)">{{.ModelID}}</td>
+                                <td>{{.Family}}</td>
+                                <td>{{if eq .Status "active"}}<span class="status-badge" data-status="healthy">活跃</span>{{else if eq .Status "deprecated"}}<span class="status-badge" data-status="warning">已弃用</span>{{else}}<span class="badge">{{.Status}}</span>{{end}}</td>
+                                <td style="display:flex;gap:4px">
+                                    <a href="{{$.BasePath}}/qb/model/edit?id={{.ID}}" class="btn-sm" style="font-size:11px;padding:2px 6px;border:1px solid var(--border-default);border-radius:var(--radius-sm);text-decoration:none;color:var(--text-secondary);background:transparent">编辑</a>
+                                    <button onclick="deleteModel('{{$.BasePath}}', {{.ID}})" class="btn-sm" style="font-size:11px;padding:2px 6px;border:1px solid var(--status-danger);border-radius:var(--radius-sm);color:var(--status-danger);background:transparent;cursor:pointer">删</button>
+                                </td>
+                            </tr>
+                            {{end}}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+            {{end}}
+            <div style="margin-top:8px">
+                <a href="{{$.BasePath}}/qb/model/new?platform_id={{$platID}}" class="btn-sm" style="font-size:11px;padding:3px 10px;background:var(--accent-teal);color:#fff;border-radius:var(--radius-sm);text-decoration:none">+ 新增模型</a>
+            </div>
+        </section>
+        {{else}}
+        <section class="insights-panel">
+            <div class="empty-state">暂无平台数据</div>
+        </section>
+        {{end}}
+    </main>
+</div>
+<script>
+const baseUrl = '{{.BasePath}}';
+async function del(url) {
+    if (!confirm('确认删除？')) return;
+    try {
+        const resp = await fetch(url, {method:'POST', headers:{'X-Requested-With':'XMLHttpRequest'}});
+        const data = await resp.json();
+        if (data.redirect) window.location.href = data.redirect;
+        else if (data.error) alert(data.error);
+    } catch(e) { alert('删除失败: '+e.message); }
+}
+function deletePlatform(bp, id) { del(bp+'/qb/platform/delete?id='+id); }
+function deletePlan(bp, id) { del(bp+'/qb/plan/delete?id='+id); }
+function deleteBucket(bp, id) { del(bp+'/qb/bucket/delete?id='+id); }
+function deleteModel(bp, id) { del(bp+'/qb/model/delete?id='+id); }
+</script>
+{{end}}

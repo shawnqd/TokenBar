@@ -1,0 +1,87 @@
+{{define "content"}}
+<div class="app">
+    <main id="main-content" class="main-content">
+        <div class="welcome-banner">
+            <h1 class="welcome-title">配置状态</h1>
+        </div>
+
+        <section class="insights-panel">
+            <header class="section-header">
+                <h3 class="section-title">
+                    <svg class="section-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="7" width="20" height="14" rx="2" ry="2"/><path d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16"/></svg>
+                    平台配置
+                </h3>
+            </header>
+            <div class="table-wrapper">
+                <table class="data-table">
+                    <thead>
+                        <tr>
+                            <th>名称</th>
+                            <th>Base URL</th>
+                            <th>凭证状态</th>
+                            <th>默认风险等级</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {{if .Platforms}}
+                        {{range .Platforms}}
+                        <tr>
+                            <td>{{.Name}}</td>
+                            <td style="font-family:var(--font-mono);font-size:12px">{{.BaseURL}}</td>
+                            <td>{{if eq .CredentialStatus "healthy"}}<span class="status-badge" data-status="healthy">正常</span>
+                                {{else if eq .CredentialStatus "warning"}}<span class="status-badge" data-status="warning">警告</span>
+                                {{else if eq .CredentialStatus "danger"}}<span class="status-badge" data-status="danger">异常</span>
+                                {{else}}<span class="badge">{{.CredentialStatus}}</span>{{end}}
+                            </td>
+                            <td><span class="badge {{if eq .DefaultRiskLevel "high"}}badge-active{{end}}">{{.DefaultRiskLevel}}</span></td>
+                        </tr>
+                        {{end}}
+                        {{else}}
+                        <tr><td colspan="4" class="empty-state">暂无平台配置</td></tr>
+                        {{end}}
+                    </tbody>
+                </table>
+            </div>
+        </section>
+
+        <section class="insights-panel">
+            <header class="section-header">
+                <h3 class="section-title">
+                    <svg class="section-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+                    凭证检测记录
+                </h3>
+            </header>
+            <div class="table-wrapper">
+                <table class="data-table">
+                    <thead>
+                        <tr>
+                            <th>状态</th>
+                            <th>检测路径</th>
+                            <th>检测时间</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {{if .CredentialStatuses}}
+                        {{range .CredentialStatuses}}
+                        <tr>
+                            <td>
+                                {{if eq .Status "healthy"}}<span class="status-badge" data-status="healthy">正常</span>
+                                {{else if eq .Status "warning"}}<span class="status-badge" data-status="warning">警告</span>
+                                {{else if eq .Status "danger"}}<span class="status-badge" data-status="danger">异常</span>
+                                {{else if eq .Status "critical"}}<span class="status-badge" data-status="critical">严重</span>
+                                {{else}}<span class="badge">{{.Status}}</span>{{end}}
+                            </td>
+                            <td style="font-family:var(--font-mono);font-size:12px">{{.DetectedPath}}</td>
+                            <td>{{.CheckedAt}}</td>
+                        </tr>
+                        {{end}}
+                        {{else}}
+                        <tr><td colspan="3" class="empty-state">暂无凭证检测记录</td></tr>
+                        {{end}}
+                    </tbody>
+                </table>
+            </div>
+        </section>
+    </main>
+</div>
+{{end}}

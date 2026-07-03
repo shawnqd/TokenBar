@@ -1,0 +1,91 @@
+{{define "content"}}
+<div class="app">
+    <main id="main-content" class="main-content">
+        <div class="welcome-banner">
+            <h1 class="welcome-title">使用记录</h1>
+        </div>
+
+        <section class="insights-panel">
+            <header class="section-header">
+                <h3 class="section-title">
+                    <svg class="section-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 3v18h18"/><path d="M18.7 8l-5.1 5.2-2.8-2.7L7 14.3"/></svg>
+                    本月用量汇总
+                </h3>
+            </header>
+            <div class="table-wrapper">
+                <table class="data-table">
+                    <thead>
+                        <tr>
+                            <th>套餐 ID</th>
+                            <th>输入 Token</th>
+                            <th>输出 Token</th>
+                            <th>缓存读取</th>
+                            <th>缓存写入</th>
+                            <th>请求数</th>
+                            <th>费用</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {{if .Summaries}}
+                        {{range $pid, $sum := .Summaries}}
+                        <tr>
+                            <td>{{$pid}}</td>
+                            <td>{{$sum.InputTokens}}</td>
+                            <td>{{$sum.OutputTokens}}</td>
+                            <td>{{$sum.CacheReadTokens}}</td>
+                            <td>{{$sum.CacheWriteTokens}}</td>
+                            <td>{{$sum.RequestCount}}</td>
+                            <td>{{$sum.CostValue}}</td>
+                        </tr>
+                        {{end}}
+                        {{else}}
+                        <tr><td colspan="7" class="empty-state">暂无汇总数据</td></tr>
+                        {{end}}
+                    </tbody>
+                </table>
+            </div>
+        </section>
+
+        <section class="insights-panel">
+            <header class="section-header">
+                <h3 class="section-title">
+                    <svg class="section-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>
+                    用量明细
+                </h3>
+            </header>
+            <div class="table-wrapper">
+                <table class="data-table">
+                    <thead>
+                        <tr>
+                            <th>日期</th>
+                            <th>范围</th>
+                            <th>输入 Token</th>
+                            <th>输出 Token</th>
+                            <th>请求数</th>
+                            <th>费用</th>
+                            <th>来源</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {{if .UsageLogs}}
+                        {{range .UsageLogs}}
+                        <tr>
+                            <td>{{.DateKey}}</td>
+                            <td>{{.BucketScope}}</td>
+                            <td>{{.InputTokens}}</td>
+                            <td>{{.OutputTokens}}</td>
+                            <td>{{.RequestCount}}</td>
+                            <td>{{.CostValue}}</td>
+                            <td>{{.Source}}</td>
+                        </tr>
+                        {{end}}
+                        {{else}}
+                        <tr><td colspan="7" class="empty-state">暂无用量记录</td></tr>
+                        {{end}}
+                    </tbody>
+                </table>
+            </div>
+        </section>
+    </main>
+</div>
+{{end}}
