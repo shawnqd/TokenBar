@@ -1,0 +1,59 @@
+{{define "content"}}
+<div class="app">
+    <main id="main-content" class="main-content">
+        <div class="welcome-banner">
+            <h1 class="welcome-title">风险备注</h1>
+        </div>
+
+        <section class="insights-panel">
+            <header class="section-header">
+                <h3 class="section-title">
+                    <svg class="section-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2v20M2 12h20M4.93 4.93l14.14 14.14M19.07 4.93L4.93 19.07"/></svg>
+                    风险备注列表
+                </h3>
+                <div style="display:flex;gap:8px">
+                    <a href="{{.BasePath}}/qb/risk/new?target_type=&target_id=" class="btn-sm" style="font-size:12px;padding:4px 12px;background:var(--accent-teal);color:#fff;border-radius:var(--radius-sm);text-decoration:none">+ 新增风险备注</a>
+                </div>
+            </header>
+            {{if .RiskNotes}}
+            {{range .RiskNotes}}
+            <div style="padding:16px;margin-bottom:12px;background:var(--surface-card-alt);border-radius:var(--radius-md);border-left:4px solid {{if eq .Level "high"}}var(--status-danger){{else if eq .Level "medium"}}var(--status-warning){{else}}var(--status-info){{end}}">
+                <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+                    <div>
+                        <span style="font-weight:600;font-size:14px">{{.Title}}</span>
+                        {{if eq .Level "high"}}<span class="status-badge" data-status="danger" style="margin-left:8px">高风险</span>
+                        {{else if eq .Level "medium"}}<span class="status-badge" data-status="warning" style="margin-left:8px">中风险</span>
+                        {{else if eq .Level "low"}}<span class="status-badge" data-status="healthy" style="margin-left:8px">低风险</span>
+                        {{else}}<span class="badge" style="margin-left:8px">{{.Level}}</span>{{end}}
+                    </div>
+                    <div style="display:flex;align-items:center;gap:8px">
+                        {{if .ResolvedAt}}<span class="status-badge" data-status="healthy">已解决</span>{{end}}
+                        <a href="{{$.BasePath}}/qb/risk/edit?id={{.ID}}" class="btn-sm" style="font-size:11px;padding:2px 8px;border:1px solid var(--border-default);border-radius:var(--radius-sm);text-decoration:none;color:var(--text-secondary);background:transparent">编辑</a>
+                        <button onclick="deleteRiskNote('{{$.BasePath}}', {{.ID}})" class="btn-sm" style="font-size:11px;padding:2px 8px;border:1px solid var(--status-danger);border-radius:var(--radius-sm);color:var(--status-danger);background:transparent;cursor:pointer">删除</button>
+                    </div>
+                </div>
+                <div style="font-size:13px;color:var(--text-secondary);margin-bottom:8px">{{.Content}}</div>
+                <div style="font-size:12px;color:var(--text-muted);display:flex;gap:16px;flex-wrap:wrap">
+                    <span>对象: {{.TargetType}}#{{.TargetID}}</span>
+                    <span>来源: {{.Source}}</span>
+                    {{if .ExpiresAt}}<span>到期: {{.ExpiresAt}}</span>{{end}}
+                    {{if .ResolvedAt}}<span>解决: {{.ResolvedAt}}</span>{{end}}
+                </div>
+            </div>
+            {{end}}
+            {{else}}
+            <div class="empty-state">暂无风险备注</div>
+            {{end}}
+        </section>
+    </main>
+</div>
+<script>
+function deleteRiskNote(bp, id) {
+    if (!confirm('确认删除？')) return;
+    fetch(bp+'/qb/risk/delete?id='+id, {method:'POST', headers:{'X-Requested-With':'XMLHttpRequest'}})
+        .then(r=>r.json())
+        .then(d=>{if(d.redirect)window.location.href=d.redirect;else if(d.error)alert(d.error)})
+        .catch(e=>alert('删除失败: '+e.message));
+}
+</script>
+{{end}}

@@ -1,0 +1,102 @@
+{{define "content"}}
+<div class="app">
+    <main id="main-content" class="main-content">
+        <div class="welcome-banner">
+            <h1 class="welcome-title">{{if .Model}}编辑模型{{else}}新增模型{{end}}</h1>
+        </div>
+        <section class="insights-panel" style="max-width:640px">
+            <form id="modelForm" class="qb-form">
+                {{if .Model}}<input type="hidden" name="id" value="{{.Model.ID}}">{{end}}
+                <div class="form-group">
+                    <label class="form-label" for="platform_id">所属平台 *</label>
+                    <select class="form-input" id="platform_id" name="platform_id" required>
+                        <option value="">请选择平台</option>
+                        {{range .Platforms}}
+                        <option value="{{.ID}}" {{if and $.Model (eq $.Model.PlatformID .ID)}}selected{{end}}>{{.Name}}</option>
+                        {{end}}
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label class="form-label" for="plan_id">关联套餐</label>
+                    <select class="form-input" id="plan_id" name="plan_id">
+                        <option value="">无（不关联套餐）</option>
+                        {{range .Plans}}
+                        <option value="{{.ID}}" {{if and (ne $.PlanIDValue 0) (eq $.PlanIDValue .ID)}}selected{{end}}>{{.Name}}</option>
+                        {{end}}
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label class="form-label" for="model_id">模型 ID *</label>
+                    <input class="form-input" type="text" id="model_id" name="model_id" value="{{if .Model}}{{.Model.ModelID}}{{end}}" placeholder="如: claude-sonnet-4-20250514" required>
+                </div>
+                <div class="form-group">
+                    <label class="form-label" for="display_name">显示名称 *</label>
+                    <input class="form-input" type="text" id="display_name" name="display_name" value="{{if .Model}}{{.Model.DisplayName}}{{end}}" placeholder="如: Claude Sonnet 4" required>
+                </div>
+                <div class="form-group">
+                    <label class="form-label" for="family">模型系列</label>
+                    <input class="form-input" type="text" id="family" name="family" value="{{if .Model}}{{.Model.Family}}{{end}}" placeholder="如: claude">
+                </div>
+                <div class="form-group">
+                    <label class="form-label">
+                        <input type="checkbox" name="is_current" value="1" {{if and .Model .Model.IsCurrent}}checked{{end}}>
+                        当前模型
+                    </label>
+                </div>
+                <div class="form-group">
+                    <label class="form-label" for="base_url_override">Base URL 覆盖</label>
+                    <input class="form-input" type="text" id="base_url_override" name="base_url_override" value="{{if .Model}}{{.Model.BaseURLOverride}}{{end}}" placeholder="如: https://api.example.com">
+                </div>
+                <div class="form-group">
+                    <label class="form-label" for="status">状态</label>
+                    <select class="form-input" id="status" name="status">
+                        <option value="active" {{if and .Model (eq .Model.Status "active")}}selected{{end}}>活跃</option>
+                        <option value="inactive" {{if and .Model (eq .Model.Status "inactive")}}selected{{end}}>停用</option>
+                        <option value="deprecated" {{if and .Model (eq .Model.Status "deprecated")}}selected{{end}}>已弃用</option>
+                    </select>
+                </div>
+                <div class="form-actions">
+                    <button type="submit" class="btn-primary">{{if .Model}}保存修改{{else}}创建模型{{end}}</button>
+                    <a href="{{.BasePath}}/qb/plans" class="btn-secondary">取消</a>
+                </div>
+            </form>
+        </section>
+    </main>
+</div>
+<style>
+.qb-form{display:flex;flex-direction:column;gap:16px}
+.form-group{display:flex;flex-direction:column;gap:4px}
+.form-label{font-size:13px;font-weight:500;color:var(--text-secondary)}
+.form-input{padding:8px 12px;border:1px solid var(--border-default);border-radius:var(--radius-sm);background:var(--surface-input);color:var(--text-primary);font-size:14px;font-family:inherit}
+.form-input:focus{outline:none;border-color:var(--accent-teal);box-shadow:0 0 0 2px rgba(13,148,136,.15)}
+.form-actions{display:flex;gap:12px;padding-top:8px}
+.btn-primary{padding:8px 20px;background:var(--accent-teal);color:#fff;border:none;border-radius:var(--radius-sm);font-size:14px;font-weight:500;cursor:pointer;text-decoration:none;display:inline-block}
+.btn-primary:hover{opacity:.9}
+.btn-secondary{padding:8px 20px;background:var(--surface-card-alt);color:var(--text-primary);border:1px solid var(--border-default);border-radius:var(--radius-sm);font-size:14px;cursor:pointer;text-decoration:none;display:inline-block;text-align:center}
+.btn-secondary:hover{background:var(--surface-hover)}
+</style>
+<script>
+document.getElementById('modelForm').addEventListener('submit', async function(e) {
+    e.preventDefault();
+    const btn = this.querySelector('button[type="submit"]');
+    btn.disabled = true;
+    try {
+        const resp = await fetch('{{.BasePath}}/qb/model/save', {
+            method: 'POST',
+            headers: {'X-Requested-With': 'XMLHttpRequest'},
+            body: new FormData(this)
+        });
+        const data = await resp.json();
+        if (data.redirect) {
+            window.location.href = data.redirect;
+        } else if (data.error) {
+            alert(data.error);
+            btn.disabled = false;
+        }
+    } catch(err) {
+        alert('提交失败: ' + err.message);
+        btn.disabled = false;
+    }
+});
+</script>
+{{end}}

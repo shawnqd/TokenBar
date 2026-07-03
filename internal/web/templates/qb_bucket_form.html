@@ -1,0 +1,107 @@
+{{define "content"}}
+<div class="app">
+    <main id="main-content" class="main-content">
+        <div class="welcome-banner">
+            <h1 class="welcome-title">{{if .Bucket}}编辑额度桶{{else}}新增额度桶{{end}}</h1>
+        </div>
+        <section class="insights-panel" style="max-width:640px">
+            <form id="bucketForm" class="qb-form">
+                {{if .Bucket}}<input type="hidden" name="id" value="{{.Bucket.ID}}">{{end}}
+                <input type="hidden" name="plan_id" value="{{.PlanID}}">
+                <div class="form-group">
+                    <label class="form-label" for="scope">范围 *</label>
+                    <input class="form-input" type="text" id="scope" name="scope" value="{{if .Bucket}}{{.Bucket.Scope}}{{end}}" placeholder="如: monthly, total" required>
+                </div>
+                <div class="form-group">
+                    <label class="form-label" for="metric">指标 *</label>
+                    <input class="form-input" type="text" id="metric" name="metric" value="{{if .Bucket}}{{.Bucket.Metric}}{{end}}" placeholder="如: tokens, requests" required>
+                </div>
+                <div class="form-group">
+                    <label class="form-label" for="limit_value">总量</label>
+                    <input class="form-input" type="number" step="any" id="limit_value" name="limit_value" value="{{if .Bucket}}{{.Bucket.LimitValue}}{{else}}0{{end}}">
+                </div>
+                <div class="form-group">
+                    <label class="form-label" for="remaining_value">剩余量</label>
+                    <input class="form-input" type="number" step="any" id="remaining_value" name="remaining_value" value="{{if .Bucket}}{{.Bucket.RemainingValue}}{{else}}0{{end}}">
+                </div>
+                <div class="form-group">
+                    <label class="form-label" for="used_value">已用量</label>
+                    <input class="form-input" type="number" step="any" id="used_value" name="used_value" value="{{if .Bucket}}{{.Bucket.UsedValue}}{{else}}0{{end}}">
+                </div>
+                <div class="form-group">
+                    <label class="form-label" for="window_start">窗口开始</label>
+                    <input class="form-input" type="text" id="window_start" name="window_start" value="{{if .Bucket}}{{.Bucket.WindowStart}}{{end}}" placeholder="2025-01-01T00:00:00Z">
+                </div>
+                <div class="form-group">
+                    <label class="form-label" for="window_end">窗口结束</label>
+                    <input class="form-input" type="text" id="window_end" name="window_end" value="{{if .Bucket}}{{.Bucket.WindowEnd}}{{end}}" placeholder="2025-12-31T23:59:59Z">
+                </div>
+                <div class="form-group">
+                    <label class="form-label" for="reset_at">重置时间</label>
+                    <input class="form-input" type="text" id="reset_at" name="reset_at" value="{{if .Bucket}}{{.Bucket.ResetAt}}{{end}}" placeholder="2025-02-01T00:00:00Z">
+                </div>
+                <div class="form-group">
+                    <label class="form-label" for="source">数据来源</label>
+                    <select class="form-input" id="source" name="source">
+                        <option value="manual" {{if and .Bucket (eq .Bucket.Source "manual")}}selected{{end}}>手动</option>
+                        <option value="api" {{if and .Bucket (eq .Bucket.Source "api")}}selected{{end}}>API</option>
+                        <option value="auto" {{if and .Bucket (eq .Bucket.Source "auto")}}selected{{end}}>自动</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label class="form-label" for="confidence_level">置信度</label>
+                    <select class="form-input" id="confidence_level" name="confidence_level">
+                        <option value="high" {{if and .Bucket (eq .Bucket.ConfidenceLevel "high")}}selected{{end}}>高</option>
+                        <option value="medium" {{if and .Bucket (eq .Bucket.ConfidenceLevel "medium")}}selected{{end}}>中</option>
+                        <option value="low" {{if and .Bucket (eq .Bucket.ConfidenceLevel "low")}}selected{{end}}>低</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label class="form-label" for="notes">备注</label>
+                    <textarea class="form-input" id="notes" name="notes" rows="3">{{if .Bucket}}{{.Bucket.Notes}}{{end}}</textarea>
+                </div>
+                <div class="form-actions">
+                    <button type="submit" class="btn-primary">{{if .Bucket}}保存修改{{else}}创建额度桶{{end}}</button>
+                    <a href="{{.BasePath}}/qb/plans" class="btn-secondary">取消</a>
+                </div>
+            </form>
+        </section>
+    </main>
+</div>
+<style>
+.qb-form{display:flex;flex-direction:column;gap:16px}
+.form-group{display:flex;flex-direction:column;gap:4px}
+.form-label{font-size:13px;font-weight:500;color:var(--text-secondary)}
+.form-input{padding:8px 12px;border:1px solid var(--border-default);border-radius:var(--radius-sm);background:var(--surface-input);color:var(--text-primary);font-size:14px;font-family:inherit}
+.form-input:focus{outline:none;border-color:var(--accent-teal);box-shadow:0 0 0 2px rgba(13,148,136,.15)}
+.form-actions{display:flex;gap:12px;padding-top:8px}
+.btn-primary{padding:8px 20px;background:var(--accent-teal);color:#fff;border:none;border-radius:var(--radius-sm);font-size:14px;font-weight:500;cursor:pointer;text-decoration:none;display:inline-block}
+.btn-primary:hover{opacity:.9}
+.btn-secondary{padding:8px 20px;background:var(--surface-card-alt);color:var(--text-primary);border:1px solid var(--border-default);border-radius:var(--radius-sm);font-size:14px;cursor:pointer;text-decoration:none;display:inline-block;text-align:center}
+.btn-secondary:hover{background:var(--surface-hover)}
+</style>
+<script>
+document.getElementById('bucketForm').addEventListener('submit', async function(e) {
+    e.preventDefault();
+    const btn = this.querySelector('button[type="submit"]');
+    btn.disabled = true;
+    try {
+        const resp = await fetch('{{.BasePath}}/qb/bucket/save', {
+            method: 'POST',
+            headers: {'X-Requested-With': 'XMLHttpRequest'},
+            body: new FormData(this)
+        });
+        const data = await resp.json();
+        if (data.redirect) {
+            window.location.href = data.redirect;
+        } else if (data.error) {
+            alert(data.error);
+            btn.disabled = false;
+        }
+    } catch(err) {
+        alert('提交失败: ' + err.message);
+        btn.disabled = false;
+    }
+});
+</script>
+{{end}}

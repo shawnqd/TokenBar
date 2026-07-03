@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{.Title}} - onWatch</title>
+    <link rel="icon" type="image/svg+xml" href="{{.BasePath}}/static/favicon.svg">
+    <link rel="manifest" href="{{.BasePath}}/manifest.json">
+    <meta name="theme-color" content="#0D9488">
+    <meta name="base-path" content="{{.BasePath}}">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Ubuntu:wght@400;500;700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+    <link rel="preload" href="{{.BasePath}}/static/style.css?v={{.Version}}" as="style">
+    <link rel="preload" href="{{.BasePath}}/static/app.js?v={{.Version}}" as="script">
+    <link rel="stylesheet" href="{{.BasePath}}/static/style.css?v={{.Version}}">
+    <script src="{{.BasePath}}/static/theme-init.js?v={{.Version}}"></script>
+</head>
+<body>
+    {{if ne .Title "Login"}}<a href="#main-content" class="skip-link">Skip to dashboard</a>{{end}}
+    {{if ne .Title "Login"}}
+    <style>
+        .qb-nav{display:flex;gap:4px;padding:0 24px;background:var(--surface-card);border-bottom:1px solid var(--border-default);flex-wrap:wrap;overflow-x:auto}
+        .qb-nav a{padding:8px 14px;font-size:13px;font-weight:500;color:var(--text-secondary);text-decoration:none;transition:all var(--transition-fast);white-space:nowrap;border-bottom:2px solid transparent}
+        .qb-nav a:hover{color:var(--text-primary);border-bottom-color:var(--border-default)}
+        .qb-nav a.active{color:var(--accent-teal);border-bottom-color:var(--accent-teal);font-weight:600}
+    </style>
+    <nav class="qb-nav" aria-label="看板导航">
+        <a href="{{.BasePath}}/qb/" {{if eq .Nav "overview"}}class="active"{{end}}>总览</a>
+        <a href="{{.BasePath}}/qb/plans" {{if eq .Nav "plans"}}class="active"{{end}}>套餐</a>
+        <a href="{{.BasePath}}/qb/providers" {{if eq .Nav "providers"}}class="active"{{end}}>Provider</a>
+        <a href="{{.BasePath}}/qb/usage" {{if eq .Nav "usage"}}class="active"{{end}}>用量</a>
+        <a href="{{.BasePath}}/qb/config" {{if eq .Nav "config"}}class="active"{{end}}>配置</a>
+        <a href="{{.BasePath}}/qb/risks" {{if eq .Nav "risks"}}class="active"{{end}}>风险</a>
+        <a href="{{.BasePath}}/qb/import-export" {{if eq .Nav "import-export"}}class="active"{{end}}>导入导出</a>
+    </nav>
+    {{end}}
+    {{template "content" .}}
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js" defer></script>
+    <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0/dist/chartjs-adapter-date-fns.bundle.min.js" defer></script>
+    <script src="{{.BasePath}}/static/app.js?v={{.Version}}" defer></script>
+</body>
+</html>
