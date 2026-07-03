@@ -6,6 +6,8 @@
 
 当前唯一生效流程：**临时流程 B：GPT 从 GitHub 分支 / PR 审核，Code / OpenCode 总控开发。**
 
+硬规则：**无论当前审查方是 Codex 还是 GPT，开发执行方都必须走分支 + PR，禁止直接在 `main` 开发。**
+
 原流程 A 保留为正式流程，等 Codex 额度恢复后再切回；切换前必须更新本文件和 `PROJECT_STATUS.md`。
 
 ## 流程 A：正式流程（Codex 可用时）
