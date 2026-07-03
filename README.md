@@ -10,6 +10,7 @@
 - `docs/TECHNICAL_MANUAL.md`：技术手册
 - `docs/MAINTENANCE_MANUAL.md`：维护与使用手册
 - `docs/CODE_HANDOFF.md`：给 Code / OpenCode 的执行任务书
+- `docs/DEVELOPMENT_WORKFLOW.md`：开发流程，包含原 Codex 流程和当前 GPT 临时 PR 审核流程
 
 当前结论：
 
@@ -28,7 +29,8 @@
 
 后续执行顺序：
 
-1. 先读 `docs/CODE_HANDOFF.md`
-2. 再读 `docs/PRODUCT_PLAN.md`
-3. 再读 `docs/TECHNICAL_MANUAL.md`
-4. 严格先做 P0，再做 P1
+1. 先读 `docs/DEVELOPMENT_WORKFLOW.md`
+2. 再读 `docs/CODE_HANDOFF.md`
+3. 再读 `docs/PRODUCT_PLAN.md`
+4. 再读 `docs/TECHNICAL_MANUAL.md`
+5. 严格先做 P0，再做 P1
