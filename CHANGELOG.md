@@ -5,8 +5,11 @@
 ### Workflow Notes
 
 - 新增 `docs/DEVELOPMENT_WORKFLOW.md`，同时记录原 Codex 项目经理流程和当前 GPT 临时 PR 审核流程
-- 明确当前唯一生效流程：GPT 从 GitHub 分支 / PR 审核，Code / OpenCode 总控开发
+- 明确当前唯一生效流程：GPT 从 GitHub 分支 / PR / 交接文档审核，Code / OpenCode 总控开发
 - 明确原 Codex 项目经理 / 最终审查流程保留，但因 Codex 额度不足临时暂停
+- 明确硬规则：所有开发必须在独立分支进行，禁止直接在 `main` 开发；每个分支必须同步更新交接文档
+- 明确关键区别：Codex 正式流程审本地分支 / 本地 diff / 测试结果 / 交接文档，不强制 GitHub PR；GPT 临时流程必须通过 GitHub PR 审核
+- 明确事实源：`AGENT_HANDOFF.md`、`PROJECT_STATUS.md`、`TODO.md`、`CHANGELOG.md`，PR 描述只作为远程审核入口
 - README 增加开发流程文档入口，执行顺序改为先读 `docs/DEVELOPMENT_WORKFLOW.md`
 - `PROJECT_STATUS.md` 增加当前开发流程说明
 
