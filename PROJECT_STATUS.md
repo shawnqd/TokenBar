@@ -19,6 +19,13 @@ P0 主骨架已完成，但还不能定义为“完整交付”。
 - 状态：`p0_gap_fixing`
 - 日期：2026-07-03
 
+## 当前开发流程
+
+- 当前唯一生效流程：GPT 从 GitHub 分支 / PR 审核，Code / OpenCode 总控开发。
+- 原 Codex 项目经理 / 最终审查流程保留，但因 Codex 额度不足临时暂停。
+- 同一时间只允许一种流程生效；恢复 Codex 流程前，必须更新 `docs/DEVELOPMENT_WORKFLOW.md` 和本文件。
+- 后续开发默认必须走分支 + PR，不直接在 `main` 开发。
+
 ## 已确认缺口
 
 ### 缺口 1：UsageLog 没有录入闭环
