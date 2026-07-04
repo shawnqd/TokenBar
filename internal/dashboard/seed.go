@@ -34,14 +34,15 @@ func SeedSampleData(s *store.Store) error {
 	// ── Platforms ──────────────────────────────────────────────────────────
 
 	huoshanID, err := s.InsertPlatform(&store.Platform{
-		Name:             "火山方舟",
-		Vendor:           "火山引擎",
-		Category:         "api",
-		BaseURL:          "https://ark.cn-beijing.volces.com/api/v3",
-		CredentialStatus: "已配置",
-		DefaultRiskLevel: "low",
-		IsActive:         true,
-		Notes:            "",
+		Name:              "火山方舟",
+		Vendor:            "火山引擎",
+		Category:          "api",
+		BaseURL:           "https://ark.cn-beijing.volces.com/api/v3",
+		CredentialStatus:  "已配置",
+		DefaultRiskLevel:  "low",
+		SupportsToolsJSON: true,
+		IsActive:          true,
+		Notes:             "",
 	})
 	if err != nil {
 		return fmt.Errorf("seed: insert 火山方舟: %w", err)
@@ -225,6 +226,7 @@ func SeedSampleData(s *store.Store) error {
 		Family:          "doubao",
 		IsCurrent:       true,
 		BaseURLOverride: "",
+		ToolFitJSON:     `{"tools":true,"json_mode":true}`,
 		Status:          "active",
 	}); err != nil {
 		return fmt.Errorf("seed: insert doubao-coding: %w", err)
@@ -346,6 +348,58 @@ func SeedSampleData(s *store.Store) error {
 		Source:     "manual",
 	}); err != nil {
 		return fmt.Errorf("seed: insert SenseNova risk note: %w", err)
+	}
+
+	// ── Usage Logs (sample consumption across periods) ────────────────────
+	// today: should appear in today / week / month summaries
+	huoshanUsagePlanID := huoshanPlanID
+	if _, err := s.InsertUsageLog(&store.UsageLog{
+		PlanID:       &huoshanUsagePlanID,
+		BucketScope:  "day",
+		DateKey:      now.Format("2006-01-02"),
+		PeriodStart:  now.Format(time.RFC3339Nano),
+		PeriodEnd:    now.Format(time.RFC3339Nano),
+		InputTokens:  12000,
+		OutputTokens: 8000,
+		RequestCount: 15,
+		CostValue:    0.12,
+		Source:       "manual",
+	}); err != nil {
+		return fmt.Errorf("seed: insert huoshan usage log: %w", err)
+	}
+	// earlier this month (10 days ago): in month, maybe not in today/week
+	mimoUsagePlanID := mimoPlanID
+	tenDaysAgo := now.AddDate(0, 0, -10)
+	if _, err := s.InsertUsageLog(&store.UsageLog{
+		PlanID:       &mimoUsagePlanID,
+		BucketScope:  "day",
+		DateKey:      tenDaysAgo.Format("2006-01-02"),
+		PeriodStart:  tenDaysAgo.Format(time.RFC3339Nano),
+		PeriodEnd:    tenDaysAgo.Format(time.RFC3339Nano),
+		InputTokens:  50000,
+		OutputTokens: 20000,
+		RequestCount: 40,
+		CostValue:    0.50,
+		Source:       "manual",
+	}); err != nil {
+		return fmt.Errorf("seed: insert mimo usage log: %w", err)
+	}
+	// last month (40 days ago): should NOT appear in this month summary
+	senseUsagePlanID := sensePlanID
+	fortyDaysAgo := now.AddDate(0, 0, -40)
+	if _, err := s.InsertUsageLog(&store.UsageLog{
+		PlanID:       &senseUsagePlanID,
+		BucketScope:  "day",
+		DateKey:      fortyDaysAgo.Format("2006-01-02"),
+		PeriodStart:  fortyDaysAgo.Format(time.RFC3339Nano),
+		PeriodEnd:    fortyDaysAgo.Format(time.RFC3339Nano),
+		InputTokens:  999,
+		OutputTokens: 999,
+		RequestCount: 1,
+		CostValue:    0.01,
+		Source:       "manual",
+	}); err != nil {
+		return fmt.Errorf("seed: insert sense usage log: %w", err)
 	}
 
 	return nil

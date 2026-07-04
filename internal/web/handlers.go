@@ -112,13 +112,13 @@ type Handler struct {
 	rateLimiter        *LoginRateLimiter // Per-IP rate limiting for login attempts
 
 	// Quota board page templates
-	overviewTmpl      *template.Template
-	plansTmpl         *template.Template
-	providersTmpl     *template.Template
-	usageTmpl         *template.Template
-	configTmpl        *template.Template
-	risksTmpl         *template.Template
-	importExportTmpl  *template.Template
+	overviewTmpl     *template.Template
+	plansTmpl        *template.Template
+	providersTmpl    *template.Template
+	usageTmpl        *template.Template
+	configTmpl       *template.Template
+	risksTmpl        *template.Template
+	importExportTmpl *template.Template
 
 	// Quota board form templates (stage 3)
 	platformFormTmpl *template.Template
@@ -126,6 +126,7 @@ type Handler struct {
 	bucketFormTmpl   *template.Template
 	riskFormTmpl     *template.Template
 	modelFormTmpl    *template.Template
+	usageFormTmpl    *template.Template
 }
 
 // DefaultCodexAccountID is the default account ID for single-account setups.
@@ -778,6 +779,12 @@ func NewHandler(store *store.Store, tracker *tracker.Tracker, logger *slog.Logge
 		modelFormTmpl = template.New("empty")
 	}
 
+	usageFormTmpl, err := template.New("").ParseFS(templatesFS, "templates/layout.html", "templates/qb_usage_form.html")
+	if err != nil {
+		logger.Error("failed to parse usage form template", "error", err)
+		usageFormTmpl = template.New("empty")
+	}
+
 	h := &Handler{
 		store:         store,
 		tracker:       tracker,
@@ -802,6 +809,7 @@ func NewHandler(store *store.Store, tracker *tracker.Tracker, logger *slog.Logge
 		bucketFormTmpl:   bucketFormTmpl,
 		riskFormTmpl:     riskFormTmpl,
 		modelFormTmpl:    modelFormTmpl,
+		usageFormTmpl:    usageFormTmpl,
 	}
 	if len(zaiTracker) > 0 && zaiTracker[0] != nil {
 		h.zaiTracker = zaiTracker[0]

@@ -121,6 +121,7 @@
                         <tr>
                             <th>平台名称</th>
                             <th>凭证状态</th>
+                            <th>支持工具</th>
                             <th>状态</th>
                         </tr>
                     </thead>
@@ -130,11 +131,12 @@
                         <tr>
                             <td>{{.Name}}</td>
                             <td><span class="badge {{if eq .CredentialStatus "healthy"}}badge-active{{end}}">{{.CredentialStatus}}</span></td>
+                            <td>{{if .SupportsToolsJSON}}<span class="status-badge" data-status="healthy">是</span>{{else}}<span class="badge">否</span>{{end}}</td>
                             <td>{{if .IsActive}}<span class="status-badge" data-status="healthy">启用</span>{{else}}<span class="status-badge" data-status="warning">停用</span>{{end}}</td>
                         </tr>
                         {{end}}
                         {{else}}
-                        <tr><td colspan="3" class="empty-state">暂无平台数据</td></tr>
+                        <tr><td colspan="4" class="empty-state">暂无平台数据</td></tr>
                         {{end}}
                     </tbody>
                 </table>

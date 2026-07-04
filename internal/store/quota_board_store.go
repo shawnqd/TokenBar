@@ -80,22 +80,22 @@ type Model struct {
 
 // UsageLog represents a recorded usage entry.
 type UsageLog struct {
-	ID              int64
-	PlanID          *int64
-	ModelID         *int64
-	BucketScope     string
-	DateKey         string
-	PeriodStart     string
-	PeriodEnd       string
-	InputTokens     int64
-	OutputTokens    int64
-	CacheReadTokens int64
+	ID               int64
+	PlanID           *int64
+	ModelID          *int64
+	BucketScope      string
+	DateKey          string
+	PeriodStart      string
+	PeriodEnd        string
+	InputTokens      int64
+	OutputTokens     int64
+	CacheReadTokens  int64
 	CacheWriteTokens int64
-	RequestCount    int64
-	CostValue       float64
-	Source          string
-	SourceRef       string
-	CreatedAt       time.Time
+	RequestCount     int64
+	CostValue        float64
+	Source           string
+	SourceRef        string
+	CreatedAt        time.Time
 }
 
 // CredentialStatus represents the credential check result for a platform.
@@ -127,13 +127,13 @@ type RiskNote struct {
 
 // UsageSummary contains aggregated usage totals for a plan within a period.
 type UsageSummary struct {
-	PlanID            int64
-	InputTokens       int64
-	OutputTokens      int64
-	CacheReadTokens   int64
-	CacheWriteTokens  int64
-	RequestCount      int64
-	CostValue         float64
+	PlanID           int64
+	InputTokens      int64
+	OutputTokens     int64
+	CacheReadTokens  int64
+	CacheWriteTokens int64
+	RequestCount     int64
+	CostValue        float64
 }
 
 // ---------------------------------------------------------------------------
@@ -999,6 +999,36 @@ func (s *Store) UsageSummaryByPeriod(planID int64, periodStart, periodEnd string
 		FROM qb_usage_logs
 		WHERE plan_id = ? AND period_start >= ? AND period_end <= ?
 	`, planID, periodStart, periodEnd).Scan(
+		&summary.InputTokens,
+		&summary.OutputTokens,
+		&summary.CacheReadTokens,
+		&summary.CacheWriteTokens,
+		&summary.RequestCount,
+		&summary.CostValue,
+	)
+	if err != nil {
+		return summary, fmt.Errorf("failed to query usage summary for plan %d: %w", planID, err)
+	}
+	return summary, nil
+}
+
+// UsageSummaryByDateRange returns aggregated usage totals for a plan where the
+// log's period_start falls within [startISO, endISO). Used for today / this
+// week / this month consumption breakdowns.
+func (s *Store) UsageSummaryByDateRange(planID int64, startISO, endISO string) (UsageSummary, error) {
+	var summary UsageSummary
+	summary.PlanID = planID
+	err := s.db.QueryRow(`
+		SELECT
+			COALESCE(SUM(input_tokens), 0),
+			COALESCE(SUM(output_tokens), 0),
+			COALESCE(SUM(cache_read_tokens), 0),
+			COALESCE(SUM(cache_write_tokens), 0),
+			COALESCE(SUM(request_count), 0),
+			COALESCE(SUM(cost_value), 0)
+		FROM qb_usage_logs
+		WHERE plan_id = ? AND period_start >= ? AND period_start < ?
+	`, planID, startISO, endISO).Scan(
 		&summary.InputTokens,
 		&summary.OutputTokens,
 		&summary.CacheReadTokens,

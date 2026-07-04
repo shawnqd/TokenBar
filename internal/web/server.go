@@ -144,6 +144,15 @@ func NewServer(port int, handler *Handler, logger *slog.Logger, username, passwo
 	mux.HandleFunc(p("/qb/model/save"), handler.ModelSave)
 	mux.HandleFunc(p("/qb/model/delete"), handler.ModelDelete)
 
+	// UsageLog form routes
+	mux.HandleFunc(p("/qb/usage/new"), handler.UsageNewForm)
+	mux.HandleFunc(p("/qb/usage/edit"), handler.UsageEditForm)
+	mux.HandleFunc(p("/qb/usage/save"), handler.UsageSave)
+	mux.HandleFunc(p("/qb/usage/delete"), handler.UsageDelete)
+
+	// Config refresh action (read-only credential detection)
+	mux.HandleFunc(p("/qb/config/refresh"), handler.ConfigRefreshAction)
+
 	// Prometheus metrics endpoint (public, with bearer token auth)
 	if handler.metrics != nil {
 		var metricsHandler http.Handler = http.HandlerFunc(handler.Metrics)

@@ -6,23 +6,32 @@
 
 - 创建 `feature/p0-urgent-mvp` 分支，进入 P0 急用连续开发模式。
 - 新增 `docs/P0_URGENT_MVP_DEV_PLAN.md`，作为本轮 Code / OpenCode 的开发任务书。
-- 更新 `AGENT_HANDOFF.md`，明确本轮目标、硬规则、禁改区、P0-1 到 P0-6 执行顺序、验收标准和本地验证命令。
-- 更新 `TODO.md`，将包 3.6 拆成可勾选执行清单。
-- 更新 `PROJECT_STATUS.md`，状态改为 `p0_urgent_mvp_in_progress`。
-- 明确本轮只使用一个开发分支，不新开多个 PR，不主动触发 GitHub Actions。
-- 明确 PR 只做摘要，事实源是 `docs/P0_URGENT_MVP_DEV_PLAN.md`、`AGENT_HANDOFF.md`、`TODO.md`、`PROJECT_STATUS.md`、`CHANGELOG.md`。
-- 明确本轮只补 P0 急用缺口，不进入 Provider 自动适配、第三方网页登录余额抓取、`ccusage` 导入、趋势图、云同步、多用户或 UI 大改版。
+- 明确本轮只使用一个开发分支，不新开多个 PR，不主动触发 GitHub Actions；远程提交带 `[skip ci]`。
+- 事实源为 `docs/P0_URGENT_MVP_DEV_PLAN.md`、`AGENT_HANDOFF.md`、`TODO.md`、`PROJECT_STATUS.md`、`CHANGELOG.md`，PR 描述只做摘要。
+- 本轮只补 P0 急用缺口，不进入 Provider 自动适配、网页余额抓取、ccusage 导入、趋势图、云同步、多用户、UI 大改版。
 
-### P0 Urgent Scope
+### P0-1~P0-6 补缺完成（feature/p0-urgent-mvp）
 
-本轮必须完成：
+- **P0-1 UsageLog 录入闭环**：新增 `UsageNewForm/UsageEditForm/UsageSave/UsageDelete` 4 handler + `qb_usage_form.html` 模板 + `/qb/usage/new|edit|save|delete` 4 路由；Handler struct 增 `usageFormTmpl`；`qb_usage.html` 增新增/编辑/删除按钮。
+- **P0-2 三段消耗口径**：store 新增 `UsageSummaryByDateRange(planID, start, end)`（半开区间 `period_start >= ? AND period_start < ?`）；`UsagePage` 重写为今日/本周（周一起）/本月三段 UTC 汇总，传 `SumSections` 给模板；`qb_usage.html` 渲染三段汇总表；seed 补 3 条样例 log（今日/10天前/40天前）验证过滤。
+- **P0-3 适合工具字段**：`PlatformSave` 读 `supports_tools_json`、`ModelSave` 读 `tool_fit_json`；平台表单加 checkbox、模型表单加 textarea；config/plans/overview 三页展示；seed 给火山方舟与豆包 Coding 补字段值。
+- **P0-4 配置状态手动刷新**：新增 `ConfigRefreshAction` + `probeBaseURL`，对每平台 Base URL 做 5s 只读 HTTP 探测（不发任何凭据），按状态码分类 healthy/warning/danger，upsert 写回 `qb_credential_statuses`；路由 `/qb/config/refresh`；`qb_config.html` 增刷新按钮与检测方式/消息列。
+- **P0-5 web 502 排查**：根因为环境代理（`HTTP_PROXY` 拦截 `0.0.0.0` 请求），非代码 bug；测试前关闭 `HTTP_PROXY/HTTPS_PROXY`（或 `NO_PROXY` 含 `0.0.0.0`）即全部通过；未改生产代码（默认 host 维持 0.0.0.0 以免破坏 Docker）。
+- **P0-6 文档同步**：更新 PROJECT_STATUS / TODO / CHANGELOG / AGENT_HANDOFF。
 
-1. UsageLog 录入 / 编辑 / 删除闭环。
-2. 使用记录页和总览页展示 today / week / month。
-3. 配置状态页接入真实只读检测刷新动作，并写回 `qb_credential_statuses`。
-4. “适合工具”字段进入平台 / 模型录入和展示。
-5. 修复或明确处置 `internal/web` 502 / 静态资源异常。
-6. 同步状态文档和本地验证结果。
+### 验证
+
+- `go build ./...` 通过；`go vet`（改动包）通过。
+- `go test ./internal/store ./internal/dashboard` 通过。
+- `go test ./internal/web`：502 全部修复，仅剩 `TestHandlerTryAutoDetectAdditionalCoverage`（Windows HOME vs USERPROFILE，stash 证实预存）。
+- HOME 隔离端到端冒烟通过：usage 三段汇总 / 用量表单 / 配置刷新写回 / 适合工具展示 均渲染正常。
+- reviewer 自审 Go/No-Go = Go，禁改区零触碰。
+
+### Notes
+
+- Go 1.26.4 装到 `~/.local/go`（zip + .NET 解压）。
+- 新增 `.gitignore` 忽略 `onwatch-smoke.exe`。
+- 台账层 P0 已交付，剩余失败均为 onWatch 原有测试的 Windows 平台不兼容（底座问题）。
 
 ## 2026-07-03
 
