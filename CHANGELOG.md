@@ -1,5 +1,29 @@
 # 变更记录
 
+## 2026-07-04
+
+### P0 Urgent MVP Notes
+
+- 创建 `feature/p0-urgent-mvp` 分支，进入 P0 急用连续开发模式。
+- 新增 `docs/P0_URGENT_MVP_DEV_PLAN.md`，作为本轮 Code / OpenCode 的开发任务书。
+- 更新 `AGENT_HANDOFF.md`，明确本轮目标、硬规则、禁改区、P0-1 到 P0-6 执行顺序、验收标准和本地验证命令。
+- 更新 `TODO.md`，将包 3.6 拆成可勾选执行清单。
+- 更新 `PROJECT_STATUS.md`，状态改为 `p0_urgent_mvp_in_progress`。
+- 明确本轮只使用一个开发分支，不新开多个 PR，不主动触发 GitHub Actions。
+- 明确 PR 只做摘要，事实源是 `docs/P0_URGENT_MVP_DEV_PLAN.md`、`AGENT_HANDOFF.md`、`TODO.md`、`PROJECT_STATUS.md`、`CHANGELOG.md`。
+- 明确本轮只补 P0 急用缺口，不进入 Provider 自动适配、第三方网页登录余额抓取、`ccusage` 导入、趋势图、云同步、多用户或 UI 大改版。
+
+### P0 Urgent Scope
+
+本轮必须完成：
+
+1. UsageLog 录入 / 编辑 / 删除闭环。
+2. 使用记录页和总览页展示 today / week / month。
+3. 配置状态页接入真实只读检测刷新动作，并写回 `qb_credential_statuses`。
+4. “适合工具”字段进入平台 / 模型录入和展示。
+5. 修复或明确处置 `internal/web` 502 / 静态资源异常。
+6. 同步状态文档和本地验证结果。
+
 ## 2026-07-03
 
 ### Workflow Notes
