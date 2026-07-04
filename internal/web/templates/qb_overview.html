@@ -111,6 +111,30 @@
         <section class="insights-panel">
             <header class="section-header">
                 <h3 class="section-title">
+                    <svg class="section-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 3v18h18"/><path d="M18.7 8l-5.1 5.2-2.8-2.7L7 14.3"/></svg>
+                    消耗统计（今日 / 本周 / 本月）
+                </h3>
+            </header>
+            <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:12px">
+                {{$periods := .UsagePeriods}}
+                {{range $periods}}
+                <div style="padding:12px;background:var(--surface-card-alt);border-radius:var(--radius-md)">
+                    <div style="font-size:13px;font-weight:600;margin-bottom:8px">{{.Title}}</div>
+                    <div style="font-size:12px;color:var(--text-muted);display:grid;grid-template-columns:1fr auto;gap:2px 8px">
+                        <span>输入 Token</span><span style="font-family:var(--font-mono)">{{.Summary.InputTokens}}</span>
+                        <span>输出 Token</span><span style="font-family:var(--font-mono)">{{.Summary.OutputTokens}}</span>
+                        <span>缓存读取</span><span style="font-family:var(--font-mono)">{{.Summary.CacheReadTokens}}</span>
+                        <span>缓存写入</span><span style="font-family:var(--font-mono)">{{.Summary.CacheWriteTokens}}</span>
+                        <span>费用</span><span style="font-family:var(--font-mono)">{{.Summary.CostValue}}</span>
+                    </div>
+                </div>
+                {{end}}
+            </div>
+        </section>
+
+        <section class="insights-panel">
+            <header class="section-header">
+                <h3 class="section-title">
                     <svg class="section-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="7" width="20" height="14" rx="2" ry="2"/><path d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16"/></svg>
                     平台摘要
                 </h3>
@@ -121,7 +145,7 @@
                         <tr>
                             <th>平台名称</th>
                             <th>凭证状态</th>
-                            <th>支持工具</th>
+                            <th>支持工具调用</th>
                             <th>状态</th>
                         </tr>
                     </thead>

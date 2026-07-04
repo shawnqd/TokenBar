@@ -136,6 +136,15 @@ model.tool_fit_json
 Codex, OpenCode, Claude Code, API, ChatGPT, Web, Mobile
 ```
 
+### P0-3 采用口径（R3 返工确认）
+
+P0 不为平台层新增 schema，降级为两层分工：
+
+- 平台层 `supports_tools_json`（bool）：只表示「是否支持工具调用」，UI 文案统一为「支持工具调用」。
+- 模型层 `tool_fit_json`（text/JSON）：维护「具体适合的工具标签」，UI 文案统一为「适合工具标签」。
+- 不再用「适合工具」泛指平台，避免误导。
+- 具体工具标签的逗号分隔→JSON 转换留 P1；P0 接受原样文本/JSON。
+
 ### P0-4：配置状态手动刷新
 
 目标：配置状态页从“展示态”变成“可手动刷新检测”。
@@ -161,6 +170,17 @@ Codex, OpenCode, Claude Code, API, ChatGPT, Web, Mobile
 2. 本地配置项是否存在。
 3. 不调用付费 API。
 4. 不发起网页登录请求。
+
+### P0-4 采用口径（R4 返工确认）
+
+P0 采用「Base URL 只读可达性探测」，不采用环境变量/本地配置存在性检测：
+
+- 对用户录入的每个平台 Base URL 做 `HTTP GET`（5s 超时），**不发送任何 API Key / Cookie / 账号密码**。
+- 按状态码分类：2xx/3xx→healthy、401/403→warning(需要鉴权)、404→warning、5xx→danger、连接失败→danger。
+- 写回 `qb_credential_statuses`（upsert）：detection_method=`http_probe`、detected_path=BaseURL、message_redacted（如 `HTTP 401 (需要鉴权)`，无敏感信息）。
+- 约束：不发凭据、不调用付费 API、不网页登录、只保存可达状态和脱敏消息。
+- 这不是余额抓取，也不是 Provider 自动适配。
+- 会访问用户录入的 Base URL（外联）；如后续要求完全禁止外联，再改回本地配置存在性检测。
 
 ### P0-5：修复 internal/web 502 / 静态资源测试失败
 

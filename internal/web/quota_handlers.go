@@ -31,13 +31,39 @@ func (h *Handler) OverviewPage(w http.ResponseWriter, r *http.Request) {
 		platforms = nil
 	}
 
+	now := time.Now().UTC()
+	startOfToday := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC)
+	daysSinceMonday := (int(now.Weekday()) + 6) % 7
+	startOfWeek := startOfToday.AddDate(0, 0, -daysSinceMonday)
+	startOfMonth := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, time.UTC)
+
+	todaySummary, err := h.store.UsageSummaryTotalByDateRange(startOfToday.Format(time.RFC3339Nano), startOfToday.AddDate(0, 0, 1).Format(time.RFC3339Nano))
+	if err != nil {
+		h.logger.Error("UsageSummaryTotalByDateRange today failed", "error", err)
+	}
+	weekSummary, err := h.store.UsageSummaryTotalByDateRange(startOfWeek.Format(time.RFC3339Nano), startOfWeek.AddDate(0, 0, 7).Format(time.RFC3339Nano))
+	if err != nil {
+		h.logger.Error("UsageSummaryTotalByDateRange week failed", "error", err)
+	}
+	monthSummary, err := h.store.UsageSummaryTotalByDateRange(startOfMonth.Format(time.RFC3339Nano), startOfMonth.AddDate(0, 1, 0).Format(time.RFC3339Nano))
+	if err != nil {
+		h.logger.Error("UsageSummaryTotalByDateRange month failed", "error", err)
+	}
+
+	usagePeriods := []map[string]interface{}{
+		{"Title": "今日", "Summary": todaySummary},
+		{"Title": "本周", "Summary": weekSummary},
+		{"Title": "本月", "Summary": monthSummary},
+	}
+
 	data := map[string]interface{}{
-		"Title":     "模型额度看板",
-		"BasePath":  h.getBasePath(),
-		"Version":   h.version,
-		"Nav":       "overview",
-		"Rec":       rec,
-		"Platforms": platforms,
+		"Title":        "模型额度看板",
+		"BasePath":     h.getBasePath(),
+		"Version":      h.version,
+		"Nav":          "overview",
+		"Rec":          rec,
+		"Platforms":    platforms,
+		"UsagePeriods": usagePeriods,
 	}
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")

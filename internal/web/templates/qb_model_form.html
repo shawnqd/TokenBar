@@ -48,7 +48,7 @@
                     <input class="form-input" type="text" id="base_url_override" name="base_url_override" value="{{if .Model}}{{.Model.BaseURLOverride}}{{end}}" placeholder="如: https://api.example.com">
                 </div>
                 <div class="form-group">
-                    <label class="form-label" for="tool_fit_json">适合工具 (JSON)</label>
+                    <label class="form-label" for="tool_fit_json">适合工具标签 (JSON)</label>
                     <textarea class="form-input" id="tool_fit_json" name="tool_fit_json" rows="3" placeholder='如: {"tools":true,"json_mode":true}'>{{if .Model}}{{.Model.ToolFitJSON}}{{end}}</textarea>
                 </div>
                 <div class="form-group">

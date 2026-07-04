@@ -10,7 +10,18 @@
 - 事实源为 `docs/P0_URGENT_MVP_DEV_PLAN.md`、`AGENT_HANDOFF.md`、`TODO.md`、`PROJECT_STATUS.md`、`CHANGELOG.md`，PR 描述只做摘要。
 - 本轮只补 P0 急用缺口，不进入 Provider 自动适配、网页余额抓取、ccusage 导入、趋势图、云同步、多用户、UI 大改版。
 
-### P0-1~P0-6 补缺完成（feature/p0-urgent-mvp）
+### R1-R5 返工（按 docs/P0_URGENT_MVP_REVIEW.md）
+
+- **R1**：`PROJECT_STATUS.md` 开头改「P0 急用闭环已完成，等待 GPT 复审 / 合并」，删除「不能完整交付」与 `p0_complete` 并存，「下一步」改等待复审。
+- **R2（补代码）**：总览页新增 today/week/month 三段消耗卡片。store 新增 `UsageSummaryTotalByDateRange(start,end)`；`OverviewPage` 计算 UTC 今日/本周(周一)/本月；`qb_overview.html` 新增「消耗统计」section。
+- **R3（文档降级）**：平台 `supports_tools_json`(bool)=「支持工具调用」；模型 `tool_fit_json`(text)=「适合工具标签」。UI 文案统一（平台列/总览列「支持工具调用」、模型列「适合工具标签」、模型表单「适合工具标签 (JSON)」）。DEV_PLAN P0-3 加「采用口径」。
+- **R4（文档）**：DEV_PLAN P0-4 加「采用口径」：Base URL 只读 HTTP 探测，不发凭据、不调付费 API、不网页登录、只存可达状态+脱敏消息；会外联用户录入的 Base URL，非余额抓取非 Provider 自动适配。代码未改。
+- **R5**：PR #2 描述改纯摘要，取舍与口径写入事实源文档。
+- 同步 AGENT_HANDOFF / PROJECT_STATUS / TODO / CHANGELOG / DEV_PLAN / REVIEW。
+
+返工验证：`go build` 通过；`go test ./internal/store ./internal/dashboard` 通过；`go test ./internal/web -run TestQB|TestServer_ServesHTML` 全 PASS；仅 `TestHandlerTryAutoDetectAdditionalCoverage` 预存失败；总览页冒烟含「消耗统计|今日|本周|本月|支持工具调用」。
+
+### P0-1~P0-6 补缺完成（feature/p0-urgent-mvp，首次交付）
 
 - **P0-1 UsageLog 录入闭环**：新增 `UsageNewForm/UsageEditForm/UsageSave/UsageDelete` 4 handler + `qb_usage_form.html` 模板 + `/qb/usage/new|edit|save|delete` 4 路由；Handler struct 增 `usageFormTmpl`；`qb_usage.html` 增新增/编辑/删除按钮。
 - **P0-2 三段消耗口径**：store 新增 `UsageSummaryByDateRange(planID, start, end)`（半开区间 `period_start >= ? AND period_start < ?`）；`UsagePage` 重写为今日/本周（周一起）/本月三段 UTC 汇总，传 `SumSections` 给模板；`qb_usage.html` 渲染三段汇总表；seed 补 3 条样例 log（今日/10天前/40天前）验证过滤。

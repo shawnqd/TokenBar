@@ -57,6 +57,18 @@
 2. **P0-2 时区**：用 UTC 而非计划建议的「本地时区」。理由：台账层既有代码（seed/recommend/ListExpiringPlans）全用 UTC，混用本地时区会与 UTC period_start 产生区间错位。UTC 口径对「今日/本周/本月」语义一致且可复现。
 3. **P0-4 检测方式**：用 HTTP 只读探测 Base URL（healthy/warning/danger），而非计划建议的「检测环境变量/配置项存在性」。理由：台账平台是用户手填 Base URL（火山方舟/MiMo 等），与 onWatch 采集层 env 变量无映射；HTTP 探测对台账场景更有意义，且不发凭据、不调付费 API、不网页登录，满足「只读检测 + 不存敏感凭据」核心要求。状态值用 healthy/warning/danger 而非 configured/missing，因探测的是可达性而非凭据存在性。
 
+## R1-R5 返工（2026-07-04，按 docs/P0_URGENT_MVP_REVIEW.md）
+
+GPT 首审 No-Go，要求 R1-R5 返工使代码与事实源一致。处理如下：
+
+- **R1 PROJECT_STATUS 冲突**：开头改「P0 急用闭环已完成，等待 GPT 复审 / 合并」；删除「不能完整交付」与 `p0_complete` 并存；「下一步」改「等待 GPT 复审；通过后合并，再进 P1」。结论/阶段/缺口/下一步不再矛盾。
+- **R2 P0-2 总览页三段（选 A 补代码）**：store 新增 `UsageSummaryTotalByDateRange(start,end)`（跨所有 plan 聚合，半开区间）；`OverviewPage` 计算 UTC 今日/本周(周一)/本月；`qb_overview.html` 新增「消耗统计」section，三卡片展示输入/输出/缓存读取/缓存写入/费用。使用记录页三段保留不变。
+- **R3 P0-3 文案降级（选 B 不改 schema）**：平台 `supports_tools_json`(bool)=「支持工具调用」；模型 `tool_fit_json`(text)=「适合工具标签」。UI 文案统一：平台列/总览列「支持工具调用」、模型列「适合工具标签」、模型表单「适合工具标签 (JSON)」。DEV_PLAN P0-3 段加「采用口径」。
+- **R4 P0-4 文档（选 B）**：DEV_PLAN P0-4 段加「采用口径」：Base URL 只读 HTTP 探测，不发凭据、不调付费 API、不网页登录、只存可达状态+脱敏消息；说明会外联用户录入的 Base URL，非余额抓取非 Provider 自动适配。代码未改。
+- **R5 PR 摘要**：PR #2 描述改纯摘要（目标/事实源/改动摘要/验证摘要/风险摘要），取舍与口径写入事实源文档。
+
+返工改动文件：`internal/store/quota_board_store.go`、`internal/web/quota_handlers.go`、`qb_overview.html`、`qb_config.html`、`qb_plans.html`、`qb_model_form.html` + 6 份文档（AGENT_HANDOFF/PROJECT_STATUS/TODO/CHANGELOG/DEV_PLAN/REVIEW）。
+
 ## 验证结果（本地，Go 1.26.4，Windows）
 
 环境准备：Go 1.26.4 解压到 `~/.local/go`（zip 用 .NET ZipFile 解压，Expand-Archive 过慢会超时致 src 残缺）；`GOPROXY=https://goproxy.cn,direct`；web 测试前 `HTTP_PROXY=$null HTTPS_PROXY=$null NO_PROXY=localhost,127.0.0.1,::1,0.0.0.0`。
@@ -92,6 +104,15 @@ seed:            200 (9356B, 跳总览)
 /qb/plans:       200 (34886B) 含「适合工具」列
 ```
 rg 验证：usage.html 含 `今日消耗|本周消耗|本月消耗|用量明细|新增用量记录`；plans.html 含 `适合工具`（3 处）。
+
+### 返工复验（R1-R5 后）
+```
+go build ./...                                   EXIT=0 ✅
+go test ./internal/store ./internal/dashboard   ok ✅
+go test ./internal/web -run 'TestQB|TestServer_ServesHTML'   全 PASS ✅
+```
+仅 `TestHandlerTryAutoDetectAdditionalCoverage` 仍失败（Windows HOME 预存，与本轮无关）。`TestQBOverviewRendersWithSeed` PASS（R2 模板加 `UsagePeriods` 后对 nil 安全）。
+HOME 隔离冒烟 `/qb/`（12741B）rg 含 `消耗统计|今日|本周|本月|支持工具调用` —— 总览页三段消耗与 R3 文案运行时确认。
 
 ### 自审（reviewer agent，Go/No-Go = Go）
 禁改区零触碰（store.go 现有 DDL/agent/api/config.go/main.go/app.js/style.css/现有 *_test.go 均未改）。P0-1 表单 name 与 handler 读取完全一致；*int64 先判 nil 再解引用；P0-2 周一起算 `(Weekday()+6)%7` 正确、半开区间 SQL 正确；P0-4 不发凭据、upsert 正确。findings：onwatch-smoke.exe 未忽略（已删 + 已加 .gitignore）、P0-6 文档（本次补齐）；建议项（probeBaseURL 加 CheckRedirect/MaxBytesReader、UsagePage 边界亚秒、qb_usage_form 加入 TestQBTemplatesParse 清单）非阻断，留 P2。

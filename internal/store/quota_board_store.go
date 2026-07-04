@@ -1042,6 +1042,35 @@ func (s *Store) UsageSummaryByDateRange(planID int64, startISO, endISO string) (
 	return summary, nil
 }
 
+// UsageSummaryTotalByDateRange returns aggregated usage totals across ALL
+// plans where the log's period_start falls within [startISO, endISO). Used
+// for the overview page's today / this week / this month consumption cards.
+func (s *Store) UsageSummaryTotalByDateRange(startISO, endISO string) (UsageSummary, error) {
+	var summary UsageSummary
+	err := s.db.QueryRow(`
+		SELECT
+			COALESCE(SUM(input_tokens), 0),
+			COALESCE(SUM(output_tokens), 0),
+			COALESCE(SUM(cache_read_tokens), 0),
+			COALESCE(SUM(cache_write_tokens), 0),
+			COALESCE(SUM(request_count), 0),
+			COALESCE(SUM(cost_value), 0)
+		FROM qb_usage_logs
+		WHERE period_start >= ? AND period_start < ?
+	`, startISO, endISO).Scan(
+		&summary.InputTokens,
+		&summary.OutputTokens,
+		&summary.CacheReadTokens,
+		&summary.CacheWriteTokens,
+		&summary.RequestCount,
+		&summary.CostValue,
+	)
+	if err != nil {
+		return summary, fmt.Errorf("failed to query total usage summary: %w", err)
+	}
+	return summary, nil
+}
+
 // ---------------------------------------------------------------------------
 // CredentialStatus CRUD + association
 // ---------------------------------------------------------------------------

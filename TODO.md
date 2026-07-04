@@ -104,6 +104,17 @@ P0 急用连续开发；分支：`feature/p0-urgent-mvp`；事实源：`docs/P0_
 
 验收：`go build ./...` 通过；`go test ./internal/store ./internal/dashboard` 通过；`go test ./internal/web` 仅剩 onWatch 原有测试的 Windows 平台预存失败（与本轮无关，已 stash 证实）；HOME 隔离端到端冒烟通过（usage 三段汇总 / 用量表单 / 配置刷新写回 / 适合工具展示）。
 
+### 包 3.7：R1-R5 返工（按 docs/P0_URGENT_MVP_REVIEW.md）✅
+
+- [x] R1 修 `PROJECT_STATUS.md` 前后冲突（开头/下一步改一致）
+- [x] R2 总览页补 today/week/month（`UsageSummaryTotalByDateRange` + `OverviewPage` + `qb_overview.html` 三卡片）
+- [x] R3 P0-3 文案降级：平台=「支持工具调用」bool，模型=「适合工具标签」tool_fit_json；UI 文案统一
+- [x] R4 P0-4 文档：Base URL 只读探测写入 `docs/P0_URGENT_MVP_DEV_PLAN.md`（不发凭据/不调付费 API/不网页登录）
+- [x] R5 PR #2 描述改纯摘要，取舍写入事实源
+- [x] 同步 AGENT_HANDOFF / PROJECT_STATUS / TODO / CHANGELOG / DEV_PLAN / REVIEW
+
+验收：`go build` 通过；`TestQBOverviewRendersWithSeed` 等通过；总览页冒烟含「消耗统计|今日|本周|本月|支持工具调用」。等待 GPT 复审。
+
 ## 非本轮
 
 - [ ] Provider 自动适配

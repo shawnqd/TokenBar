@@ -163,6 +163,20 @@ PR #2 描述只保留：
 完成后停下，等待 GPT 复审。
 ```
 
+## 返工处理结果（R1-R5，2026-07-04）
+
+| 项 | 选择 | 处理 |
+|---|---|---|
+| R1 | — | `PROJECT_STATUS.md` 开头改「P0 急用闭环已完成，等待 GPT 复审 / 合并」；删除「不能完整交付」与「暂不应标记 p0_complete」并存；「下一步」改「等待 GPT 复审；通过后合并，再进 P1 规划」。结论/阶段/缺口/下一步四处不再自相矛盾。 |
+| R2 | A（补代码） | 总览页新增 today/week/month 三段消耗卡片。store 新增 `UsageSummaryTotalByDateRange(start,end)`（跨所有 plan 聚合）；`OverviewPage` 计算 UTC 今日/本周(周一)/本月；`qb_overview.html` 新增「消耗统计」section，展示输入/输出/缓存读取/缓存写入/费用。使用记录页三段保留。 |
+| R3 | B（文档降级） | 不改 schema。平台层 `supports_tools_json`(bool)=「支持工具调用」；模型层 `tool_fit_json`(text)=「适合工具标签」。UI 文案已统一：平台列/总览列「支持工具调用」、模型列「适合工具标签」、模型表单「适合工具标签 (JSON)」。`docs/P0_URGENT_MVP_DEV_PLAN.md` P0-3 段加「采用口径」确认。 |
+| R4 | B（文档） | `docs/P0_URGENT_MVP_DEV_PLAN.md` P0-4 段加「采用口径」确认：Base URL 只读 HTTP 探测，不发凭据、不调付费 API、不网页登录、只存可达状态+脱敏消息；说明会外联用户录入的 Base URL，非余额抓取非 Provider 自动适配。代码未改（实现本就如此）。 |
+| R5 | — | PR #2 描述改纯摘要：目标 / 事实源列表 / 改动摘要 / 验证摘要 / 风险摘要。具体取舍与口径变化全部写入事实源文档（AGENT_HANDOFF / DEV_PLAN）。 |
+
+返工改动文件：`internal/store/quota_board_store.go`、`internal/web/quota_handlers.go`、`internal/web/templates/qb_overview.html`、`internal/web/templates/qb_config.html`、`internal/web/templates/qb_plans.html`、`internal/web/templates/qb_model_form.html` + 6 份文档。
+
+本地验证：`go build ./...` 通过；`go test ./internal/store ./internal/dashboard` 通过；`go test ./internal/web` 仅剩预存 `TestHandlerTryAutoDetectAdditionalCoverage`（Windows HOME，与本轮无关）。详见 `AGENT_HANDOFF.md`。
+
 ## 复审标准
 
 复审时只看：
