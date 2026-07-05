@@ -177,6 +177,10 @@ PR #2 描述只保留：
 
 本地验证：`go build ./...` 通过；`go test ./internal/store ./internal/dashboard` 通过；`go test ./internal/web` 仅剩预存 `TestHandlerTryAutoDetectAdditionalCoverage`（Windows HOME，与本轮无关）。详见 `AGENT_HANDOFF.md`。
 
+### 复审补充：P0-2 UTC 口径（已处理）
+
+复审追问 P0-2 时区口径与事实源是否一致。已处理：`docs/P0_URGENT_MVP_DEV_PLAN.md` P0-2 段后新增「P0-2 采用口径（R2 返工确认）」，明确采用 UTC（今日/本周/本月均以 UTC 计算，半开区间），理由为台账层既有 period_start / seed / recommend / ListExpiringPlans 统一 UTC，避免混用本地时区错位；UI 仍展示「今日/本周/本月」但底层为 UTC。`AGENT_HANDOFF.md` 已有对应说明，未重复长改。本轮为纯文档改动，未改功能代码。
+
 ## 复审标准
 
 复审时只看：

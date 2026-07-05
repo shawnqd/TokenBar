@@ -19,6 +19,12 @@
 - **R5**：PR #2 描述改纯摘要，取舍与口径写入事实源文档。
 - 同步 AGENT_HANDOFF / PROJECT_STATUS / TODO / CHANGELOG / DEV_PLAN / REVIEW。
 
+### 复审补充：P0-2 UTC 口径（纯文档）
+
+- `docs/P0_URGENT_MVP_DEV_PLAN.md` P0-2 段后新增「P0-2 采用口径（R2 返工确认）」：明确采用 UTC（今日/本周/本月均以 UTC 计算，半开区间），理由为台账层既有逻辑统一 UTC，避免混用本地时区错位；UI 仍展示「今日/本周/本月」但底层为 UTC。
+- `docs/P0_URGENT_MVP_REVIEW.md` 标记该复审问题已处理。
+- 未改功能代码；AGENT_HANDOFF 已有 UTC 说明，未重复长改。
+
 返工验证：`go build` 通过；`go test ./internal/store ./internal/dashboard` 通过；`go test ./internal/web -run TestQB|TestServer_ServesHTML` 全 PASS；仅 `TestHandlerTryAutoDetectAdditionalCoverage` 预存失败；总览页冒烟含「消耗统计|今日|本周|本月|支持工具调用」。
 
 ### P0-1~P0-6 补缺完成（feature/p0-urgent-mvp，首次交付）
