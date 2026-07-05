@@ -101,6 +101,7 @@
                                 <th>显示名称</th>
                                 <th>模型 ID</th>
                                 <th>系列</th>
+                                <th>适合工具标签</th>
                                 <th>状态</th>
                                 <th style="width:90px"></th>
                             </tr>
@@ -111,6 +112,7 @@
                                 <td>{{.DisplayName}}{{if .IsCurrent}} <span class="badge" style="background:var(--accent-teal);color:#fff;font-size:11px">当前</span>{{end}}</td>
                                 <td style="font-size:12px;color:var(--text-muted)">{{.ModelID}}</td>
                                 <td>{{.Family}}</td>
+                                <td style="font-size:11px;color:var(--text-muted);max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{if .ToolFitJSON}}{{.ToolFitJSON}}{{else}}-{{end}}</td>
                                 <td>{{if eq .Status "active"}}<span class="status-badge" data-status="healthy">活跃</span>{{else if eq .Status "deprecated"}}<span class="status-badge" data-status="warning">已弃用</span>{{else}}<span class="badge">{{.Status}}</span>{{end}}</td>
                                 <td style="display:flex;gap:4px">
                                     <a href="{{$.BasePath}}/qb/model/edit?id={{.ID}}" class="btn-sm" style="font-size:11px;padding:2px 6px;border:1px solid var(--border-default);border-radius:var(--radius-sm);text-decoration:none;color:var(--text-secondary);background:transparent">编辑</a>

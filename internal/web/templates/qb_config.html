@@ -5,6 +5,10 @@
             <h1 class="welcome-title">配置状态</h1>
         </div>
 
+        <div style="margin-bottom:16px">
+            <button onclick="refreshConfig('{{.BasePath}}')" class="btn-sm" style="font-size:12px;padding:6px 14px;background:var(--accent-teal);color:#fff;border:none;border-radius:var(--radius-sm);cursor:pointer">刷新检测（只读探测 Base URL）</button>
+        </div>
+
         <section class="insights-panel">
             <header class="section-header">
                 <h3 class="section-title">
@@ -20,6 +24,7 @@
                             <th>Base URL</th>
                             <th>凭证状态</th>
                             <th>默认风险等级</th>
+                            <th>支持工具调用</th>
                         </tr>
                     </thead>
                     <tbody>
@@ -34,10 +39,11 @@
                                 {{else}}<span class="badge">{{.CredentialStatus}}</span>{{end}}
                             </td>
                             <td><span class="badge {{if eq .DefaultRiskLevel "high"}}badge-active{{end}}">{{.DefaultRiskLevel}}</span></td>
+                            <td>{{if .SupportsToolsJSON}}<span class="status-badge" data-status="healthy">是</span>{{else}}<span class="badge">否</span>{{end}}</td>
                         </tr>
                         {{end}}
                         {{else}}
-                        <tr><td colspan="4" class="empty-state">暂无平台配置</td></tr>
+                        <tr><td colspan="5" class="empty-state">暂无平台配置</td></tr>
                         {{end}}
                     </tbody>
                 </table>
@@ -56,7 +62,9 @@
                     <thead>
                         <tr>
                             <th>状态</th>
+                            <th>检测方式</th>
                             <th>检测路径</th>
+                            <th>消息</th>
                             <th>检测时间</th>
                         </tr>
                     </thead>
@@ -71,12 +79,14 @@
                                 {{else if eq .Status "critical"}}<span class="status-badge" data-status="critical">严重</span>
                                 {{else}}<span class="badge">{{.Status}}</span>{{end}}
                             </td>
+                            <td>{{.DetectionMethod}}</td>
                             <td style="font-family:var(--font-mono);font-size:12px">{{.DetectedPath}}</td>
+                            <td style="font-size:12px;color:var(--text-muted)">{{.MessageRedacted}}</td>
                             <td>{{.CheckedAt}}</td>
                         </tr>
                         {{end}}
                         {{else}}
-                        <tr><td colspan="3" class="empty-state">暂无凭证检测记录</td></tr>
+                        <tr><td colspan="5" class="empty-state">暂无凭证检测记录</td></tr>
                         {{end}}
                     </tbody>
                 </table>
@@ -84,4 +94,15 @@
         </section>
     </main>
 </div>
+<script>
+async function refreshConfig(bp) {
+    if (!confirm('将对每个平台的 Base URL 执行只读探测（不发送任何凭据），确认继续？')) return;
+    try {
+        const resp = await fetch(bp+'/qb/config/refresh', {method:'POST', headers:{'X-Requested-With':'XMLHttpRequest'}});
+        const data = await resp.json();
+        if (data.redirect) window.location.href = data.redirect;
+        else if (data.error) alert(data.error);
+    } catch(e) { alert('刷新失败: '+e.message); }
+}
+</script>
 {{end}}
