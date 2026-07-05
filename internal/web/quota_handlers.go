@@ -1,9 +1,12 @@
 package web
 
 import (
+	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/onllm-dev/onwatch/v2/internal/dashboard"
@@ -28,13 +31,39 @@ func (h *Handler) OverviewPage(w http.ResponseWriter, r *http.Request) {
 		platforms = nil
 	}
 
+	now := time.Now().UTC()
+	startOfToday := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC)
+	daysSinceMonday := (int(now.Weekday()) + 6) % 7
+	startOfWeek := startOfToday.AddDate(0, 0, -daysSinceMonday)
+	startOfMonth := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, time.UTC)
+
+	todaySummary, err := h.store.UsageSummaryTotalByDateRange(startOfToday.Format(time.RFC3339Nano), startOfToday.AddDate(0, 0, 1).Format(time.RFC3339Nano))
+	if err != nil {
+		h.logger.Error("UsageSummaryTotalByDateRange today failed", "error", err)
+	}
+	weekSummary, err := h.store.UsageSummaryTotalByDateRange(startOfWeek.Format(time.RFC3339Nano), startOfWeek.AddDate(0, 0, 7).Format(time.RFC3339Nano))
+	if err != nil {
+		h.logger.Error("UsageSummaryTotalByDateRange week failed", "error", err)
+	}
+	monthSummary, err := h.store.UsageSummaryTotalByDateRange(startOfMonth.Format(time.RFC3339Nano), startOfMonth.AddDate(0, 1, 0).Format(time.RFC3339Nano))
+	if err != nil {
+		h.logger.Error("UsageSummaryTotalByDateRange month failed", "error", err)
+	}
+
+	usagePeriods := []map[string]interface{}{
+		{"Title": "今日", "Summary": todaySummary},
+		{"Title": "本周", "Summary": weekSummary},
+		{"Title": "本月", "Summary": monthSummary},
+	}
+
 	data := map[string]interface{}{
-		"Title":     "模型额度看板",
-		"BasePath":  h.getBasePath(),
-		"Version":   h.version,
-		"Nav":       "overview",
-		"Rec":       rec,
-		"Platforms": platforms,
+		"Title":        "模型额度看板",
+		"BasePath":     h.getBasePath(),
+		"Version":      h.version,
+		"Nav":          "overview",
+		"Rec":          rec,
+		"Platforms":    platforms,
+		"UsagePeriods": usagePeriods,
 	}
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
@@ -129,11 +158,21 @@ func (h *Handler) ProvidersPage(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// UsagePage renders usage log page with period summaries per plan.
+// UsagePage renders usage log page with today / this week / this month
+// consumption summaries per plan.
 func (h *Handler) UsagePage(w http.ResponseWriter, r *http.Request) {
-	now := time.Now()
-	periodStart := now.AddDate(0, 0, -30).Format(time.RFC3339)
-	periodEnd := now.Format(time.RFC3339)
+	now := time.Now().UTC()
+	startOfToday := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC)
+	daysSinceMonday := (int(now.Weekday()) + 6) % 7
+	startOfWeek := startOfToday.AddDate(0, 0, -daysSinceMonday)
+	startOfMonth := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, time.UTC)
+
+	todayStart := startOfToday.Format(time.RFC3339Nano)
+	todayEnd := startOfToday.AddDate(0, 0, 1).Format(time.RFC3339Nano)
+	weekStart := startOfWeek.Format(time.RFC3339Nano)
+	weekEnd := startOfWeek.AddDate(0, 0, 7).Format(time.RFC3339Nano)
+	monthStart := startOfMonth.Format(time.RFC3339Nano)
+	monthEnd := startOfMonth.AddDate(0, 1, 0).Format(time.RFC3339Nano)
 
 	usageLogs, err := h.store.ListUsageLogs()
 	if err != nil {
@@ -153,26 +192,51 @@ func (h *Handler) UsagePage(w http.ResponseWriter, r *http.Request) {
 		plans = nil
 	}
 
-	summaries := make(map[int64]store.UsageSummary)
+	todaySummaries := make(map[int64]store.UsageSummary)
+	weekSummaries := make(map[int64]store.UsageSummary)
+	monthSummaries := make(map[int64]store.UsageSummary)
 	for _, plan := range plans {
-		summary, err := h.store.UsageSummaryByPeriod(plan.ID, periodStart, periodEnd)
+		todaySum, err := h.store.UsageSummaryByDateRange(plan.ID, todayStart, todayEnd)
 		if err != nil {
-			h.logger.Error("UsageSummaryByPeriod failed", "plan_id", plan.ID, "error", err)
-			continue
+			h.logger.Error("UsageSummaryByDateRange today failed", "plan_id", plan.ID, "error", err)
+		} else {
+			todaySummaries[plan.ID] = todaySum
 		}
-		summaries[plan.ID] = summary
+		weekSum, err := h.store.UsageSummaryByDateRange(plan.ID, weekStart, weekEnd)
+		if err != nil {
+			h.logger.Error("UsageSummaryByDateRange week failed", "plan_id", plan.ID, "error", err)
+		} else {
+			weekSummaries[plan.ID] = weekSum
+		}
+		monthSum, err := h.store.UsageSummaryByDateRange(plan.ID, monthStart, monthEnd)
+		if err != nil {
+			h.logger.Error("UsageSummaryByDateRange month failed", "plan_id", plan.ID, "error", err)
+		} else {
+			monthSummaries[plan.ID] = monthSum
+		}
+	}
+
+	sumSections := []map[string]interface{}{
+		{"Title": "今日消耗", "Range": todayStart, "Summary": todaySummaries},
+		{"Title": "本周消耗", "Range": weekStart, "Summary": weekSummaries},
+		{"Title": "本月消耗", "Range": monthStart, "Summary": monthSummaries},
 	}
 
 	data := map[string]interface{}{
-		"Title":       "使用记录",
-		"BasePath":    h.getBasePath(),
-		"Version":     h.version,
-		"Nav":         "usage",
-		"UsageLogs":   usageLogs,
-		"Platforms":   platforms,
-		"Summaries":   summaries,
-		"PeriodStart": periodStart,
-		"PeriodEnd":   periodEnd,
+		"Title":          "使用记录",
+		"BasePath":       h.getBasePath(),
+		"Version":        h.version,
+		"Nav":            "usage",
+		"UsageLogs":      usageLogs,
+		"Platforms":      platforms,
+		"Plans":          plans,
+		"SumSections":    sumSections,
+		"TodaySummaries": todaySummaries,
+		"WeekSummaries":  weekSummaries,
+		"MonthSummaries": monthSummaries,
+		"TodayStart":     todayStart,
+		"WeekStart":      weekStart,
+		"MonthStart":     monthStart,
 	}
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
@@ -382,14 +446,15 @@ func (h *Handler) PlatformSave(w http.ResponseWriter, r *http.Request) {
 	}
 
 	p := &store.Platform{
-		Name:             r.FormValue("name"),
-		Vendor:           r.FormValue("vendor"),
-		Category:         r.FormValue("category"),
-		BaseURL:          r.FormValue("base_url"),
-		CredentialStatus: r.FormValue("credential_status"),
-		DefaultRiskLevel: r.FormValue("default_risk_level"),
-		IsActive:         r.FormValue("is_active") == "1",
-		Notes:            r.FormValue("notes"),
+		Name:              r.FormValue("name"),
+		Vendor:            r.FormValue("vendor"),
+		Category:          r.FormValue("category"),
+		BaseURL:           r.FormValue("base_url"),
+		CredentialStatus:  r.FormValue("credential_status"),
+		DefaultRiskLevel:  r.FormValue("default_risk_level"),
+		SupportsToolsJSON: r.FormValue("supports_tools_json") == "1",
+		IsActive:          r.FormValue("is_active") == "1",
+		Notes:             r.FormValue("notes"),
 	}
 
 	idStr := r.FormValue("id")
@@ -932,13 +997,13 @@ func (h *Handler) ModelEditForm(w http.ResponseWriter, r *http.Request) {
 	}
 
 	data := map[string]interface{}{
-		"Title":     "编辑模型",
-		"BasePath":  h.getBasePath(),
-		"Version":   h.version,
-		"Nav":       "plans",
-		"Model":     model,
-		"Platforms": platforms,
-		"Plans":     plans,
+		"Title":       "编辑模型",
+		"BasePath":    h.getBasePath(),
+		"Version":     h.version,
+		"Nav":         "plans",
+		"Model":       model,
+		"Platforms":   platforms,
+		"Plans":       plans,
 		"PlanIDValue": planIDValue,
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
@@ -977,6 +1042,7 @@ func (h *Handler) ModelSave(w http.ResponseWriter, r *http.Request) {
 		Family:          r.FormValue("family"),
 		IsCurrent:       r.FormValue("is_current") == "1",
 		BaseURLOverride: r.FormValue("base_url_override"),
+		ToolFitJSON:     r.FormValue("tool_fit_json"),
 		Status:          r.FormValue("status"),
 	}
 
@@ -1029,4 +1095,269 @@ func (h *Handler) ModelDelete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	respondJSON(w, http.StatusOK, map[string]string{"redirect": h.getBasePath() + "/qb/plans"})
+}
+
+// ---------------------------------------------------------------------------
+// UsageLog form handlers
+// ---------------------------------------------------------------------------
+
+// UsageNewForm renders the new usage log form.
+func (h *Handler) UsageNewForm(w http.ResponseWriter, r *http.Request) {
+	plans, err := h.store.ListPlans()
+	if err != nil {
+		h.logger.Error("ListPlans failed", "error", err)
+		plans = nil
+	}
+	models, err := h.store.ListModels()
+	if err != nil {
+		h.logger.Error("ListModels failed", "error", err)
+		models = nil
+	}
+	data := map[string]interface{}{
+		"Title":        "新增用量记录",
+		"BasePath":     h.getBasePath(),
+		"Version":      h.version,
+		"Nav":          "usage",
+		"UsageLog":     nil,
+		"Plans":        plans,
+		"Models":       models,
+		"PlanIDValue":  0,
+		"ModelIDValue": 0,
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-store")
+	if err := h.usageFormTmpl.ExecuteTemplate(w, "layout.html", data); err != nil {
+		h.logger.Error("failed to render usage form template", "error", err)
+		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+	}
+}
+
+// UsageEditForm renders the edit usage log form.
+func (h *Handler) UsageEditForm(w http.ResponseWriter, r *http.Request) {
+	idStr := r.URL.Query().Get("id")
+	id, err := strconv.ParseInt(idStr, 10, 64)
+	if err != nil || id <= 0 {
+		http.Error(w, "invalid usage log id", http.StatusBadRequest)
+		return
+	}
+	usageLog, err := h.store.GetUsageLog(id)
+	if err != nil {
+		h.logger.Error("GetUsageLog failed", "error", err)
+		http.Error(w, "usage log not found", http.StatusNotFound)
+		return
+	}
+	plans, err := h.store.ListPlans()
+	if err != nil {
+		h.logger.Error("ListPlans failed", "error", err)
+		plans = nil
+	}
+	models, err := h.store.ListModels()
+	if err != nil {
+		h.logger.Error("ListModels failed", "error", err)
+		models = nil
+	}
+	var planIDValue, modelIDValue int64
+	if usageLog.PlanID != nil {
+		planIDValue = *usageLog.PlanID
+	}
+	if usageLog.ModelID != nil {
+		modelIDValue = *usageLog.ModelID
+	}
+	data := map[string]interface{}{
+		"Title":        "编辑用量记录",
+		"BasePath":     h.getBasePath(),
+		"Version":      h.version,
+		"Nav":          "usage",
+		"UsageLog":     usageLog,
+		"Plans":        plans,
+		"Models":       models,
+		"PlanIDValue":  planIDValue,
+		"ModelIDValue": modelIDValue,
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-store")
+	if err := h.usageFormTmpl.ExecuteTemplate(w, "layout.html", data); err != nil {
+		h.logger.Error("failed to render usage form template", "error", err)
+		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+	}
+}
+
+// UsageSave handles usage log create/update.
+func (h *Handler) UsageSave(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		respondError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	if err := r.ParseForm(); err != nil {
+		respondError(w, http.StatusBadRequest, "failed to parse form")
+		return
+	}
+
+	var planID *int64
+	if pidStr := r.FormValue("plan_id"); pidStr != "" {
+		if pid, err := strconv.ParseInt(pidStr, 10, 64); err == nil && pid > 0 {
+			planID = &pid
+		}
+	}
+	var modelID *int64
+	if midStr := r.FormValue("model_id"); midStr != "" {
+		if mid, err := strconv.ParseInt(midStr, 10, 64); err == nil && mid > 0 {
+			modelID = &mid
+		}
+	}
+	inputTokens, _ := strconv.ParseInt(r.FormValue("input_tokens"), 10, 64)
+	outputTokens, _ := strconv.ParseInt(r.FormValue("output_tokens"), 10, 64)
+	cacheReadTokens, _ := strconv.ParseInt(r.FormValue("cache_read_tokens"), 10, 64)
+	cacheWriteTokens, _ := strconv.ParseInt(r.FormValue("cache_write_tokens"), 10, 64)
+	requestCount, _ := strconv.ParseInt(r.FormValue("request_count"), 10, 64)
+	costValue, _ := strconv.ParseFloat(r.FormValue("cost_value"), 64)
+
+	ul := &store.UsageLog{
+		PlanID:           planID,
+		ModelID:          modelID,
+		BucketScope:      r.FormValue("bucket_scope"),
+		DateKey:          r.FormValue("date_key"),
+		PeriodStart:      r.FormValue("period_start"),
+		PeriodEnd:        r.FormValue("period_end"),
+		InputTokens:      inputTokens,
+		OutputTokens:     outputTokens,
+		CacheReadTokens:  cacheReadTokens,
+		CacheWriteTokens: cacheWriteTokens,
+		RequestCount:     requestCount,
+		CostValue:        costValue,
+		Source:           r.FormValue("source"),
+		SourceRef:        r.FormValue("source_ref"),
+	}
+
+	idStr := r.FormValue("id")
+	if idStr != "" {
+		id, err := strconv.ParseInt(idStr, 10, 64)
+		if err != nil {
+			respondError(w, http.StatusBadRequest, "invalid id")
+			return
+		}
+		existing, err := h.store.GetUsageLog(id)
+		if err != nil {
+			h.logger.Error("GetUsageLog failed", "error", err)
+			respondError(w, http.StatusInternalServerError, "failed to get usage log")
+			return
+		}
+		ul.ID = existing.ID
+		ul.CreatedAt = existing.CreatedAt
+		if err := h.store.UpdateUsageLog(ul); err != nil {
+			h.logger.Error("UpdateUsageLog failed", "error", err)
+			respondError(w, http.StatusInternalServerError, "failed to update usage log")
+			return
+		}
+	} else {
+		if _, err := h.store.InsertUsageLog(ul); err != nil {
+			h.logger.Error("InsertUsageLog failed", "error", err)
+			respondError(w, http.StatusInternalServerError, "failed to create usage log")
+			return
+		}
+	}
+
+	respondJSON(w, http.StatusOK, map[string]string{"redirect": h.getBasePath() + "/qb/usage"})
+}
+
+// UsageDelete handles usage log deletion.
+func (h *Handler) UsageDelete(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		respondError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	idStr := r.URL.Query().Get("id")
+	id, err := strconv.ParseInt(idStr, 10, 64)
+	if err != nil || id <= 0 {
+		respondError(w, http.StatusBadRequest, "invalid usage log id")
+		return
+	}
+	if err := h.store.DeleteUsageLog(id); err != nil {
+		h.logger.Error("DeleteUsageLog failed", "error", err)
+		respondError(w, http.StatusInternalServerError, "failed to delete usage log")
+		return
+	}
+	respondJSON(w, http.StatusOK, map[string]string{"redirect": h.getBasePath() + "/qb/usage"})
+}
+
+// ---------------------------------------------------------------------------
+// Config refresh handler
+// ---------------------------------------------------------------------------
+
+// ConfigRefreshAction performs a read-only credential detection for every
+// platform by probing its Base URL over HTTP with a short timeout. No real
+// API keys or cookies are sent or stored — only reachability status, the
+// detected Base URL, a redacted HTTP status message, and the check timestamp
+// are written back to qb_credential_statuses.
+func (h *Handler) ConfigRefreshAction(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		respondError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	platforms, err := h.store.ListPlatforms()
+	if err != nil {
+		h.logger.Error("ListPlatforms failed", "error", err)
+		respondError(w, http.StatusInternalServerError, "failed to list platforms")
+		return
+	}
+
+	client := &http.Client{Timeout: 5 * time.Second}
+	checkedAt := time.Now().UTC().Format(time.RFC3339Nano)
+
+	for _, plat := range platforms {
+		status, message := probeBaseURL(client, plat.BaseURL, h.logger)
+		cs := &store.CredentialStatus{
+			PlatformID:      plat.ID,
+			Status:          status,
+			DetectionMethod: "http_probe",
+			DetectedPath:    plat.BaseURL,
+			CheckedAt:       checkedAt,
+			MessageRedacted: message,
+			BaseURL:         plat.BaseURL,
+		}
+		if existing, err := h.store.GetCredentialStatusByPlatform(plat.ID); err == nil && existing != nil {
+			cs.ID = existing.ID
+			if err := h.store.UpdateCredentialStatus(cs); err != nil {
+				h.logger.Error("UpdateCredentialStatus failed", "platform_id", plat.ID, "error", err)
+			}
+		} else {
+			if _, err := h.store.InsertCredentialStatus(cs); err != nil {
+				h.logger.Error("InsertCredentialStatus failed", "platform_id", plat.ID, "error", err)
+			}
+		}
+	}
+
+	respondJSON(w, http.StatusOK, map[string]string{"redirect": h.getBasePath() + "/qb/config"})
+}
+
+// probeBaseURL performs a read-only GET to the given Base URL without sending
+// any credentials. It returns a platform status string (healthy / warning /
+// danger / unknown) and a redacted message describing the outcome. No
+// sensitive information is included in the message.
+func probeBaseURL(client *http.Client, baseURL string, logger *slog.Logger) (string, string) {
+	if strings.TrimSpace(baseURL) == "" {
+		return "unknown", "base_url 未配置"
+	}
+	resp, err := client.Get(baseURL)
+	if err != nil {
+		if logger != nil {
+			logger.Debug("config probe failed", "base_url", baseURL, "error", err)
+		}
+		return "danger", "连接失败"
+	}
+	defer resp.Body.Close()
+	io.Copy(io.Discard, resp.Body)
+	code := resp.StatusCode
+	switch {
+	case code >= 200 && code < 400:
+		return "healthy", fmt.Sprintf("HTTP %d", code)
+	case code == 401 || code == 403:
+		return "warning", fmt.Sprintf("HTTP %d (需要鉴权)", code)
+	case code == 404:
+		return "warning", fmt.Sprintf("HTTP %d (路径不存在)", code)
+	case code >= 500:
+		return "danger", fmt.Sprintf("HTTP %d (服务异常)", code)
+	default:
+		return "warning", fmt.Sprintf("HTTP %d", code)
+	}
 }

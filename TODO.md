@@ -1,5 +1,18 @@
 # TODO
 
+## 当前执行模式
+
+P0 急用连续开发；分支：`feature/p0-urgent-mvp`；事实源：`docs/P0_URGENT_MVP_DEV_PLAN.md` + `AGENT_HANDOFF.md` + `TODO.md` + `PROJECT_STATUS.md` + `CHANGELOG.md`。
+
+硬规则（全部遵守）：
+
+- [x] 不直接在 `main` 开发
+- [x] 本轮只使用 `feature/p0-urgent-mvp` 一个开发分支
+- [x] 不新开多个 PR
+- [x] 不触发 GitHub Actions（CI 已改 workflow_dispatch；提交带 `[skip ci]`）
+- [x] 不保存真实敏感凭据
+- [x] 不进入 P1 Provider 自动适配
+
 ## P0 启动清单
 
 ### 包 0：结构审查 ✅
@@ -78,16 +91,29 @@
 - [x] G4 桶编辑入口（qb_plans.html 桶行编辑链接）
 - [x] 端到端复验（HOME 隔离）：模型录入 + 导入 CSRF + ID 重建
 
-### 包 3.6：补充审查缺口
+### 包 3.6：补充审查缺口 ✅
 
-- [ ] 新增 `UsageLog` 录入 / 编辑 / 删除路由与表单
-- [ ] 将使用记录页拆成 `today / week / month` 明确口径
-- [ ] 配置状态页增加真实只读检测刷新动作
-- [ ] 将检测结果写回 `qb_credential_statuses`
-- [ ] 平台 / 模型补录“适合工具”字段
-- [ ] 总览 / 配置 / 套餐页展示“适合工具”
-- [ ] 排查 `internal/web` 测试中的 `502` 与静态资源返回异常
-- [ ] 同步 `PROJECT_STATUS.md` / `CHANGELOG.md` / `AGENT_HANDOFF.md`
+- [x] 新增 `UsageLog` 录入 / 编辑 / 删除路由与表单
+- [x] 将使用记录页拆成 `today / week / month` 明确口径
+- [x] 配置状态页增加真实只读检测刷新动作
+- [x] 将检测结果写回 `qb_credential_statuses`
+- [x] 平台 / 模型补录“适合工具”字段
+- [x] 总览 / 配置 / 套餐页展示“适合工具”
+- [x] 排查 `internal/web` 测试中的 `502` 与静态资源返回异常（根因：环境代理；测试前关闭 HTTP_PROXY）
+- [x] 同步 `PROJECT_STATUS.md` / `CHANGELOG.md` / `AGENT_HANDOFF.md`
+
+验收：`go build ./...` 通过；`go test ./internal/store ./internal/dashboard` 通过；`go test ./internal/web` 仅剩 onWatch 原有测试的 Windows 平台预存失败（与本轮无关，已 stash 证实）；HOME 隔离端到端冒烟通过（usage 三段汇总 / 用量表单 / 配置刷新写回 / 适合工具展示）。
+
+### 包 3.7：R1-R5 返工（按 docs/P0_URGENT_MVP_REVIEW.md）✅
+
+- [x] R1 修 `PROJECT_STATUS.md` 前后冲突（开头/下一步改一致）
+- [x] R2 总览页补 today/week/month（`UsageSummaryTotalByDateRange` + `OverviewPage` + `qb_overview.html` 三卡片）
+- [x] R3 P0-3 文案降级：平台=「支持工具调用」bool，模型=「适合工具标签」tool_fit_json；UI 文案统一
+- [x] R4 P0-4 文档：Base URL 只读探测写入 `docs/P0_URGENT_MVP_DEV_PLAN.md`（不发凭据/不调付费 API/不网页登录）
+- [x] R5 PR #2 描述改纯摘要，取舍写入事实源
+- [x] 同步 AGENT_HANDOFF / PROJECT_STATUS / TODO / CHANGELOG / DEV_PLAN / REVIEW
+
+验收：`go build` 通过；`TestQBOverviewRendersWithSeed` 等通过；总览页冒烟含「消耗统计|今日|本周|本月|支持工具调用」。等待 GPT 复审。
 
 ## 非本轮
 

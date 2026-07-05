@@ -2,22 +2,37 @@
 
 ## 当前结论
 
-P0 主骨架已完成，但还不能定义为“完整交付”。
+P0 急用闭环已完成（P0-1~P0-6），等待 GPT 复审 / 合并。
 
 当前代码已经具备：
 
 - `qb_*` 数据表和台账层 store
 - 总览 / 套餐 / Provider / 使用记录 / 配置 / 风险 / 导入导出页面
-- 平台 / 套餐 / 额度桶 / 风险备注 / 模型录入闭环
+- 平台 / 套餐 / 额度桶 / 风险备注 / 模型 / 使用记录录入闭环
 - 推荐、样例数据、脱敏导入导出
+- 总览页与使用记录页的 today / week / month 三段消耗
+- 配置状态手动刷新（Base URL 只读探测）
 
-但经补充审查确认，仍有 3 个功能缺口 + 1 个状态文档漂移，暂不应标记为 `p0_complete`。
+经 R1-R5 返工后，事实源文档与代码口径已一致。剩余失败仅为 onWatch 原有测试在 Windows 上的预存平台不兼容（Setsid/systemd/HOME 语义/getCredentialsFilePath），属底座问题，非台账 P0 责任。
 
 ## 当前阶段
 
-- 阶段：P0 补缺阶段
-- 状态：`p0_gap_fixing`
-- 日期：2026-07-03
+- 阶段：P0 补缺完成
+- 状态：`p0_complete`
+- 日期：2026-07-04
+
+## 本轮结论（P0-1~P0-6，feature/p0-urgent-mvp）
+
+P0 台账层全部缺口已补齐并通过验证：
+
+- P0-1 UsageLog 新增/编辑/删除闭环 ✅
+- P0-2 today/week/month 三段消耗口径 ✅
+- P0-3 适合工具字段录入与展示 ✅
+- P0-4 配置状态手动刷新（只读探测 Base URL，不存敏感凭据） ✅
+- P0-5 web 502 排查（根因：环境代理；测试前关闭 HTTP_PROXY 即通过） ✅
+- P0-6 四份交接文档同步 ✅
+
+代码层面 P0 已可交付。剩余失败仅为 onWatch 原有测试在 Windows 上的预存平台不兼容（Setsid/systemd/HOME 语义/getCredentialsFilePath），属底座问题，非台账 P0 责任，已用 `git stash` 证实与本轮无关。
 
 ## 当前开发流程
 
@@ -26,46 +41,19 @@ P0 主骨架已完成，但还不能定义为“完整交付”。
 - 同一时间只允许一种流程生效；恢复 Codex 流程前，必须更新 `docs/DEVELOPMENT_WORKFLOW.md` 和本文件。
 - 后续开发默认必须走分支 + PR，不直接在 `main` 开发。
 
-## 已确认缺口
+## 已确认缺口（已全部补齐）
 
-### 缺口 1：UsageLog 没有录入闭环
+### 缺口 1：UsageLog 没有录入闭环 → ✅ 已补
+新增 UsageNewForm/UsageEditForm/UsageSave/UsageDelete + qb_usage_form.html + 4 路由 + 明细行编辑/删除按钮。
 
-现状：
-- store 层已有 `InsertUsageLog / UpdateUsageLog / DeleteUsageLog`
-- 使用记录页只做展示和最近 30 天汇总
-- 没有 `usage/new`、`usage/save`、`usage/delete` 路由和表单
+### 缺口 2：只读配置检测仍是展示态 → ✅ 已补
+新增 ConfigRefreshAction：对每平台 Base URL 做 5s 只读 HTTP 探测（不发凭据），分类 healthy/warning/danger，写回 qb_credential_statuses（upsert）。
 
-影响：
-- `今日 / 本周 / 本月消耗` 只是部分查询能力，不是可操作闭环
-- 用户无法手动补录或修正使用记录
+### 缺口 3：适合工具字段未落地 → ✅ 已补
+PlatformSave 读 supports_tools_json、ModelSave 读 tool_fit_json；两个表单加输入；config/plans/overview 三页展示。
 
-### 缺口 2：只读配置检测仍是展示态
-
-现状：
-- `qb/config` 和 `qb/providers` 页面只读取 `qb_credential_statuses`
-- 页面没有“刷新检测”入口
-- 当前非测试代码中，`qb_credential_statuses` 主要由 seed / import 写入，不是实时检测链路写回
-
-影响：
-- 当前更接近“状态展示页”，还不是“可刷新检测页”
-
-### 缺口 3：适合工具字段未落地
-
-现状：
-- schema 已有 `supports_tools_json` / `tool_fit_json`
-- 平台表单、模型表单、详情展示都没有对应输入与展示
-
-影响：
-- 产品计划中的“适合工具”还停留在数据结构层，未形成用户可用能力
-
-### 缺口 4：状态文档与代码状态漂移
-
-现状：
-- `PROJECT_STATUS.md` 曾写为 `p0_complete`
-- `TODO.md` 中阶段 1 未按实际代码完成情况同步
-
-影响：
-- 会误导后续 agent 对剩余工作量的判断
+### 缺口 4：状态文档与代码状态漂移 → ✅ 已补
+PROJECT_STATUS/TODO/CHANGELOG/AGENT_HANDOFF 同步，撤销 p0_complete 错误口径后再正确标记。
 
 ## 已完成部分
 
@@ -81,23 +69,22 @@ P0 主骨架已完成，但还不能定义为“完整交付”。
 
 ## 待补后才可宣称 P0 完成
 
-1. UsageLog 录入 / 编辑 / 删除闭环
-2. `today / week / month` 三段消耗口径落地，而不是单页 30 天汇总替代
-3. 配置状态页接入真实只读检测刷新动作
-4. “适合工具”字段进入录入表单和展示页
-5. 状态文档与代码实际状态同步
+全部已完成 ✅：
+1. ✅ UsageLog 录入 / 编辑 / 删除闭环
+2. ✅ `today / week / month` 三段消耗口径落地
+3. ✅ 配置状态页接入真实只读检测刷新动作
+4. ✅ “适合工具”字段进入录入表单和展示页
+5. ✅ 状态文档与代码实际状态同步
 
 ## 技术问题（已知）
 
-1. 当前终端环境无 `go`，本轮无法直接复跑 Go 测试
-2. 当前目录原本不是 git 仓库，需要初始化后再连接私有远程
-3. 补充验证结果：`internal/store` 测试通过，但 `internal/web` 测试当前失败，主要表现为静态资源 / HTML / metrics 返回 `502`，不能把 Web 层视作已稳定验收
+1. Go 1.26.4 已装到 `~/.local/go`（zip 下载 + .NET 解压）。
+2. web 测试 502 根因已定位：环境代理拦截 `0.0.0.0` 请求；测试前 `HTTP_PROXY=$null HTTPS_PROXY=$null NO_PROXY` 含 `0.0.0.0` 即通过（详见 AGENT_HANDOFF.md）。
+3. onWatch 原有测试在 Windows 有若干预存平台不兼容（Setsid/systemd/HOME 语义/getCredentialsFilePath），与本轮台账改动无关，属底座问题。
 
 ## 下一步
 
-第一优先级不是 P1，而是补齐以上 5 项 P0 缺口。
-
-补完后再进入：
+等待 GPT 复审 PR #2；复审通过后合并到 `main`，再进入 P1 规划：
 
 - Provider 自动适配
 - `ccusage` 导入

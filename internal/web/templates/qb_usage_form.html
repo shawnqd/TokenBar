@@ -1,0 +1,120 @@
+{{define "content"}}
+<div class="app">
+    <main id="main-content" class="main-content">
+        <div class="welcome-banner">
+            <h1 class="welcome-title">{{if .UsageLog}}编辑用量记录{{else}}新增用量记录{{end}}</h1>
+        </div>
+        <section class="insights-panel" style="max-width:640px">
+            <form id="usageForm" class="qb-form">
+                {{if .UsageLog}}<input type="hidden" name="id" value="{{.UsageLog.ID}}">{{end}}
+                <div class="form-group">
+                    <label class="form-label" for="plan_id">关联套餐</label>
+                    <select class="form-input" id="plan_id" name="plan_id">
+                        <option value="">无（不关联）</option>
+                        {{range .Plans}}
+                        <option value="{{.ID}}" {{if and (ne $.PlanIDValue 0) (eq $.PlanIDValue .ID)}}selected{{end}}>{{.Name}}</option>
+                        {{end}}
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label class="form-label" for="model_id">关联模型</label>
+                    <select class="form-input" id="model_id" name="model_id">
+                        <option value="">无（不关联）</option>
+                        {{range .Models}}
+                        <option value="{{.ID}}" {{if and (ne $.ModelIDValue 0) (eq $.ModelIDValue .ID)}}selected{{end}}>{{.DisplayName}}</option>
+                        {{end}}
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label class="form-label" for="bucket_scope">范围 *</label>
+                    <input class="form-input" type="text" id="bucket_scope" name="bucket_scope" value="{{if .UsageLog}}{{.UsageLog.BucketScope}}{{end}}" placeholder="如: day/month" required>
+                </div>
+                <div class="form-group">
+                    <label class="form-label" for="date_key">日期键 *</label>
+                    <input class="form-input" type="text" id="date_key" name="date_key" value="{{if .UsageLog}}{{.UsageLog.DateKey}}{{end}}" placeholder="如: 2026-07-04" required>
+                </div>
+                <div class="form-group">
+                    <label class="form-label" for="period_start">周期起 *</label>
+                    <input class="form-input" type="text" id="period_start" name="period_start" value="{{if .UsageLog}}{{.UsageLog.PeriodStart}}{{end}}" required>
+                </div>
+                <div class="form-group">
+                    <label class="form-label" for="period_end">周期止 *</label>
+                    <input class="form-input" type="text" id="period_end" name="period_end" value="{{if .UsageLog}}{{.UsageLog.PeriodEnd}}{{end}}" required>
+                </div>
+                <div class="form-group">
+                    <label class="form-label" for="input_tokens">输入 Token</label>
+                    <input class="form-input" type="number" step="any" id="input_tokens" name="input_tokens" value="{{if .UsageLog}}{{.UsageLog.InputTokens}}{{end}}">
+                </div>
+                <div class="form-group">
+                    <label class="form-label" for="output_tokens">输出 Token</label>
+                    <input class="form-input" type="number" step="any" id="output_tokens" name="output_tokens" value="{{if .UsageLog}}{{.UsageLog.OutputTokens}}{{end}}">
+                </div>
+                <div class="form-group">
+                    <label class="form-label" for="cache_read_tokens">缓存读取</label>
+                    <input class="form-input" type="number" step="any" id="cache_read_tokens" name="cache_read_tokens" value="{{if .UsageLog}}{{.UsageLog.CacheReadTokens}}{{end}}">
+                </div>
+                <div class="form-group">
+                    <label class="form-label" for="cache_write_tokens">缓存写入</label>
+                    <input class="form-input" type="number" step="any" id="cache_write_tokens" name="cache_write_tokens" value="{{if .UsageLog}}{{.UsageLog.CacheWriteTokens}}{{end}}">
+                </div>
+                <div class="form-group">
+                    <label class="form-label" for="request_count">请求数</label>
+                    <input class="form-input" type="number" step="any" id="request_count" name="request_count" value="{{if .UsageLog}}{{.UsageLog.RequestCount}}{{end}}">
+                </div>
+                <div class="form-group">
+                    <label class="form-label" for="cost_value">费用</label>
+                    <input class="form-input" type="number" step="any" id="cost_value" name="cost_value" value="{{if .UsageLog}}{{.UsageLog.CostValue}}{{end}}">
+                </div>
+                <div class="form-group">
+                    <label class="form-label" for="source">来源</label>
+                    <input class="form-input" type="text" id="source" name="source" value="{{if .UsageLog}}{{.UsageLog.Source}}{{end}}" placeholder="如: manual/ccusage">
+                </div>
+                <div class="form-group">
+                    <label class="form-label" for="source_ref">来源引用</label>
+                    <input class="form-input" type="text" id="source_ref" name="source_ref" value="{{if .UsageLog}}{{.UsageLog.SourceRef}}{{end}}">
+                </div>
+                <div class="form-actions">
+                    <button type="submit" class="btn-primary">{{if .UsageLog}}保存修改{{else}}创建用量记录{{end}}</button>
+                    <a href="{{.BasePath}}/qb/usage" class="btn-secondary">取消</a>
+                </div>
+            </form>
+        </section>
+    </main>
+</div>
+<style>
+.qb-form{display:flex;flex-direction:column;gap:16px}
+.form-group{display:flex;flex-direction:column;gap:4px}
+.form-label{font-size:13px;font-weight:500;color:var(--text-secondary)}
+.form-input{padding:8px 12px;border:1px solid var(--border-default);border-radius:var(--radius-sm);background:var(--surface-input);color:var(--text-primary);font-size:14px;font-family:inherit}
+.form-input:focus{outline:none;border-color:var(--accent-teal);box-shadow:0 0 0 2px rgba(13,148,136,.15)}
+.form-actions{display:flex;gap:12px;padding-top:8px}
+.btn-primary{padding:8px 20px;background:var(--accent-teal);color:#fff;border:none;border-radius:var(--radius-sm);font-size:14px;font-weight:500;cursor:pointer;text-decoration:none;display:inline-block}
+.btn-primary:hover{opacity:.9}
+.btn-secondary{padding:8px 20px;background:var(--surface-card-alt);color:var(--text-primary);border:1px solid var(--border-default);border-radius:var(--radius-sm);font-size:14px;cursor:pointer;text-decoration:none;display:inline-block;text-align:center}
+.btn-secondary:hover{background:var(--surface-hover)}
+</style>
+<script>
+document.getElementById('usageForm').addEventListener('submit', async function(e) {
+    e.preventDefault();
+    const btn = this.querySelector('button[type="submit"]');
+    btn.disabled = true;
+    try {
+        const resp = await fetch('{{.BasePath}}/qb/usage/save', {
+            method: 'POST',
+            headers: {'X-Requested-With': 'XMLHttpRequest'},
+            body: new FormData(this)
+        });
+        const data = await resp.json();
+        if (data.redirect) {
+            window.location.href = data.redirect;
+        } else if (data.error) {
+            alert(data.error);
+            btn.disabled = false;
+        }
+    } catch(err) {
+        alert('提交失败: ' + err.message);
+        btn.disabled = false;
+    }
+});
+</script>
+{{end}}
