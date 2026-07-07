@@ -2,73 +2,49 @@
 
 ## 目标
 
-本仓库用于把 `onWatch` 改造成个人本地双端使用的「模型额度看板」。
+TokenBar 是原生菜单栏额度管理工具：在菜单栏显示 AI 编程 / 模型平台的额度、次数、余额、重置窗口和可用状态。
+第一阶段 Mac，后续 Windows。
 
-执行目标不是重写系统，而是在不破坏 `onWatch` 原能力的前提下，先交付 P0：
-
-- 平台管理
-- 套餐管理
-- 额度桶管理
-- 当前模型
-- 到期 / 重置时间
-- API Key 状态
-- Base URL
-- 风险备注
-- 首页推荐
-- 导入 / 导出
-
-## 先读顺序
-
-1. `docs/CODE_HANDOFF.md`
-2. `docs/PRODUCT_PLAN.md`
-3. `docs/TECHNICAL_MANUAL.md`
-4. `docs/MAINTENANCE_MANUAL.md`
-5. 当前底座代码的 `README.md`
-6. `docs/API_INTEGRATIONS_SETUP.md`
-
-## 当前工作方式
+## 工作方式
 
 ### 只做
-
-- P0
-- 手动管理优先
-- 新表、新页面、新路由
-- 只读配置检测
-- 脱敏导入导出
+- 原生桌面 App（Swift / SwiftUI，macOS 14+）
+- 多来源：API Key / Browser Cookie / Local File / CLI config / Snapshot
+- 多窗口：5h / 7d / 周 / 月 / 余额 / 次数 / token / request limit
+- 菜单栏总览、Provider 详情卡片、手动刷新、设置页、数据来源状态
+- 无法获取真实额度时显示 `unknown`，绝不伪造数据
+- 分阶段实现，不删减长期 Provider / 功能范围
 
 ### 不做
+- 不保存真实密码；Cookie / Token 默认 opt-in，复用本地已有会话
+- 不做云同步、多用户、网页看板
+- 不为 P0 偷偷破坏已落地模块
 
-- P1 Provider 自动适配
-- 保存真实密钥
-- Cookie 持久化
-- 网页余额抓取
-- 云同步
-- 多用户
+## 模块边界（不可越界）
+- `TokenBarCore`：fetch + parse + provider adapter + source reader + storage。无 UI。
+- `TokenBar`：state + UI（status item / popover / provider card / settings）。
+- `TokenBarCLI`：bundled CLI。
+- 采集层（Core）与展示层（App）严格分离，UI 不得直接做网络/文件采集。
 
-## 实施原则
-
-1. 先审查再改造
-2. 采集层和台账层分离
-3. 原 `onWatch` Provider 路径不轻易改语义
-4. 优先新增独立模块，不把台账逻辑散落到旧采集逻辑
-5. 单个自动化失败不能影响手动台账
+## 先读顺序
+1. `docs/TOKENBAR_PRODUCT_PLAN.md`
+2. `docs/TOKENBAR_ARCHITECTURE.md`
+3. `docs/PROVIDER_SOURCE_STRATEGY.md`
+4. `docs/MAC_MVP_PLAN.md`
+5. `docs/PROJECT_STATUS.md`
 
 ## 停手规则
-
 出现以下情况必须停下并更新交接文件，不要擅自扩大范围：
-
-1. 必须破坏旧 Provider 才能完成 P0
-2. 必须保存真实 API Key / Cookie 才能继续
-3. 页面必须重写大量底座结构才可落地
-4. 真实代码结构与文档假设差异过大
+1. 必须保存真实密码 / Cookie 永久持久化才能继续
+2. 必须破坏 Core / App 模块边界才能落地
+3. 某个 Provider 无法获取真实额度却被迫伪造数字
+4. 真实平台行为与 `PROVIDER_SOURCE_STRATEGY.md` 假设差异过大
 
 ## 更新规则
-
 每完成一个包，至少更新：
-
-- `PROJECT_STATUS.md`
+- `docs/PROJECT_STATUS.md`
 - `TODO.md`
 - `CHANGELOG.md`
 - `AGENT_HANDOFF.md`
 
-如果发现纯技术问题，也直接写进 `AGENT_HANDOFF.md`，不要把用户当传话中间层。
+纯技术问题直接写进 `AGENT_HANDOFF.md`，不要把用户当传话中间层。
