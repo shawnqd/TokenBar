@@ -1,36 +1,70 @@
-# 模型额度看板
+# TokenBar
 
-本目录当前只放开发前基础文档，不放实现代码。
+> Every AI model quota, in your menu bar.
 
-目标：为后续新的 chat、Code、OpenCode 提供直接可执行的开发依据，避免重复调研和反复传话。
+TokenBar is a native menu bar app that shows the **quota, usage, balance, reset windows, and availability** of AI coding / model platforms — Codex, OpenCode Go, MiniMax, MiMo, DeepSeek, Doubao / Volcengine Ark, Volc Engine Agent & coding count-based plans, and more.
 
-文档入口：
+- **Native first.** macOS menu bar app (Swift / SwiftUI). Windows in a later phase.
+- **Multi-source.** API Key, browser cookie, local file, CLI config, snapshot — whatever the platform exposes.
+- **Multi-window.** 5-hour / 7-day / weekly / monthly / balance / count / token / request-limit windows, each with its own reset countdown.
+- **Honest data.** When a quota cannot be fetched, TokenBar shows `unknown` — it never fabricates numbers.
+- **Privacy first.** Reuses existing local sessions (OAuth, cookies, CLI config). No passwords stored. Cookies are opt-in.
 
-- `docs/PRODUCT_PLAN.md`：产品计划书
-- `docs/TECHNICAL_MANUAL.md`：技术手册
-- `docs/MAINTENANCE_MANUAL.md`：维护与使用手册
-- `docs/CODE_HANDOFF.md`：给 Code / OpenCode 的执行任务书
-- `docs/DEVELOPMENT_WORKFLOW.md`：开发流程，包含原 Codex 流程和当前 GPT 临时 PR 审核流程
+> **Status: scaffold phase.** This branch defines the product plan, architecture, and module scaffold only. No provider business logic is implemented yet. See [docs/PROJECT_STATUS.md](docs/PROJECT_STATUS.md).
 
-当前结论：
+---
 
-- 继续使用 `onWatch` 作为底层运行底座。
-- 第一阶段不从零开发，不先做全自动抓取。
-- 先做 P0：本地套餐台账、额度桶、总览推荐、配置状态、风险备注、导入导出。
-- Provider 自动适配放在 P1，且默认关闭高风险的 Cookie / 网页抓取路径。
+## Why
 
-执行入口：
+AI coding platforms each expose quota differently: some by API key, some by browser cookie, some only by local CLI config, some by count of requests, some by token spend, some by 5-hour rolling windows, some by weekly / monthly cycles. TokenBar puts all of them behind one menu bar icon with per-provider cards and reset countdowns, so you can plan long tasks around resets instead of guessing.
 
-- `AGENT_HANDOFF.md`：给执行开发方的当日交接单
-- `PROJECT_STATUS.md`：当前阶段、阻塞和今日目标
-- `TODO.md`：包 0 到包 3 执行清单
-- `CHANGELOG.md`：文档与执行状态变更记录
-- `AGENTS.md`：执行约束和停手规则
+## Platforms (long-term scope)
 
-后续执行顺序：
+| Platform | Primary source candidates |
+| --- | --- |
+| Codex (OpenAI) | OAuth API, local Codex CLI config |
+| OpenCode Go | Browser cookie / local SQLite |
+| MiniMax | API token / cookie header / browser cookie |
+| Xiaomi MiMo | Browser cookie |
+| DeepSeek | API key (credit balance) |
+| Doubao / Volcengine Ark | API key (request-limit probe) |
+| Volc Engine Agent / coding count plans | API key / cookie |
+| ccswitch configs | Local CLI config import |
 
-1. 先读 `docs/DEVELOPMENT_WORKFLOW.md`
-2. 再读 `docs/CODE_HANDOFF.md`
-3. 再读 `docs/PRODUCT_PLAN.md`
-4. 再读 `docs/TECHNICAL_MANUAL.md`
-5. 严格先做 P0，再做 P1
+Additional platforms can be added via the provider adapter contract (see [docs/PROVIDER_SOURCE_STRATEGY.md](docs/PROVIDER_SOURCE_STRATEGY.md)).
+
+## Architecture (summary)
+
+TokenBar follows a clean **core / app / cli** separation, inspired by [CodexBar](https://github.com/steipete/CodexBar):
+
+- `TokenBarCore` — provider adapters, usage windows, source readers, config & snapshot storage. No UI.
+- `TokenBar` — app: menu bar status item, popover, provider cards, settings, state stores.
+- `TokenBarCLI` — bundled CLI for scripts / CI.
+
+Data flow: background refresh → provider probes → `UsageStore` → menu icon / popover / widgets.
+
+See [docs/TOKENBAR_ARCHITECTURE.md](docs/TOKENBAR_ARCHITECTURE.md).
+
+## Phases
+
+- **Phase 0 — Scaffold (this branch).** Docs + module scaffold. No business logic.
+- **Phase 1 — Mac MVP.** App shell, one end-to-end provider, menu bar + popover + manual refresh + settings + source status. See [docs/MAC_MVP_PLAN.md](docs/MAC_MVP_PLAN.md).
+- **Phase 2 — Provider coverage.** All long-term providers, multi-window rendering, ccswitch import.
+- **Phase 3 — Windows.** Native Windows port.
+
+## Develop
+
+Requires macOS 14+ and Swift 6.
+
+```bash
+swift build
+swift test
+```
+
+## Attribution
+
+TokenBar is an independent project. Its architecture is informed by [CodexBar](https://github.com/steipete/CodexBar) by Peter Steinberger (MIT). See [NOTICE](NOTICE).
+
+## License
+
+MIT — see [LICENSE](LICENSE).
