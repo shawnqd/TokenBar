@@ -1,6 +1,8 @@
-# PROJECT_STATUS
+# PROJECT_STATUS (detailed)
 
-> 当前主线：`rebuild/tokenbar-main`（orphan 重建，等待 GPT 审核后并回 `main`）
+> 事实源入口：根目录 [`PROJECT_STATUS.md`](../PROJECT_STATUS.md)。本文件提供详细模块就绪度。
+>
+> 当前主线：`rebuild/tokenbar-main`（从 `main` 创建的非 orphan 重建分支，等待 GPT 审核后 squash merge 到 `main`）
 
 ## 当前阶段
 **Phase 0 — Scaffold（脚手架）**
@@ -18,7 +20,7 @@
 ## 分支与历史保护
 - `legacy/web-p0-mvp`：保留旧 Go Web P0 MVP，不删除、不合并。
 - `main`（远端当前）：仍指向旧 Web P0 commit `713d1ec`。本 PR 审核通过前不动 main。
-- `rebuild/tokenbar-main`：orphan 重建分支，干净起点，无旧 Web 文件残留。
+- `rebuild/tokenbar-main`：从 `main` 创建的非 orphan 重建分支，删除全部旧 Web 文件后加入 TokenBar scaffold；新分支树无旧 Web 残留，与 `main` 共享历史。
 
 ## 模块就绪度
 
@@ -36,4 +38,4 @@
 ## 阻塞与风险
 - 无当前阻塞。
 - 待 GPT 审核：模块边界是否清晰、Provider 范围是否被偷删、source 策略假设是否成立。
-- 审核 through 后再决定：直接 force-update `main`，或 merge PR。
+- 审核通过后：标准 PR / squash merge 到 `main`（不 force push，不用 `--allow-unrelated-histories`）。

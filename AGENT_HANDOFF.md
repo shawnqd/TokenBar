@@ -7,7 +7,7 @@
 
 ## 本次做了什么
 
-在 orphan 分支 `rebuild/tokenbar-main` 上完成 Phase 0 脚手架：
+在 `rebuild/tokenbar-main` 分支上完成 Phase 0 脚手架（该分支从 `main` 创建，**非 orphan**，删除全部旧 Web 文件后加入 TokenBar scaffold）：
 
 - 文档：产品计划 / 架构 / Provider 来源策略 / Mac MVP 计划 / 项目状态。
 - Scaffold：`TokenBarCore`（类型+协议骨架）+ `TokenBar`（App 占位）+ `TokenBarCLI`（占位）+ `TokenBarTests`（守卫测试）。
@@ -22,8 +22,8 @@
 
 ## 决策与原因
 
-1. **方案 B（rebuild 分支 + PR）而非 A（直接 force main）**：AGENTS.md 停手规则强调谨慎；先审核再并 main 更稳。
-2. **orphan 重建**：避免旧 Web 文件残留，干净起点。
+1. **非 orphan 重建分支 + 标准 PR**：从 `main` 创建 `rebuild/tokenbar-main`，`git rm` 全部旧 Web 文件后加入 TokenBar scaffold。新分支树不含旧 Web 代码，但与 `main` 共享历史，可走标准 PR。
+2. **合并方式**：标准 PR / squash merge 到 `main`。不 force push `main`，不用 `--allow-unrelated-histories`。
 3. **MVP 首选 DeepSeek**：单一 apiKey 来源 + balance 窗口，最快验证全链路；复杂来源（Cookie/CLI）放 Phase 2。
 4. **模块边界硬约束**：Core 不依赖 App；UI 不直接采集。这是参考 CodexBar 的核心收获。
 5. **`unknown` 是契约**：取不到就 nil/unknown，守卫测试 `testUnknownWindowIsUnknown` 锁住语义。
@@ -33,7 +33,7 @@
 - `PROVIDER_SOURCE_STRATEGY.md` 中各平台来源/窗口的假设是否成立？Phase 1 实现时需逐个核实真实 API/Cookie 行为。
 - ccswitch 配置文件实际路径与格式？Phase 2 落地前需确认。
 - 模块边界是否足够清晰、Provider 范围有无被偷删？
-- 审核通过后：直接 force-update `main`，还是 merge PR？（等用户/GPT 定）
+- 审核通过后：标准 PR / squash merge 到 `main`（不 force push，不用 `--allow-unrelated-histories`）。
 
 ## 下一步（审核通过后）
 

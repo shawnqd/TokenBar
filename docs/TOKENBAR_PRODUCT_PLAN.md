@@ -94,7 +94,7 @@ TokenBar 是一个**原生菜单栏额度管理工具**，在菜单栏显示 AI 
 ## 6. 与旧 onWatch / Web P0 的关系
 
 - 旧 Go Web P0 MVP 封存在 `legacy/web-p0-mvp` 分支，保留不删。
-- 新 `main` 用 orphan 重建，不携带旧 Web 代码。
+- 新 `main` 通过 `rebuild/tokenbar-main`（从 `main` 创建的非 orphan 重建分支）标准 PR / squash merge 落地；该分支删除全部旧 Web 文件后加入 TokenBar scaffold，新树不携带旧 Web 代码。不 force push `main`，不用 `--allow-unrelated-histories`。
 - 旧 onWatch 的 Provider 采集经验作为参考，但代码不迁移；TokenBar 用 Swift 重写。
 
 ## 7. 参考

@@ -8,6 +8,7 @@
 - [x] SwiftPM scaffold（TokenBarCore / TokenBar / TokenBarCLI / Tests）
 - [x] LICENSE + CodexBar/ccusage attribution
 - [x] swift build / swift test 通过
+- [x] 文档口径修复：orphan/force 表述改为「非 orphan 重建分支 + 标准 PR / squash merge」；新增根目录 `PROJECT_STATUS.md` 作为事实源入口（仅文档，未改架构代码）
 
 ## Phase 1 — Mac MVP（待 GPT 审核通过后开工）
 - [ ] `DeepSeekProvider`：实现 `Provider` 协议，apiKey 来源，balance 窗口
