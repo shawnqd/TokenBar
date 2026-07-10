@@ -1,50 +1,84 @@
-# AGENTS
+# Repository Guidelines
 
-## 目标
+## Current Project State
+- This branch launches the Tauri desktop shell by default (`apps/desktop-tauri/src-tauri`), while
+  `rust/` remains the shared backend/domain crate and standalone CLI.
+- Many files in `docs/` and some workflows reference the upstream macOS/Swift project. Treat those as historical or
+  upstream-sync material unless the task is explicitly about upstream parity.
+- When repo docs conflict, trust the active Tauri desktop sources in `apps/desktop-tauri` plus the shared Rust sources
+  in `rust/src`.
 
-TokenBar 是原生菜单栏额度管理工具：在菜单栏显示 AI 编程 / 模型平台的额度、次数、余额、重置窗口和可用状态。
-第一阶段 Mac，后续 Windows。
+## Project Structure & Modules
+- `apps/desktop-tauri/`: Tauri desktop shell (default UI). React frontend in `apps/desktop-tauri/src/`,
+  Rust backend + tray bridge in `apps/desktop-tauri/src-tauri/src/`.
+- `rust/src`: Shared backend crate + CLI (`codexbar` binary). Houses providers, settings, login,
+  status, sound, shortcuts, browser cookie extraction, and the shared tray-icon renderer.
+- `rust/src/providers`: Provider-specific fetch/parsing/auth logic. Keep provider boundaries clean.
+- `rust/src/tray` (shared): `icon.rs` + `render.rs` — pixel-level tray-icon rendering used by the Tauri shell.
+- `rust/src/browser`: Browser detection + cookie extraction for Windows.
+- `rust/src/core`: Shared provider-construction (`instantiate_provider`) and provider IDs.
+- `rust/assets`, `rust/icons`, `rust/gen`, `rust/wix`: UI assets, generated schemas, installer packaging.
+- `docs`: Mixed documentation (Windows port docs plus upstream/macOS references). Update only the relevant docs.
 
-## 工作方式
+## Build, Test, Run
+- Default desktop work runs from the repo root; `cd rust` is for backend/CLI-only tasks.
+- Build the desktop shell (preferred): `cd apps/desktop-tauri && npm run tauri:build` (or `tauri:build:debug`).
+  Raw `cargo build --release` on the Tauri crate produces an exe that still points at the dev URL.
+- Build the CLI: `cargo build -p codexbar`.
+- Test: `cargo test --manifest-path rust/Cargo.toml` and
+  `cargo test --manifest-path apps/desktop-tauri/src-tauri/Cargo.toml`.
+- Run CLI locally: `cargo run -p codexbar -- --help`, `cargo run -p codexbar -- usage -p claude`,
+  `cargo run -p codexbar -- cost`. The CLI no longer launches a GUI when run with no subcommand.
+- Run the desktop shell through Tauri's build/dev flow: `.\dev.ps1`, `./dev.sh`, or
+  `cd apps/desktop-tauri && npm run tauri:dev`.
+- Format/lint before handoff when code changed: `cargo fmt --all` and `cargo clippy --all-targets -- -D warnings`
+  on both manifests (or explain why not run).
+- There is no active root-level `Scripts/` build pipeline in this port. Do not rely on legacy `Scripts/*.sh` commands.
 
-### 只做
-- 原生桌面 App（Swift / SwiftUI，macOS 14+）
-- 多来源：API Key / Browser Cookie / Local File / CLI config / Snapshot
-- 多窗口：5h / 7d / 周 / 月 / 余额 / 次数 / token / request limit
-- 菜单栏总览、Provider 详情卡片、手动刷新、设置页、数据来源状态
-- 无法获取真实额度时显示 `unknown`，绝不伪造数据
-- 分阶段实现，不删减长期 Provider / 功能范围
+## Coding Style & Naming
+- Prefer small, typed structs/enums and focused modules; keep changes local.
+- Keep provider-specific logic inside the provider module instead of adding cross-provider branching.
+- Preserve clear error handling and user-facing diagnostics (`anyhow`/`thiserror` + friendly messages where applicable).
+- Use `tracing` for diagnostics; do not log raw secrets, cookies, or tokens.
+- Avoid adding dependencies/tooling without confirmation.
 
-### 不做
-- 不保存真实密码；Cookie / Token 默认 opt-in，复用本地已有会话
-- 不做云同步、多用户、网页看板
-- 不为 P0 偷偷破坏已落地模块
+## Testing Guidelines
+- Add or extend focused Rust tests near the changed module (`#[cfg(test)]` unit tests are common in this repo).
+- For parser/fetcher changes, add deterministic samples/fixtures where practical.
+- Run `cargo test` after code changes; include any skipped checks in handoff.
+- If desktop/tray behavior changed, do a manual validation with the Tauri shell when possible (`cargo run` or
+  `codexbar-desktop-tauri`).
 
-## 模块边界（不可越界）
-- `TokenBarCore`：fetch + parse + provider adapter + source reader + storage。无 UI。
-- `TokenBar`：state + UI（status item / popover / provider card / settings）。
-- `TokenBarCLI`：bundled CLI。
-- 采集层（Core）与展示层（App）严格分离，UI 不得直接做网络/文件采集。
+## Commit & PR Guidelines
+- Use short imperative commit messages (for example: `Fix Claude CLI parser`, `Improve cookie import errors`).
+- Keep commits scoped to one change.
+- In PRs/patches, include:
+  - Summary of behavior changes
+  - Commands run (`cargo test`, `cargo fmt`, etc.)
+  - Screenshots/GIFs for UI changes (Windows)
+  - Linked issue/reference when relevant
 
-## 先读顺序
-1. `docs/TOKENBAR_PRODUCT_PLAN.md`
-2. `docs/TOKENBAR_ARCHITECTURE.md`
-3. `docs/PROVIDER_SOURCE_STRATEGY.md`
-4. `docs/MAC_MVP_PLAN.md`
-5. `docs/PROJECT_STATUS.md`
+## Release & Winget Notes
+- Treat Winget updates as a normal release step after GitHub release artifacts are stable.
+- Winget does not track "latest" GitHub releases; every version needs its own immutable manifest folder in
+  `microsoft/winget-pkgs`, for example `manifests/f/Finesssee/Win-CodexBar/0.23.6/`.
+- For routine version bumps, copy the previous approved manifest folder and change only version-specific fields:
+  `PackageVersion`, `InstallerUrl`, `InstallerSha256`, `DisplayName`, `DisplayVersion`, `ReleaseNotes`, and
+  `ReleaseNotesUrl`.
+- Keep stable package identity and installer behavior unchanged unless there is a real packaging reason:
+  `PackageIdentifier`, `InstallerType`, `Scope`, `ProductCode`, `Publisher`, package URLs, and silent install behavior.
+- Before opening a Winget PR, verify the release installer URL resolves and recompute the SHA-256 from the downloaded
+  asset. On Windows, run `winget validate` when available.
+- The first Winget package submission was approved in `microsoft/winget-pkgs#366653`; the v0.23.5 update was approved
+  in `microsoft/winget-pkgs#366794`. Future updates should be faster, but still expect Microsoft validation/review.
 
-## 停手规则
-出现以下情况必须停下并更新交接文件，不要擅自扩大范围：
-1. 必须保存真实密码 / Cookie 永久持久化才能继续
-2. 必须破坏 Core / App 模块边界才能落地
-3. 某个 Provider 无法获取真实额度却被迫伪造数字
-4. 真实平台行为与 `PROVIDER_SOURCE_STRATEGY.md` 假设差异过大
-
-## 更新规则
-每完成一个包，至少更新：
-- `docs/PROJECT_STATUS.md`
-- `TODO.md`
-- `CHANGELOG.md`
-- `AGENT_HANDOFF.md`
-
-纯技术问题直接写进 `AGENT_HANDOFF.md`，不要把用户当传话中间层。
+## Agent Notes
+- The default desktop app is the Tauri shell in `apps/desktop-tauri/`. The Rust crate owns shared backend logic
+  and the CLI.
+- New provider construction goes through `codexbar::core::instantiate_provider` — do not duplicate provider
+  factories in shells or commands.
+- Keep provider data siloed: never show identity/plan/email fields from provider A in provider B UI.
+- Claude CLI output is user-configurable; do not depend on a customizable status line for usage parsing.
+- Cookie import UX uses explicit browser selection in Preferences. Do not assume Chrome-only in general UI flows.
+- Be conservative with secret handling (manual cookies, API keys, token accounts); use existing redaction/storage helpers.
+- Prefer Windows-native validation for tray/DPAPI/browser-cookie behavior; WSL/Linux can be insufficient for those paths.
