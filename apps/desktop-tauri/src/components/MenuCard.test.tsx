@@ -19,7 +19,7 @@ vi.mock("@tauri-apps/api/event", () => eventMocks);
 
 import { LocaleProvider } from "../i18n/LocaleProvider";
 import { buildBundle } from "../test/localeHarness";
-import type { ProviderUsageSnapshot } from "../types/bridge";
+import type { LocalUsagePeriod, ProviderUsageSnapshot } from "../types/bridge";
 import MenuCard from "./MenuCard";
 
 function rateWindow(
@@ -78,16 +78,20 @@ function provider(
 
 function renderCard(
   snapshot: ProviderUsageSnapshot,
-  opts: { showAsUsed?: boolean; onLayoutChange?: () => void } = {},
+  opts: {
+    showAsUsed?: boolean;
+    onLayoutChange?: () => void;
+    localUsagePeriod?: LocalUsagePeriod;
+  } = {},
 ) {
   return render(
     <LocaleProvider>
       <MenuCard
         provider={snapshot}
-        hideEmail={false}
         resetTimeRelative={true}
         showAsUsed={opts.showAsUsed}
         onLayoutChange={opts.onLayoutChange}
+        localUsagePeriod={opts.localUsagePeriod}
       />
     </LocaleProvider>,
   );
@@ -100,11 +104,26 @@ describe("MenuCard", () => {
       buildBundle({
         ActionCopyError: "Copy error",
         PanelEstimatedFromLocalLogs: "Estimated from local logs",
+        PanelSevenDayUsage: "Last 7 days",
+        PanelThirtyDayUsage: "Last 30 days",
+        PanelApiEquivalentValue: "Equivalent API value",
+        PanelNoUsageSevenDays: "No usage in the last 7 days",
+        PanelNoUsageThirtyDays: "No usage recorded in the last 30 days",
+        PanelTokenUnit: "Token",
+        PanelLocalEstimateShort: "Local log estimate, for reference",
         PanelLeftSuffix: "left",
         PanelNow: "now",
         PanelOneHour: "1h",
         PanelFiveHours: "5h",
         PanelOnPaceBudget: "On-pace budget",
+        PanelUsageForecast: "Usage forecast",
+        PanelForecastPrefix: "At the current pace, about",
+        PanelForecastHoursUnit: "hours remaining",
+        PanelForecastLessThanHour: "less than 1 hour",
+        PanelForecastUntilReset: "Enough to last until the next reset",
+        PanelResetCreditsTitle: "Extra resets",
+        PanelResetCreditsRemaining: "Remaining",
+        PanelResetCreditsUnit: "uses",
         PanelReserveSuffix: "in reserve",
         PanelThirtyDayCost: "30d cost",
         PanelThirtyDayTokens: "30d tokens",
@@ -119,9 +138,11 @@ describe("MenuCard", () => {
       usageBreakdown: [],
       localUsage: {
         todayCost: null,
+        todayTokens: null,
+        sevenDayCost: null,
+        sevenDayTokens: null,
         thirtyDayCost: 1.23,
         thirtyDayTokens: 584_000,
-        latestTokens: null,
         topModel: "glim-4.6",
         estimateNote: "Estimated from local logs",
       },
@@ -135,7 +156,7 @@ describe("MenuCard", () => {
     );
 
     expect(
-      await screen.findByText("OAuth error: Claude OAuth credentials not found."),
+      await screen.findByText("ProviderIssueSignInRequired"),
     ).toBeInTheDocument();
     expect(container.querySelector(".menu-card--header-only")).toBeInTheDocument();
     expect(container.querySelector(".menu-card--with-details")).not.toBeInTheDocument();
@@ -152,10 +173,12 @@ describe("MenuCard", () => {
   it("can render metric bars as used instead of remaining", async () => {
     renderCard(provider(null, 35), { showAsUsed: true });
 
-    expect(await screen.findByText("35% used")).toBeInTheDocument();
+    // The hero (first) window shows its percentage once, as the big
+    // standalone number — no "35% used" text row.
+    expect(await screen.findByText("35%")).toBeInTheDocument();
     expect(screen.queryByText("65% left")).not.toBeInTheDocument();
 
-    const fill = document.querySelector<HTMLElement>(".menu-metric__bar-fill");
+    const fill = document.querySelector<HTMLElement>(".provider-quota__fill");
     expect(fill?.style.width).toBe("35%");
   });
 
@@ -165,7 +188,7 @@ describe("MenuCard", () => {
     });
 
     expect(await screen.findAllByText("115% used")).not.toHaveLength(0);
-    const fill = document.querySelector<HTMLElement>(".menu-metric__bar-fill");
+    const fill = document.querySelector<HTMLElement>(".provider-quota__fill");
     expect(fill?.style.width).toBe("100%");
   });
 
@@ -187,6 +210,53 @@ describe("MenuCard", () => {
     expect(screen.getByText("58% left")).toBeInTheDocument();
   });
 
+  it("uses one quota structure and duration-based labels for Codex and Claude", async () => {
+    const snapshot = provider(null, 38);
+    snapshot.primaryLabel = "Session";
+    snapshot.primary = rateWindow(38, { windowMinutes: 5 * 60 });
+    snapshot.secondaryLabel = "Weekly";
+    snapshot.secondary = rateWindow(47, { windowMinutes: 7 * 24 * 60 });
+
+    const { container } = renderCard(snapshot, { showAsUsed: true });
+
+    expect(await screen.findByText("ProviderSessionLabel")).toBeInTheDocument();
+    expect(screen.getByText("ProviderWeeklyLabel")).toBeInTheDocument();
+    expect(container.querySelectorAll(".provider-quota")).toHaveLength(2);
+  });
+
+  it("does not render an empty Codex placeholder as a zero-percent quota", async () => {
+    const snapshot = provider(null, 85);
+    snapshot.providerId = "codex";
+    snapshot.primaryLabel = "Session";
+    snapshot.primary = rateWindow(85, { windowMinutes: 7 * 24 * 60 });
+    snapshot.secondaryLabel = "Weekly";
+    snapshot.secondary = rateWindow(0);
+
+    const { container } = renderCard(snapshot, { showAsUsed: true });
+
+    expect(await screen.findByText("ProviderWeeklyLabel")).toBeInTheDocument();
+    expect(container.querySelectorAll(".provider-quota")).toHaveLength(1);
+    expect(screen.queryByText("0% used")).not.toBeInTheDocument();
+  });
+
+  it("renders a DeepSeek prepaid balance without a synthetic usage row or balance badge", async () => {
+    const snapshot = provider(null, 0, {
+      resetDescription: "¥38.81 (Paid: ¥38.81 / Granted: ¥0.00)",
+    });
+    snapshot.providerId = "deepseek";
+    snapshot.displayName = "DeepSeek";
+    snapshot.primaryLabel = "Balance";
+    snapshot.planName = "CNY balance: ¥38.81";
+
+    renderCard(snapshot, { showAsUsed: true });
+
+    expect(await screen.findByText("余额")).toBeInTheDocument();
+    expect(screen.getByText("¥38.81")).toBeInTheDocument();
+    expect(screen.queryByText("Balance")).not.toBeInTheDocument();
+    expect(screen.queryByText("0% used")).not.toBeInTheDocument();
+    expect(screen.queryByText("CNY balance: ¥38.81")).not.toBeInTheDocument();
+  });
+
   it("notifies the tray panel after async local usage data loads", async () => {
     const onLayoutChange = vi.fn();
 
@@ -197,20 +267,38 @@ describe("MenuCard", () => {
     });
   });
 
-  it("renders local token and cost totals after chart data loads", async () => {
+  it("keeps a local-usage placeholder in place while chart data loads", async () => {
+    tauriMocks.getProviderChartData.mockReturnValue(new Promise(() => {}));
+
     const { container } = renderCard(provider(null));
 
-    expect(await screen.findByText("30d cost")).toBeInTheDocument();
-    expect(container.querySelector(".menu-card--with-details")).toBeInTheDocument();
-    expect(container.querySelector(".menu-card--header-only")).not.toBeInTheDocument();
-    expect(screen.getAllByText("$1.23").length).toBeGreaterThan(0);
-    expect(screen.getByText("30d tokens")).toBeInTheDocument();
-    expect(screen.getByText("584K")).toBeInTheDocument();
-    expect(screen.getByText("Estimated from local logs")).toBeInTheDocument();
+    await waitFor(() => {
+      expect(
+        container.querySelector(".menu-card__local-usage--loading"),
+      ).toBeInTheDocument();
+    });
+    expect(container.querySelector(".menu-card__skeleton--value")).toBeInTheDocument();
   });
 
-  it("shows on-pace budgets and expands projection details", async () => {
-    const onLayoutChange = vi.fn();
+  it("renders local token and cost totals after chart data loads", async () => {
+    const { container } = renderCard(provider(null), { localUsagePeriod: "30d" });
+
+    expect(await screen.findByText("Last 30 days")).toBeInTheDocument();
+    expect(container.querySelector(".menu-card--with-details")).toBeInTheDocument();
+    expect(container.querySelector(".menu-card--header-only")).not.toBeInTheDocument();
+    expect(screen.queryByText("Last 7 days")).not.toBeInTheDocument();
+    expect(screen.getByText("584,000")).toBeInTheDocument();
+    expect(screen.getByText("Token")).toBeInTheDocument();
+    expect(
+      screen.getByText(/Equivalent API value.*\$1\.23.*¥8\.86/),
+    ).toBeInTheDocument();
+    // The local-estimate note line was removed from the token usage block.
+    expect(
+      screen.queryByText("Local log estimate, for reference"),
+    ).not.toBeInTheDocument();
+  });
+
+  it("shows the current-pace forecast as remaining hours", async () => {
     const resetAt = new Date(
       Date.now() + 0.6 * 7 * 24 * 60 * 60 * 1000,
     );
@@ -222,23 +310,15 @@ describe("MenuCard", () => {
       resetsAt: resetAt.toISOString(),
     });
 
-    renderCard(snapshot, { onLayoutChange });
+    renderCard(snapshot);
 
-    const toggle = await screen.findByRole("button", { name: /On-pace budget/ });
-    expect(screen.getByText("now 20%")).toBeInTheDocument();
-    expect(screen.getByText("1h 21%")).toBeInTheDocument();
-    expect(screen.queryByRole("img", { name: /usage pace/i })).not.toBeInTheDocument();
-
-    fireEvent.click(toggle);
-
-    expect(toggle).toHaveAttribute("aria-expanded", "true");
-    expect(screen.getByRole("img", { name: /usage pace/i })).toBeInTheDocument();
-    await waitFor(() => {
-      expect(onLayoutChange).toHaveBeenCalled();
-    });
+    expect(await screen.findByText("Usage forecast")).toBeInTheDocument();
+    expect(screen.getByText(/≈ .* hours remaining/)).toBeInTheDocument();
+    expect(screen.getByText("Enough to last until the next reset")).toBeInTheDocument();
+    expect(screen.queryByText("On-pace budget")).not.toBeInTheDocument();
   });
 
-  it("shows on-pace budgets when timing exists without reserve metadata", async () => {
+  it("shows a forecast when timing exists without reserve metadata", async () => {
     const resetAt = new Date(Date.now() + 6 * 24 * 60 * 60 * 1000);
     const snapshot = provider(null, 31);
     snapshot.primary = rateWindow(31, {
@@ -248,12 +328,9 @@ describe("MenuCard", () => {
 
     renderCard(snapshot);
 
-    expect(
-      await screen.findByRole("button", { name: /On-pace budget/ }),
-    ).toBeInTheDocument();
-      expect(screen.getByText("now 0%")).toBeInTheDocument();
-      expect(screen.queryByText(/in reserve/)).not.toBeInTheDocument();
-      expect(screen.queryByText("Lasts until reset")).not.toBeInTheDocument();
+    expect(await screen.findByText("Usage forecast")).toBeInTheDocument();
+    expect(screen.getByText(/hours remaining/)).toBeInTheDocument();
+    expect(screen.queryByText(/in reserve/)).not.toBeInTheDocument();
   });
 
   it("does not show pace budgets for a five-hour session window", async () => {
@@ -266,10 +343,10 @@ describe("MenuCard", () => {
 
     renderCard(snapshot);
 
-    expect(await screen.findByText("69% left")).toBeInTheDocument();
-    expect(screen.queryByText("On-pace budget")).not.toBeInTheDocument();
+    expect(await screen.findByText("69%")).toBeInTheDocument();
+    expect(screen.queryByText("Usage forecast")).not.toBeInTheDocument();
     expect(
-      screen.queryByRole("img", { name: /usage pace/i }),
+      screen.queryByRole("img", { name: /PaceChartAriaLabel/i }),
     ).not.toBeInTheDocument();
   });
 
@@ -283,7 +360,23 @@ describe("MenuCard", () => {
     renderCard(snapshot);
 
     expect(await screen.findByText("12% in reserve")).toBeInTheDocument();
-    expect(screen.queryByText("On-pace budget")).not.toBeInTheDocument();
+    expect(screen.queryByText("Usage forecast")).not.toBeInTheDocument();
+  });
+
+  it("renders reset credits as a remaining count instead of a quota percent", async () => {
+    const snapshot = provider(null, 20);
+    snapshot.providerId = "codex";
+    snapshot.extraRateWindows = [{
+      id: "reset-credits",
+      title: "Reset credits",
+      window: rateWindow(0, { resetDescription: "3 reset credits available" }),
+    }];
+
+    const { container } = renderCard(snapshot);
+
+    expect(await screen.findByText("Extra resets")).toBeInTheDocument();
+    expect(screen.getByText("Remaining 3 uses")).toBeInTheDocument();
+    expect(container.querySelectorAll(".provider-quota")).toHaveLength(1);
   });
 
   it("localizes the relative updated-at time in Japanese without duplicated prefix", async () => {

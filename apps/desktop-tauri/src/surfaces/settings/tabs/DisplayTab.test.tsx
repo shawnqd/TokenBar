@@ -25,9 +25,15 @@ const baseSettings = {
   resetTimeRelative: false,
 } as unknown as SettingsSnapshot;
 
-function renderTab(set: (patch: Record<string, unknown>) => void) {
+function renderTab(
+  set: (patch: Record<string, unknown>) => void,
+  settings: SettingsSnapshot = {
+    ...baseSettings,
+    outputSpeedEnabled: false,
+  },
+) {
   return render(
-    <DisplayTab settings={baseSettings} set={set as never} saving={false} />,
+    <DisplayTab settings={settings} set={set as never} saving={false} />,
   );
 }
 

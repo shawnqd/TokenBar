@@ -17,7 +17,7 @@ Win-CodexBar is a Windows system-tray app for keeping AI coding-tool usage visib
 
 ## Highlights
 
-- **56 providers** including Codex, Claude, Copilot, OpenRouter, Cursor, Gemini, DeepSeek, MiniMax, Kiro, Antigravity, Groq, Qoder, Sakana AI, CrossModel, and more.
+- **59 providers** including Codex, Claude, Copilot, OpenRouter, Cursor, Gemini, DeepSeek, MiniMax, Kiro, Antigravity, Groq, Qoder, Sakana AI, CrossModel, and more.
 - **Tray-first workflow** with a compact provider grid, usage cards, refresh action, settings shortcut, and quit control.
 - **Provider settings** for source selection, credentials, cookie import, token accounts, API keys, regions, and tray-display preferences.
 - **Windows credential protection** for app-managed API keys, manual cookies, and token accounts, using user-scoped DPAPI where available.
@@ -99,8 +99,11 @@ See the full history in [CHANGELOG.md](CHANGELOG.md).
 | DeepSeek | API Key | Balance, Usage summaries, Cost |
 | Windsurf | Local Cache | Daily, Weekly |
 | Manus | Cookies | Credits, Refresh Credits |
-| Xiaomi MiMo | Cookies | Balance, Token Plan |
+| Xiaomi MiMo API | API Key (`sk-...`) | API-key validation; balance when the console endpoint accepts the key |
+| Xiaomi MiMo Token Plan | Cookies | Token Plan usage, plan label, reset date |
 | Doubao | API Key | Request Limits |
+| Volcengine Ark Coding Plan | Access Key / Secret Key | 5-hour, Weekly, Monthly quota |
+| Volcengine Ark Agent Plan | Access Key / Secret Key | 5-hour, Daily, Weekly, Monthly AFP quota |
 | Command Code | Cookies | Monthly Credits, Purchased Credits |
 | Crof | API Key | Credits, Request Quota |
 | StepFun | Oasis Token | 5h, Weekly, Token refresh |
@@ -113,6 +116,19 @@ See the full history in [CHANGELOG.md](CHANGELOG.md).
 | LLM Proxy | API Key | Quota Stats |
 
 </details>
+
+The three Volcengine entries are intentionally separate: **Doubao** is the
+request-limit probe, **Volcengine Ark Coding Plan** reads Coding Plan quota,
+and **Volcengine Ark Agent Plan** reads AFP quota. They are not browser-cookie
+providers and should be configured with the matching Ark credentials.
+
+MiMo is also intentionally split into two entries. **Xiaomi MiMo API** is the
+pay-as-you-go `sk-...` API-key surface; Xiaomi does not document a public
+quota endpoint, so the provider validates the key and reads the console balance
+only when that endpoint accepts API-key authentication. **Xiaomi MiMo Token
+Plan** keeps the browser-cookie usage endpoints for the subscription quota.
+The official `tp-...` Token Plan key is an inference credential, not a public
+quota API; it is not sent to the pay-as-you-go provider.
 
 ## Supported Languages
 

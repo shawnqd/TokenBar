@@ -74,8 +74,18 @@ export function useSettings(initial: SettingsSnapshot): UseSettingsReturn {
   }, []);
 
   const update = useCallback(async (patch: SettingsUpdate) => {
-    setSaving(true);
+    // Apply optimistically so toggles/selects feel instant — the local
+    // round trip to the Rust bridge is fast enough that waiting for it
+    // before reflecting the change reads as a page-wide flash (every
+    // `disabled={saving}` control dims and undims within one frame).
+    setSettings((prev) => ({ ...prev, ...patch }));
     setError(null);
+
+    // Only surface the "saving" state (which disables controls) if the
+    // round trip is slow enough to notice — avoids a flash-disable on
+    // every click for the common fast-save case.
+    const savingIndicatorTimer = window.setTimeout(() => setSaving(true), 200);
+
     try {
       const next = await updateSettings(patch);
       setSettings(next);
@@ -97,6 +107,7 @@ export function useSettings(initial: SettingsSnapshot): UseSettingsReturn {
         // ignore secondary failure
       }
     } finally {
+      window.clearTimeout(savingIndicatorTimer);
       setSaving(false);
     }
   }, []);

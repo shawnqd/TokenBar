@@ -177,7 +177,6 @@ enum MenuAction {
     /// Open (or focus) the dedicated flyout ("Pop Out Dashboard") window.
     OpenFlyout,
     Refresh,
-    CheckForUpdates,
     /// Toggle the enabled/disabled state of the provider with the given CLI name.
     ToggleProvider(String),
     /// Toggle the floating bar window on/off.
@@ -193,7 +192,6 @@ enum MenuTransitionDispatch {
 fn resolve_menu_action(id: &str) -> Option<MenuAction> {
     match id {
         "refresh" => Some(MenuAction::Refresh),
-        "check_for_updates" => Some(MenuAction::CheckForUpdates),
         "quit" => Some(MenuAction::Quit),
         "settings" => Some(MenuAction::OpenSettings("general".into())),
         "about" => Some(MenuAction::OpenSettings("about".into())),
@@ -249,9 +247,10 @@ fn store_anchor(app: &AppHandle, rect: &tauri::Rect, click_position: tauri::Phys
 pub fn setup(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     let menu = build_native_tray_menu(app.handle(), &crate::commands::get_provider_catalog(), &[])?;
 
-    // Embed the icon at compile time so it works regardless of working directory.
-    let icon_bytes = include_bytes!("../../../../rust/icons/icon.png");
-    let icon = Image::from_bytes(icon_bytes)?;
+    // Use the branded three-rail TokenBar mark even before the first provider
+    // refresh. Its rail lengths become live usage data after refresh.
+    let (rgba, width, height) = render_bar_icon_rgba(0.0, None, false);
+    let icon = Image::new_owned(rgba, width, height);
 
     let _tray = TrayIconBuilder::with_id("codexbar-main")
         .icon(icon)
@@ -333,13 +332,6 @@ fn handle_menu_event(app: &AppHandle, id: &str) {
             let handle = app.clone();
             tauri::async_runtime::spawn(async move {
                 let _ = crate::commands::do_refresh_providers(&handle).await;
-            });
-        }
-        Some(MenuAction::CheckForUpdates) => {
-            let handle = app.clone();
-            tauri::async_runtime::spawn(async move {
-                let state = handle.state::<Mutex<AppState>>();
-                let _ = crate::commands::check_for_updates(handle.clone(), state).await;
             });
         }
         Some(MenuAction::ToggleProvider(provider_id)) => {
@@ -1020,6 +1012,7 @@ mod tests {
                 resets_at: None,
                 reset_description: None,
                 is_exhausted: false,
+                is_informational: false,
                 reserve_percent: None,
                 reserve_description: None,
                 reserve_will_last_to_reset: false,
@@ -1033,6 +1026,7 @@ mod tests {
                 resets_at: None,
                 reset_description: None,
                 is_exhausted: false,
+                is_informational: false,
                 reserve_percent: None,
                 reserve_description: None,
                 reserve_will_last_to_reset: false,
@@ -1047,6 +1041,7 @@ mod tests {
                 resets_at: None,
                 reset_description: None,
                 is_exhausted: false,
+                is_informational: false,
                 reserve_percent: None,
                 reserve_description: None,
                 reserve_will_last_to_reset: false,
@@ -1072,6 +1067,7 @@ mod tests {
             account_organization: None,
             tray_status_label: None,
             fetch_duration_ms: None,
+            wayfinder_usage: None,
         }
     }
 
@@ -1094,6 +1090,7 @@ mod tests {
                 resets_at: None,
                 reset_description: None,
                 is_exhausted: false,
+                is_informational: false,
                 reserve_percent: None,
                 reserve_description: None,
                 reserve_will_last_to_reset: false,

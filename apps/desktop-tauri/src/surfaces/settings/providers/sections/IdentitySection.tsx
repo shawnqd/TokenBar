@@ -1,6 +1,7 @@
 import type { ProviderDetail } from "../../../../types/bridge";
 import type { LocaleKey } from "../../../../i18n/keys";
 import { ProviderIcon } from "../../../../components/providers/ProviderIcon";
+import { getProviderDetailBalance } from "../../../../lib/providerBalance";
 
 interface Props {
   provider: ProviderDetail;
@@ -16,11 +17,16 @@ interface Props {
  * `rust/src/native_ui/preferences.rs::render_provider_detail_panel` (~4301).
  */
 export function IdentitySection({ provider, subtitle, t }: Props) {
+  const { suppressPlan } = getProviderDetailBalance(provider);
   const rows: { label: string; value: string | null }[] = [
     { label: t("Account"), value: provider.email ?? provider.organization },
-    { label: t("Plan"), value: displayIdentityValue(provider.plan) },
+    {
+      label: t("Plan"),
+      value: suppressPlan ? null : displayIdentityValue(provider.plan),
+    },
     { label: t("AuthType"), value: provider.authType },
-    { label: t("DataSource"), value: provider.sourceLabel },
+    // DataSource is intentionally omitted: `subtitle` already leads with
+    // `sourceLabel` ("web · updated 2m"), so a grid row would duplicate it.
   ];
   const visible = rows.filter(
     (r): r is { label: string; value: string } =>

@@ -15,7 +15,18 @@ pub(crate) fn build_fetch_context(
 ) -> FetchContext {
     let cookie_source = settings.cookie_source(id);
     let stored_cookie = cookies.get(id.cli_name()).map(|s| s.to_string());
-    let stored_api_key = api_keys.get(id.cli_name()).map(|s| s.to_string());
+    let stored_api_key = api_keys
+        .get(id.cli_name())
+        // Coding Plan and Agent Plan use the same Volcengine IAM identity as
+        // the existing Ark/Doubao provider.  Reuse that credential so users
+        // configure an access-key pair once rather than three times.
+        .or_else(|| match id {
+            ProviderId::ArkCodingPlan | ProviderId::ArkAgentPlan => {
+                api_keys.get(ProviderId::Doubao.cli_name())
+            }
+            _ => None,
+        })
+        .map(|s| s.to_string());
     let token_override = token_accounts
         .get(&id)
         .and_then(|data| data.active_account())
@@ -32,8 +43,19 @@ pub(crate) fn build_fetch_context(
     let api_key = stored_api_key.or(active_token_api_key);
     let has_kimi_code_api_key =
         id == ProviderId::Kimi && api_key.as_deref().is_some_and(|key| !key.trim().is_empty());
+    // MiMo's pay-as-you-go provider validates an `sk-...` key and optionally
+    // supplements it with the first-party console cookie for the shared
+    // account balance. It has no CLI usage reader, so the generic
+    // `manual cookie is empty -> Cli` fallback is invalid for this provider.
+    let has_mimo_api_key =
+        id == ProviderId::MiMoApi && api_key.as_deref().is_some_and(|key| !key.trim().is_empty());
 
-    let (source_mode, cookie_header) = if id.cookie_domain().is_none() {
+    let (source_mode, cookie_header) = if has_mimo_api_key {
+        // Keep an explicitly imported per-card cookie available, but always
+        // execute the API-capable Auto source. MiMoApiProvider also falls back
+        // to the shared `mimo` platform session for a balance lookup.
+        (SourceMode::Auto, active_token_cookie.or(stored_cookie))
+    } else if id.cookie_domain().is_none() {
         let source_mode = if active_token_env.is_some() {
             SourceMode::OAuth
         } else {
@@ -82,6 +104,7 @@ pub(crate) fn build_fetch_context(
 
     let workspace_id = settings.workspace_id(id).trim().to_string();
     let api_region = settings.api_region(id).trim().to_string();
+    let gateway_url = settings.gateway_url(id).trim().to_string();
 
     FetchContext {
         source_mode,
@@ -89,6 +112,7 @@ pub(crate) fn build_fetch_context(
         api_key,
         workspace_id: (!workspace_id.is_empty()).then_some(workspace_id),
         api_region: (!api_region.is_empty()).then_some(api_region),
+        gateway_url: (!gateway_url.is_empty()).then_some(gateway_url),
         ..FetchContext::default()
     }
 }
@@ -147,6 +171,34 @@ pub(crate) fn upsert_provider_cache(
     }
 }
 
+pub(crate) fn prune_provider_cache_to_enabled(
+    cache: &mut Vec<ProviderUsageSnapshot>,
+    enabled_ids: &[ProviderId],
+) {
+    cache.retain(|snapshot| {
+        enabled_ids
+            .iter()
+            .any(|id| id.cli_name() == snapshot.provider_id)
+    });
+}
+
+pub(crate) fn invalidate_provider_refresh_and_prune_disabled(
+    state: &tauri::State<'_, Mutex<AppState>>,
+    enabled_ids: &[ProviderId],
+) -> Result<(), String> {
+    let mut guard = state.lock().map_err(|e| e.to_string())?;
+    guard.provider_refresh_generation = guard.provider_refresh_generation.wrapping_add(1);
+    prune_provider_cache_to_enabled(&mut guard.provider_cache, enabled_ids);
+    guard
+        .transient_provider_failure_counts
+        .retain(|id, _| enabled_ids.contains(id));
+    Ok(())
+}
+
+fn is_current_provider_refresh_generation(guard: &AppState, generation: u64) -> bool {
+    guard.provider_refresh_generation == generation
+}
+
 /// Core refresh logic, usable from both the Tauri command and tray menu actions.
 pub(crate) async fn do_refresh_providers(app: &tauri::AppHandle) -> Result<(), String> {
     do_refresh_providers_with_policy(app, true).await
@@ -162,19 +214,23 @@ async fn do_refresh_providers_with_policy(
 ) -> Result<(), String> {
     let state = app.state::<Mutex<AppState>>();
 
-    if !begin_provider_refresh(&state, force)? {
+    let Some(generation) = begin_provider_refresh(&state, force)? else {
         return Ok(());
-    }
-
-    events::emit_refresh_started(app);
+    };
 
     let inputs = ProviderRefreshInputs::load();
+    if let Ok(mut guard) = state.lock()
+        && is_current_provider_refresh_generation(&guard, generation)
+    {
+        prune_provider_cache_to_enabled(&mut guard.provider_cache, &inputs.enabled_ids);
+    }
+    events::emit_refresh_started(app);
     let enabled_count = inputs.enabled_ids.len();
 
-    let handles = spawn_provider_refreshes(app, &inputs);
+    let handles = spawn_provider_refreshes(app, &inputs, generation);
     await_provider_refreshes(handles).await;
 
-    let error_count = finish_provider_refresh(&state)?;
+    let error_count = finish_provider_refresh(&state, generation)?;
     update_tray_and_notifications(app, &state, &inputs.settings)?;
 
     events::emit_refresh_complete(app, enabled_count, error_count);
@@ -185,18 +241,20 @@ async fn do_refresh_providers_with_policy(
 fn begin_provider_refresh(
     state: &tauri::State<'_, Mutex<AppState>>,
     force: bool,
-) -> Result<bool, String> {
+) -> Result<Option<u64>, String> {
     let mut guard = state.lock().map_err(|e| e.to_string())?;
     if guard.is_refreshing {
-        return Ok(false);
+        return Ok(None);
     }
     if provider_cache_can_skip_refresh(&guard, force) {
-        return Ok(false);
+        return Ok(None);
     }
 
+    guard.provider_refresh_generation = guard.provider_refresh_generation.wrapping_add(1);
+    let generation = guard.provider_refresh_generation;
     guard.is_refreshing = true;
     guard.provider_refresh_started_at = Some(std::time::Instant::now());
-    Ok(true)
+    Ok(Some(generation))
 }
 
 fn provider_cache_can_skip_refresh(guard: &AppState, force: bool) -> bool {
@@ -237,6 +295,7 @@ impl ProviderRefreshInputs {
 fn spawn_provider_refreshes(
     app: &tauri::AppHandle,
     inputs: &ProviderRefreshInputs,
+    generation: u64,
 ) -> Vec<tokio::task::JoinHandle<()>> {
     let mut handles = Vec::with_capacity(inputs.enabled_ids.len());
     let fetch_permits = Arc::new(tokio::sync::Semaphore::new(MAX_CONCURRENT_PROVIDER_FETCHES));
@@ -257,18 +316,27 @@ fn spawn_provider_refreshes(
             let Ok(_permit) = fetch_permits.acquire_owned().await else {
                 return;
             };
-            refresh_provider(app_handle, id, ctx).await;
+            refresh_provider(app_handle, id, ctx, generation).await;
         }));
     }
 
     handles
 }
 
-async fn refresh_provider(app: tauri::AppHandle, id: ProviderId, ctx: FetchContext) {
+async fn refresh_provider(
+    app: tauri::AppHandle,
+    id: ProviderId,
+    ctx: FetchContext,
+    generation: u64,
+) {
     let snapshot = fetch_provider_snapshot(id, ctx).await;
 
     let state = app.state::<Mutex<AppState>>();
     if let Ok(mut guard) = state.lock() {
+        if !is_current_provider_refresh_generation(&guard, generation) {
+            tracing::debug!(provider = id.cli_name(), generation, "dropping superseded provider refresh result");
+            return;
+        }
         let snapshot = preserve_last_good_transient_failure(&mut guard, id, snapshot);
         upsert_provider_cache(&mut guard.provider_cache, snapshot.clone());
         drop(guard);
@@ -374,10 +442,15 @@ async fn await_provider_refreshes(handles: Vec<tokio::task::JoinHandle<()>>) {
     }
 }
 
-fn finish_provider_refresh(state: &tauri::State<'_, Mutex<AppState>>) -> Result<usize, String> {
+fn finish_provider_refresh(
+    state: &tauri::State<'_, Mutex<AppState>>,
+    generation: u64,
+) -> Result<usize, String> {
     let mut guard = state.lock().map_err(|e| e.to_string())?;
     guard.is_refreshing = false;
-    guard.provider_cache_updated_at = Some(std::time::Instant::now());
+    if is_current_provider_refresh_generation(&guard, generation) {
+        guard.provider_cache_updated_at = Some(std::time::Instant::now());
+    }
     guard.provider_refresh_started_at = None;
     Ok(guard
         .provider_cache

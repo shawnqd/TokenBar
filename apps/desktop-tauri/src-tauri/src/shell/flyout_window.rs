@@ -104,7 +104,6 @@ pub fn open_or_focus(app: &AppHandle, position: Option<(i32, i32)>) -> Result<()
         .resizable(props.resizable)
         .always_on_top(props.always_on_top)
         .skip_taskbar(props.skip_taskbar)
-        .theme(Some(tauri::Theme::Dark))
         // CRITICAL: dynamically-built windows default to drag-drop ENABLED,
         // which intercepts the HTML5 draggable events the provider grid's
         // drag-reorder (ProviderGrid.tsx) relies on — see `main`'s
@@ -115,11 +114,24 @@ pub fn open_or_focus(app: &AppHandle, position: Option<(i32, i32)>) -> Result<()
     if let (Some(min_w), Some(min_h)) = (props.min_width, props.min_height) {
         builder = builder.min_inner_size(min_w, min_h);
     }
-    let win = builder.build().map_err(|e| e.to_string())?;
 
-    // Force DWM caption dark; keep WS_THICKFRAME (resizable) like the
-    // Settings window.
-    super::dwm::force_dark_caption_resizable(&win);
+    // WebView2 only honors an alpha (transparent) background when the native
+    // window is itself created transparent (see floatbar/window.rs for the
+    // same fix) — without this the page's transparent areas around the
+    // rounded `.menu-surface--tray` shell render as an opaque gray square.
+    #[cfg(windows)]
+    let builder = builder.transparent(true);
+
+    let win = builder
+        .background_color(tauri::utils::config::Color(0, 0, 0, 0))
+        .build()
+        .map_err(|e| e.to_string())?;
+
+    // Strip the caption but keep WS_THICKFRAME (resizable). The flyout is a
+    // transparent window, so use the variant that skips the DWM frame
+    // extension and opaque background brush — those paint an opaque square
+    // behind the page's rounded corners.
+    super::dwm::force_borderless_transparent_resizable(&win);
 
     let target_position =
         position.or_else(|| super::position::default_surface_position(app, SurfaceMode::TrayPanel));
@@ -219,6 +231,11 @@ pub fn handle_window_event(window: &tauri::Window, event: &tauri::WindowEvent) -
     match event {
         tauri::WindowEvent::Focused(false) => {
             if crate::proof_harness::is_proof_mode(app) {
+                return true;
+            }
+            // Settings is a companion window, not an outside click: keep the
+            // flyout visible so changes can be reviewed live side by side.
+            if crate::shell::settings_window::is_visible(app) {
                 return true;
             }
             let Some(st) = app.try_state::<Mutex<AppState>>() else {

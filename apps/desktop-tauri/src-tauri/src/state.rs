@@ -123,6 +123,7 @@ pub struct AppState {
     pub transient_provider_failure_counts: HashMap<ProviderId, u8>,
     pub provider_cache_updated_at: Option<std::time::Instant>,
     pub provider_refresh_started_at: Option<std::time::Instant>,
+    pub provider_refresh_generation: u64,
     pub is_refreshing: bool,
     pub update_state: UpdateState,
     /// Full update metadata from the last successful check.
@@ -185,6 +186,7 @@ impl AppState {
             transient_provider_failure_counts: HashMap::new(),
             provider_cache_updated_at: None,
             provider_refresh_started_at: None,
+            provider_refresh_generation: 0,
             is_refreshing: false,
             update_state: UpdateState::Idle,
             update_info: None,

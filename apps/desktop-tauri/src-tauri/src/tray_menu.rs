@@ -160,10 +160,6 @@ pub(crate) fn build_tray_menu_with(
         "settings",
         text(LocaleKey::TraySettings),
     ));
-    menu.push(TrayMenuEntry::item(
-        "check_for_updates",
-        text(LocaleKey::TrayCheckForUpdates),
-    ));
     menu.push(TrayMenuEntry::item("about", text(LocaleKey::MenuAbout)));
     menu.push(TrayMenuEntry::separator());
     menu.push(TrayMenuEntry::item("quit", text(LocaleKey::MenuQuit)));
@@ -289,7 +285,6 @@ mod tests {
                 "Show Float Bar",
                 "Providers",
                 "Settings...",
-                "Check for Updates",
                 "About CodexBar",
                 "Quit",
             ]
@@ -320,9 +315,9 @@ mod tests {
     }
 
     #[test]
-    fn check_for_updates_item_is_present() {
+    fn check_for_updates_item_is_hidden_for_the_custom_build() {
         let menu = build_tray_menu(&sample_provider_catalog(), &[], &both_enabled());
-        assert!(menu_contains(&menu, "check_for_updates"));
+        assert!(!menu_contains(&menu, "check_for_updates"));
     }
 
     #[test]
@@ -394,7 +389,7 @@ mod tests {
         let items = proof_menu_items(&menu, "tray").unwrap();
 
         assert!(items.iter().any(|item| item == "すべて更新"));
-        assert!(items.iter().any(|item| item == "ウィンドウを表示"));
+        assert!(items.iter().any(|item| item == "ダッシュボードを開く"));
         assert!(items.iter().any(|item| item == "設定..."));
         assert!(items.iter().any(|item| item == "終了"));
         assert!(!items.iter().any(|item| item == "Refresh All"));

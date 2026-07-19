@@ -13,6 +13,7 @@ import {
   type ProviderSidebarStatus,
 } from "../providers/ProvidersSidebar";
 import { ProviderDetailPane } from "../providers/ProviderDetailPane";
+import { CookieFileImport, COOKIE_IMPORT_ID } from "../providers/CookieFileImport";
 import { reorderProviders } from "../../../lib/tauri";
 import { useProviders } from "../../../hooks/useProviders";
 
@@ -90,6 +91,9 @@ export default function ProvidersTab({
   );
 
   useEffect(() => {
+    // The pinned "批量导入 Cookie" row is a sentinel selection, not a real
+    // (filterable) provider row — never auto-replace it with a provider.
+    if (selectedId === COOKIE_IMPORT_ID) return;
     if (visibleRows.length === 0) {
       if (selectedId !== null) setSelectedId(null);
       return;
@@ -119,27 +123,40 @@ export default function ProvidersTab({
 
   const selectedEntry =
     orderedProviders.find((p) => p.id === selectedId) ?? null;
+  const selectedSnapshot =
+    snapshots.find((snapshot) => snapshot.providerId === selectedId) ?? null;
 
   return (
-    <div className="provider-split">
-      <ProvidersSidebar
-        providers={visibleRows}
-        selectedId={selectedId}
-        searchText={searchText}
-        onSearchTextChange={setSearchText}
-        onSelect={setSelectedId}
-        onReorder={handleReorder}
-        onToggleEnabled={toggle}
-        disabled={saving}
-      />
-      <ProviderDetailPane
-        providerId={selectedId}
-        cookieDomain={selectedEntry?.cookieDomain ?? null}
-        resetTimeRelative={settings.resetTimeRelative}
-        providerMetrics={settings.providerMetrics}
-        settingsDisabled={saving}
-        onSettingsChange={set}
-      />
+    <div className="providers-tab-content">
+      <div className="provider-split">
+        <ProvidersSidebar
+          providers={visibleRows}
+          selectedId={selectedId}
+          searchText={searchText}
+          onSearchTextChange={setSearchText}
+          onSelect={setSelectedId}
+          onReorder={handleReorder}
+          onToggleEnabled={toggle}
+          disabled={saving}
+        />
+        {selectedId === COOKIE_IMPORT_ID ? (
+          <CookieFileImport />
+        ) : (
+          <ProviderDetailPane
+            providerId={selectedId}
+            providerSnapshot={selectedSnapshot}
+            cookieDomain={selectedEntry?.cookieDomain ?? null}
+            resetTimeRelative={settings.resetTimeRelative}
+            showAsUsed={settings.showAsUsed}
+            localUsagePeriod={settings.localUsagePeriod ?? "7d"}
+            menuBarDisplayMode={settings.menuBarDisplayMode}
+            outputSpeedEnabled={settings.outputSpeedEnabled !== false}
+            providerMetrics={settings.providerMetrics}
+            settingsDisabled={saving}
+            onSettingsChange={set}
+          />
+        )}
+      </div>
     </div>
   );
 }
@@ -189,7 +206,7 @@ function providerSidebarSubtitle(
     return `${t("ProviderDisabled")} — ${providerSourceHintShort(providerId, t)}`;
   }
   if (!snap) {
-    return "Waiting for usage";
+    return t("ProviderUsageNotFetchedYet");
   }
   const source = snap.sourceLabel || providerSourceHintShort(providerId, t);
   return source;
@@ -216,6 +233,8 @@ function providerSourceHintShort(
     case "mimo":
     case "commandcode":
       return t("ProviderSourceWebShort");
+    case "mimoapi":
+      return t("ProviderSourceApiShort");
     case "gemini":
     case "antigravity":
     case "jetbrains":
@@ -229,6 +248,8 @@ function providerSourceHintShort(
     case "nanogpt":
     case "warp":
     case "doubao":
+    case "arkcodingplan":
+    case "arkagentplan":
     case "crof":
     case "stepfun":
     case "venice":

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { RateWindowSnapshot } from "../types/bridge";
-import { getPaceBudget, getPaceChartSnapshot } from "./paceBudget";
+import { getPaceBudget, getPaceChartSnapshot, getPaceEstimate } from "./paceBudget";
 
 function snapshot(
   overrides: Partial<RateWindowSnapshot> = {},
@@ -123,5 +123,25 @@ describe("getPaceChartSnapshot", () => {
         now,
       ),
     ).toBeNull();
+  });
+});
+
+describe("getPaceEstimate", () => {
+  it("estimates exhaustion time from the average pace so far", () => {
+    const estimate = getPaceEstimate(
+      snapshot({ usedPercent: 50, remainingPercent: 50 }),
+      new Date("2026-06-12T04:00:00.000Z"),
+    );
+
+    expect(estimate).toEqual({ hoursRemaining: 4, lastsUntilReset: false });
+  });
+
+  it("caps the estimate at reset when quota will last", () => {
+    const estimate = getPaceEstimate(
+      snapshot({ usedPercent: 20, remainingPercent: 80 }),
+      new Date("2026-06-12T04:00:00.000Z"),
+    );
+
+    expect(estimate).toEqual({ hoursRemaining: 6, lastsUntilReset: true });
   });
 });

@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
 vi.mock("../../../hooks/useLocale", () => ({
@@ -68,15 +68,16 @@ describe("GeneralTab language picker", () => {
   it("renders 6 language options when Traditional Chinese is wired", () => {
     render(<GeneralTab settings={settings} set={vi.fn()} saving={false} />);
 
-    const select = screen.getByDisplayValue("English");
-    expect(select).toBeInTheDocument();
+    const trigger = screen.getByRole("button", { name: "English" });
+    expect(trigger).toBeInTheDocument();
+    fireEvent.click(trigger);
 
-    const options = select.querySelectorAll("option");
-    expect(options).toHaveLength(6);
+    expect(screen.getAllByRole("option")).toHaveLength(6);
   });
 
   it("includes spanish as a selectable option", () => {
     render(<GeneralTab settings={settings} set={vi.fn()} saving={false} />);
+    fireEvent.click(screen.getByRole("button", { name: "English" }));
 
     expect(
       screen.getByText("Español"),
@@ -85,6 +86,7 @@ describe("GeneralTab language picker", () => {
 
   it("includes korean as a selectable option", () => {
     render(<GeneralTab settings={settings} set={vi.fn()} saving={false} />);
+    fireEvent.click(screen.getByRole("button", { name: "English" }));
 
     expect(
       screen.getByText("한국어"),
@@ -93,6 +95,7 @@ describe("GeneralTab language picker", () => {
 
   it("includes Traditional Chinese as a selectable option", () => {
     render(<GeneralTab settings={settings} set={vi.fn()} saving={false} />);
+    fireEvent.click(screen.getByRole("button", { name: "English" }));
 
     expect(screen.getByText("繁體中文（臺灣）")).toBeInTheDocument();
   });

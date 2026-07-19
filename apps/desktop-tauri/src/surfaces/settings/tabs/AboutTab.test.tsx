@@ -6,34 +6,10 @@ const tauriMocks = vi.hoisted(() => ({
   openExternalUrl: vi.fn(),
 }));
 
-const updateMocks = vi.hoisted(() => ({
-  checkNow: vi.fn(),
-  download: vi.fn(),
-  apply: vi.fn(),
-  dismiss: vi.fn(),
-  openRelease: vi.fn(),
-}));
-
 vi.mock("../../../lib/tauri", () => tauriMocks);
 vi.mock("../../../hooks/useLocale", () => ({
   useLocale: () => ({ t: (key: string) => key }),
 }));
-vi.mock("../../../hooks/useUpdateState", () => ({
-  useUpdateState: () => ({
-    updateState: {
-      status: "idle",
-      version: null,
-      error: null,
-      progress: null,
-      releaseUrl: null,
-      canDownload: false,
-      canApply: false,
-      lastCheckedAt: null,
-    },
-    ...updateMocks,
-  }),
-}));
-
 import AboutTab from "./AboutTab";
 import type { SettingsSnapshot } from "../../../types/bridge";
 
@@ -97,9 +73,9 @@ describe("AboutTab", () => {
   it("opens about links through the Tauri URL bridge", async () => {
     render(<AboutTab settings={settings} set={vi.fn()} saving={false} />);
 
-    fireEvent.click(await screen.findByRole("button", { name: "GitHub" }));
-    fireEvent.click(screen.getByRole("button", { name: "Website" }));
-    fireEvent.click(screen.getByRole("button", { name: "Original Project" }));
+    fireEvent.click(await screen.findByRole("button", { name: "AboutLinkGithub" }));
+    fireEvent.click(screen.getByRole("button", { name: "AboutLinkWebsite" }));
+    fireEvent.click(screen.getByRole("button", { name: "AboutLinkOriginalProject" }));
 
     expect(tauriMocks.openExternalUrl).toHaveBeenNthCalledWith(
       1,
@@ -120,10 +96,10 @@ describe("AboutTab", () => {
 
     render(<AboutTab settings={settings} set={vi.fn()} saving={false} />);
 
-    fireEvent.click(await screen.findByRole("button", { name: "Website" }));
+    fireEvent.click(await screen.findByRole("button", { name: "AboutLinkWebsite" }));
 
     await waitFor(() => {
-      expect(screen.getByText("Error: no browser")).toBeInTheDocument();
+      expect(screen.getByText("StateError: no browser")).toBeInTheDocument();
     });
   });
 });

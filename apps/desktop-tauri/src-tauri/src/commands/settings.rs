@@ -26,6 +26,8 @@ pub struct SettingsUpdate {
     pub enable_animations: Option<bool>,
     pub reset_time_relative: Option<bool>,
     pub menu_bar_display_mode: Option<String>,
+    pub output_speed_enabled: Option<bool>,
+    pub local_usage_period: Option<String>,
     pub hide_personal_info: Option<bool>,
     pub update_channel: Option<String>,
     pub auto_download_updates: Option<bool>,
@@ -49,6 +51,7 @@ pub struct SettingsUpdate {
     pub float_bar_provider_ids: Option<Vec<String>>,
     pub float_bar_dark_text: Option<bool>,
     pub float_bar_show_reset_inline: Option<bool>,
+    pub float_bar_show_cost: Option<bool>,
 }
 
 impl SettingsUpdate {
@@ -74,6 +77,8 @@ impl SettingsUpdate {
             || self.show_as_used.is_some()
             || self.reset_time_relative.is_some()
             || self.menu_bar_display_mode.is_some()
+            || self.output_speed_enabled.is_some()
+            || self.local_usage_period.is_some()
             || self.provider_metrics.is_some()
             || self.enabled_providers.is_some()
             || self.ui_language.is_some()
@@ -148,6 +153,14 @@ impl SettingsUpdate {
         }
         if let Some(v) = self.menu_bar_display_mode.clone() {
             settings.menu_bar_display_mode = v;
+        }
+        if let Some(v) = self.output_speed_enabled {
+            settings.output_speed_enabled = v;
+        }
+        if let Some(ref v) = self.local_usage_period
+            && matches!(v.as_str(), "today" | "7d" | "30d")
+        {
+            settings.local_usage_period = v.clone();
         }
         if let Some(v) = self.window_scale_percent {
             settings.window_scale_percent = codexbar::settings::clamp_window_scale_percent(v);
@@ -235,6 +248,7 @@ impl SettingsUpdate {
             provider_ids: self.float_bar_provider_ids.clone(),
             dark_text: self.float_bar_dark_text,
             show_reset_inline: self.float_bar_show_reset_inline,
+            show_cost: self.float_bar_show_cost,
         }
     }
 
@@ -309,6 +323,7 @@ pub async fn update_settings(
     let clear_local_usage_cache = patch.codex_custom_sessions_dirs.is_some();
     let rebuild_tray_menu = patch.rebuilds_tray_menu();
     let refresh_tray_presentation = patch.refreshes_tray_presentation();
+    let enabled_providers_changed = patch.enabled_providers.is_some();
     let previous_language = settings.ui_language;
 
     patch.validate_shortcut_change(&app, &settings.global_shortcut)?;
@@ -319,6 +334,11 @@ pub async fn update_settings(
     }
 
     settings.save().map_err(|e| e.to_string())?;
+    if enabled_providers_changed {
+        let enabled_ids = settings.get_enabled_provider_ids();
+        let state = app.state::<Mutex<AppState>>();
+        invalidate_provider_refresh_and_prune_disabled(&state, &enabled_ids)?;
+    }
     if clear_local_usage_cache {
         crate::commands::clear_provider_local_usage_cache();
     }

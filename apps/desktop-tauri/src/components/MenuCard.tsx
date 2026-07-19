@@ -1,9 +1,11 @@
 import { useCallback, useEffect, useState } from "react";
 import type {
   DailyCostPoint,
+  LocalUsagePeriod,
   PaceSnapshot,
   ProviderChartData,
   ProviderLocalUsageSummary,
+  ProviderOutputSpeed,
   ProviderUsageSnapshot,
   RateWindowSnapshot,
 } from "../types/bridge";
@@ -15,8 +17,14 @@ import type { LocaleKey } from "../i18n/keys";
 import { paceCategory } from "../surfaces/tray/paceCategory";
 import { SimpleBarChart, StackedBarChart } from "./MiniBarChart";
 import { providerSupportsChartData } from "../lib/providerCharts";
-import { getPaceBudget } from "../lib/paceBudget";
-import PaceDetailsChart from "./PaceDetailsChart";
+import { getPaceEstimate } from "../lib/paceBudget";
+import { getProviderBalance } from "../lib/providerBalance";
+import { ProviderBalanceBlock } from "./ProviderBalanceBlock";
+import {
+  isMeaningfulQuotaWindow,
+  ProviderQuotaBlock,
+  quotaWindowLabel,
+} from "./ProviderQuotaBlock";
 
 /** Small copy-to-clipboard button matching macOS CopyIconButton (doc.on.doc → checkmark). */
 function CopyIconButton({ text }: { text: string }) {
@@ -47,28 +55,65 @@ function CopyIconButton({ text }: { text: string }) {
 
 interface MenuCardProps {
   provider: ProviderUsageSnapshot;
-  hideEmail: boolean;
   resetTimeRelative: boolean;
   showAsUsed?: boolean;
   compactMetrics?: boolean;
   onLayoutChange?: () => void;
+  /** Most recent completed-response speed for Codex or Claude. */
+  outputSpeed?: ProviderOutputSpeed | null;
+  /** Which period the local-usage stats block leads with (Settings-driven). */
+  localUsagePeriod?: LocalUsagePeriod;
+  /** Suppress the local-usage stats block entirely (e.g. compact display mode). */
+  hideLocalUsage?: boolean;
 }
 
-function maskEmail(email: string): string {
-  const at = email.indexOf("@");
-  if (at <= 1) return "••••@••••";
-  return email[0] + "•".repeat(at - 1) + email.slice(at);
+function OutputSpeedHighlight({
+  speed,
+  t,
+}: {
+  speed: ProviderOutputSpeed;
+  t: (key: LocaleKey) => string;
+}) {
+  if (speed.tokensPerSecond == null || speed.tokensPerSecond <= 0) return null;
+  return (
+    <div className="menu-card__speed" data-status={speed.status}>
+      <div>
+        <span className="menu-card__speed-label">{t("OutputSpeedTitle")}</span>
+        <div>
+          <span className="menu-card__speed-value">{speed.tokensPerSecond.toFixed(1)}</span>
+          <span className="menu-card__speed-unit">t/s</span>
+        </div>
+      </div>
+    </div>
+  );
 }
 
-/** Localize raw provider window labels using the active locale. */
-function localizeWindowLabel(
-  raw: string | undefined,
-  t: (key: LocaleKey) => string,
-): string {
-  if (raw?.trim().toLowerCase() === "weekly") {
-    return t("ProviderWeeklyLabel");
+/**
+ * The tray flyout and the startup dashboard render raw provider errors through
+ * MenuCard, independently of the Provider settings detail pane. Translate the
+ * stable error categories here while leaving the original diagnostic available
+ * through the Copy button.
+ */
+function localizeProviderError(message: string, t: (key: LocaleKey) => string): string {
+  const lower = message.toLowerCase();
+  const requestUrl = message.match(
+    /^network error:\s*error sending request for url\s*\((https?:\/\/[^\s)]+)\)\s*$/i,
+  );
+  if (requestUrl) {
+    return t("ProviderIssueNetworkRequestFailed") + "：" + requestUrl[1];
   }
-  return raw ?? "";
+  if (lower.startsWith("network error:")) {
+    return t("ProviderIssueNetworkConnectionFailed");
+  }
+  if (
+    lower.includes("oauth credentials not found") ||
+    lower.includes("sign-in was not found") ||
+    lower.includes("sign-in expired") ||
+    lower === "authentication required"
+  ) {
+    return t("ProviderIssueSignInRequired");
+  }
+  return message;
 }
 
 /** Format a reserve description from raw pace data at render time. */
@@ -102,57 +147,79 @@ function formatCurrency(amount: number, code: string): string {
   }
 }
 
-function formatCompactCount(value: number | null): string {
-  if (value == null || value <= 0) return "—";
+const USD_TO_CNY_REFERENCE_RATE = 7.2;
+
+function formatTokenCount(value: number): string {
   return new Intl.NumberFormat("en-US", {
-    notation: "compact",
-    maximumFractionDigits: value >= 1_000_000 ? 1 : 0,
+    maximumFractionDigits: 0,
   }).format(value);
 }
 
-function LocalUsageBlock({
+function formatApiEquivalentValue(amount: number): string {
+  const cnyEstimate = amount * USD_TO_CNY_REFERENCE_RATE;
+  return `${formatCurrency(amount, "USD")} · ¥${cnyEstimate.toFixed(2)}`;
+}
+
+export function LocalUsageBlock({
   providerId,
   summary,
   costHistory,
+  period = "7d",
 }: {
   providerId: string;
   summary: ProviderLocalUsageSummary;
   costHistory: DailyCostPoint[];
+  period?: LocalUsagePeriod;
 }) {
   const { t } = useLocale();
   const isCodex = providerId === "codex";
+  const historyDays = period === "today" ? 1 : period === "7d" ? 7 : 30;
   const visibleHistory = costHistory
-    .slice(-30)
+    .slice(-historyDays)
     .filter((point) => point.value > 0);
   const maxCost = Math.max(...visibleHistory.map((point) => point.value), 0);
 
+  // The flyout follows the selected range literally: one choice, one block.
+  const lead =
+    period === "today"
+      ? {
+          label: t("PanelTodayUsage"),
+          tokens: summary.todayTokens,
+          cost: summary.todayCost,
+          empty: t("PanelNoUsageToday"),
+        }
+      : period === "30d"
+        ? {
+            label: t("PanelThirtyDayUsage"),
+            tokens: summary.thirtyDayTokens,
+            cost: summary.thirtyDayCost,
+            empty: t("PanelNoUsageThirtyDays"),
+          }
+        : {
+            label: t("PanelSevenDayUsage"),
+            tokens: summary.sevenDayTokens,
+            cost: summary.sevenDayCost,
+            empty: t("PanelNoUsageSevenDays"),
+          };
   return (
     <section className="menu-card__group menu-card__local-usage">
-      <div className="menu-card__local-grid">
-        <div>
-          <span className="menu-card__local-label">{t("PanelToday")}</span>
-          <strong>
-            {summary.todayCost != null
-              ? formatCurrency(summary.todayCost, "USD")
-              : "—"}
-          </strong>
-        </div>
-        <div>
-          <span className="menu-card__local-label">{t("PanelThirtyDayCost")}</span>
-          <strong>
-            {summary.thirtyDayCost != null
-              ? formatCurrency(summary.thirtyDayCost, "USD")
-              : "—"}
-          </strong>
-        </div>
-        <div>
-          <span className="menu-card__local-label">{t("PanelThirtyDayTokens")}</span>
-          <strong>{formatCompactCount(summary.thirtyDayTokens)}</strong>
-        </div>
-        <div>
-          <span className="menu-card__local-label">{t("PanelLatestTokens")}</span>
-          <strong>{formatCompactCount(summary.latestTokens)}</strong>
-        </div>
+      <div className="menu-card__local-period">
+        <span className="menu-card__local-label">{lead.label}</span>
+        {lead.tokens != null && lead.tokens > 0 ? (
+          <>
+            <div className="menu-card__local-token-value">
+              <strong>{formatTokenCount(lead.tokens)}</strong>
+              <span>{t("PanelTokenUnit")}</span>
+            </div>
+            {lead.cost != null && (
+              <div className="menu-card__local-equivalent">
+                {t("PanelApiEquivalentValue")} ≈ {formatApiEquivalentValue(lead.cost)}
+              </div>
+            )}
+          </>
+        ) : (
+          <strong className="menu-card__local-empty">{lead.empty}</strong>
+        )}
       </div>
 
       {isCodex && visibleHistory.length > 0 && (
@@ -169,14 +236,68 @@ function LocalUsageBlock({
         </div>
       )}
 
-      <div className="menu-card__local-note">
-        {summary.topModel && <strong>{t("PanelTopModelPrefix")}: {summary.topModel}</strong>}
-        <span>
-          {summary.estimateNote === "Estimated from local logs"
-            ? t("PanelEstimatedFromLocalLogs")
-            : summary.estimateNote}
-        </span>
+      {summary.topModel && (
+        <div className="menu-card__local-note">
+          <strong>{t("PanelTopModelPrefix")}: {summary.topModel}</strong>
+        </div>
+      )}
+    </section>
+  );
+}
+
+/**
+ * Chart data is loaded asynchronously from the local history store. Keep the
+ * space and the reading rhythm stable while that request is in flight rather
+ * than letting the lower half of the card appear a moment later.
+ */
+function LocalUsageSkeleton() {
+  const { t } = useLocale();
+
+  return (
+    <section
+      className="menu-card__group menu-card__local-usage menu-card__local-usage--loading"
+      aria-busy="true"
+      aria-label={t("ProviderStatusLoading")}
+    >
+      <div className="menu-card__local-skeleton" aria-hidden="true">
+        {[0].map((index) => (
+          <div className="menu-card__local-period" key={index}>
+            <span className="menu-card__skeleton menu-card__skeleton--label" />
+            <strong className="menu-card__skeleton menu-card__skeleton--value" />
+            <span className="menu-card__skeleton menu-card__skeleton--equivalent" />
+          </div>
+        ))}
       </div>
+      <div className="menu-card__local-note" aria-hidden="true">
+        <span className="menu-card__skeleton menu-card__skeleton--note" />
+      </div>
+    </section>
+  );
+}
+
+function WayfinderUsageBlock({
+  usage,
+}: {
+  usage: NonNullable<ProviderUsageSnapshot["wayfinderUsage"]>;
+}) {
+  const amount = (value: number) =>
+    usage.priced ? `${value.toFixed(4)} ${usage.unit.toUpperCase()}` : "—";
+  return (
+    <section className="menu-card__group menu-card__local-usage">
+      <div className="menu-card__local-grid">
+        <div><span className="menu-card__local-label">网关状态</span><strong>{usage.gatewayStatus}</strong></div>
+        <div><span className="menu-card__local-label">模型</span><strong>{usage.modelCount}</strong></div>
+        <div><span className="menu-card__local-label">请求</span><strong>{usage.requests.toLocaleString()}</strong></div>
+        <div><span className="menu-card__local-label">Token</span><strong>{usage.tokens.toLocaleString()}</strong></div>
+      </div>
+      <div className="menu-card__cost-line">近 {usage.periodDays} 天节省：{amount(usage.saved)}（{usage.savedPercent.toFixed(1)}%）</div>
+      {(usage.offline || usage.dryRun || usage.missingKeys.length > 0) && (
+        <div className="menu-card__local-note">
+          {usage.offline && <span>离线模式 </span>}
+          {usage.dryRun && <span>演练模式 </span>}
+          {usage.missingKeys.length > 0 && <span>缺少密钥：{usage.missingKeys.join(", ")}</span>}
+        </div>
+      )}
     </section>
   );
 }
@@ -184,7 +305,10 @@ function LocalUsageBlock({
 function displayPlanName(planName: string | null): string | null {
   if (!planName) return null;
   const normalized = planName.trim().toLowerCase();
-  if (normalized === "default_claude_ai") return "Claude AI";
+  // Raw claude.ai tier ids leak through both bare ("default_claude_ai") and
+  // wrapped by older backends ("Claude (default_claude_ai)") — cached
+  // snapshots can still carry the wrapped form after the Rust-side fix.
+  if (normalized.includes("default_claude_ai")) return "Claude AI";
   return planName;
 }
 
@@ -209,15 +333,7 @@ function paceStageKey(stage: PaceSnapshot["stage"]): LocaleKey {
   }
 }
 
-type UsageLevel = "normal" | "high" | "critical" | "exhausted";
 const WEEKLY_WINDOW_MINUTES = 7 * 24 * 60;
-
-function levelOf(remainPct: number, exhausted: boolean): UsageLevel {
-  if (exhausted) return "exhausted";
-  if (remainPct <= 5) return "critical";
-  if (remainPct <= 25) return "high";
-  return "normal";
-}
 
 interface MetricEntry {
   id: string;
@@ -226,7 +342,7 @@ interface MetricEntry {
 }
 
 type MetricPaceView =
-  | { kind: "budget"; budget: NonNullable<ReturnType<typeof getPaceBudget>> }
+  | { kind: "forecast"; estimate: NonNullable<ReturnType<typeof getPaceEstimate>> }
   | { kind: "reserve"; percent: number }
   | { kind: "none" };
 
@@ -235,8 +351,8 @@ function getMetricPaceView(snap: RateWindowSnapshot): MetricPaceView {
 
   const isWeeklyWindow =
     snap.windowMinutes != null && snap.windowMinutes >= WEEKLY_WINDOW_MINUTES;
-  const budget = isWeeklyWindow ? getPaceBudget(snap) : null;
-  if (budget) return { kind: "budget", budget };
+  const estimate = isWeeklyWindow ? getPaceEstimate(snap) : null;
+  if (estimate) return { kind: "forecast", estimate };
 
   if (snap.reservePercent != null) {
     return { kind: "reserve", percent: snap.reservePercent };
@@ -257,73 +373,52 @@ function MetricRow({
   exhaustedLabel,
   resetTimeRelative,
   showAsUsed,
-  expanded,
-  onToggleExpanded,
+  hero = false,
+  planLabel = null,
 }: {
   title: string;
   snap: RateWindowSnapshot;
   exhaustedLabel: string;
   resetTimeRelative: boolean;
   showAsUsed: boolean;
-  expanded: boolean;
-  onToggleExpanded: () => void;
+  hero?: boolean;
+  planLabel?: string | null;
 }) {
   const { t } = useLocale();
-  const usedPct = Number.isFinite(snap.usedPercent) ? Math.max(0, snap.usedPercent) : 0;
-  const barPct = Math.min(100, usedPct);
-  const remain = 100 - usedPct;
-  const displayPct = showAsUsed ? usedPct : Math.max(0, remain);
-  const barDisplayPct = showAsUsed ? barPct : Math.max(0, Math.min(100, remain));
-  const displayLabel = showAsUsed ? t("PanelUsedSuffix") : t("PanelLeftSuffix");
-  const level = levelOf(remain, snap.isExhausted);
-  const resetText = useFormattedResetTime(
-    snap.resetsAt,
-    snap.resetDescription,
-    resetTimeRelative,
-  );
   const paceView = getMetricPaceView(snap);
   const reserveDescription = formatReserveDescription(snap, t);
-  const formatBudget = (value: number) =>
-    value < 10 ? value.toFixed(1).replace(/\.0$/, "") : Math.round(value).toString();
+  const formatHours = (hours: number) => {
+    if (hours < 1) return t("PanelForecastLessThanHour");
+    const rounded = hours < 10 ? Math.round(hours * 10) / 10 : Math.round(hours);
+    return `${rounded} ${t("PanelForecastHoursUnit")}`;
+  };
   return (
-    <div className="menu-metric">
-      <span className="menu-metric__title">{title}</span>
-      <div className="menu-metric__bar">
-        <div className="menu-metric__bar-fill" data-level={level} style={{ width: `${barDisplayPct}%` }} />
-      </div>
-      <div className="menu-metric__row">
-        <span className="menu-metric__pct">{Math.round(displayPct)}% {displayLabel}</span>
-        {resetText && (
-          <span className="menu-metric__reset">{resetText}</span>
-        )}
-      </div>
-      {snap.isExhausted && (
-        <div className="menu-metric__exhausted">{exhaustedLabel}</div>
-      )}
-      {paceView.kind === "budget" && (
-        <div className="menu-metric__budget">
-          <button
-            type="button"
-            className="menu-metric__budget-header"
-            onClick={onToggleExpanded}
-            aria-expanded={expanded}
-          >
-            <span>{t("PanelOnPaceBudget")}</span>
-            {reserveDescription && <span>{reserveDescription}</span>}
-          </button>
-          <div className="menu-metric__budget-pills">
-            {[
-              [t("PanelNow"), paceView.budget.now],
-              [t("PanelOneHour"), paceView.budget.nextHour],
-              [t("PanelFiveHours"), paceView.budget.nextFiveHours],
-              [t("PanelTodayBudget"), paceView.budget.today],
-            ].map(([label, value]) => (
-              <span className="menu-metric__budget-pill" key={String(label)}>
-                {label} {formatBudget(Number(value))}%
-              </span>
-            ))}
+    <ProviderQuotaBlock
+      title={title}
+      rate={snap}
+      resetTimeRelative={resetTimeRelative}
+      showAsUsed={showAsUsed}
+      usedLabel={t("PanelUsedSuffix")}
+      remainingLabel={t("PanelLeftSuffix")}
+      exhaustedLabel={exhaustedLabel}
+      hero={hero}
+      planLabel={planLabel}
+    >
+      {paceView.kind === "forecast" && (
+        <div className="menu-metric__forecast">
+          <div className="menu-metric__forecast-row">
+            <span className="menu-metric__forecast-label">
+              {t("PanelUsageForecast")}
+            </span>
+            <strong className="menu-metric__forecast-value">
+              ≈ {formatHours(paceView.estimate.hoursRemaining)}
+            </strong>
           </div>
-          {expanded && <PaceDetailsChart snap={snap} />}
+          <span className="menu-metric__forecast-note">
+            {paceView.estimate.lastsUntilReset
+              ? t("PanelForecastUntilReset")
+              : t("PanelForecastPrefix")}
+          </span>
         </div>
       )}
       {paceView.kind === "reserve" && (
@@ -334,7 +429,7 @@ function MetricRow({
           )}
         </div>
       )}
-    </div>
+    </ProviderQuotaBlock>
   );
 }
 
@@ -342,9 +437,9 @@ function MetricRow({
  * Provider card — direct mirror of SwiftUI `UsageMenuCardView`.
  *
  * Layout (top to bottom):
- *   1. Header VStack(spacing: 3)
- *        – HStack: providerName (headline/semibold)  ··  email (subheadline/secondary, right)
- *        – HStack: subtitle "source · updated"        ··  plan (footnote/secondary, right)
+ *   1. Header
+ *        – HStack: providerName (headline/semibold)  ··  updated time (footnote/secondary, right)
+ *        – error block (only when the provider failed)
  *   2. Divider (1pt)
  *   3. VStack(spacing: 12)
  *        – Metrics group VStack(spacing: 12) of MetricRow
@@ -357,15 +452,17 @@ function MetricRow({
  */
 export default function MenuCard({
   provider,
-  hideEmail,
   resetTimeRelative,
   showAsUsed = false,
   compactMetrics = false,
   onLayoutChange,
+  outputSpeed = null,
+  localUsagePeriod = "7d",
+  hideLocalUsage = false,
 }: MenuCardProps) {
   const { t } = useLocale();
   const [chartData, setChartData] = useState<ProviderChartData | null>(null);
-  const [expandedPaceWindow, setExpandedPaceWindow] = useState<string | null>(null);
+  const [isChartDataLoading, setIsChartDataLoading] = useState(false);
   const formattedCostReset = useFormattedResetTime(
     provider.cost?.resetsAt ?? null,
     null,
@@ -375,10 +472,12 @@ export default function MenuCard({
   useEffect(() => {
     if (!providerSupportsChartData(provider.providerId)) {
       setChartData(null);
+      setIsChartDataLoading(false);
       return;
     }
     let cancelled = false;
     setChartData(null);
+    setIsChartDataLoading(true);
     getProviderChartData(
       provider.providerId,
       provider.accountEmail ?? undefined,
@@ -391,67 +490,113 @@ export default function MenuCard({
       })
       .catch(() => {
         /* chart data is best-effort */
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setIsChartDataLoading(false);
+          requestAnimationFrame(() => onLayoutChange?.());
+        }
       });
     return () => {
       cancelled = true;
     };
   }, [provider.providerId, provider.accountEmail, onLayoutChange]);
 
-  const email = provider.accountEmail
-    ? hideEmail
-      ? maskEmail(provider.accountEmail)
-      : provider.accountEmail
-    : null;
-  const planName = displayPlanName(provider.planName);
+  const isWayfinder = provider.providerId === "wayfinder";
+  const planName = isWayfinder ? null : displayPlanName(provider.planName);
 
-  const metrics: MetricEntry[] = [
-    {
+  // Balance-type providers (DeepSeek, MiMo, MiMo API) encode a prepaid balance
+  // or API-key status as ad-hoc strings inside quota-shaped windows. This helper
+  // normalizes every encoding into one structured view, tells us which windows
+  // to skip so we don't render synthetic 0% bars, and whether the plan badge is
+  // really a balance echo that should be hidden. See lib/providerBalance.
+  const { balance, excludeWindows, suppressPlanBadge } = getProviderBalance(provider);
+
+  const resetCreditsWindow = provider.extraRateWindows?.find(
+    (extra) => extra.id === "reset-credits",
+  );
+  const resetCreditsAvailable = (() => {
+    const description = resetCreditsWindow?.window.resetDescription ?? "";
+    const match = description.match(/^(\d+)\s+reset credits? available$/i);
+    return match ? Number(match[1]) : null;
+  })();
+
+  const metrics: MetricEntry[] = [];
+  const wayfinderUsage = isWayfinder ? provider.wayfinderUsage ?? null : null;
+  if (!isWayfinder && !excludeWindows.has("primary") && isMeaningfulQuotaWindow(provider.primary))
+    metrics.push({
       id: "primary",
-      label: provider.primaryLabel ?? t("DetailWindowPrimary"),
+      label: quotaWindowLabel(provider.primaryLabel, provider.primary, t),
       snap: provider.primary,
-    },
-  ];
-  if (provider.secondary)
+    });
+  if (
+    provider.secondary &&
+    !excludeWindows.has("secondary") &&
+    isMeaningfulQuotaWindow(provider.secondary)
+  )
     metrics.push({
       id: "secondary",
-      label: localizeWindowLabel(provider.secondaryLabel, t) || t("DetailWindowSecondary"),
+      label: quotaWindowLabel(provider.secondaryLabel, provider.secondary, t),
       snap: provider.secondary,
     });
-  if (provider.modelSpecific)
+  if (provider.modelSpecific && isMeaningfulQuotaWindow(provider.modelSpecific))
     metrics.push({
       id: "model-specific",
       label: t("DetailWindowModelSpecific"),
       snap: provider.modelSpecific,
     });
-  if (provider.tertiary)
+  if (provider.tertiary && isMeaningfulQuotaWindow(provider.tertiary))
     metrics.push({
       id: "tertiary",
       label: t("DetailWindowTertiary"),
       snap: provider.tertiary,
     });
   for (const extra of provider.extraRateWindows ?? []) {
+    if (extra.id === "reset-credits") continue;
+    if (!isMeaningfulQuotaWindow(extra.window)) continue;
     metrics.push({
       id: `extra-${extra.id}`,
       label: extra.title,
       snap: extra.window,
     });
   }
-  const visibleMetrics = compactMetrics ? metrics.slice(0, 2) : metrics;
+  // Compact is deliberately a summary row, not a nearly-identical detailed
+  // card. Keep only the primary quota and omit secondary diagnostics below.
+  const visibleMetrics = compactMetrics ? metrics.slice(0, 1) : metrics;
 
   const hasCostHistory =
+    !compactMetrics &&
     chartData !== null && chartData.costHistory.some((point) => point.value > 0);
   const hasCreditsHistory =
-    chartData !== null && chartData.creditsHistory.length > 0;
+    !compactMetrics && chartData !== null && chartData.creditsHistory.length > 0;
   const hasUsageBreakdown =
-    chartData !== null && chartData.usageBreakdown.length > 0;
+    !compactMetrics && chartData !== null && chartData.usageBreakdown.length > 0;
   const hasCharts = hasCostHistory || hasCreditsHistory || hasUsageBreakdown;
-  const localUsage = provider.error ? null : chartData?.localUsage ?? null;
+  const localUsage =
+    compactMetrics || hideLocalUsage || provider.error ? null : chartData?.localUsage ?? null;
+  const showLocalUsagePlaceholder =
+    !compactMetrics &&
+    !hideLocalUsage &&
+    !provider.error &&
+    providerSupportsChartData(provider.providerId) &&
+    isChartDataLoading;
   const localCostHistory = chartData?.costHistory ?? [];
   const hasMetrics = visibleMetrics.length > 0;
-  const hasCost = !!provider.cost;
-  const hasPace = !!provider.pace;
+  const hasResetCredits = !compactMetrics && resetCreditsAvailable != null;
+  const hasCost = !compactMetrics && !!provider.cost;
+  const hasPace = !compactMetrics && !!provider.pace;
   const hasDetails =
-    !provider.error && (hasMetrics || hasCost || hasPace || hasCharts || !!localUsage);
+    !provider.error &&
+    (hasMetrics ||
+      hasResetCredits ||
+      !!balance ||
+      hasCost ||
+      hasPace ||
+      hasCharts ||
+      !!localUsage ||
+      showLocalUsagePlaceholder ||
+      !!wayfinderUsage);
+  const displayError = provider.error ? localizeProviderError(provider.error, t) : null;
   const cardClassName = [
     "menu-card",
     provider.error ? "menu-card--error" : null,
@@ -466,24 +611,19 @@ export default function MenuCard({
         <div className="menu-card__title-row">
           <div className="menu-card__name-group">
             <span className="menu-card__name">{provider.displayName}</span>
-            {!provider.error && email && <span className="menu-card__email">{email}</span>}
           </div>
-        </div>
-        {provider.error ? (
-          <div className="menu-card__error-block">
-            <div className="menu-card__error-text">{provider.error}</div>
-            <CopyIconButton text={provider.error} />
-          </div>
-        ) : (
-          <div className="menu-card__subtitle-row">
-            <span className="menu-card__subtitle">
+          {!provider.error && (
+            <span className="menu-card__subtitle menu-card__updated">
               {Number.isNaN(Date.parse(provider.updatedAt))
                 ? provider.updatedAt
                 : formatRelativeUpdated(Date.parse(provider.updatedAt), t)}
             </span>
-            {planName && (
-              <span className="menu-card__plan-badge">{planName}</span>
-            )}
+          )}
+        </div>
+        {provider.error && (
+          <div className="menu-card__error-block">
+            <div className="menu-card__error-text">{displayError}</div>
+            <CopyIconButton text={provider.error} />
           </div>
         )}
       </header>
@@ -494,7 +634,7 @@ export default function MenuCard({
         <div className="menu-card__content">
           {!provider.error && hasMetrics && (
             <section className="menu-card__group menu-card__metrics">
-              {visibleMetrics.map((m) => (
+              {visibleMetrics.map((m, idx) => (
                 <MetricRow
                   key={m.id}
                   title={m.label}
@@ -502,29 +642,54 @@ export default function MenuCard({
                   exhaustedLabel={t("DetailWindowExhausted")}
                   resetTimeRelative={resetTimeRelative}
                   showAsUsed={showAsUsed}
-                  expanded={expandedPaceWindow === m.id}
-                  onToggleExpanded={() => {
-                    setExpandedPaceWindow((current) =>
-                      current === m.id ? null : m.id,
-                    );
-                    requestAnimationFrame(() => onLayoutChange?.());
-                  }}
+                  hero={idx === 0}
+                  planLabel={idx === 0 && !suppressPlanBadge ? planName : null}
                 />
               ))}
             </section>
           )}
 
-          {localUsage && (
+          {!provider.error && hasResetCredits && (
+            <section className="menu-card__reset-credits" aria-label={t("PanelResetCreditsTitle")}>
+              <span>{t("PanelResetCreditsTitle")}</span>
+              <strong>
+                {t("PanelResetCreditsRemaining")} {resetCreditsAvailable} {t("PanelResetCreditsUnit")}
+              </strong>
+            </section>
+          )}
+
+          {!provider.error && outputSpeed && (
+            <OutputSpeedHighlight speed={outputSpeed} t={t} />
+          )}
+
+          {!provider.error && balance && (
+            <ProviderBalanceBlock balance={balance} className="menu-card__group" />
+          )}
+
+          {!provider.error && wayfinderUsage && (
+            <WayfinderUsageBlock usage={wayfinderUsage} />
+          )}
+
+          {(hasMetrics || !!balance) && (localUsage || showLocalUsagePlaceholder) && (
+            <div className="menu-card__divider" />
+          )}
+
+          {showLocalUsagePlaceholder ? (
+            <LocalUsageSkeleton />
+          ) : localUsage ? (
             <LocalUsageBlock
               providerId={provider.providerId}
               summary={localUsage}
               costHistory={localCostHistory}
+              period={localUsagePeriod}
             />
+          ) : null}
+
+          {(hasMetrics || !!balance || !!localUsage || showLocalUsagePlaceholder) && hasCost && (
+            <div className="menu-card__divider" />
           )}
 
-          {hasMetrics && hasCost && <div className="menu-card__divider" />}
-
-          {provider.cost && (
+          {hasCost && provider.cost && (
             <section className="menu-card__group menu-card__cost">
               <div className="menu-card__group-title">
                 {t("DetailCostTitle")} — {provider.cost.period}
@@ -557,7 +722,7 @@ export default function MenuCard({
 
           {(hasMetrics || hasCost) && hasPace && <div className="menu-card__divider" />}
 
-          {provider.pace && (
+          {hasPace && provider.pace && (
             <section className="menu-card__group menu-card__pace">
               <div className="menu-card__pace-header">
                 <span className="menu-card__group-title">{t("DetailPaceTitle")}</span>

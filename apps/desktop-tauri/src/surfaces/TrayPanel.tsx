@@ -1,4 +1,4 @@
-import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import type { BootstrapState, ProviderUsageSnapshot } from "../types/bridge";
 import {
@@ -11,23 +11,22 @@ import {
   reorderProviders,
   setFlyoutSize,
   setSurfaceMode,
-  updateSettings,
 } from "../lib/tauri";
 import { useProviders } from "../hooks/useProviders";
 import { useSettings } from "../hooks/useSettings";
-import { useUpdateState } from "../hooks/useUpdateState";
 import { useLocale } from "../hooks/useLocale";
 import { useSurfaceTarget } from "../hooks/useSurfaceMode";
 import { useTrayPanelLayout } from "../hooks/useTrayPanelLayout";
+import { useOutputSpeedSnapshot } from "../hooks/useOutputSpeedSnapshot";
 import MenuCard from "../components/MenuCard";
 import MenuSurface, {
   MenuEmpty,
   type MenuFooterRow,
 } from "../components/MenuSurface";
-import UpdateBanner from "../components/UpdateBanner";
 import ProviderGrid, { prioritizeProviders } from "../components/ProviderGrid";
 import { openProviderDashboard, openProviderStatusPage } from "../lib/tauri";
 import { orderProviderSnapshots } from "../lib/providerOrder";
+import { getProviderBalance } from "../lib/providerBalance";
 import {
   hydrateProviderSlots,
   orderedEnabledProviderSlots,
@@ -38,9 +37,9 @@ const HAS_DASHBOARD = new Set([
   "abacus", "alibaba", "alibabatokenplan", "amp", "augment",
   "azureopenai", "bedrock", "claude", "codex", "codebuff",
   "commandcode", "copilot", "crof", "crossmodel", "cursor", "deepgram", "deepseek",
-  "doubao", "elevenlabs", "factory", "gemini", "grok", "groq",
+  "doubao", "arkcodingplan", "arkagentplan", "elevenlabs", "factory", "gemini", "grok", "groq",
   "infini", "jetbrains", "kilo", "kimi", "kimik2", "kiro", "manus",
-  "mimo", "minimax", "mistral", "nanogpt", "ollama", "openaiapi",
+  "mimo", "mimoapi", "minimax", "mistral", "nanogpt", "ollama", "openaiapi",
   "opencode", "opencodego", "openrouter", "perplexity", "qoder", "sakana", "stepfun",
   "t3chat", "venice", "vertexai", "warp", "windsurf",
   "zai",
@@ -56,22 +55,6 @@ const HAS_STATUS_PAGE = new Set([
 const TRAY_INITIAL_REFRESH_DELAY_MS = 250;
 const DENSE_OVERVIEW_THRESHOLD = 32;
 
-// ── Tray flyout zoom (footer slider, above Refresh) ───────────────────
-// PopOut window mode has its own independent windowScalePercent (webview
-// setZoom) — this is a separate setting/control for the tray flyout only,
-// applied via CSS `zoom` on the MenuSurface root (see render below).
-const TRAY_SCALE_MIN = 100;
-const TRAY_SCALE_MAX = 200;
-const TRAY_SCALE_STEP = 5;
-const TRAY_SCALE_COMMIT_DEBOUNCE_MS = 250;
-
-function clampTrayScalePercent(value: number): number {
-  return Math.min(
-    TRAY_SCALE_MAX,
-    Math.max(TRAY_SCALE_MIN, Number.isFinite(value) ? value : 100),
-  );
-}
-
 function getProviderStatus(
   p: ProviderUsageSnapshot,
 ): "ok" | "warning" | "exhausted" | "error" {
@@ -80,7 +63,6 @@ function getProviderStatus(
   if (p.primary.usedPercent > 80) return "warning";
   return "ok";
 }
-void getProviderStatus;
 
 /**
  * Tray popover surface — two modes like macOS CodexBar:
@@ -99,81 +81,40 @@ export default function TrayPanel({ state }: { state: BootstrapState }) {
     initialRefreshDelayMs: TRAY_INITIAL_REFRESH_DELAY_MS,
     forceRefreshOnMount: settings.refreshAllProvidersOnMenuOpen,
   });
-  const { updateState, checkNow, download, apply, dismiss, openRelease } =
-    useUpdateState();
 
   const { t } = useLocale();
+  const outputSpeed = useOutputSpeedSnapshot(
+    settings.outputSpeedEnabled !== false,
+  );
   const surfaceTarget = useSurfaceTarget("trayPanel");
-
-  // Zoom slider: LOCAL draft state drives both the thumb and the live CSS
-  // zoom preview while dragging; persistence trails behind a ~250ms debounce
-  // (fire-and-forget updateSettings). The settings_changed echo — from our
-  // own commit round-trip or another window — only re-syncs the draft when
-  // no debounce is pending, so it can't fight the thumb mid-drag.
-  const settingsTrayScalePercent = clampTrayScalePercent(
-    settings.trayScalePercent,
-  );
-  const [trayScaleDraft, setTrayScaleDraft] = useState(
-    settingsTrayScalePercent,
-  );
-  const trayScaleCommitTimerRef = useRef<number | undefined>(undefined);
-  useEffect(() => {
-    if (trayScaleCommitTimerRef.current === undefined) {
-      setTrayScaleDraft(settingsTrayScalePercent);
-    }
-  }, [settingsTrayScalePercent]);
-  useEffect(
-    () => () => {
-      if (trayScaleCommitTimerRef.current !== undefined) {
-        window.clearTimeout(trayScaleCommitTimerRef.current);
-      }
-    },
-    [],
-  );
-  const handleTrayScaleChange = useCallback((value: number) => {
-    const next = clampTrayScalePercent(value);
-    setTrayScaleDraft(next);
-    if (trayScaleCommitTimerRef.current !== undefined) {
-      window.clearTimeout(trayScaleCommitTimerRef.current);
-    }
-    trayScaleCommitTimerRef.current = window.setTimeout(() => {
-      trayScaleCommitTimerRef.current = undefined;
-      void updateSettings({ trayScalePercent: next }).catch(() => {});
-    }, TRAY_SCALE_COMMIT_DEBOUNCE_MS);
-  }, []);
-  const trayScale = trayScaleDraft / 100;
-  const trayScaleFillPercent =
-    ((trayScaleDraft - TRAY_SCALE_MIN) / (TRAY_SCALE_MAX - TRAY_SCALE_MIN)) *
-    100;
-  const zoomRow = (
-    <div className="menu-surface__footer-row menu-surface__footer-zoom">
-      <span>{t("PanelZoom")}</span>
-      <input
-        type="range"
-        className="menu-surface__footer-zoom-slider"
-        min={TRAY_SCALE_MIN}
-        max={TRAY_SCALE_MAX}
-        step={TRAY_SCALE_STEP}
-        value={trayScaleDraft}
-        aria-label={t("PanelZoom")}
-        onChange={(e) => handleTrayScaleChange(Number(e.target.value))}
-        style={{ "--zoom-fill": `${trayScaleFillPercent}%` } as CSSProperties}
-      />
-      <span className="menu-surface__footer-zoom-value">
-        {trayScaleDraft}%
-      </span>
-    </div>
+  // The cache is deliberately retained when a provider is disabled so the
+  // Settings page can still describe its last result.  A tray flyout is a
+  // live view, though: it must only render currently enabled providers.
+  const enabledSnapshots = useMemo(
+    () => providers.filter((provider) => settings.enabledProviders.includes(provider.providerId)),
+    [providers, settings.enabledProviders],
   );
 
   const sorted = useMemo(
-    () =>
-      orderProviderSnapshots(
-        providers,
+    () => {
+      const ordered = orderProviderSnapshots(
+        enabledSnapshots,
         state.providers,
         settings.enabledProviders,
         settings.providerOrder,
-      ),
-    [providers, settings.enabledProviders, settings.providerOrder, state.providers],
+      );
+      if (!settings.menuBarShowsHighestUsage) return ordered;
+      return [...ordered].sort(
+        (left, right) => right.primary.usedPercent - left.primary.usedPercent,
+      );
+    },
+    [
+      enabledSnapshots,
+      settings.enabledProviders,
+      settings.menuBarShowsHighestUsage,
+      settings.providerOrder,
+      state.providers,
+    ],
   );
   const denseProviderSlots = useMemo(
     () =>
@@ -234,36 +175,32 @@ export default function TrayPanel({ state }: { state: BootstrapState }) {
       [
         selectedProviderId ?? "overview",
         gridExpanded ? "expanded" : "collapsed",
-        isRefreshing ? "refreshing" : "idle",
-        updateState.status,
-        updateState.version ?? "",
-        updateState.error ?? "",
         expectsDenseOverview ? "dense" : "normal",
         hasLoadedCache ? "cache-ready" : "cache-pending",
+        settings.menuBarDisplayMode,
+        settings.menuBarShowsPercent ? "percent" : "no-percent",
+        settings.trayScalePercent,
         visibleProviders.map((provider) => provider.providerId).join(","),
-        trayScaleDraft,
       ].join("|"),
     [
       selectedProviderId,
       gridExpanded,
-      isRefreshing,
-      updateState.status,
-      updateState.version,
-      updateState.error,
       expectsDenseOverview,
       hasLoadedCache,
+      settings.menuBarDisplayMode,
+      settings.menuBarShowsPercent,
+      settings.trayScalePercent,
       visibleProviders,
-      trayScaleDraft,
     ],
   );
 
-  // Flyout sizing: auto-fit to content until the user manually drags the border,
-  // then remember + honor their size (position always re-anchors above the tray).
-  // `flyoutSize`: undefined = loading, null = auto-fit, [w,h] = user's fixed size.
+  // The tray's height never auto-fits to provider card content (that caused
+  // resize-on-switch flicker); it only changes when the user drags the top /
+  // top-left resize grips. This is just the default until they do.
+  const TRAY_DEFAULT_LOGICAL_HEIGHT = 540;
   const [flyoutSize, setFlyoutSizeState] = useState<
     [number, number] | null | undefined
   >(undefined);
-  const [autoFitKilled, setAutoFitKilled] = useState(false);
   useEffect(() => {
     let active = true;
     void flyoutStoredSize()
@@ -280,9 +217,8 @@ export default function TrayPanel({ state }: { state: BootstrapState }) {
 
   const saveSizeTimerRef = useRef<number | undefined>(undefined);
   const handleUserResize = useCallback((width: number, height: number) => {
-    // Stop auto-fit immediately so it can't fight the drag; commit the size
-    // (state + persistence) after the drag settles.
-    setAutoFitKilled(true);
+    // Persist both dimensions from a genuine drag on the left/top/top-left
+    // grips; the layout hook re-applies this exact size on every future open.
     if (saveSizeTimerRef.current !== undefined) {
       window.clearTimeout(saveSizeTimerRef.current);
     }
@@ -310,6 +246,7 @@ export default function TrayPanel({ state }: { state: BootstrapState }) {
   // reveal itself. Hardcoded true: being mounted IS "the flyout is open".
   const isFlyoutOpen = true;
   const fixedFlyoutSize = Array.isArray(flyoutSize) ? flyoutSize : null;
+  const isMinimalMode = settings.menuBarDisplayMode === "minimal";
   const useWideColumns =
     selectedProviderId === null &&
     fixedFlyoutSize !== null &&
@@ -325,38 +262,39 @@ export default function TrayPanel({ state }: { state: BootstrapState }) {
     canMeasure: hasLoadedCache || sorted.length > 0,
     denseOverview: expectsDenseOverview,
     detailMode: selectedProviderId !== null,
+    minimalOverview: isMinimalMode && selectedProviderId === null,
     layoutKey,
-    autoFit: flyoutSize === null && !autoFitKilled,
+    autoFit: false,
     fixedSize: fixedFlyoutSize,
+    fixedLogicalHeight: TRAY_DEFAULT_LOGICAL_HEIGHT,
     isOpen: isFlyoutOpen,
     onUserResize: handleUserResize,
   });
 
   const openSettings = useCallback(() => {
-    void openSettingsWindow("general").finally(() => {
-      void getCurrentWindow().close();
-    });
+    // Keep the flyout visible as a live preview while Settings is open.
+    // The native blur handler recognizes the Settings window as an allowed
+    // companion surface, so this does not turn ordinary click-outside into a
+    // permanently pinned flyout.
+    void openSettingsWindow("general").catch(() => {});
   }, []);
-  const openPopOut = useCallback(() => {
-    setSurfaceMode("popOut", { kind: "dashboard" });
-  }, []);
-  const openAbout = useCallback(() => {
-    void openSettingsWindow("about").finally(() => {
-      void getCurrentWindow().close();
-    });
+  const openDashboard = useCallback(() => {
+    void (async () => {
+      try {
+        await setSurfaceMode("popOut", { kind: "dashboard" });
+      } finally {
+        void dismissTrayPanel().catch(() => {});
+      }
+    })();
   }, []);
   const quitApp = useCallback(() => {
     void quitApplication();
   }, []);
 
-  const headerActions = [
-    { icon: "⧉", title: t("TooltipPopOut"), onClick: openPopOut },
-  ];
-
   const footerRows: MenuFooterRow[] = [
+    { icon: "⧉", label: t("TrayShowWindow"), onClick: openDashboard },
     { icon: "↻", label: t("ActionRefresh"), shortcut: "Ctrl+R", onClick: refresh },
     { icon: "⚙", label: t("MenuSettings"), shortcut: "Ctrl+,", onClick: openSettings },
-    { icon: "ⓘ", label: t("MenuAbout"), onClick: openAbout },
     { icon: "⌧", label: t("MenuQuit"), shortcut: "Ctrl+Q", onClick: quitApp },
   ];
 
@@ -409,20 +347,27 @@ export default function TrayPanel({ state }: { state: BootstrapState }) {
   const handleGestureEnd = useCallback(() => {
     void endFlyoutGesture().catch(() => {});
   }, []);
-  const banner = (
-    <UpdateBanner
-      updateState={updateState}
-      onCheck={checkNow}
-      onDownload={download}
-      onApply={apply}
-      onDismiss={dismiss}
-      onOpenRelease={openRelease}
-    />
+  const revealClassName = `tray-panel-reveal tray-panel-reveal--fixed-height${layoutReady ? " tray-panel-reveal--ready" : ""}${expectsDenseOverview ? " tray-panel-reveal--dense" : ""}${selectedProviderId !== null ? " tray-panel-reveal--detail" : ""}`;
+  const trayScale = Math.min(
+    2,
+    Math.max(
+      1,
+      Number.isFinite(settings.trayScalePercent)
+        ? settings.trayScalePercent / 100
+        : 1,
+    ),
   );
-  const revealClassName = `tray-panel-reveal${layoutReady ? " tray-panel-reveal--ready" : ""}${expectsDenseOverview ? " tray-panel-reveal--dense" : ""}${fixedFlyoutSize ? " tray-panel-reveal--usersized" : ""}`;
+  const compactMetrics = settings.menuBarDisplayMode !== "detailed";
+  // Minimal deliberately has its own render path. Reusing full MenuCards here
+  // made its result indistinguishable from compact mode and, in a fixed-height
+  // flyout, could leave users looking at an apparently empty scroll body.
+  const showMinimalSummary = isMinimalMode && selectedProviderId === null;
   const renderProviderCard = (p: ProviderUsageSnapshot) => {
     const isSelected =
       selectedProviderId !== null && p.providerId === selectedProviderId;
+    const speedProviderId = p.providerId === "codex" || p.providerId === "claude"
+      ? p.providerId
+      : null;
     return (
       <div
         className={`menu-stack__item${isSelected ? " menu-stack__item--selected" : ""}`}
@@ -431,15 +376,27 @@ export default function TrayPanel({ state }: { state: BootstrapState }) {
       >
         <MenuCard
           provider={p}
-          hideEmail={settings.hidePersonalInfo}
           resetTimeRelative={settings.resetTimeRelative}
           showAsUsed={settings.showAsUsed}
-          compactMetrics={selectedProviderId === null}
+          compactMetrics={compactMetrics}
           onLayoutChange={requestLayout}
+          outputSpeed={speedProviderId ? outputSpeed?.[speedProviderId] : null}
+          localUsagePeriod={settings.localUsagePeriod}
+          hideLocalUsage={settings.menuBarDisplayMode !== "detailed"}
         />
       </div>
     );
   };
+
+  useEffect(() => {
+    if (!showMinimalSummary) return;
+    // A mode switch must always reveal the first minimal rows, rather than
+    // preserving a scroll offset from the preceding full-card overview.
+    const body = document.querySelector<HTMLElement>(
+      ".menu-surface--tray .menu-surface__body",
+    );
+    if (body) body.scrollTop = 0;
+  }, [showMinimalSummary]);
 
   if (sorted.length === 0) {
     return (
@@ -448,9 +405,7 @@ export default function TrayPanel({ state }: { state: BootstrapState }) {
           variant="tray"
           onRefresh={refresh}
           isRefreshing={isRefreshing}
-          actions={headerActions}
-          banner={banner}
-          footerLead={zoomRow}
+          actions={[]}
           footerRows={footerRows}
           style={{ zoom: trayScale }}
         >
@@ -470,43 +425,91 @@ export default function TrayPanel({ state }: { state: BootstrapState }) {
         variant="tray"
         onRefresh={refresh}
         isRefreshing={isRefreshing}
-        actions={headerActions}
-        banner={banner}
-        footerLead={zoomRow}
-        footerRows={footerRows}
-        style={{ zoom: trayScale }}
-      >
-        <ProviderGrid
-          providers={expectsDenseOverview ? denseTrayProviders : sorted}
-          selectedProviderId={selectedProviderId}
-          showAsUsed={settings.showAsUsed}
-          showProviderIcons={settings.switcherShowsIcons}
-          expanded={gridExpanded}
-          onExpandedChange={setGridExpanded}
-          onSelect={handleGridClick}
-          onReorder={handleReorder}
-          onGestureStart={handleGestureStart}
-          onGestureEnd={handleGestureEnd}
-        />
+        actions={[]}
+          footerRows={footerRows}
+          style={{ zoom: trayScale }}
+          fixedHeader={
+            <ProviderGrid
+              providers={expectsDenseOverview ? denseTrayProviders : sorted}
+              selectedProviderId={selectedProviderId}
+              showAsUsed={settings.showAsUsed}
+              showProviderIcons={settings.switcherShowsIcons}
+              showPercent={settings.menuBarShowsPercent}
+              expanded={gridExpanded}
+              onExpandedChange={setGridExpanded}
+              onSelect={handleGridClick}
+              onReorder={handleReorder}
+              onGestureStart={handleGestureStart}
+              onGestureEnd={handleGestureEnd}
+            />
+          }
+        >
         <div className="provider-grid__divider" />
-        <div className="menu-stack">
-          {useWideColumns
-            ? wideColumns.map((column, index) => (
-                <div className="menu-stack__column" key={index}>
-                  {column.map(renderProviderCard)}
-                </div>
-              ))
-            : visibleProviders.map((p, idx) => (
-                <Fragment key={p.providerId}>
-                  {idx > 0 && <div className="menu-stack__sep" />}
-                  {renderProviderCard(p)}
-                </Fragment>
-              ))}
-        </div>
+        {showMinimalSummary ? (
+          <div className="tray-minimal-summary" aria-label={t("DisplayModeMinimal")}>
+            {visibleProviders.map((provider) => {
+              const status = getProviderStatus(provider);
+              const usedPercent = Math.max(0, Math.min(100, provider.primary.usedPercent));
+              const displayPercent = settings.showAsUsed
+                ? usedPercent
+                : 100 - usedPercent;
+              // Balance-type providers (DeepSeek, MiMo without an active
+              // token plan) synthesize a meaningless 0% primary window —
+              // showing that bar/percent here just reads as "empty". Swap
+              // in the parsed balance amount instead, same as MenuCard.
+              const { balance, excludeWindows } = getProviderBalance(provider);
+              const showBalance = excludeWindows.has("primary") && !!balance;
+              return (
+                <button
+                  type="button"
+                  className="tray-minimal-summary__row"
+                  data-status={status}
+                  key={provider.providerId}
+                  onClick={() => handleGridClick(provider.providerId)}
+                  title={provider.displayName}
+                >
+                  <span className="tray-minimal-summary__status" aria-hidden />
+                  <span className="tray-minimal-summary__name">{provider.displayName}</span>
+                  {showBalance ? (
+                    <span
+                      className="tray-minimal-summary__balance"
+                      data-unavailable={balance.unavailable ? "true" : undefined}
+                    >
+                      {balance.amount}
+                    </span>
+                  ) : (
+                    <>
+                      <span className="tray-minimal-summary__bar" aria-hidden>
+                        <span style={{ width: `${displayPercent}%` }} />
+                      </span>
+                      <span className="tray-minimal-summary__percent">
+                        {Math.round(displayPercent)}%
+                      </span>
+                    </>
+                  )}
+                </button>
+              );
+            })}
+          </div>
+        ) : (
+          <div className="menu-stack">
+            {useWideColumns
+              ? wideColumns.map((column, index) => (
+                  <div className="menu-stack__column" key={index}>
+                    {column.map(renderProviderCard)}
+                  </div>
+                ))
+              : visibleProviders.map((p, idx) => (
+                  <Fragment key={p.providerId}>
+                    {idx > 0 && <div className="menu-stack__sep" />}
+                    {renderProviderCard(p)}
+                  </Fragment>
+                ))}
+          </div>
+        )}
         {/* Context actions — detail mode only, matches macOS actionsSection */}
         {selectedProviderId && (HAS_DASHBOARD.has(selectedProviderId) || HAS_STATUS_PAGE.has(selectedProviderId)) && (
           <div className="context-actions">
-            <div className="context-actions__divider" />
             {HAS_DASHBOARD.has(selectedProviderId) && (
               <button
                 type="button"
@@ -546,11 +549,11 @@ export default function TrayPanel({ state }: { state: BootstrapState }) {
 }
 
 /**
- * Invisible resize grips along the flyout's in-screen edges (top / left /
- * top-left corner). The flyout is anchored bottom-right above the tray, so these
- * let the user widen (left edge) or heighten (top edge) it. Native edge-resize
- * doesn't work through the borderless WebView2, so we drive it explicitly with
- * `startResizeDragging`. That call enters a Win32 modal size loop which
+ * Invisible resize grip along the flyout's in-screen left edge. The flyout is
+ * anchored bottom-right above the tray, so users can widen it without changing
+ * its deliberately fixed height. Native edge-resize doesn't work through the
+ * borderless WebView2, so we drive it explicitly with `startResizeDragging`.
+ * That call enters a Win32 modal size loop which
  * transiently steals focus from the WebView2 child for its duration — Windows
  * fires a spurious `Focused(false)` the instant the press starts even though
  * the user never left the window. We arm a gesture-scoped blur guard on the
@@ -560,41 +563,20 @@ export default function TrayPanel({ state }: { state: BootstrapState }) {
  * explicit end call is needed here — the OS loop swallows mouseup.
  */
 function TrayResizeHandles() {
+  const startDrag = (direction: "North" | "West" | "NorthWest") => (
+    e: React.MouseEvent<HTMLDivElement>,
+  ) => {
+    e.preventDefault();
+    void (async () => {
+      await beginFlyoutGesture().catch(() => {});
+      await getCurrentWindow().startResizeDragging(direction);
+    })().catch((err) => console.error("[tray-resize] startResizeDragging failed:", err));
+  };
   return (
     <>
-      <div
-        className="tray-resize tray-resize--top"
-        aria-hidden
-        onMouseDown={(e) => {
-          e.preventDefault();
-          void (async () => {
-            await beginFlyoutGesture().catch(() => {});
-            await getCurrentWindow().startResizeDragging("North");
-          })().catch((err) => console.error("[tray-resize] startResizeDragging failed:", err));
-        }}
-      />
-      <div
-        className="tray-resize tray-resize--left"
-        aria-hidden
-        onMouseDown={(e) => {
-          e.preventDefault();
-          void (async () => {
-            await beginFlyoutGesture().catch(() => {});
-            await getCurrentWindow().startResizeDragging("West");
-          })().catch((err) => console.error("[tray-resize] startResizeDragging failed:", err));
-        }}
-      />
-      <div
-        className="tray-resize tray-resize--topleft"
-        aria-hidden
-        onMouseDown={(e) => {
-          e.preventDefault();
-          void (async () => {
-            await beginFlyoutGesture().catch(() => {});
-            await getCurrentWindow().startResizeDragging("NorthWest");
-          })().catch((err) => console.error("[tray-resize] startResizeDragging failed:", err));
-        }}
-      />
+      <div className="tray-resize tray-resize--top" aria-hidden onMouseDown={startDrag("North")} />
+      <div className="tray-resize tray-resize--left" aria-hidden onMouseDown={startDrag("West")} />
+      <div className="tray-resize tray-resize--topleft" aria-hidden onMouseDown={startDrag("NorthWest")} />
     </>
   );
 }

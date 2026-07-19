@@ -1,0 +1,94 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="420" viewBox="0 0 1280 420">
+  <defs>
+    <style>
+      .card { fill:#f8fafc; stroke:#d6dce7; stroke-width:2 }
+      .title { font:700 23px 'Segoe UI',sans-serif; fill:#16233a }
+      .copy { font:15px 'Segoe UI',sans-serif; fill:#536174 }
+      .label { font:600 14px 'Segoe UI',sans-serif; fill:#536174 }
+      .task-light { fill:#dff5f0 }
+      .task-dark { fill:#202634 }
+    </style>
+    <!-- A: no outer tile; the three large rails are legible at 16px. -->
+    <g id="rail-mark">
+      <rect x="2" y="2" width="12" height="12" rx="3" fill="#12213a"/>
+      <rect x="4" y="4" width="7" height="1.6" rx=".8" fill="#62e5ff"/>
+      <rect x="4" y="7.2" width="6" height="1.6" rx=".8" fill="#41b9f3"/>
+      <rect x="4" y="10.4" width="4" height="1.6" rx=".8" fill="#207fff"/>
+      <circle cx="11.7" cy="11.7" r="1.1" fill="#62e5ff"/>
+    </g>
+    <!-- B: high-contrast blue token; best when Windows uses a dark taskbar. -->
+    <g id="token-mark">
+      <rect x="1.5" y="1.5" width="13" height="13" rx="4" fill="#0a84ff"/>
+      <rect x="4" y="4.1" width="8" height="1.5" rx=".75" fill="#fff"/>
+      <rect x="4" y="7.25" width="6" height="1.5" rx=".75" fill="#dff4ff"/>
+      <rect x="4" y="10.4" width="4" height="1.5" rx=".75" fill="#b3e5ff"/>
+    </g>
+    <!-- C: three horizontal signals, no small dot or tiny details. -->
+    <g id="signal-mark">
+      <rect x="1" y="1" width="14" height="14" rx="4" fill="#12213a"/>
+      <rect x="3.7" y="4" width="8.6" height="2" rx="1" fill="#62e5ff"/>
+      <rect x="3.7" y="7" width="6.6" height="2" rx="1" fill="#62e5ff"/>
+      <rect x="3.7" y="10" width="4.6" height="2" rx="1" fill="#62e5ff"/>
+    </g>
+    <!-- D: one-token gauge: most distinctive silhouette, but less literal. -->
+    <g id="gauge-mark">
+      <circle cx="8" cy="8" r="6.5" fill="#12213a"/>
+      <path d="M4 8a4 4 0 0 1 7.2-2.4" fill="none" stroke="#62e5ff" stroke-width="2" stroke-linecap="round"/>
+      <path d="M4 11.3h8" stroke="#62e5ff" stroke-width="2" stroke-linecap="round"/>
+      <circle cx="10.9" cy="5.5" r="1.1" fill="#0a84ff"/>
+    </g>
+  </defs>
+  <rect width="1280" height="420" fill="#eef2f7"/>
+
+  <g transform="translate(28 24)">
+    <rect class="card" width="286" height="372" rx="18"/>
+    <text class="title" x="24" y="42">A · 三段额度</text>
+    <text class="copy" x="24" y="68">推荐：深色基底 + 三条粗轨</text>
+    <g transform="translate(103 96) scale(5)"><use href="#rail-mark"/></g>
+    <text class="label" x="24" y="208">浅色任务栏 · 实际 16px</text>
+    <rect class="task-light" x="24" y="221" width="238" height="48" rx="10"/>
+    <g transform="translate(135 237)"><use href="#rail-mark"/></g>
+    <text class="label" x="24" y="302">深色任务栏 · 实际 16px</text>
+    <rect class="task-dark" x="24" y="315" width="238" height="48" rx="10"/>
+    <g transform="translate(135 331)"><use href="#rail-mark"/></g>
+  </g>
+
+  <g transform="translate(332 24)">
+    <rect class="card" width="286" height="372" rx="18"/>
+    <text class="title" x="24" y="42">B · 蓝色令牌</text>
+    <text class="copy" x="24" y="68">亮蓝主体，最像应用图标</text>
+    <g transform="translate(103 96) scale(5)"><use href="#token-mark"/></g>
+    <text class="label" x="24" y="208">浅色任务栏 · 实际 16px</text>
+    <rect class="task-light" x="24" y="221" width="238" height="48" rx="10"/>
+    <g transform="translate(135 237)"><use href="#token-mark"/></g>
+    <text class="label" x="24" y="302">深色任务栏 · 实际 16px</text>
+    <rect class="task-dark" x="24" y="315" width="238" height="48" rx="10"/>
+    <g transform="translate(135 331)"><use href="#token-mark"/></g>
+  </g>
+
+  <g transform="translate(636 24)">
+    <rect class="card" width="286" height="372" rx="18"/>
+    <text class="title" x="24" y="42">C · 三条信号</text>
+    <text class="copy" x="24" y="68">无小元素，缩小最稳</text>
+    <g transform="translate(103 96) scale(5)"><use href="#signal-mark"/></g>
+    <text class="label" x="24" y="208">浅色任务栏 · 实际 16px</text>
+    <rect class="task-light" x="24" y="221" width="238" height="48" rx="10"/>
+    <g transform="translate(135 237)"><use href="#signal-mark"/></g>
+    <text class="label" x="24" y="302">深色任务栏 · 实际 16px</text>
+    <rect class="task-dark" x="24" y="315" width="238" height="48" rx="10"/>
+    <g transform="translate(135 331)"><use href="#signal-mark"/></g>
+  </g>
+
+  <g transform="translate(940 24)">
+    <rect class="card" width="286" height="372" rx="18"/>
+    <text class="title" x="24" y="42">D · 额度仪表</text>
+    <text class="copy" x="24" y="68">轮廓最独特，偏“监控”</text>
+    <g transform="translate(103 96) scale(5)"><use href="#gauge-mark"/></g>
+    <text class="label" x="24" y="208">浅色任务栏 · 实际 16px</text>
+    <rect class="task-light" x="24" y="221" width="238" height="48" rx="10"/>
+    <g transform="translate(135 237)"><use href="#gauge-mark"/></g>
+    <text class="label" x="24" y="302">深色任务栏 · 实际 16px</text>
+    <rect class="task-dark" x="24" y="315" width="238" height="48" rx="10"/>
+    <g transform="translate(135 331)"><use href="#gauge-mark"/></g>
+  </g>
+</svg>

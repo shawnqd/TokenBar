@@ -1,0 +1,60 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1440" height="560" viewBox="0 0 1440 560">
+  <defs>
+    <linearGradient id="a" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#48D7E8"/><stop offset="1" stop-color="#3978F6"/></linearGradient>
+    <linearGradient id="b" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#6BE3D6"/><stop offset="1" stop-color="#2788F7"/></linearGradient>
+    <filter id="shadow" x="-10%" y="-10%" width="120%" height="130%"><feDropShadow dx="0" dy="12" stdDeviation="14" flood-color="#16213A" flood-opacity=".12"/></filter>
+  </defs>
+  <rect width="1440" height="560" fill="#EEF2F8"/>
+  <text x="72" y="76" fill="#14233B" font-family="Segoe UI, sans-serif" font-size="30" font-weight="700">TokenBar 图标候选</text>
+  <text x="72" y="112" fill="#6E7D93" font-family="Segoe UI, sans-serif" font-size="18">均按 16px 托盘图标可辨识性设计</text>
+
+  <g filter="url(#shadow)">
+    <rect x="72" y="152" width="288" height="330" rx="28" fill="#FFF"/>
+    <rect x="396" y="152" width="288" height="330" rx="28" fill="#FFF"/>
+    <rect x="720" y="152" width="288" height="330" rx="28" fill="#FFF"/>
+    <rect x="1044" y="152" width="288" height="330" rx="28" fill="#FFF"/>
+  </g>
+
+  <!-- A: enlarged quota rails, designed to stay legible at 16px -->
+  <g transform="translate(144 188)">
+    <rect width="144" height="144" rx="38" fill="#101A2C"/>
+    <rect x="24" y="38" width="96" height="18" rx="9" fill="#314766"/><rect x="24" y="38" width="79" height="18" rx="9" fill="url(#a)"/>
+    <rect x="24" y="63" width="96" height="18" rx="9" fill="#314766"/><rect x="24" y="63" width="61" height="18" rx="9" fill="url(#a)"/>
+    <rect x="24" y="88" width="96" height="18" rx="9" fill="#314766"/><rect x="24" y="88" width="42" height="18" rx="9" fill="url(#a)"/>
+    <circle cx="114" cy="117" r="5" fill="#48D7E8"/>
+  </g>
+  <text x="216" y="382" text-anchor="middle" fill="#13233B" font-family="Segoe UI, sans-serif" font-size="20" font-weight="700">A · 放大额度轨道</text>
+  <text x="216" y="414" text-anchor="middle" fill="#718095" font-family="Segoe UI, sans-serif" font-size="15">去掉内框，小尺寸更清晰</text>
+
+  <!-- B: radial meter -->
+  <g transform="translate(468 188)">
+    <rect width="144" height="144" rx="38" fill="#0E1A29"/>
+    <circle cx="72" cy="72" r="39" fill="none" stroke="#2E4868" stroke-width="12"/>
+    <path d="M 41 96 A 39 39 0 1 1 104 46" fill="none" stroke="url(#b)" stroke-width="12" stroke-linecap="round"/>
+    <circle cx="72" cy="72" r="23" fill="#172942"/>
+    <path d="M58 79h28M58 70h20M58 61h12" stroke="#E8F8FF" stroke-width="4" stroke-linecap="round"/>
+  </g>
+  <text x="540" y="382" text-anchor="middle" fill="#13233B" font-family="Segoe UI, sans-serif" font-size="20" font-weight="700">B · 环形仪表</text>
+  <text x="540" y="414" text-anchor="middle" fill="#718095" font-family="Segoe UI, sans-serif" font-size="15">更像监控与仪表板</text>
+
+  <!-- C: monogram -->
+  <g transform="translate(792 188)">
+    <rect width="144" height="144" rx="38" fill="url(#a)"/>
+    <path d="M39 39h66v17H81v49H63V56H39z" fill="#F7FCFF"/>
+    <path d="M42 113h60" stroke="#10223B" stroke-opacity=".42" stroke-width="9" stroke-linecap="round"/>
+    <circle cx="108" cy="107" r="9" fill="#F7FCFF"/>
+  </g>
+  <text x="864" y="382" text-anchor="middle" fill="#13233B" font-family="Segoe UI, sans-serif" font-size="20" font-weight="700">C · T 标识</text>
+  <text x="864" y="414" text-anchor="middle" fill="#718095" font-family="Segoe UI, sans-serif" font-size="15">品牌感最强，语义较弱</text>
+
+  <!-- D: token stack -->
+  <g transform="translate(1116 188)">
+    <rect width="144" height="144" rx="38" fill="#101A2C"/>
+    <path d="M72 33l42 24-42 24-42-24z" fill="#4DD7E3"/>
+    <path d="M30 66l42 24 42-24v19l-42 24-42-24z" fill="#338AF4"/>
+    <path d="M30 94l42 24 42-24v19l-42 24-42-24z" fill="#296AD1"/>
+    <path d="M72 93v39" stroke="#E9FBFF" stroke-opacity=".85" stroke-width="5" stroke-linecap="round"/>
+  </g>
+  <text x="1188" y="382" text-anchor="middle" fill="#13233B" font-family="Segoe UI, sans-serif" font-size="20" font-weight="700">D · Token 堆叠</text>
+  <text x="1188" y="414" text-anchor="middle" fill="#718095" font-family="Segoe UI, sans-serif" font-size="15">更具产品感，细节较多</text>
+</svg>

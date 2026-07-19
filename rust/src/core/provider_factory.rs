@@ -8,16 +8,17 @@
 use super::{Provider, ProviderId};
 use crate::providers::{
     AbacusProvider, AlibabaProvider, AlibabaTokenPlanProvider, AmpProvider, AntigravityProvider,
-    AugmentProvider, AzureOpenAIProvider, BedrockProvider, ChutesProvider, ClaudeProvider,
-    CodebuffProvider, CodexProvider, CommandCodeProvider, CopilotProvider, CrofProvider,
-    CrossModelProvider, CursorProvider, DeepSeekProvider, DeepgramProvider, DevinProvider,
-    DoubaoProvider, ElevenLabsProvider, FactoryProvider, GeminiProvider, GrokProvider,
-    GroqProvider, InfiniProvider, JetBrainsProvider, KiloProvider, KimiK2Provider, KimiProvider,
-    KiroProvider, LLMProxyProvider, LiteLLMProvider, ManusProvider, MiMoProvider, MiniMaxProvider,
-    MistralProvider, NanoGPTProvider, OllamaProvider, OpenAIApiProvider, OpenCodeGoProvider,
-    OpenCodeProvider, OpenRouterProvider, PerplexityProvider, PoeProvider, QoderProvider,
-    SakanaProvider, StepFunProvider, T3ChatProvider, VeniceProvider, VertexAIProvider,
-    WarpProvider, WindsurfProvider, ZaiProvider, ZedProvider,
+    ArkAgentPlanProvider, ArkCodingPlanProvider, AugmentProvider, AzureOpenAIProvider,
+    BedrockProvider, ChutesProvider, ClaudeProvider, CodebuffProvider, CodexProvider,
+    CommandCodeProvider, CopilotProvider, CrofProvider, CrossModelProvider, CursorProvider,
+    DeepSeekProvider, DeepgramProvider, DevinProvider, DoubaoProvider, ElevenLabsProvider,
+    FactoryProvider, GeminiProvider, GrokProvider, GroqProvider, InfiniProvider, JetBrainsProvider,
+    KiloProvider, KimiK2Provider, KimiProvider, KiroProvider, LLMProxyProvider, LiteLLMProvider,
+    ManusProvider, MiMoApiProvider, MiMoProvider, MiniMaxProvider, MistralProvider,
+    NanoGPTProvider, OllamaProvider, OpenAIApiProvider, OpenCodeGoProvider, OpenCodeProvider,
+    OpenRouterProvider, PerplexityProvider, PoeProvider, QoderProvider, SakanaProvider,
+    StepFunProvider, Sub2ApiProvider, T3ChatProvider, VeniceProvider, VertexAIProvider, WarpProvider,
+    WayfinderProvider, WindsurfProvider, ZaiProvider, ZedProvider,
 };
 
 /// Instantiate the concrete [`Provider`] implementation for a given [`ProviderId`].
@@ -63,7 +64,10 @@ pub fn instantiate(id: ProviderId) -> Box<dyn Provider> {
         ProviderId::Windsurf => Box::new(WindsurfProvider::new()),
         ProviderId::Manus => Box::new(ManusProvider::new()),
         ProviderId::MiMo => Box::new(MiMoProvider::new()),
+        ProviderId::MiMoApi => Box::new(MiMoApiProvider::new()),
         ProviderId::Doubao => Box::new(DoubaoProvider::new()),
+        ProviderId::ArkCodingPlan => Box::new(ArkCodingPlanProvider::new()),
+        ProviderId::ArkAgentPlan => Box::new(ArkAgentPlanProvider::new()),
         ProviderId::CommandCode => Box::new(CommandCodeProvider::new()),
         ProviderId::Crof => Box::new(CrofProvider::new()),
         ProviderId::StepFun => Box::new(StepFunProvider::new()),
@@ -82,6 +86,8 @@ pub fn instantiate(id: ProviderId) -> Box<dyn Provider> {
         ProviderId::CrossModel => Box::new(CrossModelProvider::new()),
         ProviderId::Qoder => Box::new(QoderProvider::new()),
         ProviderId::Sakana => Box::new(SakanaProvider::new()),
+        ProviderId::Sub2Api => Box::new(Sub2ApiProvider::new()),
+        ProviderId::Wayfinder => Box::new(WayfinderProvider::new()),
     }
 }
 

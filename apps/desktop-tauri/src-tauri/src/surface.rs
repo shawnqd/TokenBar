@@ -84,7 +84,7 @@ impl SurfaceMode {
                 visible: true,
                 decorations: true,
                 resizable: true,
-                width: 496.0,
+                width: 912.0,
                 height: 580.0,
                 min_width: None,
                 min_height: None,
@@ -285,7 +285,7 @@ mod tests {
     #[test]
     fn settings_properties() {
         let props = SurfaceMode::Settings.window_properties();
-        assert_eq!(props.width, 496.0);
+        assert_eq!(props.width, 912.0);
         assert_eq!(props.height, 580.0);
     }
 

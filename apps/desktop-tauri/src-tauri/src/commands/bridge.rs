@@ -11,6 +11,7 @@ pub struct RateWindowSnapshot {
     pub resets_at: Option<String>,
     pub reset_description: Option<String>,
     pub is_exhausted: bool,
+    pub is_informational: bool,
     pub reserve_percent: Option<f64>,
     pub reserve_description: Option<String>,
     pub reserve_will_last_to_reset: bool,
@@ -26,6 +27,7 @@ impl RateWindowSnapshot {
             resets_at: rw.resets_at.map(|dt| dt.to_rfc3339()),
             reset_description: rw.reset_description.clone(),
             is_exhausted: rw.is_exhausted(),
+            is_informational: rw.is_informational,
             reserve_percent: None,
             reserve_description: None,
             reserve_will_last_to_reset: false,
@@ -104,6 +106,7 @@ pub struct ProviderUsageSnapshot {
     pub account_organization: Option<String>,
     pub tray_status_label: Option<String>,
     pub fetch_duration_ms: Option<u128>,
+    pub wayfinder_usage: Option<codexbar::core::WayfinderUsageSnapshot>,
 }
 
 pub(crate) fn pace_stage_str(stage: codexbar::core::PaceStage) -> &'static str {
@@ -200,6 +203,7 @@ impl ProviderUsageSnapshot {
             account_organization: usage.account_organization.clone(),
             tray_status_label: None,
             fetch_duration_ms: None,
+            wayfinder_usage: result.wayfinder_usage.clone(),
         }
     }
 
@@ -215,6 +219,7 @@ impl ProviderUsageSnapshot {
                 resets_at: None,
                 reset_description: None,
                 is_exhausted: false,
+                is_informational: false,
                 reserve_percent: None,
                 reserve_description: None,
                 reserve_will_last_to_reset: false,
@@ -236,6 +241,7 @@ impl ProviderUsageSnapshot {
             account_organization: None,
             tray_status_label: None,
             fetch_duration_ms: None,
+            wayfinder_usage: None,
         }
     }
 }
@@ -408,6 +414,8 @@ pub struct SettingsSnapshot {
     enable_animations: bool,
     reset_time_relative: bool,
     menu_bar_display_mode: String,
+    output_speed_enabled: bool,
+    local_usage_period: String,
     hide_personal_info: bool,
     update_channel: &'static str,
     auto_download_updates: bool,
@@ -430,6 +438,7 @@ pub struct SettingsSnapshot {
     float_bar_provider_ids: Vec<String>,
     float_bar_dark_text: bool,
     float_bar_show_reset_inline: bool,
+    float_bar_show_cost: bool,
 }
 
 #[tauri::command]
@@ -490,6 +499,8 @@ impl From<Settings> for SettingsSnapshot {
             enable_animations: settings.enable_animations,
             reset_time_relative: settings.reset_time_relative,
             menu_bar_display_mode: settings.menu_bar_display_mode,
+            output_speed_enabled: settings.output_speed_enabled,
+            local_usage_period: settings.local_usage_period,
             hide_personal_info: settings.hide_personal_info,
             update_channel: update_channel_label(settings.update_channel),
             auto_download_updates: settings.auto_download_updates,
@@ -512,6 +523,7 @@ impl From<Settings> for SettingsSnapshot {
             float_bar_provider_ids: settings.float_bar_provider_ids,
             float_bar_dark_text: settings.float_bar_dark_text,
             float_bar_show_reset_inline: settings.float_bar_show_reset_inline,
+            float_bar_show_cost: settings.float_bar_show_cost,
         }
     }
 }
@@ -520,6 +532,10 @@ pub(crate) fn provider_catalog_for(settings: &Settings) -> Vec<ProviderCatalogEn
     settings
         .provider_display_order()
         .into_iter()
+        // The MiMo balance endpoint is now owned by the cookie-backed MiMo
+        // provider. Keep the legacy API-key provider in the core for backward
+        // compatibility, but do not expose a duplicate card in this product.
+        .filter(|provider| *provider != ProviderId::MiMoApi)
         .map(|provider| ProviderCatalogEntry {
             id: provider.cli_name().to_string(),
             display_name: provider.display_name().to_string(),
@@ -607,6 +623,7 @@ mod tests {
             resets_at: resets_at.map(|dt| dt.to_rfc3339()),
             reset_description,
             is_exhausted: false,
+            is_informational: false,
             reserve_percent: None,
             reserve_description: None,
             reserve_will_last_to_reset: false,

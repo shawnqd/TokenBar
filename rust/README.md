@@ -7,12 +7,12 @@ A Windows port of [CodexBar](https://github.com/steipete/CodexBar) - a system tr
 ## Features
 
 - **System Tray Icon** - Color-coded usage indicator with incident badges
-- **Multiple Providers** - Support for 40 AI providers:
+- **Multiple Providers** - Support for 59 AI providers:
   - Codex, Claude, Cursor, Factory, Gemini, Copilot, Antigravity, z.ai
   - MiniMax, Kiro, Vertex AI, Augment, OpenCode, OpenCode Go, Kimi, Kimi K2
   - Amp, Warp, Ollama, OpenRouter, JetBrains AI, Alibaba
   - NanoGPT, Infini, Perplexity, Abacus AI, Mistral, Kilo, AWS Bedrock, Codebuff, DeepSeek, Windsurf
-  - Manus, Xiaomi MiMo, Doubao, Command Code, Crof, StepFun, Venice, OpenAI API
+  - Manus, Xiaomi MiMo API, Xiaomi MiMo Token Plan, Doubao, Command Code, Crof, StepFun, Venice, OpenAI API
 - **Usage Notifications** - Windows toast alerts when usage hits thresholds
 - **Settings Panel** - Enable/disable providers, configure refresh intervals
 - **Manual Cookie Input** - Fallback for when automatic cookie extraction fails
@@ -164,6 +164,8 @@ Each provider has different authentication methods:
 | Kilo | API key / local CLI config |
 | Codebuff | API key / local Manicode config |
 | DeepSeek | API key |
+| Xiaomi MiMo API | Pay-as-you-go API key (`sk-...`) |
+| Xiaomi MiMo Token Plan | Browser cookies for plan usage (`tp-...` is an inference key, not a quota API) |
 
 ### Claude session env vars
 

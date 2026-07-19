@@ -3,9 +3,17 @@
 
 use tauri::{Emitter, Manager, PhysicalPosition, WebviewUrl};
 
-const SETTINGS_LABEL: &str = "settings";
-const SETTINGS_WIDTH: f64 = 720.0;
+pub const SETTINGS_LABEL: &str = "settings";
+const SETTINGS_WIDTH: f64 = 912.0;
 const SETTINGS_HEIGHT: f64 = 580.0;
+
+/// Whether the detached Settings window is visibly open. The tray flyout uses
+/// this to stay on screen as a live settings preview while focus moves between
+/// these two companion surfaces.
+pub fn is_visible(app: &tauri::AppHandle) -> bool {
+    app.get_webview_window(SETTINGS_LABEL)
+        .is_some_and(|window| window.is_visible().unwrap_or(false))
+}
 
 /// Open the detached Settings window, or focus it if already open.
 ///
@@ -27,8 +35,14 @@ pub fn open_or_focus(app: &tauri::AppHandle, tab: &str) -> Result<(), String> {
         .inner_size(SETTINGS_WIDTH, SETTINGS_HEIGHT)
         .decorations(false)
         .shadow(false)
-        .theme(Some(tauri::Theme::Dark))
         .resizable(true)
+        // Dynamically-built windows default to drag-drop ENABLED, which
+        // intercepts the HTML5 draggable events the Providers sidebar's
+        // drag-reorder (ProvidersSidebar.tsx) relies on before React ever
+        // sees them — see `main`'s `dragDropEnabled: false` in
+        // tauri.conf.json / flyout_window.rs's own call to this same method
+        // for why every window hosting an HTML5-draggable list needs it.
+        .disable_drag_drop_handler()
         .build()
         .map_err(|e| e.to_string())?;
 

@@ -24,10 +24,8 @@ interface MenuSurfaceProps {
   actions: MenuSurfaceAction[];
   summary?: ReactNode;
   banner?: ReactNode;
-  /** Non-button content rendered in the footer nav BEFORE the mapped
-   *  `footerRows` (e.g. the tray zoom control). Rendering it here — rather
-   *  than as a `footerRows` entry — keeps it a plain `div`, not a `button`. */
-  footerLead?: ReactNode;
+  /** Content kept above the scrolling tray body, such as the provider switcher. */
+  fixedHeader?: ReactNode;
   footerRows?: MenuFooterRow[];
   /** Inline style applied to the root `menu-surface` element (e.g. CSS
    *  `zoom` for the tray flyout). */
@@ -51,7 +49,7 @@ export default function MenuSurface({
   actions,
   summary,
   banner,
-  footerLead,
+  fixedHeader,
   footerRows,
   style,
   children,
@@ -62,11 +60,11 @@ export default function MenuSurface({
       {titleBar}
       {banner}
       {summary}
+      {fixedHeader && <div className="menu-surface__fixed-header">{fixedHeader}</div>}
       <div className="menu-surface__body">{children}</div>
-      {(footerLead || (footerRows && footerRows.length > 0)) && (
+      {footerRows && footerRows.length > 0 && (
         <nav className="menu-surface__footer" aria-label={t("PanelMenu")}>
-          {footerLead}
-          {footerRows?.map((row) => (
+          {footerRows.map((row) => (
             <button
               key={row.label}
               type="button"

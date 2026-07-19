@@ -3,6 +3,24 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const tauriMocks = vi.hoisted(() => ({
   getCachedProviders: vi.fn(),
+  getOutputSpeedSnapshot: vi.fn().mockResolvedValue({
+    codex: {
+      providerId: "codex",
+      status: "recent",
+      tokensPerSecond: 24.5,
+      outputTokens: 120,
+      updatedAtMs: 1,
+      approximate: true,
+    },
+    claude: {
+      providerId: "claude",
+      status: "recent",
+      tokensPerSecond: 18.2,
+      outputTokens: 90,
+      updatedAtMs: 1,
+      approximate: true,
+    },
+  }),
   refreshProviders: vi.fn(),
   refreshProvidersIfStale: vi.fn(),
   getSettingsSnapshot: vi.fn(),
@@ -121,6 +139,7 @@ function settings(overrides: Partial<SettingsSnapshot> = {}): SettingsSnapshot {
     enableAnimations: true,
     resetTimeRelative: true,
     menuBarDisplayMode: "detailed",
+    outputSpeedEnabled: true,
     hidePersonalInfo: false,
     updateChannel: "stable",
     autoDownloadUpdates: false,
@@ -163,11 +182,19 @@ function renderTrayPanel(
   settingsOverrides: Partial<SettingsSnapshot> = {},
   catalog: ProviderCatalogEntry[] = [],
 ) {
+  const effectiveSettings = settings({
+    enabledProviders: providers.map((provider) => provider.providerId),
+    ...settingsOverrides,
+  });
   tauriMocks.getCachedProviders.mockResolvedValue(providers);
-  tauriMocks.getSettingsSnapshot.mockResolvedValue(settings(settingsOverrides));
+  tauriMocks.getSettingsSnapshot.mockResolvedValue(effectiveSettings);
   return render(
     <LocaleProvider>
-      <TrayPanel state={bootstrap(settingsOverrides, catalog)} />
+      <TrayPanel state={{
+        contractVersion: "v1",
+        providers: catalog,
+        settings: effectiveSettings,
+      }} />
     </LocaleProvider>,
   );
 }
@@ -198,6 +225,24 @@ describe("TrayPanel provider grid", () => {
       target: { kind: "summary" },
     });
     tauriMocks.getSettingsSnapshot.mockResolvedValue(settings());
+    tauriMocks.getOutputSpeedSnapshot.mockResolvedValue({
+      codex: {
+        providerId: "codex",
+        status: "recent",
+        tokensPerSecond: 24.5,
+        outputTokens: 120,
+        updatedAtMs: 1,
+        approximate: true,
+      },
+      claude: {
+        providerId: "claude",
+        status: "recent",
+        tokensPerSecond: 18.2,
+        outputTokens: 90,
+        updatedAtMs: 1,
+        approximate: true,
+      },
+    });
     tauriMocks.updateSettings.mockResolvedValue(settings());
     tauriMocks.getUpdateState.mockResolvedValue({
       status: "idle",
@@ -219,7 +264,7 @@ describe("TrayPanel provider grid", () => {
     tauriMocks.getLocaleStrings.mockResolvedValue(
       buildBundle({
         ActionRefresh: "Refresh",
-        MenuAbout: "About CodexBar",
+        TrayShowWindow: "Open dashboard",
         MenuQuit: "Quit",
         MenuSettings: "Settings...",
         PanelAllProviders: "All providers",
@@ -228,7 +273,6 @@ describe("TrayPanel provider grid", () => {
         PanelShowAllProviders: "Show all providers",
         PanelShowFewerProviders: "Show fewer providers",
         PanelUsedSuffix: "used",
-        PanelZoom: "Zoom",
       }),
     );
     eventMocks.listen.mockImplementation(
@@ -263,6 +307,37 @@ describe("TrayPanel provider grid", () => {
     await waitFor(() => {
       expect(container.querySelector(".tray-panel-reveal--ready")).not.toBeNull();
     });
+  });
+
+  it("renders a one-line provider status list in minimal mode", async () => {
+    const { container } = renderTrayPanel(
+      [provider("claude", "Claude", 35)],
+      { menuBarDisplayMode: "minimal" },
+    );
+
+    await waitFor(() => {
+      expect(container.querySelector(".tray-minimal-summary__row")).not.toBeNull();
+    });
+    expect(container.querySelector(".tray-minimal-summary__name")?.textContent).toBe("Claude");
+    expect(container.querySelector(".tray-minimal-summary__percent")?.textContent).toBe("35%");
+    expect(container.querySelector(".menu-stack")).toBeNull();
+  });
+
+  it("shows the balance amount instead of a meaningless 0% for balance-only providers in minimal mode", async () => {
+    const deepseek: ProviderUsageSnapshot = {
+      ...provider("deepseek", "DeepSeek", 0),
+      primary: {
+        ...rateWindow(0),
+        resetDescription: "¥38.81 (Paid: ¥38.81 / Granted: ¥0.00)",
+      },
+    };
+    const { container } = renderTrayPanel([deepseek], { menuBarDisplayMode: "minimal" });
+
+    await waitFor(() => {
+      expect(container.querySelector(".tray-minimal-summary__row")).not.toBeNull();
+    });
+    expect(container.querySelector(".tray-minimal-summary__balance")?.textContent).toBe("¥38.81");
+    expect(container.querySelector(".tray-minimal-summary__percent")).toBeNull();
   });
 
   it("dismisses the tray panel on unmodified Escape", async () => {
@@ -314,16 +389,16 @@ describe("TrayPanel provider grid", () => {
       buildBundle(
         {
           ActionRefresh: "更新",
-          MenuAbout: "CodexBar について",
           MenuQuit: "終了",
           MenuSettings: "設定...",
           PanelAllProviders: "すべてのプロバイダー",
           PanelAllProvidersShort: "すべて",
-          PanelLatestTokens: "最新トークン",
-          PanelThirtyDayCost: "30日間のコスト",
+          PanelSevenDayUsage: "過去7日間",
+          PanelThirtyDayUsage: "過去30日間",
+          PanelApiEquivalentValue: "API換算額",
+          PanelTokenUnit: "Token",
+          PanelLocalEstimateShort: "ローカルログによる参考値",
           PanelTopModelPrefix: "トップモデル",
-          PanelEstimatedFromLocalLogs: "ローカルログから推定",
-          PanelZoom: "ズーム",
           UpdatedDaysAgo: "{}日前",
         },
         "japanese",
@@ -336,9 +411,11 @@ describe("TrayPanel provider grid", () => {
       usageBreakdown: [],
       localUsage: {
         todayCost: null,
+        todayTokens: null,
+        sevenDayCost: null,
+        sevenDayTokens: 1200,
         thirtyDayCost: 1.23,
         thirtyDayTokens: 584_000,
-        latestTokens: 1200,
         topModel: "gpt-5.5",
         estimateNote: "Estimated from local logs",
       },
@@ -352,17 +429,17 @@ describe("TrayPanel provider grid", () => {
       ).not.toBeNull();
     });
     expect(container.querySelector(".provider-grid__item")?.textContent).toContain("すべて");
-    expect(screen.getByText("ズーム")).toBeInTheDocument();
-    expect(screen.getByLabelText("ズーム")).toBeInTheDocument();
     expect(screen.getByText("更新")).toBeInTheDocument();
     expect(screen.getByText("設定...")).toBeInTheDocument();
-    expect(screen.getByText("CodexBar について")).toBeInTheDocument();
     expect(screen.getByText("終了")).toBeInTheDocument();
-    expect(await screen.findByText("30日間のコスト")).toBeInTheDocument();
+    expect(await screen.findByText("過去7日間")).toBeInTheDocument();
+    expect(screen.queryByText("過去30日間")).not.toBeInTheDocument();
     expect(container.querySelector(".menu-card__subtitle")?.textContent).toContain("日前");
-    expect(screen.getByText("最新トークン")).toBeInTheDocument();
+    expect(screen.getByText("1,200")).toBeInTheDocument();
+    expect(screen.getByText("Token")).toBeInTheDocument();
     expect(screen.getByText("トップモデル: gpt-5.5")).toBeInTheDocument();
-    expect(screen.getByText("ローカルログから推定")).toBeInTheDocument();
+    // The local-estimate note line was removed from the token usage block.
+    expect(screen.queryByText("ローカルログによる参考値")).not.toBeInTheDocument();
   });
 
   it("localizes the expanded dense grid collapse label in Japanese", async () => {
@@ -505,7 +582,7 @@ describe("TrayPanel provider grid", () => {
     });
 
     await waitFor(() => {
-      expect(container.querySelector(".tray-panel-reveal--usersized")).not.toBeNull();
+      expect(container.querySelector(".tray-panel-reveal--fixed-height")).not.toBeNull();
     });
 
     expect(
@@ -536,7 +613,7 @@ describe("TrayPanel provider grid", () => {
     });
 
     await waitFor(() => {
-      expect(container.querySelector(".tray-panel-reveal--usersized")).not.toBeNull();
+      expect(container.querySelector(".tray-panel-reveal--fixed-height")).not.toBeNull();
     });
 
     expect(container.querySelector(".menu-stack__column")).toBeNull();
@@ -672,57 +749,32 @@ describe("TrayPanel provider grid", () => {
     expect(container.querySelector(".provider-grid__icon-overview")).toBeNull();
   });
 
-  it("renders the tray footer zoom slider above Refresh and persists trayScalePercent after the debounce", async () => {
+  it("applies the saved tray flyout scale with no inline zoom control", async () => {
     const { container } = renderTrayPanel(
       [provider("claude", "Claude", 35)],
-      { trayScalePercent: 120 },
+      { trayScalePercent: 150 },
     );
 
     await waitFor(() => {
-      expect(container.querySelector(".menu-surface__footer-zoom")).not.toBeNull();
+      expect(container.querySelector(".menu-surface--tray")).not.toBeNull();
     });
 
-    const footerChildren = Array.from(
-      container.querySelectorAll(".menu-surface__footer > *"),
-    );
-    const zoomIndex = footerChildren.findIndex((el) =>
-      el.classList.contains("menu-surface__footer-zoom"),
-    );
-    const refreshIndex = footerChildren.findIndex(
-      (el) => el.textContent?.includes("Refresh"),
-    );
-    expect(zoomIndex).toBeGreaterThanOrEqual(0);
-    expect(refreshIndex).toBeGreaterThan(zoomIndex);
+    expect(container.querySelector(".menu-surface__footer-zoom")).toBeNull();
+    const surface = container.querySelector<HTMLElement>(".menu-surface--tray")!;
+    expect(surface.style.zoom).toBe("1.5");
+  });
 
-    // Slider reflects the persisted settings value.
-    const slider = container.querySelector<HTMLInputElement>(
-      ".menu-surface__footer-zoom-slider",
-    )!;
-    expect(slider).not.toBeNull();
-    expect(slider.value).toBe("120");
-    expect(slider.min).toBe("100");
-    expect(slider.max).toBe("200");
-    expect(slider.step).toBe("5");
-    expect(
-      container.querySelector(".menu-surface__footer-zoom-value")?.textContent,
-    ).toBe("120%");
+  it("opens the full dashboard from the tray and then dismisses the flyout", async () => {
+    renderTrayPanel([provider("claude", "Claude", 35)]);
 
-    fireEvent.change(slider, { target: { value: "150" } });
+    fireEvent.click(await screen.findByText("Open dashboard"));
 
-    // Live preview: thumb and readout update immediately from local state…
-    expect(slider.value).toBe("150");
-    expect(
-      container.querySelector(".menu-surface__footer-zoom-value")?.textContent,
-    ).toBe("150%");
-
-    // …while persistence trails the ~250ms debounce (not synchronous).
-    expect(tauriMocks.updateSettings).not.toHaveBeenCalled();
     await waitFor(() => {
-      expect(tauriMocks.updateSettings).toHaveBeenCalledWith({
-        trayScalePercent: 150,
+      expect(tauriMocks.setSurfaceMode).toHaveBeenCalledWith("popOut", {
+        kind: "dashboard",
       });
+      expect(tauriMocks.dismissTrayPanel).toHaveBeenCalledTimes(1);
     });
-    expect(tauriMocks.updateSettings).toHaveBeenCalledTimes(1);
   });
 
   it("reveals the tray panel if the native resize pass fails", async () => {
@@ -773,39 +825,25 @@ describe("TrayPanel provider grid", () => {
     expect(tauriMocks.reanchorTrayPanel).not.toHaveBeenCalled();
   });
 
-  it("reserves dense all-provider height on first layout", async () => {
-    const setSize = vi.fn().mockResolvedValue(undefined);
-    windowMocks.getCurrentWindow.mockReturnValue({
-      setSize,
-      close: vi.fn().mockResolvedValue(undefined),
-      scaleFactor: vi.fn().mockResolvedValue(1),
-      onResized: vi.fn().mockResolvedValue(() => {}),
-      innerSize: vi.fn().mockResolvedValue({ width: 328, height: 200 }),
-    });
+  it("keeps dense provider cards in the scrollable body", async () => {
     const denseProviders = TEST_PROVIDER_CATALOG.slice(0, 36).map(([id, displayName]) =>
       provider(id, displayName),
     );
 
-    renderTrayPanel(denseProviders, {
+    const { container } = renderTrayPanel(denseProviders, {
       enabledProviders: denseProviders.map((snapshot) => snapshot.providerId),
     });
 
     await waitFor(() => {
-      expect(setSize).toHaveBeenCalledWith(
-        expect.objectContaining({ width: 328, height: 776 }),
-      );
+      expect(container.querySelector(".tray-panel-reveal--fixed-height")).not.toBeNull();
     });
+    const body = container.querySelector(".menu-surface__body");
+    expect(body?.querySelectorAll(".menu-stack__item").length).toBeGreaterThan(1);
+    expect(container.querySelector(".menu-surface__fixed-header .provider-grid")).not.toBeNull();
+    expect(container.querySelector(".menu-surface__footer")).not.toBeNull();
   });
 
-  it("keeps provider detail mode tall enough for context actions and footer", async () => {
-    const setSize = vi.fn().mockResolvedValue(undefined);
-    windowMocks.getCurrentWindow.mockReturnValue({
-      setSize,
-      close: vi.fn().mockResolvedValue(undefined),
-      scaleFactor: vi.fn().mockResolvedValue(1),
-      onResized: vi.fn().mockResolvedValue(() => {}),
-      innerSize: vi.fn().mockResolvedValue({ width: 328, height: 200 }),
-    });
+  it("keeps switcher and command rows outside the selected provider scroll body", async () => {
     const errorProvider = {
       ...provider("abacus", "Abacus AI", 0),
       error: "Source mode `Cli` not supported for this provider",
@@ -816,8 +854,6 @@ describe("TrayPanel provider grid", () => {
     await waitFor(() => {
       expect(container.querySelector(".tray-panel-reveal--ready")).not.toBeNull();
     });
-    setSize.mockClear();
-
     fireEvent.click(
       container.querySelector<HTMLButtonElement>(
         '.provider-grid__item[aria-label="Abacus AI"]',
@@ -825,9 +861,12 @@ describe("TrayPanel provider grid", () => {
     );
 
     await waitFor(() => {
-      expect(setSize).toHaveBeenCalledWith(
-        expect.objectContaining({ width: 328, height: 420 }),
-      );
+      expect(container.querySelector(".menu-stack__item--selected")).not.toBeNull();
     });
+    const body = container.querySelector(".menu-surface__body");
+    expect(body?.querySelector(".menu-surface__fixed-header")).toBeNull();
+    expect(body?.querySelector(".menu-surface__footer")).toBeNull();
+    expect(container.querySelector(".menu-surface__fixed-header")).not.toBeNull();
+    expect(container.querySelector(".menu-surface__footer")).not.toBeNull();
   });
 });

@@ -7,6 +7,11 @@ export interface PaceBudget {
   today: number;
 }
 
+export interface PaceEstimate {
+  hoursRemaining: number;
+  lastsUntilReset: boolean;
+}
+
 interface PaceWindow {
   startMs: number;
   resetMs: number;
@@ -85,6 +90,44 @@ export function getPaceBudget(
     nextHour: budgetAt(nowMs + HOUR_MS),
     nextFiveHours: budgetAt(nowMs + 5 * HOUR_MS),
     today: budgetAt(startOfTomorrow(now)),
+  };
+}
+
+/**
+ * Estimates how many hours the current quota can keep going at the average
+ * consumption rate observed in this window. The result is capped at the next
+ * reset because unused quota does not carry beyond that boundary.
+ */
+export function getPaceEstimate(
+  snap: RateWindowSnapshot,
+  now = new Date(),
+): PaceEstimate | null {
+  const nowMs = now.getTime();
+  const window = paceWindow(snap, nowMs);
+  if (
+    !window ||
+    snap.isExhausted ||
+    !Number.isFinite(snap.usedPercent) ||
+    !Number.isFinite(snap.remainingPercent)
+  ) {
+    return null;
+  }
+
+  const elapsedHours = (nowMs - window.startMs) / HOUR_MS;
+  const hoursUntilReset = (window.resetMs - nowMs) / HOUR_MS;
+  if (elapsedHours <= 0 || hoursUntilReset <= 0) return null;
+
+  const usedPercent = Math.max(0, snap.usedPercent);
+  const remainingPercent = Math.max(0, snap.remainingPercent);
+  const percentPerHour = usedPercent / elapsedHours;
+  if (percentPerHour <= 0) {
+    return { hoursRemaining: hoursUntilReset, lastsUntilReset: true };
+  }
+
+  const hoursUntilExhausted = remainingPercent / percentPerHour;
+  return {
+    hoursRemaining: Math.min(hoursUntilExhausted, hoursUntilReset),
+    lastsUntilReset: hoursUntilExhausted >= hoursUntilReset,
   };
 }
 

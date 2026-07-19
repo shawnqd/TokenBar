@@ -8,7 +8,7 @@ import type {
   ProofCommand,
   ProofStatePayload,
   CookieInfoBridge,
-  DetectedBrowserBridge,
+  CookieFilePreviewBridge,
   Language,
   LocaleStrings,
   ProviderCatalogEntry,
@@ -30,6 +30,7 @@ import type {
   SafeDiagnostics,
   CredentialStorageStatus,
   WorkAreaRect,
+  OutputSpeedSnapshot,
 } from "../types/bridge";
 
 export function getBootstrapState(): Promise<BootstrapState> {
@@ -112,6 +113,10 @@ export function refreshProvidersIfStale(): Promise<void> {
 
 export function getCachedProviders(): Promise<ProviderUsageSnapshot[]> {
   return invoke<ProviderUsageSnapshot[]>("get_cached_providers");
+}
+
+export function getOutputSpeedSnapshot(): Promise<OutputSpeedSnapshot> {
+  return invoke<OutputSpeedSnapshot>("get_output_speed_snapshot");
 }
 
 export function getSafeDiagnostics(): Promise<SafeDiagnostics> {
@@ -200,18 +205,15 @@ export function removeManualCookie(
   return invoke<CookieInfoBridge[]>("remove_manual_cookie", { providerId });
 }
 
-export function listDetectedBrowsers(): Promise<DetectedBrowserBridge[]> {
-  return invoke<DetectedBrowserBridge[]>("list_detected_browsers");
+export function previewCookieFile(contents: string): Promise<CookieFilePreviewBridge> {
+  return invoke<CookieFilePreviewBridge>("preview_cookie_file", { contents });
 }
 
-export function importBrowserCookies(
-  providerId: string,
-  browserType: string,
+export function importCookieFile(
+  contents: string,
+  providerIds: string[],
 ): Promise<CookieInfoBridge[]> {
-  return invoke<CookieInfoBridge[]>("import_browser_cookies", {
-    providerId,
-    browserType,
-  });
+  return invoke<CookieInfoBridge[]>("import_cookie_file", { contents, providerIds });
 }
 
 export function getAppInfo(): Promise<AppInfoBridge> {
@@ -342,6 +344,17 @@ export function setProviderWorkspaceId(
   workspaceId: string,
 ): Promise<void> {
   return invoke<void>("set_provider_workspace_id", { providerId, workspaceId });
+}
+
+export function getProviderGatewayUrl(providerId: string): Promise<string | null> {
+  return invoke<string | null>("get_provider_gateway_url", { providerId });
+}
+
+export function setProviderGatewayUrl(
+  providerId: string,
+  gatewayUrl: string,
+): Promise<void> {
+  return invoke<void>("set_provider_gateway_url", { providerId, gatewayUrl });
 }
 
 // ── Phase 6d — credential detection ──────────────────────────────────

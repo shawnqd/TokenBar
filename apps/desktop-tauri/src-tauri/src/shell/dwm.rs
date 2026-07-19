@@ -174,17 +174,28 @@ unsafe extern "system" fn borderless_subclass_proc(
 /// resize affordance still works.
 #[cfg(windows)]
 pub fn force_dark_caption(win: &tauri::WebviewWindow) {
-    force_dark_caption_inner(win, false);
+    force_dark_caption_inner(win, false, false);
 }
 
 /// Same as [`force_dark_caption`] but keeps the resize frame.
 #[cfg(windows)]
 pub fn force_dark_caption_resizable(win: &tauri::WebviewWindow) {
-    force_dark_caption_inner(win, true);
+    force_dark_caption_inner(win, true, false);
+}
+
+/// Borderless treatment for windows created with `.transparent(true)`
+/// (the tray flyout): strips the caption and keeps the resize frame like
+/// [`force_dark_caption_resizable`], but skips `DwmExtendFrameIntoClientArea`
+/// and the opaque background brush — both composite an opaque backdrop
+/// behind the webview, which repaints the window rectangle behind the
+/// page's rounded corners and defeats the transparency.
+#[cfg(windows)]
+pub fn force_borderless_transparent_resizable(win: &tauri::WebviewWindow) {
+    force_dark_caption_inner(win, true, true);
 }
 
 #[cfg(windows)]
-fn force_dark_caption_inner(win: &tauri::WebviewWindow, keep_resize: bool) {
+fn force_dark_caption_inner(win: &tauri::WebviewWindow, keep_resize: bool, transparent: bool) {
     use raw_window_handle::HasWindowHandle;
 
     let Ok(handle) = win.window_handle() else {
@@ -222,25 +233,48 @@ fn force_dark_caption_inner(win: &tauri::WebviewWindow, keep_resize: bool) {
         );
         tracing::info!("dwm: dark_mode={r1:#x} caption_color={r2:#x}");
 
-        // Extend DWM frame fully into client area
-        let margins = Margins {
-            left: -1,
-            right: -1,
-            top: -1,
-            bottom: -1,
-        };
-        let r3 = DwmExtendFrameIntoClientArea(hwnd, &margins);
-        tracing::info!("dwm: extend_frame={r3:#x}");
+        if transparent {
+            // Windows 11 draws a one-pixel non-client border around any
+            // WS_THICKFRAME window, even when the client area and WebView are
+            // fully transparent. It shows through as a square underneath the
+            // flyout's rounded CSS shell. DWMWA_COLOR_NONE removes only that
+            // DWM border while retaining the resize style used by our custom
+            // left/top resize grips.
+            const DWMWA_BORDER_COLOR: u32 = 34;
+            const DWMWA_COLOR_NONE: u32 = 0xFFFF_FFFE;
+            let border_color = DWMWA_COLOR_NONE;
+            let border_result = DwmSetWindowAttribute(
+                hwnd,
+                DWMWA_BORDER_COLOR,
+                &raw const border_color as *const c_void,
+                4,
+            );
+            tracing::info!("dwm: transparent border_color={border_result:#x}");
+        }
+
+        if !transparent {
+            // Extend DWM frame fully into client area
+            let margins = Margins {
+                left: -1,
+                right: -1,
+                top: -1,
+                bottom: -1,
+            };
+            let r3 = DwmExtendFrameIntoClientArea(hwnd, &margins);
+            tracing::info!("dwm: extend_frame={r3:#x}");
+        }
 
         // Install subclass proc (safe for multiple windows)
         let ok = SetWindowSubclass(hwnd, borderless_subclass_proc, BORDERLESS_SUBCLASS_ID, 0);
         tracing::info!("dwm: subclass installed={ok}");
 
-        // Set background brush to dark (reuse a single GDI brush)
-        const GCL_HBRBACKGROUND: i32 = -10;
-        let brush = *DARK_BRUSH.get_or_init(|| CreateSolidBrush(0x001C1C1E));
-        if brush != 0 {
-            SetWindowLongPtrW(hwnd, GCL_HBRBACKGROUND, brush);
+        if !transparent {
+            // Set background brush to dark (reuse a single GDI brush)
+            const GCL_HBRBACKGROUND: i32 = -10;
+            let brush = *DARK_BRUSH.get_or_init(|| CreateSolidBrush(0x001C1C1E));
+            if brush != 0 {
+                SetWindowLongPtrW(hwnd, GCL_HBRBACKGROUND, brush);
+            }
         }
 
         // Remove WS_CAPTION; only strip WS_THICKFRAME for non-resizable windows
@@ -284,3 +318,6 @@ pub fn force_dark_caption(_win: &tauri::WebviewWindow) {}
 
 #[cfg(not(windows))]
 pub fn force_dark_caption_resizable(_win: &tauri::WebviewWindow) {}
+
+#[cfg(not(windows))]
+pub fn force_borderless_transparent_resizable(_win: &tauri::WebviewWindow) {}

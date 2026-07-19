@@ -1,5 +1,6 @@
 import type { RateWindowSnapshot } from "../types/bridge";
 import { getPaceChartSnapshot } from "../lib/paceBudget";
+import { useLocale } from "../hooks/useLocale";
 
 const CHART_WIDTH = 300;
 const CHART_HEIGHT = 76;
@@ -19,6 +20,7 @@ export default function PaceDetailsChart({
 }: {
   snap: RateWindowSnapshot;
 }) {
+  const { t } = useLocale();
   const chart = getPaceChartSnapshot(snap);
   if (!chart) return null;
 
@@ -35,7 +37,7 @@ export default function PaceDetailsChart({
       <svg
         viewBox={`0 0 ${CHART_WIDTH} ${CHART_HEIGHT}`}
         role="img"
-        aria-label="Average usage pace and projection through the current rate window"
+        aria-label={t("PaceChartAriaLabel")}
       >
         <line
           className="pace-details-chart__grid"
@@ -70,9 +72,9 @@ export default function PaceDetailsChart({
         />
       </svg>
       <div className="pace-details-chart__legend">
-        <span data-series="actual">Average so far</span>
-        <span data-series="ideal">Ideal pace</span>
-        <span data-series="projection">Projection</span>
+        <span data-series="actual">{t("PaceChartAverageSoFar")}</span>
+        <span data-series="ideal">{t("PaceChartIdealPace")}</span>
+        <span data-series="projection">{t("PaceChartProjection")}</span>
       </div>
     </div>
   );

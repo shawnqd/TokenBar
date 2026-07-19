@@ -3,6 +3,9 @@ import type {
   CookieSourceOption,
   CredentialStorageStatus,
   ProviderDetail,
+  ProviderUsageSnapshot,
+  LocalUsagePeriod,
+  MenuBarDisplayMode,
   RegionOption,
   SettingsSnapshot,
   SettingsUpdate,
@@ -25,9 +28,8 @@ import { listen } from "@tauri-apps/api/event";
 import { IdentitySection } from "./sections/IdentitySection";
 import { UsageSection } from "./sections/UsageSection";
 import { PaceSection } from "./sections/PaceSection";
-import { CostSection } from "./sections/CostSection";
+import { StatsSection } from "./sections/StatsSection";
 import { QuickActionsSection } from "./sections/QuickActionsSection";
-import { ChartsSection } from "./sections/charts/ChartsSection";
 import { CookieSourceSection } from "./sections/CookieSourceSection";
 import { RegionSection } from "./sections/RegionSection";
 import { GeminiCliCreds } from "./sections/credentials/GeminiCliCreds";
@@ -40,11 +42,18 @@ import { TokenAccountsPanel } from "../tokens/TokenAccountsPanel";
 import { ApiKeySection } from "./ApiKeySection";
 import { CookieSection } from "./CookieSection";
 import { MenuBarMetricSection } from "./sections/MenuBarMetricSection";
+import MenuCard from "../../../components/MenuCard";
+import { useOutputSpeedSnapshot } from "../../../hooks/useOutputSpeedSnapshot";
 
 interface Props {
   providerId: string | null;
+  providerSnapshot?: ProviderUsageSnapshot | null;
   cookieDomain?: string | null;
   resetTimeRelative: boolean;
+  showAsUsed: boolean;
+  localUsagePeriod: LocalUsagePeriod;
+  menuBarDisplayMode: MenuBarDisplayMode;
+  outputSpeedEnabled: boolean;
   providerMetrics: SettingsSnapshot["providerMetrics"];
   settingsDisabled: boolean;
   onSettingsChange: (patch: SettingsUpdate) => void;
@@ -62,8 +71,13 @@ interface Props {
  */
 export function ProviderDetailPane({
   providerId,
+  providerSnapshot = null,
   cookieDomain = null,
   resetTimeRelative,
+  showAsUsed,
+  localUsagePeriod,
+  menuBarDisplayMode,
+  outputSpeedEnabled,
   providerMetrics,
   settingsDisabled,
   onSettingsChange,
@@ -81,6 +95,7 @@ export function ProviderDetailPane({
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const outputSpeed = useOutputSpeedSnapshot(outputSpeedEnabled);
 
   // Load the set of providers that support token accounts once.
   useEffect(() => {
@@ -195,6 +210,11 @@ export function ProviderDetailPane({
   if (!detail) return null;
 
   const subtitle = buildSubtitle(detail, t);
+  const speedProviderId = detail.id === "codex" || detail.id === "claude"
+    ? detail.id
+    : null;
+  const providerOutputSpeed = speedProviderId ? outputSpeed?.[speedProviderId] ?? null : null;
+  const compactMetrics = menuBarDisplayMode !== "detailed";
 
   const handleRefresh = async () => {
     setBusy(true);
@@ -257,7 +277,23 @@ export function ProviderDetailPane({
 
   return (
     <div className="provider-detail">
-      <IdentitySection provider={detail} subtitle={subtitle} t={t} />
+      {providerSnapshot ? (
+        <div className="provider-detail-live-card">
+          {/* In the detail pane the card stays a pure quota summary — token
+              stats, output speed and cost live in the tabbed StatsSection
+              below so the page never stacks three different stat UIs. */}
+          <MenuCard
+            provider={providerSnapshot}
+            resetTimeRelative={resetTimeRelative}
+            showAsUsed={showAsUsed}
+            compactMetrics={compactMetrics}
+            localUsagePeriod={localUsagePeriod}
+            hideLocalUsage
+          />
+        </div>
+      ) : (
+        <IdentitySection provider={detail} subtitle={subtitle} t={t} />
+      )}
 
       {detail.lastError && (
         <ProviderIssueNotice
@@ -268,10 +304,19 @@ export function ProviderDetailPane({
         />
       )}
 
-      <UsageSection
-        provider={detail}
-        resetTimeRelative={resetTimeRelative}
-        t={t}
+      {!providerSnapshot && (
+        <UsageSection
+          provider={detail}
+          resetTimeRelative={resetTimeRelative}
+          t={t}
+        />
+      )}
+      <StatsSection
+        providerId={detail.id}
+        accountEmail={detail.email}
+        speed={providerOutputSpeed}
+        cost={detail.cost}
+        localUsagePeriod={localUsagePeriod}
       />
       <MenuBarMetricSection
         provider={detail}
@@ -280,17 +325,18 @@ export function ProviderDetailPane({
         t={t}
         onChange={onSettingsChange}
       />
-      <PaceSection pace={detail.pace} t={t} />
-      <CostSection cost={detail.cost} t={t} />
+      {!providerSnapshot && <PaceSection pace={detail.pace} t={t} />}
 
       {/* Per-provider sub-sections ported in Phases 6c–6f. */}
-      <CookieSourceSection
-        providerId={detail.id}
-        currentValue={detail.cookieSource}
-        options={cookieOptions}
-        t={t}
-        onChanged={() => void load(detail.id)}
-      />
+      {detail.id !== "codex" && (
+        <CookieSourceSection
+          providerId={detail.id}
+          currentValue={detail.cookieSource}
+          options={cookieOptions}
+          t={t}
+          onChanged={() => void load(detail.id)}
+        />
+      )}
       <RegionSection
         providerId={detail.id}
         currentValue={detail.region}
@@ -316,16 +362,13 @@ export function ProviderDetailPane({
         key={`api-${detail.id}-${credentialRevision}`}
         providerId={detail.id}
       />
-      <CookieSection
-        key={`cookie-${detail.id}-${credentialRevision}`}
-        providerId={detail.id}
-        cookieDomain={cookieDomain}
-      />
-      <ChartsSection
-        providerId={detail.id}
-        accountEmail={detail.email}
-        t={t}
-      />
+      {detail.id !== "codex" && (
+        <CookieSection
+          key={`cookie-${detail.id}-${credentialRevision}`}
+          providerId={detail.id}
+          cookieDomain={cookieDomain}
+        />
+      )}
 
       <QuickActionsSection
         provider={detail}
@@ -389,6 +432,26 @@ function localizeProviderIssue(
   message: string,
   t: ReturnType<typeof useLocale>["t"],
 ): string {
+  const lower = message.toLowerCase();
+  const requestUrl = message.match(
+    /^network error:\s*error sending request for url\s*\((https?:\/\/[^\s)]+)\)\s*$/i,
+  );
+  if (requestUrl) {
+    return t("ProviderIssueNetworkRequestFailed") + "：" + requestUrl[1];
+  }
+  if (lower.startsWith("network error:")) {
+    // The raw diagnostic remains available through the existing Copy action.
+    // The visible message stays in the selected UI language.
+    return t("ProviderIssueNetworkConnectionFailed");
+  }
+  if (
+    lower.includes("oauth credentials not found") ||
+    lower.includes("sign-in was not found") ||
+    lower.includes("sign-in expired") ||
+    lower === "authentication required"
+  ) {
+    return t("ProviderIssueSignInRequired");
+  }
   const unsupported = message.match(/^Source mode `?([^`']+)`? not supported for this provider$/i);
   if (unsupported) {
     return `${t("ProviderIssueUnsupportedSourceModePrefix")} (${unsupported[1]})`;
@@ -511,6 +574,8 @@ function CredentialsDispatcher({
     case "devin":
     case "opencodego":
     case "zed":
+    case "sub2api":
+    case "wayfinder":
       return <OpenAiExtras providerId={providerId} t={t} />;
     default:
       return null;

@@ -73,6 +73,9 @@ pub struct OAuthUsageResponse {
 
     #[serde(rename = "extraUsage", alias = "extra_usage")]
     pub extra_usage: Option<ExtraUsage>,
+
+    #[serde(default)]
+    limits: Vec<super::scoped_weekly::ScopedWeeklyLimit>,
 }
 
 /// A usage window from the OAuth API
@@ -398,6 +401,11 @@ impl ClaudeOAuthFetcher {
                     .push(NamedRateWindow::new(id, title, window));
             }
         }
+        usage
+            .extra_rate_windows
+            .extend(super::scoped_weekly::scoped_weekly_windows(
+                &response.limits,
+            ));
 
         // Login method from rate limit tier or default
         if let Some(ref tier) = credentials.rate_limit_tier {
