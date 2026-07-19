@@ -252,6 +252,8 @@ pub struct ProviderConfig {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub api_region: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub gateway_url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub manual_cookie_header: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub api_token: Option<String>,

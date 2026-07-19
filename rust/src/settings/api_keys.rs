@@ -313,6 +313,28 @@ pub fn get_api_key_providers() -> Vec<ProviderConfigInfo> {
             dashboard_url: Some("https://console.volcengine.com/ark/region:ark+cn-beijing/usage"),
         },
         ProviderConfigInfo {
+            id: ProviderId::ArkCodingPlan,
+            name: "Volcengine Ark Coding Plan",
+            requires_api_key: true,
+            api_key_env_var: Some("VOLCENGINE_ACCESS_KEY_ID + VOLCENGINE_SECRET_ACCESS_KEY"),
+            api_key_help: Some(
+                "Use a Volcengine IAM AccessKey pair, not an Ark inference API key. Paste access_key|secret_key|region (region defaults to cn-beijing). A compatible pair saved under Doubao / Volcengine Ark is reused automatically.",
+            ),
+            config_file_path: None,
+            dashboard_url: Some("https://console.volcengine.com/ark/region:ark+cn-beijing/usage"),
+        },
+        ProviderConfigInfo {
+            id: ProviderId::ArkAgentPlan,
+            name: "Volcengine Ark Agent Plan",
+            requires_api_key: true,
+            api_key_env_var: Some("VOLCENGINE_ACCESS_KEY_ID + VOLCENGINE_SECRET_ACCESS_KEY"),
+            api_key_help: Some(
+                "Use a Volcengine IAM AccessKey pair, not an Ark inference API key. Paste access_key|secret_key|region (region defaults to cn-beijing). A compatible pair saved under Doubao / Volcengine Ark is reused automatically.",
+            ),
+            config_file_path: None,
+            dashboard_url: Some("https://console.volcengine.com/ark/region:ark+cn-beijing/usage"),
+        },
+        ProviderConfigInfo {
             id: ProviderId::Crof,
             name: "Crof",
             requires_api_key: true,
@@ -458,6 +480,28 @@ pub fn get_api_key_providers() -> Vec<ProviderConfigInfo> {
             ),
             config_file_path: None,
             dashboard_url: Some("https://crossmodel.ai"),
+        },
+        ProviderConfigInfo {
+            id: ProviderId::Sub2Api,
+            name: "sub2api",
+            requires_api_key: true,
+            api_key_env_var: Some("SUB2API_API_KEY"),
+            api_key_help: Some(
+                "粘贴分组 API Key，并在服务商设置中填写 sub2api 基础地址；要求 HTTPS，本机开发可使用回环 HTTP。",
+            ),
+            config_file_path: None,
+            dashboard_url: None,
+        },
+        ProviderConfigInfo {
+            id: ProviderId::Factory,
+            name: "Droid (Factory)",
+            requires_api_key: true,
+            api_key_env_var: Some("FACTORY_API_KEY"),
+            api_key_help: Some(
+                "可在 Factory 设置中创建 API Key。自动模式优先使用密钥，失败后再回退浏览器 Cookie。",
+            ),
+            config_file_path: Some("%USERPROFILE%\\.factory\\.env"),
+            dashboard_url: Some("https://app.factory.ai/settings/api-keys"),
         },
     ]
 }

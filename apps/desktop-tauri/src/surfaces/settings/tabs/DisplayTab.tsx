@@ -1,7 +1,12 @@
 import { useCallback, useEffect, useState } from "react";
 import { useLocale } from "../../../hooks/useLocale";
-import { Field, Select, Toggle } from "../../../components/FormControls";
-import type { MenuBarDisplayMode, TrayIconMode } from "../../../types/bridge";
+import { Field, SegmentedControl, Toggle } from "../../../components/FormControls";
+import type {
+  LocalUsagePeriod,
+  MenuBarDisplayMode,
+  ThemePreference,
+  TrayIconMode,
+} from "../../../types/bridge";
 import type { TabProps } from "../../Settings";
 import { FloatBarSettingsSection } from "../../../floatbar";
 
@@ -9,7 +14,12 @@ function clampWindowScalePercent(value: number): number {
   return Math.min(250, Math.max(100, Number.isFinite(value) ? value : 100));
 }
 
-export default function DisplayTab({ settings, set, saving }: TabProps) {
+export default function DisplayTab({
+  mode = "menu",
+  settings,
+  set,
+  saving,
+}: TabProps & { mode?: "menuBar" | "menu" }) {
   const { t } = useLocale();
   const [windowScaleDraft, setWindowScaleDraft] = useState(() =>
     clampWindowScalePercent(settings.windowScalePercent),
@@ -27,15 +37,34 @@ export default function DisplayTab({ settings, set, saving }: TabProps) {
   }, [set, settings.windowScalePercent, windowScaleDraft]);
   return (
     <>
+      {/* ── Appearance ───────────────────────────────────────────── */}
+      {mode === "menu" && <section className="settings-section">
+        <h3 className="settings-section__title">{t("SectionTheme")}</h3>
+        <div className="settings-section__group">
+          <Field label={t("ThemeLabel")} description={t("ThemeHelper")}>
+            <SegmentedControl
+              value={settings.theme}
+              disabled={saving}
+              options={[
+                { value: "auto", label: t("ThemeAutoOption") },
+                { value: "light", label: t("ThemeLightOption") },
+                { value: "dark", label: t("ThemeDarkOption") },
+              ]}
+              onChange={(v) => set({ theme: v as ThemePreference })}
+            />
+          </Field>
+        </div>
+      </section>}
+
       {/* ── Menu bar ─────────────────────────────────────────────── */}
-      <section className="settings-section">
+      {mode === "menuBar" && <section className="settings-section">
         <h3 className="settings-section__title">{t("MenuBar")}</h3>
         <div className="settings-section__group">
           <Field
             label={t("TrayIconModeLabel")}
             description={t("TrayIconModeHelper")}
           >
-            <Select
+            <SegmentedControl
               value={settings.trayIconMode}
               disabled={saving}
               options={[
@@ -48,7 +77,6 @@ export default function DisplayTab({ settings, set, saving }: TabProps) {
           <Field
             label={t("ShowProviderIcons")}
             description={t("ShowProviderIconsHelper")}
-            leading
           >
             <Toggle
               checked={settings.switcherShowsIcons}
@@ -59,7 +87,6 @@ export default function DisplayTab({ settings, set, saving }: TabProps) {
           <Field
             label={t("PreferHighestUsage")}
             description={t("PreferHighestUsageHelper")}
-            leading
           >
             <Toggle
               checked={settings.menuBarShowsHighestUsage}
@@ -70,7 +97,6 @@ export default function DisplayTab({ settings, set, saving }: TabProps) {
           <Field
             label={t("ShowPercentInTray")}
             description={t("ShowPercentInTrayHelper")}
-            leading
           >
             <Toggle
               checked={settings.menuBarShowsPercent}
@@ -82,7 +108,7 @@ export default function DisplayTab({ settings, set, saving }: TabProps) {
             label={t("DisplayModeLabel")}
             description={t("DisplayModeHelper")}
           >
-            <Select
+            <SegmentedControl
               value={settings.menuBarDisplayMode}
               disabled={saving}
               options={[
@@ -95,12 +121,37 @@ export default function DisplayTab({ settings, set, saving }: TabProps) {
               }
             />
           </Field>
+          <Field
+            label={t("OutputSpeedSettingLabel")}
+            description={t("OutputSpeedSettingHelper")}
+          >
+            <Toggle
+              checked={settings.outputSpeedEnabled ?? true}
+              disabled={saving}
+              onChange={(v) => set({ outputSpeedEnabled: v })}
+            />
+          </Field>
+          <Field
+            label={t("LocalUsagePeriodLabel")}
+            description={t("LocalUsagePeriodHelper")}
+          >
+            <SegmentedControl
+              value={settings.localUsagePeriod ?? "7d"}
+              disabled={saving}
+              options={[
+                { value: "today", label: t("PanelToday") },
+                { value: "7d", label: t("FloatBarSevenDayShort") },
+                { value: "30d", label: t("FloatBarThirtyDayShort") },
+              ]}
+              onChange={(v) => set({ localUsagePeriod: v as LocalUsagePeriod })}
+            />
+          </Field>
         </div>
-      </section>
+      </section>}
 
       {/* ── Menu content ─────────────────────────────────────────── */}
-      <section className="settings-section">
-        <h3 className="settings-section__title">Menu Content</h3>
+      {mode === "menu" && <section className="settings-section">
+        <h3 className="settings-section__title">{t("SectionMenuContent")}</h3>
         <div className="settings-section__group">
           <Field
             label={`${t("WindowScaleLabel")} (${windowScaleDraft}%)`}
@@ -128,7 +179,6 @@ export default function DisplayTab({ settings, set, saving }: TabProps) {
           <Field
             label={t("ShowAsUsedLabel")}
             description={t("ShowAsUsedHelper")}
-            leading
           >
             <Toggle
               checked={settings.showAsUsed}
@@ -139,7 +189,6 @@ export default function DisplayTab({ settings, set, saving }: TabProps) {
           <Field
             label={t("ShowAllTokenAccountsLabel")}
             description={t("ShowAllTokenAccountsHelper")}
-            leading
           >
             <Toggle
               checked={settings.showAllTokenAccountsInMenu}
@@ -150,7 +199,6 @@ export default function DisplayTab({ settings, set, saving }: TabProps) {
           <Field
             label={t("ResetTimeRelative")}
             description={t("ResetTimeRelativeHelper")}
-            leading
           >
             <Toggle
               checked={settings.resetTimeRelative}
@@ -159,9 +207,11 @@ export default function DisplayTab({ settings, set, saving }: TabProps) {
             />
           </Field>
         </div>
-      </section>
+      </section>}
 
-      <FloatBarSettingsSection settings={settings} saving={saving} set={set} />
+      {mode === "menu" && (
+        <FloatBarSettingsSection settings={settings} saving={saving} set={set} />
+      )}
     </>
   );
 }

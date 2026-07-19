@@ -183,6 +183,7 @@ fn workspace_provider(provider_id: &str) -> Option<codexbar::core::ProviderId> {
         "devin" => ProviderId::Devin,
         "opencodego" => ProviderId::OpenCodeGo,
         "zed" => ProviderId::Zed,
+        "sub2api" => ProviderId::Sub2Api,
         _ => return None,
     })
 }
@@ -298,6 +299,25 @@ pub fn get_provider_workspace_id(provider_id: String) -> Result<Option<String>, 
     Ok((!value.is_empty()).then_some(value))
 }
 
+#[tauri::command]
+pub fn set_provider_gateway_url(provider_id: String, gateway_url: String) -> Result<(), String> {
+    let id = codexbar::core::ProviderId::from_cli_name(&provider_id)
+        .filter(|id| *id == codexbar::core::ProviderId::Wayfinder)
+        .ok_or_else(|| format!("Provider '{provider_id}' does not expose a gateway URL"))?;
+    codexbar::providers::wayfinder::parse_gateway_url(&gateway_url)
+        .map_err(|error| error.to_string())?;
+    let mut settings = Settings::load();
+    settings.set_gateway_url(id, gateway_url.trim().to_string());
+    settings.save().map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn get_provider_gateway_url(provider_id: String) -> Result<Option<String>, String> {
+    let id = codexbar::core::ProviderId::from_cli_name(&provider_id)
+        .filter(|id| *id == codexbar::core::ProviderId::Wayfinder);
+    Ok(id.map(|id| Settings::load().gateway_url(id).to_string()))
+}
+
 // ── Phase 6c — cookie source & region option catalogs ────────────────
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -353,29 +373,21 @@ fn cookie_option(
 /// mirroring the `egui` ComboBox choices in `preferences.rs`.
 /// Empty vec means the provider does not expose a cookie-source picker.
 pub fn cookie_source_options_for(provider_id: &str, lang: Language) -> Vec<CookieSourceOption> {
+    let automatic_help = locale::get_text(lang, locale::LocaleKey::ProviderCookieAutoHelp);
+    let disabled_help = locale::get_text(lang, locale::LocaleKey::ProviderCookieDisabledHelp);
+    let manual_help = locale::get_text(lang, locale::LocaleKey::BrowserCookiePlaceholderDefault);
+
     match provider_id {
         "codex" => vec![
             cookie_option(
                 lang,
                 "auto",
                 locale::get_text(lang, locale::LocaleKey::ProviderCodexAutoImportHelp),
-                "Paste a Cookie header from a chatgpt.com request.",
-                Some("Disable OpenAI dashboard cookie usage."),
+                &manual_help,
+                Some(&disabled_help),
             ),
-            cookie_option(
-                lang,
-                "manual",
-                "",
-                "Paste a Cookie header from a chatgpt.com request.",
-                None,
-            ),
-            cookie_option(
-                lang,
-                "off",
-                "",
-                "",
-                Some("Disable OpenAI dashboard cookie usage."),
-            ),
+            cookie_option(lang, "manual", "", &manual_help, None),
+            cookie_option(lang, "off", "", "", Some(&disabled_help)),
         ],
         "claude" => vec![
             cookie_option(
@@ -401,134 +413,44 @@ pub fn cookie_source_options_for(provider_id: &str, lang: Language) -> Vec<Cooki
                 "",
                 None,
             ),
-            cookie_option(
-                lang,
-                "manual",
-                "",
-                "Paste a Cookie header from a cursor.com request.",
-                None,
-            ),
+            cookie_option(lang, "manual", "", &manual_help, None),
         ],
         "opencode" => vec![
-            cookie_option(
-                lang,
-                "auto",
-                "Automatic imports browser cookies from opencode.ai.",
-                "",
-                None,
-            ),
-            cookie_option(
-                lang,
-                "manual",
-                "",
-                "Paste a Cookie header from the billing page.",
-                None,
-            ),
+            cookie_option(lang, "auto", &automatic_help, "", None),
+            cookie_option(lang, "manual", "", &manual_help, None),
         ],
         "factory" => vec![
-            cookie_option(
-                lang,
-                "auto",
-                "Automatic imports browser cookies and WorkOS sessions.",
-                "",
-                None,
-            ),
-            cookie_option(
-                lang,
-                "manual",
-                "",
-                "Paste a Cookie header from Factory.",
-                None,
-            ),
+            cookie_option(lang, "auto", &automatic_help, "", None),
+            cookie_option(lang, "manual", "", &manual_help, None),
         ],
         "alibaba" => vec![
-            cookie_option(
-                lang,
-                "auto",
-                "Automatic imports browser cookies from Model Studio / Bailian.",
-                "",
-                None,
-            ),
-            cookie_option(
-                lang,
-                "manual",
-                "",
-                "Paste a Cookie header from Model Studio or Bailian.",
-                None,
-            ),
+            cookie_option(lang, "auto", &automatic_help, "", None),
+            cookie_option(lang, "manual", "", &manual_help, None),
         ],
         "kimi" | "kimik2" => vec![
-            cookie_option(lang, "auto", "Automatic imports browser cookies.", "", None),
-            cookie_option(
-                lang,
-                "manual",
-                "",
-                "Paste a cookie header or the kimi-auth token value.",
-                None,
-            ),
-            cookie_option(lang, "off", "", "", Some("Kimi cookies are disabled.")),
+            cookie_option(lang, "auto", &automatic_help, "", None),
+            cookie_option(lang, "manual", "", &manual_help, None),
+            cookie_option(lang, "off", "", "", Some(&disabled_help)),
         ],
         "minimax" => vec![
-            cookie_option(
-                lang,
-                "auto",
-                "Automatic imports browser cookies and Coding Plan tokens.",
-                "",
-                None,
-            ),
-            cookie_option(
-                lang,
-                "manual",
-                "",
-                "Paste a Cookie header from the Coding Plan page.",
-                None,
-            ),
+            cookie_option(lang, "auto", &automatic_help, "", None),
+            cookie_option(lang, "manual", "", &manual_help, None),
         ],
         "augment" => vec![
-            cookie_option(lang, "auto", "Automatic imports browser cookies.", "", None),
-            cookie_option(
-                lang,
-                "manual",
-                "",
-                "Paste a Cookie header from the Augment dashboard.",
-                None,
-            ),
+            cookie_option(lang, "auto", &automatic_help, "", None),
+            cookie_option(lang, "manual", "", &manual_help, None),
         ],
         "amp" => vec![
-            cookie_option(lang, "auto", "Automatic imports browser cookies.", "", None),
-            cookie_option(
-                lang,
-                "manual",
-                "",
-                "Paste a Cookie header from Amp settings.",
-                None,
-            ),
+            cookie_option(lang, "auto", &automatic_help, "", None),
+            cookie_option(lang, "manual", "", &manual_help, None),
         ],
         "ollama" => vec![
-            cookie_option(lang, "auto", "Automatic imports browser cookies.", "", None),
-            cookie_option(
-                lang,
-                "manual",
-                "",
-                "Paste a Cookie header from Ollama settings.",
-                None,
-            ),
+            cookie_option(lang, "auto", &automatic_help, "", None),
+            cookie_option(lang, "manual", "", &manual_help, None),
         ],
         "mistral" => vec![
-            cookie_option(
-                lang,
-                "auto",
-                "Automatic imports browser cookies from Mistral Admin.",
-                "",
-                None,
-            ),
-            cookie_option(
-                lang,
-                "manual",
-                "",
-                "Paste a Cookie header from admin.mistral.ai.",
-                None,
-            ),
+            cookie_option(lang, "auto", &automatic_help, "", None),
+            cookie_option(lang, "manual", "", &manual_help, None),
         ],
         _ => Vec::new(),
     }

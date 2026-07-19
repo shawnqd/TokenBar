@@ -15,7 +15,7 @@ use crate::core::{
 };
 
 const DOUBAO_API_URL: &str = "https://ark.cn-beijing.volces.com/api/coding/v3/chat/completions";
-const DOUBAO_CODING_PLAN_URL: &str =
+pub(crate) const DOUBAO_CODING_PLAN_URL: &str =
     "https://open.volcengineapi.com/?Action=GetCodingPlanUsage&Version=2024-01-01";
 const DOUBAO_CREDENTIAL_TARGET: &str = "codexbar-doubao";
 const PROBE_MODELS: &[&str] = &[
@@ -303,14 +303,14 @@ fn parse_reset_time(value: String) -> Option<DateTime<Utc>> {
 }
 
 #[derive(Debug)]
-struct DoubaoCodingPlanCredentials {
-    access_key_id: String,
-    secret_access_key: String,
-    region: String,
+pub(crate) struct DoubaoCodingPlanCredentials {
+    pub(crate) access_key_id: String,
+    pub(crate) secret_access_key: String,
+    pub(crate) region: String,
 }
 
 impl DoubaoCodingPlanCredentials {
-    fn from_env() -> Option<Self> {
+    pub(crate) fn from_env() -> Option<Self> {
         let access_key_id = cleaned_env("VOLCENGINE_ACCESS_KEY_ID")
             .or_else(|| cleaned_env("DOUBAO_ACCESS_KEY_ID"))?;
         let secret_access_key = cleaned_env("VOLCENGINE_SECRET_ACCESS_KEY")
@@ -325,7 +325,7 @@ impl DoubaoCodingPlanCredentials {
         })
     }
 
-    fn parse(raw: &str) -> Option<Self> {
+    pub(crate) fn parse(raw: &str) -> Option<Self> {
         let trimmed = raw.trim();
         if trimmed.starts_with('{') {
             let value: serde_json::Value = serde_json::from_str(trimmed).ok()?;
@@ -388,13 +388,13 @@ fn string_key(value: &serde_json::Value, keys: &[&str]) -> Option<String> {
 }
 
 #[derive(Debug, Deserialize)]
-struct CodingPlanUsageResponse {
+pub(crate) struct CodingPlanUsageResponse {
     #[serde(rename = "Result")]
     result: CodingPlanResult,
 }
 
 #[derive(Debug, Deserialize)]
-struct CodingPlanResult {
+pub(crate) struct CodingPlanResult {
     #[serde(rename = "Status")]
     status: Option<String>,
     #[serde(rename = "UpdateTimestamp")]
@@ -404,7 +404,7 @@ struct CodingPlanResult {
 }
 
 #[derive(Debug, Deserialize)]
-struct CodingPlanQuota {
+pub(crate) struct CodingPlanQuota {
     #[serde(rename = "Level")]
     level: String,
     #[serde(rename = "Percent")]
@@ -413,13 +413,13 @@ struct CodingPlanQuota {
     reset_timestamp: Option<f64>,
 }
 
-fn decode_coding_plan_usage(bytes: &[u8]) -> Result<CodingPlanResult, ProviderError> {
+pub(crate) fn decode_coding_plan_usage(bytes: &[u8]) -> Result<CodingPlanResult, ProviderError> {
     let response: CodingPlanUsageResponse = serde_json::from_slice(bytes)
         .map_err(|e| ProviderError::Parse(format!("Failed to parse Doubao Coding Plan: {e}")))?;
     Ok(response.result)
 }
 
-fn coding_plan_snapshot(usage: CodingPlanResult) -> UsageSnapshot {
+pub(crate) fn coding_plan_snapshot(usage: CodingPlanResult) -> UsageSnapshot {
     let primary = coding_plan_window(&usage, &["session", "5-hour", "five_hour"], Some(5 * 60))
         .unwrap_or_else(|| RateWindow::new(0.0));
     let mut snapshot = UsageSnapshot::new(primary);
@@ -462,12 +462,12 @@ fn datetime_from_epoch(timestamp: f64) -> Option<DateTime<Utc>> {
     Utc.timestamp_opt(timestamp as i64, 0).single()
 }
 
-struct SignedVolcengineRequest {
-    content_type: &'static str,
-    host: String,
-    timestamp: String,
-    payload_hash: String,
-    authorization: String,
+pub(crate) struct SignedVolcengineRequest {
+    pub(crate) content_type: &'static str,
+    pub(crate) host: String,
+    pub(crate) timestamp: String,
+    pub(crate) payload_hash: String,
+    pub(crate) authorization: String,
 }
 
 fn sign_volcengine_request(
@@ -475,7 +475,23 @@ fn sign_volcengine_request(
     body: &[u8],
     now: DateTime<Utc>,
 ) -> Result<SignedVolcengineRequest, ProviderError> {
-    let parsed = url::Url::parse(DOUBAO_CODING_PLAN_URL)
+    sign_volcengine_request_for_url(
+        DOUBAO_CODING_PLAN_URL,
+        credentials,
+        body,
+        now,
+        "application/x-www-form-urlencoded; charset=utf-8",
+    )
+}
+
+pub(crate) fn sign_volcengine_request_for_url(
+    request_url: &str,
+    credentials: &DoubaoCodingPlanCredentials,
+    body: &[u8],
+    now: DateTime<Utc>,
+    content_type: &'static str,
+) -> Result<SignedVolcengineRequest, ProviderError> {
+    let parsed = url::Url::parse(request_url)
         .map_err(|e| ProviderError::Other(format!("Invalid Doubao Coding Plan URL: {e}")))?;
     let host = parsed
         .host_str()
@@ -484,7 +500,6 @@ fn sign_volcengine_request(
     let timestamp = now.format("%Y%m%dT%H%M%SZ").to_string();
     let date_stamp = now.format("%Y%m%d").to_string();
     let payload_hash = sha256_hex(body);
-    let content_type = "application/x-www-form-urlencoded; charset=utf-8";
     let signed_headers = "content-type;host;x-content-sha256;x-date";
     let canonical_request = [
         "POST".to_string(),

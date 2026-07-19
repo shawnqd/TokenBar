@@ -94,6 +94,7 @@ struct UsageResponse {
     seven_day_oauth_apps: Option<UsageWindow>,
     seven_day_design: Option<UsageWindow>,
     seven_day_routines: Option<UsageWindow>,
+    limits: Vec<super::scoped_weekly::ScopedWeeklyLimit>,
     extra_usage: Option<ExtraUsageResponse>,
 }
 
@@ -156,6 +157,14 @@ impl<'de> Deserialize<'de> for UsageResponse {
                     "cowork",
                 ],
             )?,
+            limits: map
+                .get("limits")
+                .filter(|value| !value.is_null())
+                .cloned()
+                .map(serde_json::from_value)
+                .transpose()
+                .map_err(serde::de::Error::custom)?
+                .unwrap_or_default(),
             extra_usage: map
                 .remove("extra_usage")
                 .filter(|value| !value.is_null())
@@ -195,8 +204,12 @@ struct ExtraUsageResponse {
 struct AccountResponse {
     email_address: Option<String>,
 
-    #[serde(rename = "rate_limit_tier")]
+    #[serde(default, rename = "rate_limit_tier", alias = "rateLimitTier")]
     rate_limit_tier: Option<String>,
+    #[serde(default, rename = "subscription_type", alias = "subscriptionType")]
+    subscription_type: Option<String>,
+    #[serde(default, rename = "plan_type", alias = "planType")]
+    plan_type: Option<String>,
 
     #[serde(default)]
     memberships: Vec<AccountMembership>,
@@ -205,12 +218,24 @@ struct AccountResponse {
 #[derive(Debug, Deserialize)]
 struct AccountMembership {
     uuid: Option<String>,
+    #[serde(default, rename = "rate_limit_tier", alias = "rateLimitTier")]
+    rate_limit_tier: Option<String>,
+    #[serde(default, rename = "subscription_type", alias = "subscriptionType")]
+    subscription_type: Option<String>,
+    #[serde(default, rename = "plan_type", alias = "planType")]
+    plan_type: Option<String>,
     organization: Option<AccountOrganization>,
 }
 
 #[derive(Debug, Deserialize)]
 struct AccountOrganization {
     uuid: Option<String>,
+    #[serde(default, rename = "rate_limit_tier", alias = "rateLimitTier")]
+    rate_limit_tier: Option<String>,
+    #[serde(default, rename = "subscription_type", alias = "subscriptionType")]
+    subscription_type: Option<String>,
+    #[serde(default, rename = "plan_type", alias = "planType")]
+    plan_type: Option<String>,
 }
 
 impl AccountResponse {
@@ -226,6 +251,32 @@ impl AccountResponse {
                 .map(ToString::to_string)
         })
     }
+
+    fn plan_tier(&self) -> Option<&str> {
+        non_empty(self.rate_limit_tier.as_deref())
+            .or_else(|| non_empty(self.subscription_type.as_deref()))
+            .or_else(|| non_empty(self.plan_type.as_deref()))
+            .or_else(|| {
+                self.memberships.iter().find_map(|membership| {
+                    non_empty(membership.rate_limit_tier.as_deref())
+                        .or_else(|| non_empty(membership.subscription_type.as_deref()))
+                        .or_else(|| non_empty(membership.plan_type.as_deref()))
+                        .or_else(|| {
+                            membership.organization.as_ref().and_then(|organization| {
+                                non_empty(organization.rate_limit_tier.as_deref())
+                                    .or_else(|| {
+                                        non_empty(organization.subscription_type.as_deref())
+                                    })
+                                    .or_else(|| non_empty(organization.plan_type.as_deref()))
+                            })
+                        })
+                })
+            })
+    }
+}
+
+fn non_empty(value: Option<&str>) -> Option<&str> {
+    value.map(str::trim).filter(|value| !value.is_empty())
 }
 
 impl ClaudeWebApiFetcher {
@@ -301,12 +352,13 @@ impl ClaudeWebApiFetcher {
         // Step 4: Fetch account info - optional
         let account = self.get_account_info(&headers).await.ok();
 
-        // Build the result
+        // A null five_hour row means there is no active live session; keep it
+        // visible as information without treating it as a real 0% quota lane.
         let primary = usage
             .five_hour
             .as_ref()
             .map(|w| self.to_rate_window(w, Some(300))) // 5 hours = 300 minutes
-            .unwrap_or_else(|| RateWindow::new(0.0));
+            .unwrap_or_else(synthetic_no_session_primary);
 
         let secondary = usage
             .seven_day
@@ -352,14 +404,21 @@ impl ClaudeWebApiFetcher {
                     .push(NamedRateWindow::new(id, title, window));
             }
         }
+        snapshot
+            .extra_rate_windows
+            .extend(super::scoped_weekly::scoped_weekly_windows(&usage.limits));
 
         if let Some(ref acc) = account {
             if let Some(ref email) = acc.email_address {
                 snapshot = snapshot.with_email(email.clone());
             }
-            if let Some(ref tier) = acc.rate_limit_tier {
+            if let Some(tier) = acc.plan_tier() {
                 snapshot = snapshot.with_login_method(super::claude_plan_label(tier));
+            } else {
+                snapshot = snapshot.with_login_method("Claude Subscription (plan unavailable)");
             }
+        } else {
+            snapshot = snapshot.with_login_method("Claude Subscription (plan unavailable)");
         }
 
         let mut result = ProviderFetchResult::new(snapshot, "web");
@@ -598,6 +657,17 @@ impl ClaudeWebApiFetcher {
     }
 }
 
+fn synthetic_no_session_primary() -> RateWindow {
+    let mut window = RateWindow::with_details(
+        0.0,
+        Some(300),
+        None,
+        Some("当前没有活动的 5 小时会话".to_string()),
+    );
+    window.is_informational = true;
+    window
+}
+
 impl Default for ClaudeWebApiFetcher {
     fn default() -> Self {
         Self::new()
@@ -776,6 +846,37 @@ mod tests {
         .unwrap();
 
         assert_eq!(account.first_membership_org_id().as_deref(), Some("org-id"));
+    }
+
+    #[test]
+    fn account_accepts_subscription_type_as_top_level_plan() {
+        let account: AccountResponse = serde_json::from_str(
+            r#"{
+                "email_address": "user@example.com",
+                "subscriptionType": "max"
+            }"#,
+        )
+        .unwrap();
+
+        assert_eq!(account.plan_tier(), Some("max"));
+    }
+
+    #[test]
+    fn account_finds_plan_in_nested_membership_organization() {
+        let account: AccountResponse = serde_json::from_str(
+            r#"{
+                "memberships": [{
+                    "uuid": "membership-id",
+                    "organization": {
+                        "uuid": "org-id",
+                        "subscription_type": "default_claude_max_5x"
+                    }
+                }]
+            }"#,
+        )
+        .unwrap();
+
+        assert_eq!(account.plan_tier(), Some("default_claude_max_5x"));
     }
 
     #[test]

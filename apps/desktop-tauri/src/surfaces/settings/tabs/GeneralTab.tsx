@@ -4,6 +4,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { playNotificationSound } from "../../../lib/tauri";
 import { Field, NumberInput, Select, Toggle } from "../../../components/FormControls";
 import type { Language, LanguageOption } from "../../../types/bridge";
+import type { LocaleKey } from "../../../i18n/keys";
 import type { TabProps } from "../../Settings";
 
 const FALLBACK_LANGUAGE_OPTIONS: LanguageOption[] = [
@@ -15,16 +16,21 @@ const FALLBACK_LANGUAGE_OPTIONS: LanguageOption[] = [
   { value: "spanish", display: "Español" },
 ];
 
-const REFRESH_CADENCE_OPTIONS: { value: string; label: string }[] = [
-  { value: "0", label: "Manual" },
-  { value: "60", label: "1 minute" },
-  { value: "300", label: "5 minutes" },
-  { value: "900", label: "15 minutes" },
-  { value: "1800", label: "30 minutes" },
-  { value: "3600", label: "1 hour" },
+const REFRESH_CADENCE_KEYS: { value: string; labelKey: LocaleKey }[] = [
+  { value: "0", labelKey: "RefreshCadenceManual" },
+  { value: "60", labelKey: "RefreshCadenceOneMinute" },
+  { value: "300", labelKey: "RefreshCadenceFiveMinutes" },
+  { value: "900", labelKey: "RefreshCadenceFifteenMinutes" },
+  { value: "1800", labelKey: "RefreshCadenceThirtyMinutes" },
+  { value: "3600", labelKey: "RefreshCadenceOneHour" },
 ];
 
-export default function GeneralTab({ settings, set, saving }: TabProps) {
+export default function GeneralTab({
+  mode = "general",
+  settings,
+  set,
+  saving,
+}: TabProps & { mode?: "general" | "notifications" }) {
   const { t } = useLocale();
   const [playingSound, setPlayingSound] = useState(false);
   const [languageOptions, setLanguageOptions] = useState<LanguageOption[]>(
@@ -45,7 +51,7 @@ export default function GeneralTab({ settings, set, saving }: TabProps) {
 
   return (
     <>
-      <section className="settings-section">
+      {mode === "general" && <section className="settings-section">
         <h3 className="settings-section__title">{t("SectionLanguage")}</h3>
         <div className="settings-section__group">
           <Field label={t("InterfaceLanguage")}>
@@ -60,12 +66,12 @@ export default function GeneralTab({ settings, set, saving }: TabProps) {
             />
           </Field>
         </div>
-      </section>
+      </section>}
 
-      <section className="settings-section">
+      {mode === "general" && <section className="settings-section">
         <h3 className="settings-section__title">{t("StartupSettings")}</h3>
         <div className="settings-section__group">
-          <Field label={t("StartAtLogin")} description={t("StartAtLoginHelper")} leading>
+          <Field label={t("StartAtLogin")} description={t("StartAtLoginHelper")}>
             <Toggle
               checked={settings.startAtLogin}
               disabled={saving}
@@ -75,7 +81,6 @@ export default function GeneralTab({ settings, set, saving }: TabProps) {
           <Field
             label={t("StartMinimized")}
             description={t("StartMinimizedHelper")}
-            leading
           >
             <Toggle
               checked={settings.startMinimized}
@@ -84,9 +89,9 @@ export default function GeneralTab({ settings, set, saving }: TabProps) {
             />
           </Field>
         </div>
-      </section>
+      </section>}
 
-      <section className="settings-section">
+      {mode === "notifications" && <section className="settings-section">
         <h3 className="settings-section__title">
           {t("SectionNotifications")}
         </h3>
@@ -94,7 +99,6 @@ export default function GeneralTab({ settings, set, saving }: TabProps) {
           <Field
             label={t("ShowNotifications")}
             description={t("ShowNotificationsHelper")}
-            leading
           >
             <Toggle
               checked={settings.showNotifications}
@@ -102,7 +106,7 @@ export default function GeneralTab({ settings, set, saving }: TabProps) {
               onChange={(v) => set({ showNotifications: v })}
             />
           </Field>
-          <Field label={t("SoundEnabled")} description={t("SoundEnabledHelper")} leading>
+          <Field label={t("SoundEnabled")} description={t("SoundEnabledHelper")}>
             <div className="sound-enabled-row">
               <Toggle
                 checked={settings.soundEnabled}
@@ -134,9 +138,9 @@ export default function GeneralTab({ settings, set, saving }: TabProps) {
             </Field>
           )}
         </div>
-      </section>
+      </section>}
 
-      <section className="settings-section">
+      {mode === "notifications" && <section className="settings-section">
         <h3 className="settings-section__title">
           {t("SectionUsageThresholds")}
         </h3>
@@ -168,10 +172,10 @@ export default function GeneralTab({ settings, set, saving }: TabProps) {
             />
           </Field>
         </div>
-      </section>
+      </section>}
 
       {/* ── Automation ───────────────────────────────────────────── */}
-      <section className="settings-section">
+      {mode === "general" && <section className="settings-section">
         <h3 className="settings-section__title">{t("SectionRefresh")}</h3>
         <div className="settings-section__group">
           <Field
@@ -181,14 +185,16 @@ export default function GeneralTab({ settings, set, saving }: TabProps) {
             <Select
               value={String(settings.refreshIntervalSecs)}
               disabled={saving}
-              options={REFRESH_CADENCE_OPTIONS}
+              options={REFRESH_CADENCE_KEYS.map((o) => ({
+                value: o.value,
+                label: t(o.labelKey),
+              }))}
               onChange={(v) => set({ refreshIntervalSecs: Number(v) })}
             />
           </Field>
           <Field
             label={t("RefreshAllProvidersOnMenuOpen")}
             description={t("RefreshAllProvidersOnMenuOpenHelper")}
-            leading
           >
             <Toggle
               checked={settings.refreshAllProvidersOnMenuOpen}
@@ -197,7 +203,7 @@ export default function GeneralTab({ settings, set, saving }: TabProps) {
             />
           </Field>
         </div>
-      </section>
+      </section>}
     </>
   );
 }

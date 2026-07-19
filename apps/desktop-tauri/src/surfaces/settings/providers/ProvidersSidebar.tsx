@@ -10,6 +10,7 @@ import { useLocale } from "../../../hooks/useLocale";
 import type { LocaleKey } from "../../../i18n/keys";
 import { ProviderIcon } from "../../../components/providers/ProviderIcon";
 import { getProviderIcon } from "../../../components/providers/providerIcons";
+import { COOKIE_IMPORT_ID } from "./CookieFileImport";
 
 /** Last-fetch state mapped from a ProviderUsageSnapshot / settings pair. */
 export type ProviderSidebarStatus =
@@ -176,6 +177,64 @@ export function ProvidersSidebar({
 
   const sidebarRef = useRef<HTMLUListElement>(null);
 
+  // Auto-scroll the list while dragging a row near its top/bottom edge, so a
+  // long-distance drag (e.g. bottom of a tall list to the top) doesn't
+  // require the pointer to already be over the destination row. A plain
+  // per-row `dragover` doesn't cover this: once the pointer crosses out of
+  // the scrollable `<ul>` — e.g. onto the search box sitting right above it
+  // — those rows stop receiving dragover entirely, which is exactly the
+  // "search box interrupts the drag" symptom. Listening on `window` instead
+  // keeps tracking the pointer regardless of which element it's over.
+  useEffect(() => {
+    if (!dragId) return;
+    const scrollEl = sidebarRef.current;
+    if (!scrollEl) return;
+    const EDGE = 48;
+    const MAX_STEP = 16;
+    let pointerY: number | null = null;
+    let rafId: number | undefined;
+
+    const step = () => {
+      rafId = undefined;
+      if (pointerY === null) return;
+      const rect = scrollEl.getBoundingClientRect();
+      let delta = 0;
+      if (pointerY < rect.top + EDGE) {
+        delta = -Math.ceil(((rect.top + EDGE - pointerY) / EDGE) * MAX_STEP);
+      } else if (pointerY > rect.bottom - EDGE) {
+        delta = Math.ceil(((pointerY - (rect.bottom - EDGE)) / EDGE) * MAX_STEP);
+      }
+      if (delta !== 0) {
+        scrollEl.scrollTop += delta;
+        rafId = requestAnimationFrame(step);
+      }
+    };
+
+    const onDragOver = (e: DragEvent) => {
+      pointerY = e.clientY;
+      if (rafId === undefined) {
+        rafId = requestAnimationFrame(step);
+      }
+    };
+    const stop = () => {
+      pointerY = null;
+      if (rafId !== undefined) {
+        cancelAnimationFrame(rafId);
+        rafId = undefined;
+      }
+    };
+
+    window.addEventListener("dragover", onDragOver);
+    window.addEventListener("dragend", stop);
+    window.addEventListener("drop", stop);
+    return () => {
+      window.removeEventListener("dragover", onDragOver);
+      window.removeEventListener("dragend", stop);
+      window.removeEventListener("drop", stop);
+      stop();
+    };
+  }, [dragId]);
+
   // Explicit wheel handler — WebView2 on Windows can swallow wheel events
   // when parent containers have overflow:hidden/clip. This ensures the
   // sidebar always scrolls in response to wheel input.
@@ -186,8 +245,24 @@ export function ProvidersSidebar({
     e.stopPropagation();
   };
 
+  const isCookieImportSelected = selectedId === COOKIE_IMPORT_ID;
+
   return (
     <div className="providers-sidebar-shell">
+      <button
+        type="button"
+        className={`providers-sidebar__pinned-row${isCookieImportSelected ? " providers-sidebar__pinned-row--selected" : ""}`}
+        aria-selected={isCookieImportSelected}
+        onClick={() => onSelect(COOKIE_IMPORT_ID)}
+      >
+        <span className="providers-sidebar__pinned-icon" aria-hidden>
+          <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth={1.4} strokeLinecap="round" strokeLinejoin="round">
+            <path d="M8 10.5V2.5M8 2.5 5.2 5.3M8 2.5l2.8 2.8" />
+            <path d="M2.5 10v2.3a.7.7 0 0 0 .7.7h9.6a.7.7 0 0 0 .7-.7V10" />
+          </svg>
+        </span>
+        <span className="providers-sidebar__pinned-name">批量导入 Cookie</span>
+      </button>
       <div className="providers-sidebar-search">
         <input
           className="providers-sidebar-search__input"
@@ -223,14 +298,12 @@ export function ProvidersSidebar({
             {t("ProviderSidebarNoMatches")}
           </li>
         )}
-        {ordered.map((p, index) => {
+        {ordered.map((p) => {
           const isSelected = p.id === selectedId;
           const isDrop = dropTargetId === p.id;
           const isDragging = dragId === p.id;
           const reveal = justMounted.has(p.id);
           const brand = getProviderIcon(p.id).brandColor;
-          const canMoveUp = index > 0 && !disabled;
-          const canMoveDown = index < ordered.length - 1 && !disabled;
           const cls = [
             "providers-sidebar__row",
             isSelected && "providers-sidebar__row--selected",
@@ -288,42 +361,14 @@ export function ProvidersSidebar({
               >
                 ⋮⋮
               </span>
-              <span className="providers-sidebar__reorder-controls">
-                <button
-                  type="button"
-                  className="providers-sidebar__reorder-button"
-                  disabled={!canMoveUp}
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    moveId(p.id, -1);
-                  }}
-                  aria-label={`${t("ProviderSidebarMoveUp")} ${p.displayName}`}
-                  title={`${t("ProviderSidebarMoveUp")} ${p.displayName}`}
-                >
-                  ↑
-                </button>
-                <button
-                  type="button"
-                  className="providers-sidebar__reorder-button"
-                  disabled={!canMoveDown}
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    moveId(p.id, 1);
-                  }}
-                  aria-label={`${t("ProviderSidebarMoveDown")} ${p.displayName}`}
-                  title={`${t("ProviderSidebarMoveDown")} ${p.displayName}`}
-                >
-                  ↓
-                </button>
-              </span>
               <input
                 type="checkbox"
-                className="providers-sidebar__checkbox"
+                className="toggle toggle--sm providers-sidebar__checkbox"
                 checked={p.enabled}
                 disabled={disabled}
                 onClick={(e) => e.stopPropagation()}
                 onChange={(e) => onToggleEnabled(p.id, e.target.checked)}
-                aria-label={`${p.displayName} enabled`}
+                aria-label={t("ProviderSidebarEnabledSuffix").replace("{}", p.displayName)}
               />
             </li>
           );

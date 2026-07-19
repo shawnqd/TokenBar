@@ -116,6 +116,17 @@ function AppInner() {
         })
       : Promise.resolve(null);
 
+    // Every Tauri surface is its own WebView. A DOM CustomEvent only reaches
+    // the window that changed the setting, while Rust broadcasts this event to
+    // every open surface after persistence. Subscribe here, at the app root,
+    // so the tray panel, pop-out dashboard and detached flyout immediately
+    // apply the selected light/dark/auto theme as well.
+    const unlistenThemeSyncPromise = listen("settings-changed", () => {
+      void getSettingsSnapshot()
+        .then((fresh) => setThemePreference(fresh.theme))
+        .catch(() => {});
+    });
+
     // Keep the theme in sync when mutations happen inside other surfaces
     // (e.g., Settings → Appearance). `useSettings` dispatches this event
     // after every successful `updateSettings` call.
@@ -137,6 +148,7 @@ function AppInner() {
       void unlistenSettingsChangePromise
         .then((unlisten) => unlisten?.())
         .catch(() => {});
+      void unlistenThemeSyncPromise.then((unlisten) => unlisten()).catch(() => {});
       window.clearTimeout(updateTimer);
       window.removeEventListener("codexbar:settings-updated", onSettingsUpdated);
     };

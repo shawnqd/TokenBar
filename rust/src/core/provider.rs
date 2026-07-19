@@ -48,7 +48,10 @@ pub enum ProviderId {
     Windsurf,
     Manus,
     MiMo,
+    MiMoApi,
     Doubao,
+    ArkCodingPlan,
+    ArkAgentPlan,
     CommandCode,
     Crof,
     StepFun,
@@ -67,6 +70,8 @@ pub enum ProviderId {
     CrossModel,
     Qoder,
     Sakana,
+    Sub2Api,
+    Wayfinder,
 }
 
 impl ProviderId {
@@ -110,7 +115,10 @@ impl ProviderId {
             ProviderId::Windsurf,
             ProviderId::Manus,
             ProviderId::MiMo,
+            ProviderId::MiMoApi,
             ProviderId::Doubao,
+            ProviderId::ArkCodingPlan,
+            ProviderId::ArkAgentPlan,
             ProviderId::CommandCode,
             ProviderId::Crof,
             ProviderId::StepFun,
@@ -129,6 +137,8 @@ impl ProviderId {
             ProviderId::CrossModel,
             ProviderId::Qoder,
             ProviderId::Sakana,
+            ProviderId::Sub2Api,
+            ProviderId::Wayfinder,
         ]
     }
 
@@ -172,7 +182,10 @@ impl ProviderId {
             ProviderId::Windsurf => "windsurf",
             ProviderId::Manus => "manus",
             ProviderId::MiMo => "mimo",
+            ProviderId::MiMoApi => "mimoapi",
             ProviderId::Doubao => "doubao",
+            ProviderId::ArkCodingPlan => "arkcodingplan",
+            ProviderId::ArkAgentPlan => "arkagentplan",
             ProviderId::CommandCode => "commandcode",
             ProviderId::Crof => "crof",
             ProviderId::StepFun => "stepfun",
@@ -191,6 +204,8 @@ impl ProviderId {
             ProviderId::CrossModel => "crossmodel",
             ProviderId::Qoder => "qoder",
             ProviderId::Sakana => "sakana",
+            ProviderId::Sub2Api => "sub2api",
+            ProviderId::Wayfinder => "wayfinder",
         }
     }
 
@@ -233,8 +248,11 @@ impl ProviderId {
             ProviderId::DeepSeek => "DeepSeek",
             ProviderId::Windsurf => "Windsurf",
             ProviderId::Manus => "Manus",
-            ProviderId::MiMo => "Xiaomi MiMo",
+            ProviderId::MiMo => "Xiaomi MiMo Token Plan",
+            ProviderId::MiMoApi => "Xiaomi MiMo API",
             ProviderId::Doubao => "Doubao",
+            ProviderId::ArkCodingPlan => "Volcengine Ark Coding Plan",
+            ProviderId::ArkAgentPlan => "Volcengine Ark Agent Plan",
             ProviderId::CommandCode => "Command Code",
             ProviderId::Crof => "Crof",
             ProviderId::StepFun => "StepFun",
@@ -253,6 +271,8 @@ impl ProviderId {
             ProviderId::CrossModel => "CrossModel",
             ProviderId::Qoder => "Qoder",
             ProviderId::Sakana => "Sakana AI",
+            ProviderId::Sub2Api => "sub2api",
+            ProviderId::Wayfinder => "Wayfinder",
         }
     }
 
@@ -285,11 +305,13 @@ impl ProviderId {
             ProviderId::Mistral => Some("admin.mistral.ai"),
             ProviderId::OpenCodeGo => Some("opencode.ai"),
             ProviderId::Manus => Some("manus.im"),
-            ProviderId::MiMo => Some("platform.xiaomimimo.com"),
+            ProviderId::MiMo | ProviderId::MiMoApi => Some("platform.xiaomimimo.com"),
             ProviderId::CommandCode => Some("commandcode.ai"),
             ProviderId::Grok => Some("grok.com"),
             ProviderId::Qoder => Some("qoder.com"),
             ProviderId::Sakana => Some("console.sakana.ai"),
+            ProviderId::Sub2Api => None,
+            ProviderId::Wayfinder => None,
             // Token-based providers (don't use cookies)
             ProviderId::Copilot => None,
             ProviderId::Zai => None,
@@ -306,6 +328,8 @@ impl ProviderId {
             ProviderId::DeepSeek => None,
             ProviderId::Windsurf => None,
             ProviderId::Doubao => None,
+            ProviderId::ArkCodingPlan => None,
+            ProviderId::ArkAgentPlan => None,
             ProviderId::Crof => None,
             ProviderId::StepFun => None,
             ProviderId::Venice => None,
@@ -365,10 +389,30 @@ impl ProviderId {
             "deepseek" | "deep-seek" | "ds" => Some(ProviderId::DeepSeek),
             "windsurf" | "codeium" => Some(ProviderId::Windsurf),
             "manus" => Some(ProviderId::Manus),
-            "mimo" | "xiaomi" | "xiaomimimo" | "xiaomi-mimo" | "xiaomi mimo" => {
-                Some(ProviderId::MiMo)
-            }
+            "mimo"
+            | "mimoplan"
+            | "mimo-plan"
+            | "xiaomi"
+            | "xiaomimimo"
+            | "xiaomi-mimo"
+            | "xiaomi mimo"
+            | "xiaomi-mimo-plan"
+            | "xiaomi mimo token plan" => Some(ProviderId::MiMo),
+            "mimoapi"
+            | "mimo-api"
+            | "mimo-api-key"
+            | "xiaomi-mimo-api"
+            | "xiaomi mimo api"
+            | "xiaomi-mimo-api-key" => Some(ProviderId::MiMoApi),
             "doubao" | "ark" | "volcengine" => Some(ProviderId::Doubao),
+            "arkcodingplan"
+            | "ark-coding-plan"
+            | "volcengine-coding-plan"
+            | "volcengine ark coding plan" => Some(ProviderId::ArkCodingPlan),
+            "arkagentplan"
+            | "ark-agent-plan"
+            | "volcengine-agent-plan"
+            | "volcengine ark agent plan" => Some(ProviderId::ArkAgentPlan),
             "commandcode" | "command-code" | "command code" => Some(ProviderId::CommandCode),
             "crof" => Some(ProviderId::Crof),
             "stepfun" | "step-fun" | "step fun" => Some(ProviderId::StepFun),
@@ -389,6 +433,8 @@ impl ProviderId {
             "crossmodel" | "cross-model" | "cross model" => Some(ProviderId::CrossModel),
             "qoder" => Some(ProviderId::Qoder),
             "sakana" | "sakana-ai" | "sakana ai" => Some(ProviderId::Sakana),
+            "sub2api" | "sub-2-api" | "sub 2 api" => Some(ProviderId::Sub2Api),
+            "wayfinder" => Some(ProviderId::Wayfinder),
             _ => None,
         }
     }
@@ -498,6 +544,9 @@ pub struct FetchContext {
 
     /// Optional provider API/web region from persisted settings.
     pub api_region: Option<String>,
+
+    /// Optional provider gateway URL, used by local gateway-backed providers.
+    pub gateway_url: Option<String>,
 }
 
 impl Default for FetchContext {
@@ -511,6 +560,7 @@ impl Default for FetchContext {
             api_key: None,
             workspace_id: None,
             api_region: None,
+            gateway_url: None,
         }
     }
 }
@@ -588,8 +638,15 @@ pub fn cli_name_map() -> HashMap<&'static str, ProviderId> {
     map.insert("opencode-go", ProviderId::OpenCodeGo);
     map.insert("xiaomimimo", ProviderId::MiMo);
     map.insert("xiaomi-mimo", ProviderId::MiMo);
+    map.insert("mimo-plan", ProviderId::MiMo);
+    map.insert("mimo-api", ProviderId::MiMoApi);
+    map.insert("mimo-api-key", ProviderId::MiMoApi);
     map.insert("ark", ProviderId::Doubao);
     map.insert("volcengine", ProviderId::Doubao);
+    map.insert("ark-coding-plan", ProviderId::ArkCodingPlan);
+    map.insert("volcengine-coding-plan", ProviderId::ArkCodingPlan);
+    map.insert("ark-agent-plan", ProviderId::ArkAgentPlan);
+    map.insert("volcengine-agent-plan", ProviderId::ArkAgentPlan);
     map.insert("command-code", ProviderId::CommandCode);
     map.insert("step-fun", ProviderId::StepFun);
     map.insert("openai-api", ProviderId::OpenAIApi);
@@ -607,6 +664,7 @@ pub fn cli_name_map() -> HashMap<&'static str, ProviderId> {
     map.insert("llm-proxy", ProviderId::LLMProxy);
     map.insert("cross-model", ProviderId::CrossModel);
     map.insert("sakana-ai", ProviderId::Sakana);
+    map.insert("sub-2-api", ProviderId::Sub2Api);
     map
 }
 
@@ -617,7 +675,7 @@ mod tests {
     #[test]
     fn test_provider_id_all() {
         let all = ProviderId::all();
-        assert_eq!(all.len(), 56);
+        assert_eq!(all.len(), 61);
         assert!(all.contains(&ProviderId::Claude));
         assert!(all.contains(&ProviderId::Codex));
         assert!(all.contains(&ProviderId::Kimi));
@@ -635,7 +693,10 @@ mod tests {
         assert!(all.contains(&ProviderId::Windsurf));
         assert!(all.contains(&ProviderId::Manus));
         assert!(all.contains(&ProviderId::MiMo));
+        assert!(all.contains(&ProviderId::MiMoApi));
         assert!(all.contains(&ProviderId::Doubao));
+        assert!(all.contains(&ProviderId::ArkCodingPlan));
+        assert!(all.contains(&ProviderId::ArkAgentPlan));
         assert!(all.contains(&ProviderId::CommandCode));
         assert!(all.contains(&ProviderId::Crof));
         assert!(all.contains(&ProviderId::StepFun));
@@ -654,6 +715,8 @@ mod tests {
         assert!(all.contains(&ProviderId::CrossModel));
         assert!(all.contains(&ProviderId::Qoder));
         assert!(all.contains(&ProviderId::Sakana));
+        assert!(all.contains(&ProviderId::Sub2Api));
+        assert!(all.contains(&ProviderId::Wayfinder));
     }
 
     #[test]

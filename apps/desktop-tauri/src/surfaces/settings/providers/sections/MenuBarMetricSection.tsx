@@ -6,6 +6,7 @@ import type {
   SettingsUpdate,
 } from "../../../../types/bridge";
 import type { LocaleKey } from "../../../../i18n/keys";
+import { Select } from "../../../../components/FormControls";
 
 interface Props {
   provider: ProviderDetail;
@@ -48,23 +49,17 @@ export function MenuBarMetricSection({
   return (
     <section className="provider-detail-section provider-detail-menu-metric">
       <h4>{t("TrayDisplayTitle")}</h4>
-      <label className="provider-detail-field">
+      <div className="provider-detail-field provider-detail-field--row">
         <span className="provider-detail-field__label">
           {t("MenuBarMetric")}
         </span>
-        <select
-          className="provider-detail-select"
+        <Select
           value={selected}
+          options={options}
           disabled={disabled}
-          onChange={(e) => handleChange(e.target.value as MetricPreference)}
-        >
-          {options.map((option) => (
-            <option key={option.value} value={option.value}>
-              {option.label}
-            </option>
-          ))}
-        </select>
-      </label>
+          onChange={(v) => handleChange(v as MetricPreference)}
+        />
+      </div>
       <p className="provider-detail-helper">{t("MenuBarMetricHelper")}</p>
       {error && <p className="provider-detail-error">{error}</p>}
     </section>

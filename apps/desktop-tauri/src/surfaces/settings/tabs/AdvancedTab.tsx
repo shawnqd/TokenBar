@@ -121,7 +121,6 @@ export default function AdvancedTab({ settings, set, saving }: TabProps) {
           <Field
             label={t("HidePersonalInfo")}
             description={t("HidePersonalInfoHelper")}
-            leading
           >
             <Toggle
               checked={settings.hidePersonalInfo}
@@ -135,17 +134,15 @@ export default function AdvancedTab({ settings, set, saving }: TabProps) {
       {/* ── Keychain access ──────────────────────────────────────── */}
       <section className="settings-section">
         <h3 className="settings-section__title settings-section__title--bold">
-          KEYCHAIN ACCESS
+          {t("SectionKeychainAccess")}
         </h3>
         <p className="settings-section__caption">
-          Disable all Keychain reads and writes. Browser cookie import is
-          unavailable; paste Cookie headers manually in Providers.
+          {t("KeychainAccessCaption")}
         </p>
         <div className="settings-section__group">
           <Field
             label={t("DisableAllKeychainLabel")}
             description={t("DisableAllKeychainHelper")}
-            leading
           >
             <Toggle
               checked={settings.disableKeychainAccess}
@@ -156,7 +153,6 @@ export default function AdvancedTab({ settings, set, saving }: TabProps) {
           <Field
             label={t("AvoidKeychainPromptsLabel")}
             description={t("AvoidKeychainPromptsHelper")}
-            leading
           >
             <Toggle
               checked={settings.claudeAvoidKeychainPrompts}

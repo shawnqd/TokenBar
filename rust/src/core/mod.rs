@@ -5,6 +5,7 @@ mod credential_migration;
 mod credentials;
 mod http;
 mod jsonl_scanner;
+mod models_dev_pricing;
 mod openai_dashboard;
 mod provider;
 mod provider_factory;

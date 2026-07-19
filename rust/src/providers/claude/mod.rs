@@ -1,7 +1,9 @@
 //! Claude provider implementation
 
 mod admin_api;
+mod cli_reset;
 mod oauth;
+mod scoped_weekly;
 mod web_api;
 
 use async_trait::async_trait;
@@ -63,6 +65,10 @@ fn claude_plan_label(tier: &str) -> String {
         "Claude Max 5x".to_string()
     } else if normalized.contains("claude_max_20x") || normalized.contains("claude_max_20") {
         "Claude Max 20x".to_string()
+    } else if normalized.contains("default_claude_ai") {
+        // Standard claude.ai tier ids ("default_claude_ai", "v2_default_claude_ai")
+        // are internal identifiers, not user-facing plan names.
+        "Claude AI".to_string()
     } else {
         match normalized.as_str() {
             "free" => "Claude Free".to_string(),

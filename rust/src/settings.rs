@@ -97,6 +97,14 @@ pub struct Settings {
     /// Menu bar display mode: "minimal", "compact", or "detailed"
     pub menu_bar_display_mode: String,
 
+    /// Show recent model output speed in the tray flyout.
+    #[serde(default = "default_true")]
+    pub output_speed_enabled: bool,
+
+    /// Which period the panel's local-usage stats lead with: "today", "7d", or "30d".
+    #[serde(default = "default_local_usage_period")]
+    pub local_usage_period: String,
+
     /// Show all token accounts in provider menus instead of collapsing behind switchers
     #[serde(default)]
     pub show_all_token_accounts_in_menu: bool,
@@ -201,6 +209,10 @@ pub struct Settings {
     /// When true, show the primary window's next reset inline in each pill.
     #[serde(default)]
     pub float_bar_show_reset_inline: bool,
+
+    /// When true, show local cost summaries in the floating bar.
+    #[serde(default)]
+    pub float_bar_show_cost: bool,
 }
 
 fn default_window_scale_percent() -> u16 {
@@ -304,6 +316,10 @@ fn default_true() -> bool {
     true
 }
 
+fn default_local_usage_period() -> String {
+    "7d".to_string()
+}
+
 /// Default cookie source value for browser-authenticated providers.
 ///
 /// Browser cookie extraction reads browser profile databases and decrypts
@@ -353,6 +369,8 @@ impl Default for Settings {
             enable_animations: true,   // Animations enabled by default
             reset_time_relative: true, // Show relative times by default
             menu_bar_display_mode: "detailed".to_string(), // Detailed mode by default
+            output_speed_enabled: true,
+            local_usage_period: default_local_usage_period(),
             show_all_token_accounts_in_menu: false,
             provider_configs: HashMap::new(),
             disable_keychain_access: false,
@@ -377,6 +395,7 @@ impl Default for Settings {
             float_bar_provider_ids: Vec::new(),
             float_bar_dark_text: false,
             float_bar_show_reset_inline: false,
+            float_bar_show_cost: false,
         }
     }
 }
@@ -406,7 +425,27 @@ impl Settings {
             settings.start_at_login = Self::sync_start_at_login_registry();
         }
 
+        // MiMo's pay-as-you-go API card used the same browser session as the
+        // Token Plan card solely to read the prepaid balance. The MiMo card
+        // now owns that balance lookup, so migrate any existing enablement to
+        // the single user-facing provider and persist the cleanup once.
+        if settings.retire_mimo_api_provider() {
+            let _ = settings.save();
+        }
+
         settings
+    }
+
+    fn retire_mimo_api_provider(&mut self) -> bool {
+        if !self
+            .enabled_providers
+            .remove(ProviderId::MiMoApi.cli_name())
+        {
+            return false;
+        }
+        self.enabled_providers
+            .insert(ProviderId::MiMo.cli_name().to_string());
+        true
     }
 
     /// Save settings to disk
@@ -702,6 +741,23 @@ impl Settings {
 
     pub fn set_workspace_id(&mut self, id: ProviderId, value: impl Into<String>) {
         self.provider_config_mut(id).workspace_id = Some(value.into());
+    }
+
+    pub fn gateway_url(&self, id: ProviderId) -> &str {
+        self.provider_configs
+            .get(&id)
+            .and_then(|c| c.gateway_url.as_deref())
+            .unwrap_or_else(|| {
+                if id == ProviderId::Wayfinder {
+                    crate::providers::wayfinder::DEFAULT_GATEWAY_URL
+                } else {
+                    ""
+                }
+            })
+    }
+
+    pub fn set_gateway_url(&mut self, id: ProviderId, value: impl Into<String>) {
+        self.provider_config_mut(id).gateway_url = Some(value.into());
     }
 
     /// IDE base path override for `id`, or `""` if unset.

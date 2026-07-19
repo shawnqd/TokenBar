@@ -3,7 +3,9 @@ export type VisibleSurfaceMode = Exclude<SurfaceMode, "hidden">;
 export type SettingsTabId =
   | "general"
   | "providers"
-  | "display"
+  | "notifications"
+  | "menuBar"
+  | "menu"
   | "advanced"
   | "about";
 
@@ -42,6 +44,8 @@ export type UpdateChannel = "stable" | "beta";
 export type ThemePreference = "auto" | "light" | "dark";
 
 export type MenuBarDisplayMode = "minimal" | "compact" | "detailed";
+/** Which period the panel's local-usage stats lead with. */
+export type LocalUsagePeriod = "today" | "7d" | "30d";
 export type FloatBarOrientation = "horizontal" | "vertical";
 export type FloatBarStyle = "floating" | "taskbar";
 export type ProofProviderId =
@@ -82,7 +86,10 @@ export type ProofProviderId =
   | "windsurf"
   | "manus"
   | "mimo"
+  | "mimoapi"
   | "doubao"
+  | "arkcodingplan"
+  | "arkagentplan"
   | "commandcode"
   | "crof"
   | "stepfun"
@@ -100,7 +107,9 @@ export type ProofProviderId =
   | "zed"
   | "crossmodel"
   | "qoder"
-  | "sakana";
+  | "sakana"
+  | "sub2api"
+  | "wayfinder";
 
 export type TrayPanelSurfaceTarget = { kind: "summary" };
 export type PopOutSurfaceTarget =
@@ -185,6 +194,8 @@ export interface SettingsSnapshot {
   enableAnimations: boolean;
   resetTimeRelative: boolean;
   menuBarDisplayMode: MenuBarDisplayMode;
+  outputSpeedEnabled?: boolean;
+  localUsagePeriod?: LocalUsagePeriod;
   hidePersonalInfo: boolean;
   updateChannel: UpdateChannel;
   autoDownloadUpdates: boolean;
@@ -215,6 +226,8 @@ export interface SettingsSnapshot {
   floatBarDarkText: boolean;
   /** When true, render the next primary reset inline in each provider pill. */
   floatBarShowResetInline: boolean;
+  /** When true, show local cost summaries in the floating bar. */
+  floatBarShowCost?: boolean;
 }
 
 /** Partial settings object — only include fields you want to change. */
@@ -238,6 +251,8 @@ export interface SettingsUpdate {
   enableAnimations?: boolean;
   resetTimeRelative?: boolean;
   menuBarDisplayMode?: MenuBarDisplayMode;
+  outputSpeedEnabled?: boolean;
+  localUsagePeriod?: LocalUsagePeriod;
   hidePersonalInfo?: boolean;
   updateChannel?: UpdateChannel;
   autoDownloadUpdates?: boolean;
@@ -261,6 +276,7 @@ export interface SettingsUpdate {
   floatBarProviderIds?: string[];
   floatBarDarkText?: boolean;
   floatBarShowResetInline?: boolean;
+  floatBarShowCost?: boolean;
 }
 
 export interface BootstrapState {
@@ -278,6 +294,7 @@ export interface RateWindowSnapshot {
   resetsAt: string | null;
   resetDescription: string | null;
   isExhausted: boolean;
+  isInformational?: boolean;
   reservePercent: number | null;
   reserveDescription: string | null;
   reserveWillLastToReset?: boolean;
@@ -328,6 +345,36 @@ export interface ProviderUsageSnapshot {
   accountOrganization: string | null;
   trayStatusLabel: string | null;
   fetchDurationMs?: number | null;
+  wayfinderUsage?: WayfinderUsageSnapshot | null;
+}
+
+export interface WayfinderRouteSummary {
+  name: string;
+  requests: number;
+  tokens: number;
+  realized: number;
+  baseline: number;
+  saved: number;
+}
+
+export interface WayfinderUsageSnapshot {
+  gatewayStatus: string;
+  offline: boolean;
+  dryRun: boolean;
+  missingKeys: string[];
+  modelCount: number;
+  models: string[];
+  requests: number;
+  estimatedRequests: number;
+  tokens: number;
+  realized: number;
+  baseline: number;
+  saved: number;
+  savedPercent: number;
+  periodDays: number;
+  unit: string;
+  priced: boolean;
+  routes: WayfinderRouteSummary[];
 }
 
 export interface RefreshCompletePayload {
@@ -399,10 +446,39 @@ export interface CookieInfoBridge {
   savedAt: string;
 }
 
-export interface DetectedBrowserBridge {
-  browserType: string;
-  displayName: string;
-  profileCount: number;
+export interface ProviderOutputSpeed {
+  providerId: "codex" | "claude";
+  status: "generating" | "recent" | "unavailable";
+  tokensPerSecond: number | null;
+  outputTokens: number | null;
+  updatedAtMs: number | null;
+  approximate: boolean;
+  recentSamples: OutputSpeedSample[];
+}
+
+export interface OutputSpeedSample {
+  tokensPerSecond: number;
+  outputTokens: number;
+  durationMs: number;
+  completedAtMs: number;
+  model: string | null;
+}
+
+export interface OutputSpeedSnapshot {
+  codex: ProviderOutputSpeed;
+  claude: ProviderOutputSpeed;
+}
+
+export interface CookieFileProviderBridge {
+  providerId: string;
+  provider: string;
+  cookieCount: number;
+}
+
+export interface CookieFilePreviewBridge {
+  format: string;
+  providers: CookieFileProviderBridge[];
+  unmatchedCookieCount: number;
 }
 
 export interface AppInfoBridge {
@@ -433,9 +509,11 @@ export interface DailyUsageBreakdown {
 
 export interface ProviderLocalUsageSummary {
   todayCost: number | null;
+  todayTokens: number | null;
+  sevenDayCost: number | null;
+  sevenDayTokens: number | null;
   thirtyDayCost: number | null;
   thirtyDayTokens: number | null;
-  latestTokens: number | null;
   topModel: string | null;
   estimateNote: string;
 }

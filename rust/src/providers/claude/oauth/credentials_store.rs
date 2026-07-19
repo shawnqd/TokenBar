@@ -57,8 +57,12 @@ struct OAuthData {
     #[serde(rename = "expiresAt")]
     expires_at: Option<f64>, // milliseconds since epoch
     scopes: Option<Vec<String>>,
-    #[serde(rename = "rateLimitTier")]
+    #[serde(default, rename = "rateLimitTier", alias = "rate_limit_tier")]
     rate_limit_tier: Option<String>,
+    #[serde(default, rename = "subscriptionType", alias = "subscription_type")]
+    subscription_type: Option<String>,
+    #[serde(default, rename = "planType", alias = "plan_type")]
+    plan_type: Option<String>,
 }
 
 fn refreshed_cache() -> &'static Mutex<HashMap<CredentialSource, ClaudeOAuthCredentials>> {
@@ -253,6 +257,10 @@ fn parse_credentials_json(content: &str) -> Result<ClaudeOAuthCredentials, Provi
 }
 
 fn credentials_from_oauth_data(oauth: OAuthData) -> Result<ClaudeOAuthCredentials, ProviderError> {
+    let rate_limit_tier = oauth
+        .rate_limit_tier
+        .or(oauth.subscription_type)
+        .or(oauth.plan_type);
     let access_token = oauth.access_token.ok_or_else(|| {
         ProviderError::OAuth(
             "Claude OAuth access token missing. Run `claude` to authenticate.".to_string(),
@@ -277,7 +285,7 @@ fn credentials_from_oauth_data(oauth: OAuthData) -> Result<ClaudeOAuthCredential
         refresh_token: oauth.refresh_token,
         expires_at,
         scopes: oauth.scopes.unwrap_or_default(),
-        rate_limit_tier: oauth.rate_limit_tier,
+        rate_limit_tier,
     })
 }
 
@@ -435,6 +443,21 @@ mod tests {
             Some("default_claude_ai")
         );
         assert!(credentials.expires_at.is_some());
+    }
+
+    #[test]
+    fn parses_subscription_type_from_claude_code_credentials() {
+        let credentials = parse_credentials_json(
+            r#"{
+                "claudeAiOauth": {
+                    "accessToken": "token",
+                    "subscriptionType": "max"
+                }
+            }"#,
+        )
+        .expect("Claude Code subscription type should parse");
+
+        assert_eq!(credentials.rate_limit_tier.as_deref(), Some("max"));
     }
 
     #[test]

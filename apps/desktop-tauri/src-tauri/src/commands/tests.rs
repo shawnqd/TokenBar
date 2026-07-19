@@ -377,6 +377,27 @@ fn fetch_context_api_key_provider_uses_auto_without_cookie_import() {
 }
 
 #[test]
+fn fetch_context_mimo_api_key_never_falls_back_to_cli() {
+    let settings = Settings::default();
+    let cookies = ManualCookies::default();
+    let mut api_keys = ApiKeys::default();
+    api_keys.set("mimoapi", "sk-mimo-test", None);
+    let token_accounts = HashMap::new();
+
+    let ctx = super::build_fetch_context(
+        ProviderId::MiMoApi,
+        &settings,
+        &cookies,
+        &api_keys,
+        &token_accounts,
+    );
+
+    assert_eq!(ctx.source_mode, SourceMode::Auto);
+    assert!(ctx.manual_cookie_header.is_none());
+    assert_eq!(ctx.api_key.as_deref(), Some("sk-mimo-test"));
+}
+
+#[test]
 fn fetch_context_kimi_api_key_preserves_auto_for_web_fallback() {
     let settings = Settings::default();
     let cookies = ManualCookies::default();
@@ -680,6 +701,7 @@ fn provider_cache_upsert_replaces_existing_provider() {
     let result = ProviderFetchResult {
         usage: codexbar::core::UsageSnapshot::new(codexbar::core::RateWindow::new(10.0)),
         cost: None,
+        wayfinder_usage: None,
         source_label: "CLI".to_string(),
     };
     let mut first = ProviderUsageSnapshot::from_fetch_result(ProviderId::Codex, &metadata, &result);
@@ -701,6 +723,7 @@ fn claude_transient_auth_failure_preserves_first_last_good_snapshot() {
     let result = ProviderFetchResult {
         usage: codexbar::core::UsageSnapshot::new(codexbar::core::RateWindow::new(42.0)),
         cost: None,
+        wayfinder_usage: None,
         source_label: "OAuth".to_string(),
     };
     let good = ProviderUsageSnapshot::from_fetch_result(ProviderId::Claude, &metadata, &result);
@@ -728,6 +751,7 @@ fn claude_repeated_auth_failure_surfaces_error() {
     let result = ProviderFetchResult {
         usage: codexbar::core::UsageSnapshot::new(codexbar::core::RateWindow::new(42.0)),
         cost: None,
+        wayfinder_usage: None,
         source_label: "OAuth".to_string(),
     };
     let good = ProviderUsageSnapshot::from_fetch_result(ProviderId::Claude, &metadata, &result);
@@ -867,6 +891,7 @@ fn japanese_provider_snapshot_localizes_weekly_label() {
     let result = ProviderFetchResult {
         usage,
         cost: None,
+        wayfinder_usage: None,
         source_label: "OAuth".to_string(),
     };
 
@@ -894,6 +919,7 @@ fn japanese_provider_snapshot_localizes_pace_reserve_description() {
     let result = ProviderFetchResult {
         usage,
         cost: None,
+        wayfinder_usage: None,
         source_label: "OAuth".to_string(),
     };
 
@@ -1025,11 +1051,10 @@ fn external_url_validator_rejects_non_web_and_control_urls() {
 
 // ── Phase 13 — E2E IPC harness ─────────────────────────────────
 //
-// Build the full bootstrap payload and prove that every shared
-// `ProviderId` variant ends up in the provider catalog with a
-// non-empty id + display name. If a new provider is added to the
-// enum but never wired through the desktop catalog, this test will
-// fail with `missing provider in bootstrap catalog: <id>`.
+// Build the full bootstrap payload and prove that every user-facing provider
+// variant ends up in the catalog with a non-empty id + display name. The
+// legacy MiMo API-key bridge is intentionally hidden because the MiMo card
+// owns its balance lookup.
 
 #[test]
 fn bootstrap_payload_exposes_every_provider_variant() {
@@ -1051,6 +1076,9 @@ fn bootstrap_payload_exposes_every_provider_variant() {
     }
 
     for provider in ProviderId::all() {
+        if *provider == ProviderId::MiMoApi {
+            continue;
+        }
         let expected = provider.cli_name().to_string();
         assert!(
             catalog_ids.contains(&expected),
@@ -1060,7 +1088,7 @@ fn bootstrap_payload_exposes_every_provider_variant() {
 
     assert_eq!(
         catalog_ids.len(),
-        ProviderId::all().len(),
+        ProviderId::all().len() - 1,
         "bootstrap catalog size drifted from ProviderId::all()"
     );
 

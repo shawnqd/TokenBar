@@ -40,8 +40,6 @@ describe("ProvidersSidebar", () => {
     tauriMocks.getLocaleStrings.mockResolvedValue(buildBundle({
       ProviderSidebarSearch: "Search",
       ProviderSidebarNoMatches: "No matching providers",
-      ProviderSidebarMoveUp: "Move up",
-      ProviderSidebarMoveDown: "Move down",
     }));
     eventMocks.listen.mockResolvedValue(() => {});
   });
@@ -89,7 +87,7 @@ describe("ProvidersSidebar", () => {
     expect(screen.getByText("No matching providers")).toBeInTheDocument();
   });
 
-  it("reorders providers through explicit move buttons", async () => {
+  it("reorders providers via Alt+ArrowDown on the focused row", async () => {
     const onReorder = vi.fn();
     const { container } = render(
       <LocaleProvider>
@@ -105,7 +103,8 @@ describe("ProvidersSidebar", () => {
       </LocaleProvider>,
     );
 
-    fireEvent.click(await screen.findByRole("button", { name: "Move down Codex" }));
+    const codexRow = await screen.findByRole("option", { name: /Codex/ });
+    fireEvent.keyDown(codexRow, { key: "ArrowDown", altKey: true });
 
     await waitFor(() => {
       const names = Array.from(
@@ -121,7 +120,8 @@ describe("ProvidersSidebar", () => {
     ]);
   });
 
-  it("does not let the first provider move up", async () => {
+  it("does not reorder past the first row on Alt+ArrowUp", async () => {
+    const onReorder = vi.fn();
     render(
       <LocaleProvider>
         <ProvidersSidebar
@@ -130,12 +130,15 @@ describe("ProvidersSidebar", () => {
           searchText=""
           onSearchTextChange={vi.fn()}
           onSelect={vi.fn()}
-          onReorder={vi.fn()}
+          onReorder={onReorder}
           onToggleEnabled={vi.fn()}
         />
       </LocaleProvider>,
     );
 
-    expect(await screen.findByRole("button", { name: "Move up Codex" })).toBeDisabled();
+    const firstRow = await screen.findByRole("option", { name: /Codex/ });
+    fireEvent.keyDown(firstRow, { key: "ArrowUp", altKey: true });
+
+    expect(onReorder).not.toHaveBeenCalled();
   });
 });

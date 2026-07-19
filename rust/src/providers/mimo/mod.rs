@@ -1,6 +1,6 @@
 //! Xiaomi MiMo provider implementation.
 //!
-//! Uses browser cookies to read balance and token-plan usage.
+//! Uses browser cookies to read Xiaomi MiMo Token Plan usage.
 
 use async_trait::async_trait;
 use chrono::{DateTime, NaiveDateTime, TimeZone, Utc};
@@ -12,29 +12,11 @@ use crate::core::{
     RateWindow, SourceMode, UsageSnapshot,
 };
 
-const MIMO_API_BASE: &str = "https://platform.xiaomimimo.com/api/v1";
+pub(crate) const MIMO_API_BASE: &str = "https://platform.xiaomimimo.com/api/v1";
 
 pub struct MiMoProvider {
     metadata: ProviderMetadata,
     client: Client,
-}
-
-#[derive(Debug, Deserialize)]
-struct BalanceResponse {
-    code: i64,
-    #[serde(default)]
-    message: Option<String>,
-    data: Option<BalanceData>,
-}
-
-#[derive(Debug, Deserialize)]
-struct BalanceData {
-    balance: String,
-    currency: String,
-    #[serde(default, alias = "cashBalance")]
-    cash_balance: Option<String>,
-    #[serde(default, alias = "giftBalance")]
-    gift_balance: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -77,14 +59,51 @@ struct TokenPlanUsageItem {
     percent: f64,
 }
 
+/// The control-console balance is shared by Token Plan and pay-as-you-go
+/// usage. Keep it on the Cookie-backed MiMo provider so the application needs
+/// only one MiMo card and one login session.
+#[derive(Debug, Deserialize)]
+struct BalanceResponse {
+    code: i64,
+    data: Option<BalanceData>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct BalanceData {
+    balance: NumericValue,
+    #[serde(default)]
+    currency: String,
+    #[serde(default)]
+    cash_balance: Option<NumericValue>,
+    #[serde(default)]
+    gift_balance: Option<NumericValue>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+enum NumericValue {
+    Number(f64),
+    String(String),
+}
+
+impl NumericValue {
+    fn as_f64(&self) -> Option<f64> {
+        match self {
+            Self::Number(value) => Some(*value),
+            Self::String(value) => value.trim().parse::<f64>().ok(),
+        }
+    }
+}
+
 impl MiMoProvider {
     pub fn new() -> Self {
         Self {
             metadata: ProviderMetadata {
                 id: ProviderId::MiMo,
-                display_name: "Xiaomi MiMo",
+                display_name: "Xiaomi MiMo Token Plan",
                 session_label: "Tokens",
-                weekly_label: "Balance",
+                weekly_label: "Plan",
                 supports_opus: false,
                 supports_credits: true,
                 default_enabled: false,
@@ -101,36 +120,26 @@ impl MiMoProvider {
 
     async fn fetch_web(&self, cookie_header: &str) -> Result<UsageSnapshot, ProviderError> {
         let cookie = normalize_cookie_header(cookie_header).ok_or(ProviderError::NoCookies)?;
-        let balance: BalanceResponse = self.get_json("balance", &cookie).await?;
-        if balance.code == 401 {
-            return Err(ProviderError::AuthRequired);
-        }
-        if balance.code != 0 {
-            return Err(ProviderError::Parse(format!(
-                "MiMo balance error: {}",
-                balance.message.unwrap_or_else(|| balance.code.to_string())
-            )));
-        }
-        let data = balance
-            .data
-            .ok_or_else(|| ProviderError::Parse("MiMo balance payload missing".into()))?;
-        let balance_value = data
-            .balance
-            .parse::<f64>()
-            .map_err(|_| ProviderError::Parse("MiMo balance value invalid".into()))?;
-
         let detail: Option<TokenPlanDetailResponse> =
-            self.get_json("tokenPlan/detail", &cookie).await.ok();
+            match self.get_json("tokenPlan/detail", &cookie).await {
+                Ok(response) => Some(response),
+                Err(ProviderError::AuthRequired) => return Err(ProviderError::AuthRequired),
+                Err(_) => None,
+            };
         let usage: Option<TokenPlanUsageResponse> =
-            self.get_json("tokenPlan/usage", &cookie).await.ok();
-        Ok(snapshot_from_parts(
-            balance_value,
-            data.currency,
-            data.cash_balance,
-            data.gift_balance,
-            detail,
-            usage,
-        ))
+            match self.get_json("tokenPlan/usage", &cookie).await {
+                Ok(response) => Some(response),
+                Err(ProviderError::AuthRequired) => return Err(ProviderError::AuthRequired),
+                Err(_) => None,
+            };
+        let balance = match self.get_json::<BalanceResponse>("balance", &cookie).await {
+            Ok(response) => balance_description_from_response(response),
+            Err(ProviderError::AuthRequired) => return Err(ProviderError::AuthRequired),
+            // Token Plan usage remains useful if the balance endpoint has a
+            // temporary server-side issue, so do not fail the whole card.
+            Err(_) => None,
+        };
+        Ok(snapshot_from_plan(detail, usage, balance))
     }
 
     async fn get_json<T: for<'de> Deserialize<'de>>(
@@ -170,7 +179,7 @@ impl MiMoProvider {
     }
 }
 
-fn normalize_cookie_header(raw: &str) -> Option<String> {
+pub(crate) fn normalize_cookie_header(raw: &str) -> Option<String> {
     let known = [
         "api-platform_serviceToken",
         "userId",
@@ -206,13 +215,10 @@ fn normalize_cookie_header(raw: &str) -> Option<String> {
     }
 }
 
-fn snapshot_from_parts(
-    balance: f64,
-    currency: String,
-    cash_balance: Option<String>,
-    gift_balance: Option<String>,
+fn snapshot_from_plan(
     detail: Option<TokenPlanDetailResponse>,
     usage: Option<TokenPlanUsageResponse>,
+    balance: Option<String>,
 ) -> UsageSnapshot {
     let detail_data =
         detail.and_then(|response| (response.code == 0).then_some(response.data).flatten());
@@ -238,23 +244,50 @@ fn snapshot_from_parts(
             Some(format!("{}/{} tokens", item.used, item.limit)),
         )
     } else {
-        RateWindow::with_details(0.0, None, period_end, Some("No token-plan usage".into()))
+        RateWindow::with_details(
+            0.0,
+            None,
+            period_end,
+            Some("No active MiMo Token Plan".into()),
+        )
     };
-    let mut secondary = RateWindow::new(0.0);
-    secondary.reset_description = Some(balance_description(
-        balance,
-        &currency,
-        cash_balance.as_deref(),
-        gift_balance.as_deref(),
-    ));
-
-    let mut snapshot = UsageSnapshot::new(primary).with_secondary(secondary);
+    let mut snapshot = UsageSnapshot::new(primary);
+    if let Some(description) = balance {
+        snapshot.secondary = Some(RateWindow::with_details(0.0, None, None, Some(description)));
+    }
     if let Some(plan) = plan_name {
-        snapshot = snapshot.with_login_method(plan);
+        let label = detail_data
+            .as_ref()
+            .is_some_and(|data| data.expired)
+            .then(|| format!("{plan} (expired)"))
+            .unwrap_or(plan);
+        snapshot = snapshot.with_login_method(label);
     } else {
-        snapshot = snapshot.with_login_method(format!("{balance:.2} {currency}"));
+        snapshot = snapshot.with_login_method("MiMo Token Plan");
     }
     snapshot
+}
+
+fn balance_description_from_response(response: BalanceResponse) -> Option<String> {
+    let data = (response.code == 0).then_some(response.data).flatten()?;
+    let balance = data.balance.as_f64()?;
+    let cash_balance = data
+        .cash_balance
+        .as_ref()
+        .and_then(NumericValue::as_f64)
+        .map(|value| value.to_string());
+    let gift_balance = data
+        .gift_balance
+        .as_ref()
+        .and_then(NumericValue::as_f64)
+        .map(|value| value.to_string());
+
+    Some(balance_description(
+        balance,
+        &data.currency,
+        cash_balance.as_deref(),
+        gift_balance.as_deref(),
+    ))
 }
 
 fn parse_mimo_date(value: &str) -> Option<DateTime<Utc>> {
@@ -267,7 +300,7 @@ fn parse_decimal(value: Option<&str>) -> Option<f64> {
     value?.trim().parse().ok()
 }
 
-fn balance_description(
+pub(crate) fn balance_description(
     balance: f64,
     currency: &str,
     cash_balance: Option<&str>,
@@ -346,6 +379,31 @@ mod tests {
         assert_eq!(
             balance_description(12.5, "CNY", Some("8.25"), None),
             "12.50 CNY balance"
+        );
+    }
+
+    #[test]
+    fn mimo_console_balance_is_attached_as_the_secondary_balance_window() {
+        let response: BalanceResponse = serde_json::from_str(
+            r#"{
+                "code": 0,
+                "data": {
+                    "balance": 34.46,
+                    "currency": "CNY",
+                    "cashBalance": "34.46",
+                    "giftBalance": 0
+                }
+            }"#,
+        )
+        .expect("platform balance payload should deserialize");
+
+        let snapshot = snapshot_from_plan(None, None, balance_description_from_response(response));
+
+        assert_eq!(
+            snapshot
+                .secondary
+                .and_then(|window| window.reset_description),
+            Some("34.46 CNY balance (Paid: 34.46 CNY / Granted: 0.00 CNY)".into())
         );
     }
 }

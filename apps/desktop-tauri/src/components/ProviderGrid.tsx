@@ -3,12 +3,14 @@ import type { ProviderUsageSnapshot } from "../types/bridge";
 import { ProviderIcon } from "./providers/ProviderIcon";
 import { getProviderIcon } from "./providers/providerIcons";
 import { useLocale } from "../hooks/useLocale";
+import { TokenBarIcon } from "./TokenBarIcon";
 
 export default function ProviderGrid({
   providers,
   selectedProviderId,
   showAsUsed,
   showProviderIcons = true,
+  showPercent = false,
   expanded,
   onExpandedChange,
   onSelect,
@@ -20,6 +22,7 @@ export default function ProviderGrid({
   selectedProviderId: string | null;
   showAsUsed: boolean;
   showProviderIcons?: boolean;
+  showPercent?: boolean;
   expanded?: boolean;
   onExpandedChange?: (expanded: boolean) => void;
   onSelect: (providerId: string | null) => void;
@@ -95,7 +98,11 @@ export default function ProviderGrid({
         onClick={() => onSelect(null)}
         aria-label={t("PanelAllProviders")}
       >
-        {showProviderIcons && <span className="provider-grid__icon-overview">⊞</span>}
+        {showProviderIcons && (
+          <span className="provider-grid__icon-overview provider-grid__icon-overview--brand">
+            <TokenBarIcon size={18} />
+          </span>
+        )}
         <span className="provider-grid__label">{t("PanelAllProvidersShort")}</span>
       </button>
       {visibleProviders.map((p) => (
@@ -154,6 +161,11 @@ export default function ProviderGrid({
                 "--weekly-color": getProviderIcon(p.providerId).brandColor,
               } as CSSProperties}
             />
+          )}
+          {showPercent && !p.error && (
+            <span className="provider-grid__percentage">
+              {Math.round(gridPercent(p))}%
+            </span>
           )}
         </button>
       ))}

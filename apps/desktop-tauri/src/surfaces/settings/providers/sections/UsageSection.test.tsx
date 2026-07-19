@@ -20,13 +20,13 @@ vi.mock("../../../../lib/tauri", async (importOriginal) => ({
 }));
 vi.mock("@tauri-apps/api/event", () => eventMocks);
 
-function rateWindow(usedPercent: number) {
+function rateWindow(usedPercent: number, resetDescription: string | null = null) {
   return {
     usedPercent,
     remainingPercent: 100 - usedPercent,
     windowMinutes: null,
     resetsAt: null,
-    resetDescription: null,
+    resetDescription,
     isExhausted: false,
     reservePercent: null,
     reserveDescription: null,
@@ -78,6 +78,51 @@ describe("UsageSection", () => {
     );
 
     expect(await screen.findByText("Additional Budget")).toBeInTheDocument();
-    expect(screen.getByText("42%")).toBeInTheDocument();
+    expect(screen.getByText("42% PanelUsedSuffix")).toBeInTheDocument();
+    expect(document.querySelector(".provider-quota")).toBeInTheDocument();
+  });
+
+  it.each([
+    {
+      id: "deepseek",
+      session: rateWindow(0, "¥38.81 (Paid: ¥38.81 / Granted: ¥0.00)"),
+      weekly: null,
+      amount: "¥38.81",
+      granted: "含赠送 ¥0.00",
+    },
+    {
+      id: "mimo",
+      session: rateWindow(0, "No active MiMo Token Plan"),
+      weekly: rateWindow(
+        0,
+        "34.46 CNY balance (Paid: 34.46 CNY / Granted: 0.00 CNY)",
+      ),
+      amount: "¥34.46",
+      granted: "含赠送 ¥0.00",
+    },
+  ])("renders $id with the shared balance-only structure", async (example) => {
+    const detail = provider();
+    detail.id = example.id;
+    detail.displayName = example.id;
+    detail.session = example.session;
+    detail.weekly = example.weekly;
+    detail.extraRateWindows = [];
+
+    const { container } = render(
+      <LocaleProvider>
+        <UsageSection provider={detail} resetTimeRelative={true} t={(key) => key} />
+      </LocaleProvider>,
+    );
+
+    expect(await screen.findByText("余额")).toBeInTheDocument();
+    expect(screen.getByText(example.amount)).toBeInTheDocument();
+    expect(screen.getByText(example.granted)).toBeInTheDocument();
+    // The balance title is promoted to the section h4 so balance-only cards
+    // open with the same header rhythm as every other detail section.
+    expect(container.querySelector(".provider-detail-section > h4")).toHaveTextContent("余额");
+    expect(container.querySelector(".provider-balance__title")).not.toBeInTheDocument();
+    expect(container.querySelector(".provider-balance__row")).toBeInTheDocument();
+    expect(container.querySelector(".provider-quota")).not.toBeInTheDocument();
+    expect(screen.queryByText("0%")).not.toBeInTheDocument();
   });
 });

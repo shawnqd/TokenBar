@@ -189,6 +189,16 @@ impl TokenAccountSupport {
                 requires_manual_cookie_source: true,
                 cookie_name: None,
             }),
+            ProviderId::Sub2Api => Some(TokenAccountSupport {
+                title: "Group API keys",
+                subtitle: "Store multiple sub2api group API keys with labels such as Claude, Codex, or Gemini.",
+                placeholder: "sk-...",
+                injection: TokenInjection::Environment {
+                    key: "SUB2API_API_KEY".to_string(),
+                },
+                requires_manual_cookie_source: false,
+                cookie_name: None,
+            }),
             ProviderId::Copilot => Some(TokenAccountSupport {
                 title: "GitHub accounts",
                 subtitle: "Store GitHub OAuth tokens for Copilot plan usage.",
@@ -221,7 +231,10 @@ impl TokenAccountSupport {
             | ProviderId::Codebuff
             | ProviderId::DeepSeek
             | ProviderId::Windsurf
+            | ProviderId::MiMoApi
             | ProviderId::Doubao
+            | ProviderId::ArkCodingPlan
+            | ProviderId::ArkAgentPlan
             | ProviderId::Crof
             | ProviderId::StepFun
             | ProviderId::Venice
@@ -236,7 +249,8 @@ impl TokenAccountSupport {
             | ProviderId::Poe
             | ProviderId::Devin
             | ProviderId::Zed
-            | ProviderId::CrossModel => None,
+            | ProviderId::CrossModel
+            | ProviderId::Wayfinder => None,
         }
     }
 

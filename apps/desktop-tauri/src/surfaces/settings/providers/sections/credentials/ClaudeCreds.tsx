@@ -52,6 +52,7 @@ export function ClaudeCreds({ t }: Props) {
       <label className="provider-detail-toggle">
         <input
           type="checkbox"
+          className="toggle"
           checked={value}
           disabled={saving}
           onChange={(e) => void toggle(e.target.checked)}

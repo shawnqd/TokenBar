@@ -56,6 +56,17 @@ export function CookieSourceSection({
         aria-label={t("ProviderCookieSource")}
         className="provider-detail-segmented"
       >
+        <div
+          className="provider-detail-segmented__thumb"
+          aria-hidden
+          style={{
+            width: `calc((100% - 4px) / ${options.length})`,
+            transform: `translateX(${Math.max(
+              0,
+              options.findIndex((o) => o.value === selected),
+            ) * 100}%)`,
+          }}
+        />
         {options.map((opt) => {
           const isActive = opt.value === selected;
           return (

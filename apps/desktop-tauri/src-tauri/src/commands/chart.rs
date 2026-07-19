@@ -8,8 +8,11 @@
 use codexbar::core::OpenAIDashboardCacheStore;
 use codexbar::cost_scanner::{CostScanner, CostSummary, get_daily_cost_history};
 use codexbar::locale::{self, LocaleKey};
+use codexbar::settings::Settings;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::fs;
+use std::path::PathBuf;
 use std::sync::{
     Arc, Mutex, OnceLock,
     atomic::{AtomicBool, Ordering},
@@ -17,6 +20,8 @@ use std::sync::{
 use std::time::{Duration, Instant};
 
 const LOCAL_USAGE_TTL: Duration = Duration::from_secs(30);
+const PROVIDER_CHART_TTL: Duration = Duration::from_secs(5 * 60);
+const PROVIDER_CHART_CACHE_VERSION: u8 = 2;
 
 /// A single (date, value) point for cost or credits history charts.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -48,9 +53,11 @@ pub struct DailyUsageBreakdown {
 #[serde(rename_all = "camelCase")]
 pub struct ProviderLocalUsageSummary {
     pub today_cost: Option<f64>,
+    pub today_tokens: Option<u64>,
+    pub seven_day_cost: Option<f64>,
+    pub seven_day_tokens: Option<u64>,
     pub thirty_day_cost: Option<f64>,
     pub thirty_day_tokens: Option<u64>,
-    pub latest_tokens: Option<u64>,
     pub top_model: Option<String>,
     pub estimate_note: String,
 }
@@ -71,16 +78,60 @@ pub async fn get_provider_chart_data(
     provider_id: String,
     account_email: Option<String>,
 ) -> ProviderChartData {
+    if let Some(cached) = cached_provider_chart_data(&provider_id, account_email.as_deref()) {
+        return cached;
+    }
+
     let fallback_provider_id = provider_id.clone();
     let cancel = register_chart_scan(&provider_id);
     tauri::async_runtime::spawn_blocking(move || {
-        build_provider_chart_data_with_cancel(provider_id, account_email, Some(cancel))
+        let data = build_provider_chart_data_with_cancel(
+            provider_id,
+            account_email.clone(),
+            Some(cancel.clone()),
+        );
+        if !cancel.load(Ordering::Relaxed) {
+            cache_provider_chart_data(&data, account_email.as_deref());
+        }
+        data
     })
     .await
     .unwrap_or_else(|err| {
         tracing::warn!("Provider chart data worker failed: {}", err);
         ProviderChartData::empty(fallback_provider_id)
     })
+}
+
+/// Start the expensive Codex / Claude log aggregation after the shell is up,
+/// so opening the tray normally hits a warm cache instead of beginning a scan.
+pub(crate) fn prewarm_provider_chart_data() {
+    tauri::async_runtime::spawn_blocking(move || {
+        for provider_id in ["codex", "claude"] {
+            let data = build_provider_chart_data_with_cancel(provider_id.to_string(), None, None);
+            cache_provider_chart_data(&data, None);
+        }
+    });
+}
+
+/// Restore aggregate-only data from the previous run. This keeps the first
+/// tray open fast even before the background refresh has finished.
+pub(crate) fn restore_provider_chart_cache() {
+    let Some(path) = persisted_provider_chart_cache_path() else {
+        return;
+    };
+    let Ok(bytes) = fs::read(path) else {
+        return;
+    };
+    let Ok(persisted) = serde_json::from_slice::<PersistedProviderChartCache>(&bytes) else {
+        return;
+    };
+    if persisted.version != PROVIDER_CHART_CACHE_VERSION {
+        return;
+    }
+
+    for data in persisted.entries.into_values() {
+        cache_provider_chart_data_in_memory(&data, None);
+    }
 }
 
 #[tauri::command]
@@ -108,7 +159,9 @@ fn build_provider_chart_data_with_cancel(
     account_email: Option<String>,
     cancel: Option<Arc<AtomicBool>>,
 ) -> ProviderChartData {
-    let raw_cost = get_daily_cost_history(&provider_id, 30);
+    // Keep one year available so the UI's 7 day / 30 day / quarter / year
+    // switch changes the actual data window instead of only relabelling it.
+    let raw_cost = get_daily_cost_history(&provider_id, 365);
     let cost_history: Vec<DailyCostPoint> = raw_cost
         .into_iter()
         .map(|(date, value)| DailyCostPoint { date, value })
@@ -146,6 +199,138 @@ impl ProviderChartData {
     }
 }
 
+struct CachedProviderChartData {
+    loaded_at: Instant,
+    data: ProviderChartData,
+}
+
+#[derive(Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PersistedProviderChartCache {
+    version: u8,
+    entries: HashMap<String, ProviderChartData>,
+}
+
+fn provider_chart_cache() -> &'static Mutex<HashMap<String, CachedProviderChartData>> {
+    static CACHE: OnceLock<Mutex<HashMap<String, CachedProviderChartData>>> = OnceLock::new();
+    CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+#[cfg(not(test))]
+fn provider_chart_persistence_lock() -> &'static Mutex<()> {
+    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    LOCK.get_or_init(|| Mutex::new(()))
+}
+
+fn provider_chart_cache_key(provider_id: &str, account_email: Option<&str>) -> String {
+    format!(
+        "{}:{}",
+        provider_id.to_ascii_lowercase(),
+        account_email
+            .unwrap_or_default()
+            .trim()
+            .to_ascii_lowercase(),
+    )
+}
+
+fn cached_provider_chart_data(
+    provider_id: &str,
+    account_email: Option<&str>,
+) -> Option<ProviderChartData> {
+    let exact_key = provider_chart_cache_key(provider_id, account_email);
+    let base_key = provider_chart_cache_key(provider_id, None);
+    let mut data = {
+        let guard = provider_chart_cache().lock().ok()?;
+        let entry = guard
+            .get(&exact_key)
+            .or_else(|| account_email.and_then(|_| guard.get(&base_key)))?;
+        if entry.loaded_at.elapsed() > PROVIDER_CHART_TTL {
+            return None;
+        }
+        entry.data.clone()
+    };
+
+    // The expensive local-log part is account-independent. A startup prewarm
+    // therefore uses the provider-only key; when the UI later supplies an
+    // account, only overlay the cheap account-scoped dashboard cache data.
+    if exact_key != base_key {
+        let (credits_history, usage_breakdown) =
+            load_openai_dashboard_chart_data(provider_id, account_email);
+        data.credits_history = credits_history;
+        data.usage_breakdown = usage_breakdown;
+        cache_provider_chart_data(&data, account_email);
+    }
+    Some(data)
+}
+
+fn cache_provider_chart_data(data: &ProviderChartData, account_email: Option<&str>) {
+    cache_provider_chart_data_in_memory(data, account_email);
+    #[cfg(not(test))]
+    if account_email.is_none() {
+        persist_provider_chart_data(data);
+    }
+}
+
+fn cache_provider_chart_data_in_memory(data: &ProviderChartData, account_email: Option<&str>) {
+    let key = provider_chart_cache_key(&data.provider_id, account_email);
+    if let Ok(mut guard) = provider_chart_cache().lock() {
+        guard.insert(
+            key,
+            CachedProviderChartData {
+                loaded_at: Instant::now(),
+                data: data.clone(),
+            },
+        );
+    }
+}
+
+fn persisted_provider_chart_cache_path() -> Option<PathBuf> {
+    Settings::settings_path()?
+        .parent()
+        .map(|parent| parent.join("provider-chart-cache.json"))
+}
+
+#[cfg(not(test))]
+fn persist_provider_chart_data(data: &ProviderChartData) {
+    let Ok(_write_guard) = provider_chart_persistence_lock().lock() else {
+        return;
+    };
+    let Some(path) = persisted_provider_chart_cache_path() else {
+        return;
+    };
+    let mut persisted = fs::read(&path)
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<PersistedProviderChartCache>(&bytes).ok())
+        .filter(|cache| cache.version == PROVIDER_CHART_CACHE_VERSION)
+        .unwrap_or_else(|| PersistedProviderChartCache {
+            version: PROVIDER_CHART_CACHE_VERSION,
+            entries: HashMap::new(),
+        });
+    persisted
+        .entries
+        .insert(data.provider_id.to_ascii_lowercase(), data.clone());
+
+    if let Some(parent) = path.parent()
+        && fs::create_dir_all(parent).is_err()
+    {
+        return;
+    }
+    let Ok(bytes) = serde_json::to_vec(&persisted) else {
+        return;
+    };
+    let temp_path = path.with_extension("json.tmp");
+    if fs::write(&temp_path, bytes).is_err() {
+        return;
+    }
+    // Windows does not replace an existing destination with rename. Removing
+    // the old complete snapshot first still avoids exposing a half-written
+    // JSON file; at worst startup sees no cache and rebuilds it.
+    let _ = fs::remove_file(&path);
+    if fs::rename(&temp_path, &path).is_err() {
+        let _ = fs::remove_file(temp_path);
+    }
+}
+
 fn active_chart_scans() -> &'static Mutex<HashMap<String, Arc<AtomicBool>>> {
     static ACTIVE: OnceLock<Mutex<HashMap<String, Arc<AtomicBool>>>> = OnceLock::new();
     ACTIVE.get_or_init(|| Mutex::new(HashMap::new()))
@@ -169,10 +354,15 @@ fn load_local_usage_summary(
     if cancel.is_some_and(|flag| flag.load(Ordering::Relaxed)) {
         return None;
     }
+    let seven_day = scan_local_cost(provider_id, 7, cancel).unwrap_or_default();
+    if cancel.is_some_and(|flag| flag.load(Ordering::Relaxed)) {
+        return None;
+    }
     let today = scan_local_cost(provider_id, 1, cancel).unwrap_or_default();
 
     let thirty_day_tokens = total_tokens(&thirty_day);
-    let latest_tokens = total_tokens(&today);
+    let seven_day_tokens = total_tokens(&seven_day);
+    let today_tokens = total_tokens(&today);
     let has_usage =
         thirty_day.sessions_count > 0 || thirty_day.total_cost_usd > 0.0 || thirty_day_tokens > 0;
     if !has_usage {
@@ -182,9 +372,11 @@ fn load_local_usage_summary(
     let lang = locale::current_language();
     Some(ProviderLocalUsageSummary {
         today_cost: non_zero_f64(today.total_cost_usd),
+        today_tokens: non_zero_u64(today_tokens),
+        seven_day_cost: non_zero_f64(seven_day.total_cost_usd),
+        seven_day_tokens: non_zero_u64(seven_day_tokens),
         thirty_day_cost: non_zero_f64(thirty_day.total_cost_usd),
         thirty_day_tokens: non_zero_u64(thirty_day_tokens),
-        latest_tokens: non_zero_u64(latest_tokens),
         top_model: top_model(&thirty_day),
         estimate_note: localized_estimate_note(provider_id, lang),
     })
@@ -209,6 +401,13 @@ fn local_usage_cache() -> &'static Mutex<HashMap<String, CachedLocalUsage>> {
 pub(crate) fn clear_provider_local_usage_cache() {
     if let Ok(mut guard) = local_usage_cache().lock() {
         guard.clear();
+    }
+    if let Ok(mut guard) = provider_chart_cache().lock() {
+        guard.clear();
+    }
+    #[cfg(not(test))]
+    if let Some(path) = persisted_provider_chart_cache_path() {
+        let _ = fs::remove_file(path);
     }
 }
 
@@ -352,7 +551,10 @@ fn load_openai_dashboard_chart_data(
 
 #[cfg(test)]
 mod tests {
-    use super::localized_estimate_note;
+    use super::{
+        ProviderChartData, cache_provider_chart_data, cached_provider_chart_data,
+        clear_provider_local_usage_cache, localized_estimate_note,
+    };
     use codexbar::settings::Language;
 
     #[test]
@@ -377,5 +579,19 @@ mod tests {
             localized_estimate_note("claude", Language::English),
             "Estimated from local Claude logs at API rates; token totals may differ from your bill"
         );
+    }
+
+    #[test]
+    fn provider_chart_cache_reuses_prewarmed_data_for_account_view() {
+        clear_provider_local_usage_cache();
+        let data = ProviderChartData::empty("cache-test".to_string());
+        cache_provider_chart_data(&data, None);
+
+        let cached = cached_provider_chart_data("cache-test", Some("user@example.com"))
+            .expect("prewarmed provider data");
+        assert_eq!(cached.provider_id, "cache-test");
+
+        clear_provider_local_usage_cache();
+        assert!(cached_provider_chart_data("cache-test", None).is_none());
     }
 }

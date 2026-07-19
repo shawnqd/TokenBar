@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { Field, Select, Toggle } from "../components/FormControls";
+import { useLocale } from "../hooks/useLocale";
 import type {
   FloatBarOrientation,
   FloatBarStyle,
@@ -42,6 +43,7 @@ function useDraftNumber(value: number) {
  * imports a single component.
  */
 export default function FloatBarSettingsSection({ settings, saving, set }: Props) {
+  const { t } = useLocale();
   const opacity = useDraftNumber(settings.floatBarOpacity);
   const scale = useDraftNumber(settings.floatBarScale);
   const commitOpacity = () => {
@@ -53,12 +55,11 @@ export default function FloatBarSettingsSection({ settings, saving, set }: Props
 
   return (
     <section className="settings-section">
-      <h3 className="settings-section__title">Floating Bar</h3>
+      <h3 className="settings-section__title">{t("FloatBarSectionTitle")}</h3>
       <div className="settings-section__group">
         <Field
-          label="Show Floating Bar"
-          description="Always-on-top, transparent strip showing remaining capacity per provider."
-          leading
+          label={t("FloatBarShowLabel")}
+          description={t("FloatBarShowHelper")}
         >
           <Toggle
             checked={settings.floatBarEnabled}
@@ -67,36 +68,36 @@ export default function FloatBarSettingsSection({ settings, saving, set }: Props
           />
         </Field>
         <Field
-          label="Orientation"
-          description="Horizontal sits above a taskbar; vertical sits on a screen edge."
+          label={t("FloatBarOrientationLabel")}
+          description={t("FloatBarOrientationHelper")}
         >
           <Select
             value={settings.floatBarOrientation}
             disabled={saving || !settings.floatBarEnabled}
             options={[
-              { value: "horizontal", label: "Horizontal" },
-              { value: "vertical", label: "Vertical" },
+              { value: "horizontal", label: t("FloatBarOrientationHorizontal") },
+              { value: "vertical", label: t("FloatBarOrientationVertical") },
             ]}
             onChange={(v) => set({ floatBarOrientation: v as FloatBarOrientation })}
           />
         </Field>
         <Field
-          label="Style"
-          description="Choose the original floating glass look or the Windows taskbar widget look."
+          label={t("FloatBarStyleLabel")}
+          description={t("FloatBarStyleHelper")}
         >
           <Select
             value={settings.floatBarStyle}
             disabled={saving || !settings.floatBarEnabled}
             options={[
-              { value: "floating", label: "Floating glass" },
-              { value: "taskbar", label: "Taskbar widget" },
+              { value: "floating", label: t("FloatBarStyleFloating") },
+              { value: "taskbar", label: t("FloatBarStyleTaskbar") },
             ]}
             onChange={(v) => set({ floatBarStyle: v as FloatBarStyle })}
           />
         </Field>
         <Field
-          label={`Opacity (${opacity.draft}%)`}
-          description="Lower values make the bar more see-through."
+          label={`${t("FloatBarOpacityLabel")} (${opacity.draft}%)`}
+          description={t("FloatBarOpacityHelper")}
         >
           <input
             type="range"
@@ -110,12 +111,12 @@ export default function FloatBarSettingsSection({ settings, saving, set }: Props
             onTouchEnd={commitOpacity}
             onBlur={commitOpacity}
             onKeyUp={commitOpacity}
-            aria-label="Floating bar opacity"
+            aria-label={t("FloatBarOpacityAriaLabel")}
           />
         </Field>
         <Field
-          label={`Size (${scale.draft}%)`}
-          description="Scales the floating bar icons, text, and pill spacing."
+          label={`${t("FloatBarSizeLabel")} (${scale.draft}%)`}
+          description={t("FloatBarSizeHelper")}
         >
           <input
             type="range"
@@ -129,13 +130,22 @@ export default function FloatBarSettingsSection({ settings, saving, set }: Props
             onTouchEnd={commitScale}
             onBlur={commitScale}
             onKeyUp={commitScale}
-            aria-label="Floating bar size"
+            aria-label={t("FloatBarSizeAriaLabel")}
           />
         </Field>
         <Field
-          label="Show Reset Time Inline"
-          description="Shows the reset time beside each provider percentage with a reset icon."
-          leading
+          label={t("FloatBarShowCost")}
+          description={t("FloatBarShowCostDescription")}
+        >
+          <Toggle
+            checked={settings.floatBarShowCost ?? false}
+            disabled={saving || !settings.floatBarEnabled}
+            onChange={(v) => set({ floatBarShowCost: v })}
+          />
+        </Field>
+        <Field
+          label={t("FloatBarShowResetInlineLabel")}
+          description={t("FloatBarShowResetInlineHelper")}
         >
           <Toggle
             checked={settings.floatBarShowResetInline}
@@ -144,9 +154,8 @@ export default function FloatBarSettingsSection({ settings, saving, set }: Props
           />
         </Field>
         <Field
-          label="Invert Colors"
-          description="Switches to dark text on light glass for bright backgrounds."
-          leading
+          label={t("FloatBarInvertColorsLabel")}
+          description={t("FloatBarInvertColorsHelper")}
         >
           <Toggle
             checked={settings.floatBarDarkText}
@@ -155,9 +164,8 @@ export default function FloatBarSettingsSection({ settings, saving, set }: Props
           />
         </Field>
         <Field
-          label="Click-Through"
-          description="Mouse clicks pass through to the window underneath — pure overlay mode."
-          leading
+          label={t("FloatBarClickThroughLabel")}
+          description={t("FloatBarClickThroughHelper")}
         >
           <Toggle
             checked={settings.floatBarClickThrough}

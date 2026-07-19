@@ -7,6 +7,7 @@ pub mod alibaba;
 pub mod alibabatokenplan;
 pub mod amp;
 pub mod antigravity;
+pub mod ark_plans;
 pub mod augment;
 pub mod azureopenai;
 pub mod bedrock;
@@ -38,6 +39,7 @@ pub mod litellm;
 pub mod llmproxy;
 pub mod manus;
 pub mod mimo;
+pub mod mimoapi;
 pub mod minimax;
 pub mod mistral;
 pub mod nanogpt;
@@ -52,10 +54,12 @@ pub mod poe;
 pub mod qoder;
 pub mod sakana;
 pub mod stepfun;
+pub mod sub2api;
 pub mod t3chat;
 pub mod venice;
 pub mod vertexai;
 pub mod warp;
+pub mod wayfinder;
 pub mod windsurf;
 pub mod zai;
 pub mod zed;
@@ -66,6 +70,7 @@ pub use alibaba::{AlibabaProvider, AlibabaRegion};
 pub use alibabatokenplan::AlibabaTokenPlanProvider;
 pub use amp::AmpProvider;
 pub use antigravity::AntigravityProvider;
+pub use ark_plans::{ArkAgentPlanProvider, ArkCodingPlanProvider};
 pub use augment::AugmentProvider;
 pub use azureopenai::AzureOpenAIProvider;
 pub use bedrock::BedrockProvider;
@@ -97,6 +102,7 @@ pub use litellm::LiteLLMProvider;
 pub use llmproxy::LLMProxyProvider;
 pub use manus::ManusProvider;
 pub use mimo::MiMoProvider;
+pub use mimoapi::MiMoApiProvider;
 pub use minimax::{MiniMaxProvider, MiniMaxRegion};
 pub use mistral::MistralProvider;
 pub use nanogpt::NanoGPTProvider;
@@ -110,10 +116,12 @@ pub use poe::PoeProvider;
 pub use qoder::QoderProvider;
 pub use sakana::SakanaProvider;
 pub use stepfun::StepFunProvider;
+pub use sub2api::Sub2ApiProvider;
 pub use t3chat::T3ChatProvider;
 pub use venice::VeniceProvider;
 pub use vertexai::VertexAIProvider;
 pub use warp::WarpProvider;
+pub use wayfinder::WayfinderProvider;
 pub use windsurf::WindsurfProvider;
 pub use zai::ZaiProvider;
 pub use zed::ZedProvider;
@@ -121,13 +129,26 @@ pub use zed::ZedProvider;
 pub(crate) fn browser_cookie_header(
     domains: &[&str],
 ) -> Result<String, crate::core::ProviderError> {
-    crate::browser::cookies::get_cookie_header_for_domains(domains).map_err(|error| match error {
+    crate::browser::cookies::get_cookie_header_for_domains(domains)
+        .map_err(map_browser_cookie_error)
+}
+
+pub(crate) fn browser_cookies_for_domain(
+    domain: &str,
+) -> Result<Vec<crate::browser::cookies::Cookie>, crate::core::ProviderError> {
+    crate::browser::cookies::get_cookies_for_domain(domain).map_err(map_browser_cookie_error)
+}
+
+fn map_browser_cookie_error(
+    error: crate::browser::cookies::CookieError,
+) -> crate::core::ProviderError {
+    match error {
         crate::browser::cookies::CookieError::BrowserNotInstalled
         | crate::browser::cookies::CookieError::NotFound(_) => {
             crate::core::ProviderError::NoCookies
         }
         _ => crate::core::ProviderError::Other(format!("Failed to read browser cookies: {error}")),
-    })
+    }
 }
 
 pub(crate) fn resolve_api_key(

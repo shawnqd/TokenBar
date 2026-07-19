@@ -5,6 +5,37 @@ use serde::{Deserialize, Serialize};
 
 use super::RateWindow;
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WayfinderUsageSnapshot {
+    pub gateway_status: String,
+    pub offline: bool,
+    pub dry_run: bool,
+    pub missing_keys: Vec<String>,
+    pub model_count: usize,
+    pub models: Vec<String>,
+    pub requests: u64,
+    pub estimated_requests: u64,
+    pub tokens: u64,
+    pub realized: f64,
+    pub baseline: f64,
+    pub saved: f64,
+    pub saved_percent: f64,
+    pub period_days: u32,
+    pub unit: String,
+    pub priced: bool,
+    pub routes: Vec<WayfinderRouteSummary>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WayfinderRouteSummary {
+    pub name: String,
+    pub requests: u64,
+    pub tokens: u64,
+    pub realized: f64,
+    pub baseline: f64,
+    pub saved: f64,
+}
+
 /// A labeled extra usage window surfaced by provider APIs.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NamedRateWindow {
@@ -273,6 +304,9 @@ pub struct ProviderFetchResult {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cost: Option<CostSnapshot>,
 
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub wayfinder_usage: Option<WayfinderUsageSnapshot>,
+
     /// Label describing the data source (e.g., "oauth", "web", "cli")
     pub source_label: String,
 }
@@ -283,6 +317,7 @@ impl ProviderFetchResult {
         Self {
             usage,
             cost: None,
+            wayfinder_usage: None,
             source_label: source_label.into(),
         }
     }
@@ -290,6 +325,11 @@ impl ProviderFetchResult {
     /// Builder pattern: set cost
     pub fn with_cost(mut self, cost: CostSnapshot) -> Self {
         self.cost = Some(cost);
+        self
+    }
+
+    pub fn with_wayfinder_usage(mut self, usage: WayfinderUsageSnapshot) -> Self {
+        self.wayfinder_usage = Some(usage);
         self
     }
 }

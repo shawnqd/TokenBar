@@ -2,6 +2,7 @@ import { useState } from "react";
 import type { RegionOption } from "../../../../types/bridge";
 import type { LocaleKey } from "../../../../i18n/keys";
 import { setProviderRegion } from "../../../../lib/tauri";
+import { Select } from "../../../../components/FormControls";
 
 interface Props {
   providerId: string;
@@ -49,18 +50,12 @@ export function RegionSection({
   return (
     <section className="provider-detail-section provider-detail-region">
       <h4>{t("ProviderRegion")}</h4>
-      <select
-        className="provider-detail-select"
+      <Select
         value={selected}
+        options={options}
         disabled={busy}
-        onChange={(e) => void handleChange(e.target.value)}
-      >
-        {options.map((opt) => (
-          <option key={opt.value} value={opt.value}>
-            {opt.label}
-          </option>
-        ))}
-      </select>
+        onChange={(v) => void handleChange(v)}
+      />
       {error && <p className="provider-detail-error">{error}</p>}
     </section>
   );

@@ -2,7 +2,9 @@ import { useEffect, useState } from "react";
 import type { LocaleKey } from "../../../../../i18n/keys";
 import {
   getProviderWorkspaceId,
+  getProviderGatewayUrl,
   setProviderWorkspaceId,
+  setProviderGatewayUrl,
 } from "../../../../../lib/tauri";
 
 interface Props {
@@ -30,7 +32,10 @@ export function OpenAiExtras({ providerId = "codex", t }: Props) {
   useEffect(() => {
     if (!extraConfig(providerId)) return;
     let cancelled = false;
-    void getProviderWorkspaceId(providerId)
+    const readValue = providerId === "wayfinder"
+      ? getProviderGatewayUrl(providerId)
+      : getProviderWorkspaceId(providerId);
+    void readValue
       .then((value) => {
         if (!cancelled) {
           setProjectId(value ?? "");
@@ -50,7 +55,11 @@ export function OpenAiExtras({ providerId = "codex", t }: Props) {
     setError(null);
     try {
       const next = projectId.trim();
-      await setProviderWorkspaceId(providerId, next);
+      if (providerId === "wayfinder") {
+        await setProviderGatewayUrl(providerId, next);
+      } else {
+        await setProviderWorkspaceId(providerId, next);
+      }
       setSavedProjectId(next);
     } catch (e) {
       setError(String(e));
@@ -86,7 +95,7 @@ export function OpenAiExtras({ providerId = "codex", t }: Props) {
             disabled={busy || projectId.trim() === savedProjectId}
             onClick={saveProjectId}
           >
-            Save
+            {t("Save")}
           </button>
         </div>
         {error && <div className="provider-detail-error">{error}</div>}
@@ -98,24 +107,24 @@ export function OpenAiExtras({ providerId = "codex", t }: Props) {
     switch (providerId) {
       case "openaiapi":
         return {
-          title: "OpenAI Admin API",
-          label: "Project ID",
+          title: t("ExtrasOpenAiApiTitle"),
+          label: t("ExtrasProjectIdLabel"),
           placeholder: "proj_...",
-          help: "Leave blank for organization-wide usage. Set a project ID to scope OpenAI usage and cost requests with the Admin API.",
+          help: t("ExtrasOpenAiApiHelp"),
         };
       case "litellm":
         return {
-          title: "LiteLLM API",
-          label: "Base URL",
+          title: t("ExtrasLiteLlmTitle"),
+          label: t("ExtrasBaseUrlLabel"),
           placeholder: "https://litellm.example.com",
-          help: "Used with the saved API key for LiteLLM /key/info.",
+          help: t("ExtrasLiteLlmHelp"),
         };
       case "devin":
         return {
-          title: "Devin API",
-          label: "Organization",
+          title: t("ExtrasDevinTitle"),
+          label: t("ExtrasOrganizationLabel"),
           placeholder: "org/acme",
-          help: "Used with the saved bearer token for Devin billing quota usage.",
+          help: t("ExtrasDevinHelp"),
         };
       case "opencodego":
         return {
@@ -126,10 +135,24 @@ export function OpenAiExtras({ providerId = "codex", t }: Props) {
         };
       case "zed":
         return {
-          title: "Zed API",
-          label: "API URL",
+          title: t("ExtrasZedTitle"),
+          label: t("ExtrasApiUrlLabel"),
           placeholder: "https://cloud.zed.dev/client/users/me",
-          help: "Optional. Leave blank for the default Zed Cloud API URL.",
+          help: t("ExtrasZedHelp"),
+        };
+      case "sub2api":
+        return {
+          title: "sub2api 连接",
+          label: "基础地址",
+          placeholder: "https://sub2api.example.com",
+          help: "填写分组 API Key 所属的 sub2api 服务地址。远程地址必须使用 HTTPS。",
+        };
+      case "wayfinder":
+        return {
+          title: "Wayfinder 网关",
+          label: "本地网关地址",
+          placeholder: "http://127.0.0.1:8088",
+          help: "只允许 localhost 或回环地址，TokenBar 不会把网关数据发送到外部。",
         };
       default:
         return null;

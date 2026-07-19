@@ -28,6 +28,9 @@ export interface BarChartProps {
   animations?: boolean;
   /** Optional empty-state message rendered when `data.length === 0`. */
   emptyMessage?: string;
+  /** Optional horizontal reference line, such as the recent average. */
+  referenceValue?: number;
+  referenceLabel?: string;
 }
 
 const DEFAULT_COLOR = "var(--chart-cost)";
@@ -43,6 +46,8 @@ export function BarChart({
   ariaLabel,
   animations = true,
   emptyMessage,
+  referenceValue,
+  referenceLabel,
 }: BarChartProps) {
   const fmt = valueFormatter ?? ((v: number) => v.toFixed(2));
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -55,7 +60,7 @@ export function BarChart({
   ]);
 
   const { max, peakIndex } = useMemo(() => {
-    let m = 0.0001;
+    let m = Math.max(0.0001, referenceValue ?? 0);
     let p = -1;
     for (let i = 0; i < data.length; i++) {
       const v = data[i].value;
@@ -65,7 +70,7 @@ export function BarChart({
       }
     }
     return { max: m, peakIndex: p };
-  }, [data]);
+  }, [data, referenceValue]);
 
   if (data.length === 0) {
     return (
@@ -100,6 +105,19 @@ export function BarChart({
         role="img"
         aria-label={ariaLabel}
       >
+        {referenceValue != null && referenceValue > 0 && (
+          <line
+            x1={0}
+            x2={actualWidth}
+            y1={height - (referenceValue / max) * plotHeight}
+            y2={height - (referenceValue / max) * plotHeight}
+            className="chart__reference-line"
+          >
+            <title>
+              {referenceLabel ?? "Average"}: {fmt(referenceValue)}
+            </title>
+          </line>
+        )}
         {data.map((p, i) => {
           const base = p.value === 0 ? 1 : Math.max(3, (p.value / max) * plotHeight);
           const eased = anim.barProgress(i);

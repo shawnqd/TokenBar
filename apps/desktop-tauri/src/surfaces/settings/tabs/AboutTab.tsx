@@ -1,43 +1,34 @@
 import { useEffect, useState } from "react";
 import { useLocale } from "../../../hooks/useLocale";
-import { useUpdateState } from "../../../hooks/useUpdateState";
 import { getAppInfo, openExternalUrl } from "../../../lib/tauri";
-import { Field, Select, Toggle } from "../../../components/FormControls";
-import type { AppInfoBridge, UpdateChannel } from "../../../types/bridge";
+import type { AppInfoBridge } from "../../../types/bridge";
+import type { LocaleKey } from "../../../i18n/keys";
 import type { TabProps } from "../../Settings";
 import codexbarIcon from "../../../assets/codexbar-icon.png";
 
-const ABOUT_LINKS = [
+const ABOUT_LINKS: { labelKey: LocaleKey; url: string }[] = [
   {
-    label: "GitHub",
+    labelKey: "AboutLinkGithub",
     url: "https://github.com/Finesssee/Win-CodexBar",
   },
   {
-    label: "Website",
+    labelKey: "AboutLinkWebsite",
     url: "https://codexbar.app",
   },
   {
-    label: "Original Project",
+    labelKey: "AboutLinkOriginalProject",
     url: "https://github.com/steipete/CodexBar",
   },
 ] as const;
 
-export default function AboutTab({ settings, set, saving }: TabProps) {
+export default function AboutTab({}: TabProps) {
   const { t } = useLocale();
   const [appInfo, setAppInfo] = useState<AppInfoBridge | null>(null);
-  const { updateState, checkNow, download, apply, openRelease } =
-    useUpdateState();
-  const [hasChecked, setHasChecked] = useState(false);
   const [linkError, setLinkError] = useState<string | null>(null);
 
   useEffect(() => {
     void getAppInfo().then(setAppInfo);
   }, []);
-
-  const handleCheck = () => {
-    setHasChecked(true);
-    checkNow();
-  };
 
   const openAboutLink = (url: string) => {
     setLinkError(null);
@@ -49,14 +40,10 @@ export default function AboutTab({ settings, set, saving }: TabProps) {
   if (!appInfo) {
     return (
       <section className="settings-section">
-        <p className="settings-section__hint">Loading…</p>
+        <p className="settings-section__hint">{t("TrayStatusRowLoading")}</p>
       </section>
     );
   }
-
-  const isBusy =
-    updateState.status === "checking" ||
-    updateState.status === "downloading";
 
   return (
     <section className="settings-section about-section">
@@ -65,7 +52,7 @@ export default function AboutTab({ settings, set, saving }: TabProps) {
         <div className="about-title-block">
           <h2 className="about-title">{appInfo.name}</h2>
           <p className="about-version">
-            Version {appInfo.version}
+            {t("Version")} {appInfo.version}
             {appInfo.buildNumber !== "dev" && ` (${appInfo.buildNumber})`}
           </p>
           <p className="about-tagline">{appInfo.tagline}</p>
@@ -80,115 +67,18 @@ export default function AboutTab({ settings, set, saving }: TabProps) {
             className="about-link"
             onClick={() => openAboutLink(link.url)}
           >
-            {link.label}
+            {t(link.labelKey)}
           </button>
         ))}
       </div>
-      {linkError && <p className="about-update-msg">Error: {linkError}</p>}
-
-      <div className="about-divider" />
-
-      <div className="about-update-controls">
-        <Field
-          label={t("AutoDownloadUpdates")}
-          description={t("AutoDownloadUpdatesHelper")}
-          leading
-        >
-          <Toggle
-            checked={settings.autoDownloadUpdates}
-            disabled={saving}
-            onChange={(v) => set({ autoDownloadUpdates: v })}
-          />
-        </Field>
-
-        <div className="about-channel-row">
-          <Field label={t("UpdateChannelChoice")}>
-            <Select
-              value={settings.updateChannel}
-              disabled={saving}
-              options={[
-                { value: "stable", label: t("UpdateChannelStableOption") },
-                { value: "beta", label: t("UpdateChannelBetaOption") },
-              ]}
-              onChange={(v) => set({ updateChannel: v as UpdateChannel })}
-            />
-          </Field>
-          <p className="about-channel-description">
-            {t("UpdateChannelChoiceHelper")}
-          </p>
-        </div>
-      </div>
-
-      <div className="about-actions">
-        <button
-          className="credential-btn credential-btn--primary"
-          disabled={isBusy}
-          onClick={handleCheck}
-        >
-          {updateState.status === "checking"
-            ? "Checking…"
-            : "Check for Updates…"}
-        </button>
-
-        {updateState.status === "available" && (
-          <div className="about-update-row">
-            <span className="about-update-msg">
-              Update {updateState.version} available
-            </span>
-            {updateState.canDownload ? (
-              <button
-                className="credential-btn credential-btn--primary"
-                onClick={download}
-              >
-                Download
-              </button>
-            ) : (
-              <button className="credential-btn" onClick={openRelease}>
-                View Release
-              </button>
-            )}
-          </div>
-        )}
-
-        {updateState.status === "downloading" && (
-          <span className="about-update-msg">
-            Downloading…
-            {updateState.progress != null &&
-              ` ${Math.round(updateState.progress * 100)}%`}
-          </span>
-        )}
-
-        {updateState.status === "ready" && (
-          <div className="about-update-row">
-            <span className="about-update-msg">Update ready to install</span>
-            {updateState.canApply ? (
-              <button
-                className="credential-btn credential-btn--primary"
-                onClick={apply}
-              >
-                Install &amp; Restart
-              </button>
-            ) : (
-              <button className="credential-btn" onClick={openRelease}>
-                View Release
-              </button>
-            )}
-          </div>
-        )}
-
-        {updateState.status === "error" && (
-          <span className="about-update-msg">
-            Error: {updateState.error}
-          </span>
-        )}
-
-        {updateState.status === "idle" && hasChecked && (
-          <span className="about-update-msg">You&apos;re up to date!</span>
-        )}
-      </div>
+      {linkError && (
+        <p className="about-update-msg">
+          {t("StateError")}: {linkError}
+        </p>
+      )}
 
       <p className="about-copyright">
-        Windows port by NessZerra. Based on{" "}
+        {t("AboutCopyrightPrefix")}{" "}
         <button
           type="button"
           className="about-link about-link--inline"
@@ -196,7 +86,7 @@ export default function AboutTab({ settings, set, saving }: TabProps) {
         >
           CodexBar
         </button>{" "}
-        by steipete. MIT License.
+        {t("AboutCopyrightSuffix")}
       </p>
     </section>
   );

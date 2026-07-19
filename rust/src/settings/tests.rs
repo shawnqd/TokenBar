@@ -12,6 +12,19 @@ fn test_settings_default() {
 }
 
 #[test]
+fn retired_mimo_api_enablement_migrates_to_the_unified_mimo_provider() {
+    let mut settings = Settings::default();
+    settings
+        .enabled_providers
+        .insert(ProviderId::MiMoApi.cli_name().to_string());
+
+    assert!(settings.retire_mimo_api_provider());
+    assert!(settings.is_provider_enabled(ProviderId::MiMo));
+    assert!(!settings.is_provider_enabled(ProviderId::MiMoApi));
+    assert!(!settings.retire_mimo_api_provider());
+}
+
+#[test]
 fn float_bar_defaults_are_safe() {
     let settings = Settings::default();
     assert!(!settings.float_bar_enabled);
@@ -289,6 +302,15 @@ fn test_api_key_provider_catalog_includes_token_providers() {
             "{id} should be configurable from the API Keys UI"
         );
     }
+}
+
+#[test]
+fn retired_mimo_api_key_entry_is_not_exposed_in_the_api_keys_ui() {
+    assert!(
+        !get_api_key_providers()
+            .iter()
+            .any(|provider| provider.id == ProviderId::MiMoApi)
+    );
 }
 
 #[test]

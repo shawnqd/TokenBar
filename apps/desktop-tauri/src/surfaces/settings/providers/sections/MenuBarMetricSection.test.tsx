@@ -59,9 +59,11 @@ describe("MenuBarMetricSection", () => {
       />,
     );
 
-    fireEvent.change(screen.getByRole("combobox"), { target: { value: "extraUsage" } });
+    fireEvent.click(screen.getByRole("button", { name: "Automatic" }));
+    const option = screen.getByRole("option", { name: "ExtraUsage" });
+    expect(option).toBeInTheDocument();
+    fireEvent.click(option);
 
-    expect(screen.getByRole("option", { name: "ExtraUsage" })).toBeInTheDocument();
     expect(onChange).toHaveBeenCalledWith({
       providerMetrics: { copilot: "extraUsage" },
     });

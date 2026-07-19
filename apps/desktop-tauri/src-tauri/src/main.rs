@@ -84,7 +84,11 @@ where
     args.is_empty() || should_open_primary_window_from_args(&args)
 }
 
-fn launch_behavior<I, S>(force_visible: bool, start_minimized: bool, args: I) -> LaunchBehavior
+fn launch_behavior<I, S>(
+    force_visible: bool,
+    open_dashboard_on_launch: bool,
+    args: I,
+) -> LaunchBehavior
 where
     I: IntoIterator<Item = S>,
     S: AsRef<str>,
@@ -94,9 +98,13 @@ where
     let plain_desktop_launch = args.is_empty();
 
     LaunchBehavior {
+        // The app is tray-first: a regular launch stays in the tray unless
+        // the user explicitly opted into opening the full dashboard. The
+        // persisted setting retains its legacy `start_minimized` field name;
+        // Settings presents it as "Open dashboard on launch".
         open_primary_window_at_start: force_visible
             || explicit_primary_launch
-            || (plain_desktop_launch && !start_minimized),
+            || (plain_desktop_launch && open_dashboard_on_launch),
         suppress_blur_dismiss: force_visible,
     }
 }
@@ -153,6 +161,7 @@ fn main() {
             commands::refresh_providers,
             commands::refresh_providers_if_stale,
             commands::get_cached_providers,
+            commands::get_output_speed_snapshot,
             commands::get_safe_diagnostics,
             commands::get_credential_storage_status,
             commands::get_update_state,
@@ -168,8 +177,8 @@ fn main() {
             commands::get_manual_cookies,
             commands::set_manual_cookie,
             commands::remove_manual_cookie,
-            commands::list_detected_browsers,
-            commands::import_browser_cookies,
+            commands::preview_cookie_file,
+            commands::import_cookie_file,
             commands::get_token_account_providers,
             commands::get_token_accounts,
             commands::add_token_account,
@@ -187,6 +196,8 @@ fn main() {
             commands::get_provider_region_options,
             commands::set_provider_workspace_id,
             commands::get_provider_workspace_id,
+            commands::set_provider_gateway_url,
+            commands::get_provider_gateway_url,
             commands::get_gemini_cli_signed_in,
             commands::get_vertexai_status,
             commands::list_jetbrains_detected_ides,
@@ -226,6 +237,17 @@ fn main() {
             shortcut_bridge::register(app.handle());
             floatbar::install(app.handle());
             auto_refresh::install(app.handle().clone());
+            commands::restore_provider_chart_cache();
+
+            // Local cost/token summaries are expensive because they aggregate
+            // up to 30 days of Codex and Claude JSONL logs. Warm them after the
+            // shell is responsive so the first tray open can use cached data.
+            if !is_proof_mode {
+                tauri::async_runtime::spawn(async move {
+                    tokio::time::sleep(std::time::Duration::from_millis(750)).await;
+                    commands::prewarm_provider_chart_data();
+                });
+            }
 
             // Give the WebView/event loop one turn to finish startup before
             // routing shortcut launches into the tray panel. Without this, the
@@ -403,32 +425,32 @@ mod tests {
     }
 
     #[test]
-    fn plain_desktop_launch_opens_unless_start_minimized() {
+    fn plain_desktop_launch_stays_in_tray_unless_dashboard_start_is_enabled() {
         assert_eq!(
             launch_behavior(false, false, std::iter::empty::<&str>()),
             LaunchBehavior {
-                open_primary_window_at_start: true,
+                open_primary_window_at_start: false,
                 suppress_blur_dismiss: false,
             }
         );
         assert_eq!(
             launch_behavior(false, false, [""]),
             LaunchBehavior {
-                open_primary_window_at_start: true,
+                open_primary_window_at_start: false,
                 suppress_blur_dismiss: false,
             }
         );
         assert_eq!(
             launch_behavior(false, false, ["  "]),
             LaunchBehavior {
-                open_primary_window_at_start: true,
+                open_primary_window_at_start: false,
                 suppress_blur_dismiss: false,
             }
         );
         assert_eq!(
             launch_behavior(false, true, std::iter::empty::<&str>()),
             LaunchBehavior {
-                open_primary_window_at_start: false,
+                open_primary_window_at_start: true,
                 suppress_blur_dismiss: false,
             }
         );

@@ -1,14 +1,13 @@
-import { LineChart } from "../../../../../components/charts/LineChart";
-import { providerCreditsColor } from "../../../../../components/charts/chartPalette";
+import { BarChart } from "../../../../../components/charts/BarChart";
 import type { DailyCostPoint } from "../../../../../types/bridge";
 
 interface Props {
   data: DailyCostPoint[];
   title: string;
   ariaLabel: string;
-  providerId: string;
   animations: boolean;
   emptyMessage: string;
+  days: number;
 }
 
 /**
@@ -19,18 +18,19 @@ export function CreditsHistoryChart({
   data,
   title,
   ariaLabel,
-  providerId,
   animations,
   emptyMessage,
+  days,
 }: Props) {
-  const recent = data.slice(-30);
+  const recent = data.slice(-days);
   const points = recent.map((p) => ({ label: p.date, value: p.value }));
   return (
     <div className="provider-detail-chart">
       <div className="provider-detail-chart__title">{title}</div>
-      <LineChart
+      <BarChart
         data={points}
-        color={providerCreditsColor(providerId)}
+        color="var(--accent)"
+        height={90}
         ariaLabel={ariaLabel}
         valueFormatter={(v) => v.toFixed(1)}
         animations={animations}

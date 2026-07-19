@@ -130,6 +130,7 @@ function settings(overrides: Partial<SettingsSnapshot> = {}): SettingsSnapshot {
     floatBarClickThrough: false,
     floatBarProviderIds: [],
     floatBarDarkText: false,
+    floatBarShowCost: false,
     floatBarShowResetInline: false,
     ...overrides,
   };
@@ -164,6 +165,7 @@ describe("FloatBar", () => {
         TrayResetsDueNow: "Resetting",
         PanelToday: "Today",
         PanelUsedSuffix: "used",
+        FloatBarSevenDayShort: "7d",
         FloatBarThirtyDayShort: "30d",
         FloatBarNoProviders: "No providers",
         FloatBarRemainingSuffix: "remaining",
@@ -197,17 +199,19 @@ describe("FloatBar", () => {
     tauriMocks.getCachedProviders.mockResolvedValue([
       snapshot("codex", "Codex", 75),
     ]);
-    tauriMocks.getSettingsSnapshot.mockResolvedValue(settings());
+    tauriMocks.getSettingsSnapshot.mockResolvedValue(settings({ floatBarShowCost: true }));
     tauriMocks.getProviderLocalUsageSummary.mockResolvedValue({
-      todayCost: 1.25,
+      todayCost: null,
+      todayTokens: null,
+      sevenDayCost: 1.25,
+      sevenDayTokens: 200,
       thirtyDayCost: 12.5,
       thirtyDayTokens: 1000,
-      latestTokens: 200,
       topModel: "gpt-5",
       estimateNote: "Estimated from local logs",
     });
 
-    renderFloatBar(bootstrap());
+    renderFloatBar(bootstrap({ floatBarShowCost: true }));
 
     await waitFor(() => {
       expect(tauriMocks.getProviderLocalUsageSummary).toHaveBeenCalledWith("codex");

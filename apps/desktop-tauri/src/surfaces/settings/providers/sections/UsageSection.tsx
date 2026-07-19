@@ -3,7 +3,13 @@ import type {
   RateWindowSnapshot,
 } from "../../../../types/bridge";
 import type { LocaleKey } from "../../../../i18n/keys";
-import { useFormattedResetTime } from "../../../../hooks/useFormattedResetTime";
+import { ProviderBalanceBlock } from "../../../../components/ProviderBalanceBlock";
+import {
+  isMeaningfulQuotaWindow,
+  ProviderQuotaBlock,
+  quotaWindowLabel,
+} from "../../../../components/ProviderQuotaBlock";
+import { getProviderDetailBalance } from "../../../../lib/providerBalance";
 
 interface Props {
   provider: ProviderDetail;
@@ -24,28 +30,38 @@ interface BarSpec {
  */
 export function UsageSection({ provider, resetTimeRelative, t }: Props) {
   const bars: BarSpec[] = [];
-  if (provider.session) {
+  const balanceInfo = getProviderDetailBalance(provider);
+
+  if (
+    provider.session &&
+    !balanceInfo.excludeWindows.has("session") &&
+    isMeaningfulQuotaWindow(provider.session)
+  ) {
     bars.push({
       key: "session",
-      label: t("ProviderSessionLabel"),
+      label: quotaWindowLabel("session", provider.session, t),
       rate: provider.session,
     });
   }
-  if (provider.weekly) {
+  if (
+    provider.weekly &&
+    !balanceInfo.excludeWindows.has("weekly") &&
+    isMeaningfulQuotaWindow(provider.weekly)
+  ) {
     bars.push({
       key: "weekly",
-      label: t("ProviderWeeklyLabel"),
+      label: quotaWindowLabel("weekly", provider.weekly, t),
       rate: provider.weekly,
     });
   }
-  if (provider.modelSpecific) {
+  if (provider.modelSpecific && isMeaningfulQuotaWindow(provider.modelSpecific)) {
     bars.push({
       key: "modelSpecific",
       label: t("DetailWindowModelSpecific"),
       rate: provider.modelSpecific,
     });
   }
-  if (provider.tertiary) {
+  if (provider.tertiary && isMeaningfulQuotaWindow(provider.tertiary)) {
     bars.push({
       key: "tertiary",
       label: t("DetailWindowTertiary"),
@@ -53,6 +69,7 @@ export function UsageSection({ provider, resetTimeRelative, t }: Props) {
     });
   }
   for (const extra of provider.extraRateWindows ?? []) {
+    if (!isMeaningfulQuotaWindow(extra.window)) continue;
     bars.push({
       key: extra.id,
       label: extra.title,
@@ -60,75 +77,37 @@ export function UsageSection({ provider, resetTimeRelative, t }: Props) {
     });
   }
 
-  if (bars.length === 0) {
+  if (bars.length === 0 && !balanceInfo.balance) {
     return null;
   }
 
   return (
     <section className="provider-detail-section">
-      <h4>{t("ProviderUsage")}</h4>
+      {/* Balance-only providers promote the balance title to the section
+          header so every detail card opens with the same h4 rhythm. */}
+      <h4>
+        {balanceInfo.balanceOnly && balanceInfo.balance
+          ? balanceInfo.balance.title
+          : t("ProviderUsage")}
+      </h4>
+      {balanceInfo.balance && (
+        <ProviderBalanceBlock
+          balance={balanceInfo.balance}
+          showTitle={!balanceInfo.balanceOnly}
+        />
+      )}
       {bars.map((b) => (
-        <UsageBar
+        <ProviderQuotaBlock
           key={b.key}
-          label={b.label}
+          title={b.label}
           rate={b.rate}
           resetTimeRelative={resetTimeRelative}
-          t={t}
+          showAsUsed={true}
+          usedLabel={t("PanelUsedSuffix")}
+          remainingLabel={t("PanelLeftSuffix")}
+          exhaustedLabel={t("DetailWindowExhausted")}
         />
       ))}
     </section>
-  );
-}
-
-function UsageBar({
-  label,
-  rate,
-  resetTimeRelative,
-  t,
-}: {
-  label: string;
-  rate: RateWindowSnapshot;
-  resetTimeRelative: boolean;
-  t: (key: LocaleKey) => string;
-}) {
-  const usedPct = Number.isFinite(rate.usedPercent) ? Math.max(0, rate.usedPercent) : 0;
-  const pct = Math.min(100, usedPct);
-  const formattedReset = useFormattedResetTime(
-    rate.resetsAt,
-    rate.resetDescription,
-    resetTimeRelative,
-  );
-  const resetHint = formattedReset
-    ? resetTimeRelative
-      ? formattedReset
-      : `${t("MetricResetsIn")} ${formattedReset}`
-    : null;
-
-  return (
-    <div className="provider-usage-bar">
-      <div className="provider-usage-bar__header">
-        <span className="provider-usage-bar__label">{label}</span>
-        <span
-          className="provider-usage-bar__pct"
-          data-exhausted={rate.isExhausted || undefined}
-        >
-          {rate.isExhausted
-            ? usedPct > 100
-              ? `${usedPct.toFixed(0)}%`
-              : t("DetailWindowExhausted")
-            : `${usedPct.toFixed(0)}%`}
-        </span>
-      </div>
-      <div className="provider-usage-bar__track">
-        <div
-          className="provider-usage-bar__fill"
-          style={{ width: `${pct}%` }}
-          data-exhausted={rate.isExhausted || undefined}
-        />
-      </div>
-      {resetHint && (
-        <span className="provider-usage-bar__reset">{resetHint}</span>
-      )}
-    </div>
   );
 }

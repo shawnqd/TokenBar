@@ -1,6 +1,10 @@
 //! Local cost-usage scanner for Codex and Claude
 //!
-//! Scans local JSONL log files to aggregate token usage and calculate costs
+//! Scans local JSONL log files to aggregate token usage and calculate costs.
+//!
+//! Note: this path always full-walks session files. The disk-cache /
+//! [`crate::core::CostScanOptions`] debounce API in `jsonl_scanner` is not
+//! wired here yet (upstream #2089); app-level TTL still owns refresh pacing.
 
 use chrono::{DateTime, Duration, Local, NaiveDate, Utc};
 use serde::Deserialize;
@@ -13,7 +17,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 #[cfg(test)]
 use crate::codex_costs::scan_codex_file_cost;
 use crate::codex_costs::{
-    add_codex_days_to_summary, codex_period_start, codex_scan_dates, scan_codex_file_cost_for_range,
+    add_codex_records_to_summary, codex_period_start, codex_scan_dates,
+    scan_codex_file_cost_for_range,
 };
 use crate::codex_sessions::{codex_sessions_dir_candidates, default_wsl_roots};
 use crate::core::{CostUsageDayRange, CostUsagePricing, JsonlScanner};
@@ -40,12 +45,13 @@ pub struct CostSummary {
     pub by_speed: HashMap<String, f64>,
     /// Codex token split by speed/tier when local logs expose it.
     pub by_speed_tokens: HashMap<String, ModelTokenCounts>,
+    /// Model IDs that were priced with fallback rates because no canonical rate is available.
+    pub unknown_models: HashSet<String>,
     /// Period start date
     pub period_start: Option<NaiveDate>,
     /// Period end date
     pub period_end: Option<NaiveDate>,
 }
-
 /// Per-model token counts
 #[derive(Debug, Clone, Default)]
 pub struct ModelTokenCounts {
@@ -371,7 +377,7 @@ impl CostScanner {
         };
 
         let (session_cost, has_tokens) =
-            add_codex_days_to_summary(summary, &parse_result.days, &range);
+            add_codex_records_to_summary(summary, &parse_result.records, &range);
 
         if has_tokens {
             summary.total_cost_usd += session_cost;
@@ -523,6 +529,10 @@ fn should_count_claude_record(
 }
 
 fn add_claude_record_to_summary(summary: &mut CostSummary, record: &ClaudeUsageRecord) {
+    if CostUsagePricing::claude_cost_usd(&record.model, 0, 0, 0, 0).is_none() {
+        summary.unknown_models.insert(record.model.clone());
+    }
+
     summary.input_tokens += record.input;
     summary.output_tokens += record.output;
     summary.cached_tokens += record.cache_create + record.cache_read;
@@ -653,6 +663,21 @@ mod tests {
             ClaudePricing::cost_usd_with_cache_ttl("claude-3-5-sonnet", 100_000, 0, 0, 0, 100_000);
         // 100k * $3/M + 100k * $15/M = 0.30 + 1.50 = 1.80
         assert!((cost - 1.80).abs() < 0.001);
+    }
+
+    #[test]
+    fn records_unknown_claude_model_while_using_fallback_cost() {
+        let event: ClaudeEvent = serde_json::from_str(
+            r#"{"type":"assistant","timestamp":"2026-01-15T10:00:00Z","requestId":"req_unknown","message":{"id":"msg_unknown","model":"claude-retired-unknown","usage":{"input_tokens":100000,"output_tokens":100000}}}"#,
+        )
+        .unwrap();
+        let record = claude_usage_record_from_event(&event).expect("usage record");
+        let mut summary = CostSummary::default();
+
+        add_claude_record_to_summary(&mut summary, &record);
+
+        assert!(summary.total_cost_usd > 0.0);
+        assert!(summary.unknown_models.contains("claude-retired-unknown"));
     }
 
     #[test]

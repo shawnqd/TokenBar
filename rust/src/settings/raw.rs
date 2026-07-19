@@ -34,6 +34,10 @@ pub(super) struct RawSettings {
     enable_animations: bool,
     reset_time_relative: bool,
     menu_bar_display_mode: String,
+    #[serde(default = "default_true")]
+    output_speed_enabled: bool,
+    #[serde(default = "default_local_usage_period")]
+    local_usage_period: String,
     show_all_token_accounts_in_menu: bool,
 
     // ── New unified per-provider map ─────────────────────────────────
@@ -132,6 +136,7 @@ pub(super) struct RawSettings {
     float_bar_dark_text: bool,
     #[serde(default)]
     float_bar_show_reset_inline: bool,
+    float_bar_show_cost: bool,
 }
 
 impl Default for RawSettings {
@@ -157,6 +162,8 @@ impl Default for RawSettings {
             enable_animations: s.enable_animations,
             reset_time_relative: s.reset_time_relative,
             menu_bar_display_mode: s.menu_bar_display_mode,
+            output_speed_enabled: s.output_speed_enabled,
+            local_usage_period: s.local_usage_period,
             show_all_token_accounts_in_menu: s.show_all_token_accounts_in_menu,
             provider_configs: s.provider_configs,
             claude_usage_source: None,
@@ -209,6 +216,7 @@ impl Default for RawSettings {
             float_bar_provider_ids: s.float_bar_provider_ids,
             float_bar_dark_text: s.float_bar_dark_text,
             float_bar_show_reset_inline: s.float_bar_show_reset_inline,
+            float_bar_show_cost: s.float_bar_show_cost,
         }
     }
 }
@@ -439,6 +447,8 @@ impl From<RawSettings> for Settings {
             enable_animations: raw.enable_animations,
             reset_time_relative: raw.reset_time_relative,
             menu_bar_display_mode: raw.menu_bar_display_mode,
+            output_speed_enabled: raw.output_speed_enabled,
+            local_usage_period: raw.local_usage_period,
             show_all_token_accounts_in_menu: raw.show_all_token_accounts_in_menu,
             provider_configs,
             disable_keychain_access: raw.disable_keychain_access,
@@ -467,6 +477,7 @@ impl From<RawSettings> for Settings {
             float_bar_provider_ids: raw.float_bar_provider_ids,
             float_bar_dark_text: raw.float_bar_dark_text,
             float_bar_show_reset_inline: raw.float_bar_show_reset_inline,
+            float_bar_show_cost: raw.float_bar_show_cost,
         }
     }
 }
