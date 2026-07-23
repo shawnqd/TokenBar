@@ -5418,19 +5418,15 @@ html:has(.menu-surface--tray) {
    cohesive place. Gauge-led title + a colored stage pill on top; a single
    actual-usage bar with an "expected" marker; a status+hours runway line. */
 .menu-card__pace {
-  /* `.menu-card__group` (the shared class this section also carries) has NO
-     CSS rule anywhere in this file, so without an explicit `display: flex`
-     here `gap` silently no-ops on the plain block box — header/track/runway
-     rendered flush against each other with 0px between them (verified via
-     computed geometry: the intended 9px gap measured as 0px), which is what
-     made the block look like a jumbled mess. */
+  /* No background/border: the block blends into the card instead of forming a
+     heavy gray inset at the card bottom. `display: flex` is still required -
+     `.menu-card__group` (also on this section) has no CSS rule anywhere in
+     this file, so without it `gap` silently no-ops and header/track/runway
+     render flush against each other (verified: the intended gap measured 0px). */
   display: flex;
   flex-direction: column;
   gap: 9px;
   padding: 10px 12px;
-  border-radius: 13px;
-  background: var(--surface-elevated);
-  border: 1px solid var(--menu-popover-divider);
 }
 
 .menu-card__pace-header {
@@ -5445,7 +5441,7 @@ html:has(.menu-surface--tray) {
   align-items: center;
   gap: 6px;
   font-size: var(--font-caption);
-  font-weight: 700;
+  font-weight: 600;
   color: var(--text-secondary);
 }
 .menu-card__pace-title svg {
@@ -5463,16 +5459,13 @@ html:has(.menu-surface--tray) {
   padding: 2px 8px;
   border-radius: 999px;
   white-space: nowrap;
+  background: var(--menu-popover-divider);
+  color: var(--text-secondary);
 }
 .menu-card__pace-chip svg {
   width: 12px;
   height: 12px;
 }
-.menu-card__pace-chip[data-pace="slow"] { background: var(--pace-slow-bg); color: var(--pace-slow-fg); }
-.menu-card__pace-chip[data-pace="steady"] { background: var(--pace-steady-bg); color: var(--pace-steady-fg); }
-.menu-card__pace-chip[data-pace="racing"] { background: var(--pace-racing-bg); color: var(--pace-racing-fg); }
-.menu-card__pace-chip[data-pace="burning"] { background: var(--pace-burning-bg); color: var(--pace-burning-fg); }
-
 .menu-card__pace-track {
   position: relative;
   height: 7px;
@@ -5500,11 +5493,6 @@ html:has(.menu-surface--tray) {
   transition: width 0.3s ease;
 }
 
-.menu-card__pace-fill[data-pace="slow"] { background: var(--pace-slow-fg); }
-.menu-card__pace-fill[data-pace="steady"] { background: var(--pace-steady-fg); }
-.menu-card__pace-fill[data-pace="racing"] { background: var(--pace-racing-fg); }
-.menu-card__pace-fill[data-pace="burning"] { background: var(--pace-burning-fg); }
-
 /* Runway line — status (icon + text) on the left, estimated hours on the right. */
 .menu-card__pace-runway {
   display: flex;
@@ -5517,7 +5505,7 @@ html:has(.menu-surface--tray) {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  font-size: var(--font-caption);
+  font-size: var(--font-caption2);
   font-weight: 600;
 }
 .menu-card__pace-runway-status svg {
@@ -5525,16 +5513,24 @@ html:has(.menu-surface--tray) {
 }
 
 .menu-card__pace-runway[data-state="ok"] .menu-card__pace-runway-status {
-  color: var(--pace-steady-fg);
+  color: var(--text-secondary);
 }
 
 .menu-card__pace-runway[data-state="warn"] .menu-card__pace-runway-status {
+  color: var(--text-secondary);
+}
+
+.menu-card__pace-runway[data-state="ok"] .menu-card__pace-runway-status svg {
+  color: var(--pace-steady-fg);
+}
+
+.menu-card__pace-runway[data-state="warn"] .menu-card__pace-runway-status svg {
   color: var(--pace-racing-fg);
 }
 
 .menu-card__pace-runway-value {
-  font-size: var(--font-caption);
-  font-weight: 800;
+  font-size: var(--font-caption2);
+  font-weight: 700;
   color: var(--text-primary);
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
@@ -6053,8 +6049,7 @@ html:has(.menu-surface--tray) {
   font-size: var(--font-caption);
 }
 .menu-card__cost-line,
-.menu-card__pace-chip,
-.menu-card__pace-runway-status {
+.menu-card__pace-chip {
   font-size: var(--font-caption);
 }
 

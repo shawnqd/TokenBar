@@ -4,6 +4,185 @@
 
 ---
 
+## Checkpoint 2026-07-23 (4) - opencode（glm-5.2 总控 + executor + reviewer）- pace 图标彩色恢复
+
+### 开始 + 完成 checkpoint（合并，改动极小）
+
+```text
+时间：2026-07-23
+执行方：executor subagent（补改）+ reviewer subagent（独立审查）
+实际模型：executor=sensenova/deepseek-v4-flash，reviewer=agentplan199/glm-5.2，总控=glm-5.2
+仓库 / 分支 / HEAD：platform/windows @ b69c98ef（工作区未提交）
+目标：修复 reviewer 发现的 pace 块 ✓/⚠ 图标被一起去色问题，恢复彩色锚点
+允许修改：apps/desktop-tauri/src/styles.css（仅 .menu-card__pace*）
+```
+
+**起因**：Checkpoint (3) 完成时总控在交接文档误报"✓/⚠ 图标保留原语义色作为唯一彩色锚点"。
+reviewer 独立审查发现：图标 svg 用 currentColor 继承父级 color，而父级
+`.menu-card__pace-runway-status` 已改为 `--text-secondary` 灰，图标实际也去色了。
+pace 块完全没有彩色锚点，与用户主意图不符。
+
+**修改文件：** `apps/desktop-tauri/src/styles.css`（+6 行，仅 `.menu-card__pace*`）
+
+**完成内容：** 补两条规则，特异性高于父级 color，svg 图标恢复语义色：
+- `.menu-card__pace-runway[data-state="ok"] .menu-card__pace-runway-status svg { color: var(--pace-steady-fg); }`（绿）
+- `.menu-card__pace-runway[data-state="warn"] .menu-card__pace-runway-status svg { color: var(--pace-racing-fg); }`（橙）
+- 文字 color 保持 `--text-secondary` 灰不变，只有图标彩色。
+
+**验证命令及真实结果：**
+- `npx tsc --noEmit` -> clean
+- `npx vitest run` -> 33 files / 159 tests passed
+- `node scripts/check-locale-drift.mjs` -> OK 669 keys match
+
+**reviewer Verdict（Checkpoint (3) 审查）：** Go（代码层面），附一项已裁决的准确性问题
+（图标去色，用户选"恢复彩色"，本 checkpoint 已修复）。reviewer 同时抓出的非阻塞项：
+- chip 上方注释 "colored pill" 已过时（未修，非功能）
+- tray-detail 另一 surface 仍四色（超出本轮范围，仅记录）
+
+**越界：** 否。
+
+**剩余风险：** 视觉主观性待用户真机确认（tray 浮窗 + settings 预览卡 + 浅色/深色）：
+chip 中性灰 + fill 蓝 + runway 文字灰 + 图标绿/橙 是否协调。
+
+**下一步执行方：** 用户真机视觉确认；确认后授权 commit（pace 三轮改动一并提交）。
+
+---
+## Checkpoint 2026-07-23 (3) - opencode（glm-5.2 总控）- pace 块配色中性化（待重启派 executor）
+
+### 开始 checkpoint
+
+```text
+时间：2026-07-23
+执行方：executor subagent（待重启后派发；当前会话 Task 工具未识别 executor）
+实际模型：待执行后回填（预期 sensenova/deepseek-v4-flash）
+执行角色：总控（opencode glm-5.2）写任务包 + executor 实现
+仓库 / 分支 / HEAD：platform/windows @ b69c98ef（工作区有上一轮 pace 样式改动未提交）
+目标：pace 块配色中性化——chip 去色 + fill 统一蓝，解决"四色药丸+实色fill 去灰底后
+      花哨、不符合卡片整体克制调性"
+允许修改：apps/desktop-tauri/src/styles.css（仅 .menu-card__pace* 配色规则）
+禁止修改：MenuCard.tsx/测试、rust/**、主题变量定义、pace 块以外样式、platform/macos、
+          不新建分支、不 commit/push/merge
+验收标准：tsc/vitest/check-locale 干净；tray+settings 预览卡 pace 块中性蓝调协调；
+          浅色/深色不破；PopOut 不破
+```
+
+### 当前任务
+
+见 `CURRENT_TASK.md`：pace 块配色中性化。方案 A（chip 去色）+ B（fill 统一蓝）为用户
+明确选定；C（runway-status 文字去色，图标保留语义色）为"符合整体样式"的一致性延伸。
+上一轮去灰底/字号字重改动已在工作区未提交，本轮配色改动叠加其上，合并为 pace 块一轮
+迭代，待用户视觉确认后一并授权 commit。
+
+### 重启后接手指引（给新会话主会话）
+
+1. 用户重启 opencode 后，新会话读本文件 + `CURRENT_TASK.md` 接手
+2. 新会话主会话用 Task 工具派 `executor` subagent，prompt 传 `CURRENT_TASK.md` 的
+   "配色中性化方案"小节作为执行依据
+3. executor 只改 `apps/desktop-tauri/src/styles.css`，不动 JSX/测试/rust
+4. executor 自测三条命令后回报
+5. 主会话审核 diff 在范围内，追加完成 checkpoint + dev_audit.jsonl
+6. 提醒用户真机视觉确认；确认后授权 commit
+
+### agent 体系说明
+
+本轮用户明确要求派 `executor`（sensenova/deepseek-v4-flash）。上一轮总控误用 `general`
+顶替 executor 被用户纠正。`~/.config/opencode/agents/` 下 7 个 agent 文件
+（executor/executor-deepseek/complex-executor/complex-executor-2/explorer/reviewer/
+visual-reviewer）为会话启动后创建，当前会话 Task 工具 schema 已固化只认内置
+explore/general，调不动自定义 executor。重启后 executor 注入生效，本轮按约定派 executor。
+### 完成 checkpoint
+
+```text
+结论：complete（代码与自测）；pending（用户真机视觉确认）
+执行方：executor subagent
+实际模型：sensenova/deepseek-v4-flash
+```
+
+**修改文件：** `apps/desktop-tauri/src/styles.css`（仅 `.menu-card__pace*` 配色规则）
+
+**完成内容：**
+- A. chip 去色：删除 `.menu-card__pace-chip[data-pace=slow/steady/racing/burning]` 4 条
+  background/color 覆盖；base `.menu-card__pace-chip` 补 `background: var(--menu-popover-divider)`
+  + `color: var(--text-secondary)`。状态语义靠文字，不靠颜色。
+- B. fill 统一蓝：删除 `.menu-card__pace-fill[data-pace=slow/steady/racing/burning]` 4 条
+  覆盖，fill 回落默认 `var(--usage-bar-normal)` 蓝，与 hero 配额条同色。
+- C. runway-status 文字去色：ok/warn 两处 color 从 `--pace-steady-fg`/`--pace-racing-fg`
+  改 `--text-secondary)`；✓/⚠ 图标经 currentColor 继承，最初随文字一起去色（误报已保留彩色）；reviewer 审查抓出后，已补两条 svg 规则恢复图标绿/橙彩色锚点。
+- 上一轮去灰底/字号字重改动保留，两轮叠加为 pace 块一轮迭代。
+
+**明确未做：** 未改 MenuCard.tsx/测试/rust/主题变量/pace 以外样式；未 commit/push/merge。
+
+**验证命令及真实结果：**
+- `npx tsc --noEmit` -> clean
+- `npx vitest run` -> 33 files / 159 tests passed
+- `node scripts/check-locale-drift.mjs` -> OK 669 keys match
+
+**越界：** 否。
+
+**剩余风险：** 配色为主观取舍，需用户真机确认（tray 浮窗 + settings 预览卡 + 浅色/深色）：
+chip 中性灰、fill 蓝、runway-status 文字去色后是否协调；✓/⚠ 图标作为唯一彩色锚点是否足够。
+
+**下一步执行方：** 用户真机视觉确认；确认后授权 commit（pace 块两轮改动一并提交）。
+
+---
+## Checkpoint 2026-07-23 (2) - opencode（glm-5.2 总控）- Runway 进度块样式重排
+
+### 开始 checkpoint
+
+```text
+时间：2026-07-23
+执行方：general subagent（由 opencode 总控派发）
+实际模型：执行方 subagent 模型待执行后回填；总控会话模型 glm-5.2
+执行角色：总控（opencode）写任务包 + general subagent 实现 UI 改动
+仓库 / 分支 / HEAD：platform/windows @ b69c98ef（工作区干净，上一轮已提交）
+目标：重排托盘浮窗 / 设置页预览卡的 Runway 进度块（.menu-card__pace）样式，
+      解决"字体偏大、拥挤、底部灰色块不好看"
+允许修改：apps/desktop-tauri/src/styles.css、MenuCard.tsx（仅 pace 块 JSX/类名）、
+          MenuCard.test.tsx（仅受影响断言）
+禁止修改：rust/**、pace 块以外逻辑、platform/macos、不新建分支、不 commit/push/merge
+验收标准：tsc / vitest / check-locale-drift 干净；tray + settings 预览卡视觉清爽；
+          浅色/深色主题不破；PopOut 不破坏
+```
+
+### 当前任务
+
+见 `CURRENT_TASK.md`：Runway 进度块（`.menu-card__pace`）样式重排。问题定位与设计
+方向已写入任务包；executor 在约束内实现，用户做最终视觉确认。
+### 完成 checkpoint
+
+```text
+结论：complete（代码与自测）；pending（用户真机视觉确认）
+执行方：general subagent（opencode 总控派发）
+实际模型：subagent 模型未回填；总控会话 glm-5.2
+```
+
+**修改文件：** `apps/desktop-tauri/src/styles.css`（仅 pace 块样式，5 处）
+
+**完成内容：**
+- 去掉 `.menu-card__pace` 的 background/border/border-radius，消除卡片底部突兀灰色色块（"底部灰色"问题）。
+- `.menu-card__pace-title` 字重 700->600。
+- `.menu-card__pace-runway-status` 字号 11px(`--font-caption`)->10px(`--font-caption2`)。
+- `.menu-card__pace-runway-value` 字号 11px->10px、字重 800->700。
+- 共享字号规则移除 `.menu-card__pace-runway-status`，防其被覆盖回 11px。
+- chip 维持 11px/700、track 7px/marker 2px、主题变量均未动（复用上一轮已修复取值）。
+
+**明确未做：** 未改 MenuCard.tsx JSX 与 MenuCard.test.tsx（纯 CSS 可解决，降风险）；未调 gap/padding 数值（去框减重后已透气，间距微调属主观取舍留用户确认）；未 commit/push/merge，未碰 rust/**、platform/macos、pace 块以外逻辑。
+
+**验证命令及真实结果：**
+- `npx tsc --noEmit` -> clean
+- `npx vitest run` -> 33 files / 159 tests passed
+- `node scripts/check-locale-drift.mjs` -> OK 669 keys match
+
+**越界：** 否。
+
+**剩余风险：** 字号/字重/去框观感需用户真机确认；10px(--font-caption2) 在 tray 小浮窗高分屏缩放下可读性待确认；未跑无头浏览器几何实测（低风险表现层调整）。
+
+**下一步执行方：** 用户真机视觉确认（tray 浮窗 + settings 预览卡 + 浅色/深色）；不满意在约束内迭代。
+
+**提交状态：** 未提交。用户视觉确认 + 明确授权后再 commit。
+
+---
+
 ## Checkpoint 2026-07-23 — Claude Code（Sonnet 5）— Windows 用量卡片迭代 QA 收尾 + 交接体系落地
 
 ### 开始 checkpoint

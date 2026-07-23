@@ -21,7 +21,7 @@ Windows（Tauri/React/Rust）端的截图驱动 UI 迭代 QA，聚焦托盘浮�
 
 ## 进行中
 
-无。
+Runway 进度块（.menu-card__pace）样式迭代（两轮：去灰底/减字重 + 配色中性化 chip去色/fill统一蓝/runway去色）：代码与自测完成，reviewer 独立审查 Go（已修复图标去色问题），待用户真机视觉确认（仅改 styles.css，去灰底/减字重/降字号），待用户真机视觉确认。
 
 ## 阻塞项
 
@@ -29,5 +29,4 @@ Windows（Tauri/React/Rust）端的截图驱动 UI 迭代 QA，聚焦托盘浮�
 
 ## 下一步
 
-等待用户对本轮最后一批修复（Runway 进度块浅色主题渲染、卡内间距）在真机截图中做最终视觉确认；
-或由用户指定新任务并写入 `CURRENT_TASK.md`。
+等待用户真机视觉确认（tray 浮窗 + settings 预览卡 + 浅色/深色）；reviewer 已审查 Go（tray 浮窗 + settings 预览卡 + 浅色/深色）；确认后授权 commit（pace 两轮改动一并提交）；或由用户指定新任务并写入 CURRENT_TASK.md。
