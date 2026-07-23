@@ -73,7 +73,9 @@ describe("StatsSection", () => {
         sevenDayTokens: 584_000,
         thirtyDayCost: null,
         thirtyDayTokens: null,
-        topModel: null,
+        todayTopModel: null,
+        sevenDayTopModel: null,
+        thirtyDayTopModel: null,
         estimateNote: "Estimated from local logs",
       },
     });

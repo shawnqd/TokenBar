@@ -207,7 +207,9 @@ describe("FloatBar", () => {
       sevenDayTokens: 200,
       thirtyDayCost: 12.5,
       thirtyDayTokens: 1000,
-      topModel: "gpt-5",
+      todayTopModel: null,
+      sevenDayTopModel: "gpt-5",
+      thirtyDayTopModel: "gpt-5",
       estimateNote: "Estimated from local logs",
     });
 

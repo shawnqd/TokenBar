@@ -416,7 +416,9 @@ describe("TrayPanel provider grid", () => {
         sevenDayTokens: 1200,
         thirtyDayCost: 1.23,
         thirtyDayTokens: 584_000,
-        topModel: "gpt-5.5",
+        todayTopModel: null,
+        sevenDayTopModel: "gpt-5.5",
+        thirtyDayTopModel: "gpt-5.5",
         estimateNote: "Estimated from local logs",
       },
     });

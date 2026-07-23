@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import type {
   DailyCostPoint,
+  Language,
   LocalUsagePeriod,
   PaceSnapshot,
   ProviderChartData,
@@ -20,11 +21,50 @@ import { providerSupportsChartData } from "../lib/providerCharts";
 import { getPaceEstimate } from "../lib/paceBudget";
 import { getProviderBalance } from "../lib/providerBalance";
 import { ProviderBalanceBlock } from "./ProviderBalanceBlock";
+import { ProviderIcon } from "./providers/ProviderIcon";
 import {
   isMeaningfulQuotaWindow,
   ProviderQuotaBlock,
   quotaWindowLabel,
 } from "./ProviderQuotaBlock";
+
+/** Line icons for the pace ("进度") block — 1.5–2pt stroke, inherit currentColor. */
+const paceIconProps = {
+  width: 13,
+  height: 13,
+  viewBox: "0 0 24 24",
+  fill: "none",
+  stroke: "currentColor",
+  strokeWidth: 2,
+  strokeLinecap: "round" as const,
+  strokeLinejoin: "round" as const,
+  "aria-hidden": true,
+};
+const GaugeIcon = () => (
+  <svg {...paceIconProps}>
+    <path d="M4 15a8 8 0 1 1 16 0" />
+    <path d="M12 15l4-3" />
+  </svg>
+);
+const TrendIcon = () => (
+  <svg {...paceIconProps}>
+    <path d="M3 17l6-6 4 4 8-8" />
+    <path d="M15 7h6v6" />
+  </svg>
+);
+const CheckIcon = () => (
+  <svg {...paceIconProps}>
+    <circle cx="12" cy="12" r="9" />
+    <path d="M8.5 12.5l2.5 2.5 4.5-5" />
+  </svg>
+);
+const WarnIcon = () => (
+  <svg {...paceIconProps}>
+    <path d="M12 3l9 16H3z" />
+    <path d="M12 10v4" />
+    <circle cx="12" cy="17" r="0.6" fill="currentColor" stroke="none" />
+  </svg>
+);
 
 /** Small copy-to-clipboard button matching macOS CopyIconButton (doc.on.doc → checkmark). */
 function CopyIconButton({ text }: { text: string }) {
@@ -65,6 +105,29 @@ interface MenuCardProps {
   localUsagePeriod?: LocalUsagePeriod;
   /** Suppress the local-usage stats block entirely (e.g. compact display mode). */
   hideLocalUsage?: boolean;
+  /** Show the provider brand icon in the card header. Governed by the
+   * "show provider icons" setting on the tray; defaults on elsewhere. */
+  showProviderIcon?: boolean;
+}
+
+const SPARK_W = 68;
+const SPARK_H = 26;
+
+/** Polyline path over a series, normalized to the actual min/max with a little
+ * vertical padding so a near-flat series sits centered instead of hugging an
+ * edge. Returns null when there aren't enough points to draw a line. */
+function buildSparklinePath(values: number[]): string | null {
+  if (values.length < 2) return null;
+  const min = Math.min(...values);
+  const max = Math.max(...values);
+  const pad = 3;
+  const span = max - min;
+  const x = (i: number) => (i / (values.length - 1)) * SPARK_W;
+  const y = (v: number) =>
+    span === 0
+      ? SPARK_H / 2
+      : SPARK_H - pad - ((v - min) / span) * (SPARK_H - pad * 2);
+  return values.map((v, i) => `${i === 0 ? "M" : "L"}${x(i).toFixed(1)} ${y(v).toFixed(1)}`).join(" ");
 }
 
 function OutputSpeedHighlight({
@@ -75,6 +138,12 @@ function OutputSpeedHighlight({
   t: (key: LocaleKey) => string;
 }) {
   if (speed.tokensPerSecond == null || speed.tokensPerSecond <= 0) return null;
+  // Oldest → newest so the line reads left-to-right in time order.
+  const series = [...(speed.recentSamples ?? [])]
+    .sort((a, b) => a.completedAtMs - b.completedAtMs)
+    .map((s) => s.tokensPerSecond)
+    .filter((v) => Number.isFinite(v) && v > 0);
+  const sparkPath = buildSparklinePath(series);
   return (
     <div className="menu-card__speed" data-status={speed.status}>
       <div>
@@ -84,6 +153,18 @@ function OutputSpeedHighlight({
           <span className="menu-card__speed-unit">t/s</span>
         </div>
       </div>
+      {sparkPath && (
+        <svg
+          className="menu-card__speed-spark"
+          viewBox={`0 0 ${SPARK_W} ${SPARK_H}`}
+          width={SPARK_W}
+          height={SPARK_H}
+          fill="none"
+          aria-hidden="true"
+        >
+          <path d={sparkPath} stroke="var(--accent)" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" />
+        </svg>
+      )}
     </div>
   );
 }
@@ -155,6 +236,55 @@ function formatTokenCount(value: number): string {
   }).format(value);
 }
 
+// Standard Chinese myriad units — 万 (1e4) up to 亿 (1e8), matching how large
+// token counts are read at a glance (568,759 → 56.9万, 50,000,000 → 5000万).
+// Traditional Chinese uses the same words in traditional forms.
+const CJK_COMPACT_UNITS: Record<"chinese" | "chinesetraditional", [number, string][]> = {
+  chinese: [
+    [1e8, "亿"],
+    [1e4, "万"],
+  ],
+  chinesetraditional: [
+    [1e8, "億"],
+    [1e4, "萬"],
+  ],
+};
+
+/**
+ * Compact, human-scannable form of a large token count (e.g. 568,759 → "56.9万",
+ * 50,000,000 → "5000万", 120,000,000 → "1.2亿"). Returns null when the value is
+ * small enough that the raw number already reads cleanly, so the caller can skip
+ * the approximation. Chinese uses 万/亿; other locales fall back to the standard
+ * locale-aware compact notation (569K, 57万, 57만…).
+ */
+function formatCompactTokens(value: number, language: Language): string | null {
+  if (language === "chinese" || language === "chinesetraditional") {
+    if (value < 1e4) return null;
+    for (const [threshold, unit] of CJK_COMPACT_UNITS[language]) {
+      if (value >= threshold) {
+        const scaled = value / threshold;
+        const text =
+          scaled >= 100 ? Math.round(scaled).toString() : scaled.toFixed(1).replace(/\.0$/, "");
+        return `${text}${unit}`;
+      }
+    }
+    return null;
+  }
+  if (value < 1000) return null;
+  const localeCode =
+    language === "japanese"
+      ? "ja-JP"
+      : language === "korean"
+        ? "ko-KR"
+        : language === "spanish"
+          ? "es-MX"
+          : "en-US";
+  return new Intl.NumberFormat(localeCode, {
+    notation: "compact",
+    maximumFractionDigits: 1,
+  }).format(value);
+}
+
 function formatApiEquivalentValue(amount: number): string {
   const cnyEstimate = amount * USD_TO_CNY_REFERENCE_RATE;
   return `${formatCurrency(amount, "USD")} · ¥${cnyEstimate.toFixed(2)}`;
@@ -171,7 +301,7 @@ export function LocalUsageBlock({
   costHistory: DailyCostPoint[];
   period?: LocalUsagePeriod;
 }) {
-  const { t } = useLocale();
+  const { t, language } = useLocale();
   const isCodex = providerId === "codex";
   const historyDays = period === "today" ? 1 : period === "7d" ? 7 : 30;
   const visibleHistory = costHistory
@@ -186,6 +316,7 @@ export function LocalUsageBlock({
           label: t("PanelTodayUsage"),
           tokens: summary.todayTokens,
           cost: summary.todayCost,
+          topModel: summary.todayTopModel,
           empty: t("PanelNoUsageToday"),
         }
       : period === "30d"
@@ -193,14 +324,18 @@ export function LocalUsageBlock({
             label: t("PanelThirtyDayUsage"),
             tokens: summary.thirtyDayTokens,
             cost: summary.thirtyDayCost,
+            topModel: summary.thirtyDayTopModel,
             empty: t("PanelNoUsageThirtyDays"),
           }
         : {
             label: t("PanelSevenDayUsage"),
             tokens: summary.sevenDayTokens,
             cost: summary.sevenDayCost,
+            topModel: summary.sevenDayTopModel,
             empty: t("PanelNoUsageSevenDays"),
           };
+  const compactTokens =
+    lead.tokens != null ? formatCompactTokens(lead.tokens, language) : null;
   return (
     <section className="menu-card__group menu-card__local-usage">
       <div className="menu-card__local-period">
@@ -210,6 +345,9 @@ export function LocalUsageBlock({
             <div className="menu-card__local-token-value">
               <strong>{formatTokenCount(lead.tokens)}</strong>
               <span>{t("PanelTokenUnit")}</span>
+              {compactTokens && (
+                <span className="menu-card__local-token-approx">≈ {compactTokens}</span>
+              )}
             </div>
             {lead.cost != null && (
               <div className="menu-card__local-equivalent">
@@ -236,9 +374,9 @@ export function LocalUsageBlock({
         </div>
       )}
 
-      {summary.topModel && (
+      {lead.topModel && (
         <div className="menu-card__local-note">
-          <strong>{t("PanelTopModelPrefix")}: {summary.topModel}</strong>
+          <strong>{t("PanelTopModelPrefix")}: {lead.topModel}</strong>
         </div>
       )}
     </section>
@@ -375,6 +513,7 @@ function MetricRow({
   showAsUsed,
   hero = false,
   planLabel = null,
+  suppressForecast = false,
 }: {
   title: string;
   snap: RateWindowSnapshot;
@@ -383,6 +522,11 @@ function MetricRow({
   showAsUsed: boolean;
   hero?: boolean;
   planLabel?: string | null;
+  /** When the card also renders a dedicated pace ("进度") block, the weekly
+   * forecast box is redundant — its "hours remaining" just restates the reset
+   * countdown and its "lasts until reset" note duplicates the pace status. Hide
+   * it here so the runway information lives in exactly one place. */
+  suppressForecast?: boolean;
 }) {
   const { t } = useLocale();
   const paceView = getMetricPaceView(snap);
@@ -404,7 +548,7 @@ function MetricRow({
       hero={hero}
       planLabel={planLabel}
     >
-      {paceView.kind === "forecast" && (
+      {paceView.kind === "forecast" && !suppressForecast && (
         <div className="menu-metric__forecast">
           <div className="menu-metric__forecast-row">
             <span className="menu-metric__forecast-label">
@@ -459,6 +603,7 @@ export default function MenuCard({
   outputSpeed = null,
   localUsagePeriod = "7d",
   hideLocalUsage = false,
+  showProviderIcon = true,
 }: MenuCardProps) {
   const { t } = useLocale();
   const [chartData, setChartData] = useState<ProviderChartData | null>(null);
@@ -564,6 +709,22 @@ export default function MenuCard({
   // card. Keep only the primary quota and omit secondary diagnostics below.
   const visibleMetrics = compactMetrics ? metrics.slice(0, 1) : metrics;
 
+  // The weekly usage forecast is folded INTO the dedicated pace ("进度") block
+  // below (rather than shown as its own box) whenever that block renders — see
+  // `suppressForecast`. Compute the estimate here so the pace block can present
+  // the runway hours next to the pace bar instead of duplicating them.
+  const weeklyForecast = compactMetrics
+    ? null
+    : (() => {
+        const weekly = metrics.find(
+          (m) =>
+            m.snap.windowMinutes != null &&
+            m.snap.windowMinutes >= WEEKLY_WINDOW_MINUTES &&
+            !m.snap.isExhausted,
+        );
+        return weekly ? getPaceEstimate(weekly.snap) : null;
+      })();
+
   const hasCostHistory =
     !compactMetrics &&
     chartData !== null && chartData.costHistory.some((point) => point.value > 0);
@@ -609,6 +770,13 @@ export default function MenuCard({
     <article className={cardClassName}>
       <header className="menu-card__header">
         <div className="menu-card__title-row">
+          {showProviderIcon && (
+            <ProviderIcon
+              providerId={provider.providerId}
+              size={18}
+              className="menu-card__provider-icon"
+            />
+          )}
           <div className="menu-card__name-group">
             <span className="menu-card__name">{provider.displayName}</span>
           </div>
@@ -644,6 +812,7 @@ export default function MenuCard({
                   showAsUsed={showAsUsed}
                   hero={idx === 0}
                   planLabel={idx === 0 && !suppressPlanBadge ? planName : null}
+                  suppressForecast={hasPace}
                 />
               ))}
             </section>
@@ -720,50 +889,72 @@ export default function MenuCard({
             </section>
           )}
 
-          {(hasMetrics || hasCost) && hasPace && <div className="menu-card__divider" />}
-
           {hasPace && provider.pace && (
             <section className="menu-card__group menu-card__pace">
               <div className="menu-card__pace-header">
-                <span className="menu-card__group-title">{t("DetailPaceTitle")}</span>
+                <span className="menu-card__pace-title">
+                  <GaugeIcon />
+                  {t("DetailPaceTitle")}
+                </span>
                 <span
-                  className="menu-card__pace-label"
+                  className="menu-card__pace-chip"
                   data-pace={paceCategory(provider.pace.stage)}
                 >
+                  <TrendIcon />
                   {t(paceStageKey(provider.pace.stage))} (
                   {provider.pace.deltaPercent >= 0 ? "+" : ""}
                   {provider.pace.deltaPercent.toFixed(1)}%)
                 </span>
               </div>
-              <div className="menu-card__pace-bars">
-                <div className="menu-card__pace-track" title={t("PanelExpected")}>
-                  <div
-                    className="menu-card__pace-fill menu-card__pace-fill--expected"
-                    style={{ width: `${provider.pace.expectedUsedPercent.toFixed(1)}%` }}
-                  />
-                </div>
-                <div className="menu-card__pace-track" title={t("PanelActual")}>
-                  <div
-                    className="menu-card__pace-fill"
-                    data-pace={paceCategory(provider.pace.stage)}
-                    style={{ width: `${provider.pace.actualUsedPercent.toFixed(1)}%` }}
-                  />
-                </div>
+              {/* One track: the actual-usage fill, with a slim marker at the
+                  "expected by now" position — cleaner than two stacked bars. */}
+              <div className="menu-card__pace-track" title={t("PanelActual")}>
+                <div
+                  className="menu-card__pace-fill"
+                  data-pace={paceCategory(provider.pace.stage)}
+                  style={{ width: `${provider.pace.actualUsedPercent.toFixed(1)}%` }}
+                />
+                <span
+                  className="menu-card__pace-marker"
+                  style={{ left: `${provider.pace.expectedUsedPercent.toFixed(1)}%` }}
+                  title={t("PanelExpected")}
+                  aria-hidden
+                />
               </div>
-              {provider.pace.etaSeconds != null && !provider.pace.willLastToReset && (
-                <div className="menu-card__pace-eta">
-                  ⚠{" "}
-                  {t("DetailPaceRunsOutIn").replace(
-                    "{}",
-                    String(Math.round(provider.pace.etaSeconds / 3600)),
-                  )}
-                </div>
-              )}
-              {provider.pace.willLastToReset && (
-                <div className="menu-card__pace-ok">
-                  ✓ {t("DetailPaceWillLastToReset")}
-                </div>
-              )}
+              {/* Runway line — the weekly usage forecast merged in: status on
+                  the left, the estimated hours on the right. */}
+              {(() => {
+                const lasts = weeklyForecast
+                  ? weeklyForecast.lastsUntilReset
+                  : provider.pace.willLastToReset;
+                const hours =
+                  weeklyForecast?.hoursRemaining ??
+                  (provider.pace.etaSeconds != null
+                    ? provider.pace.etaSeconds / 3600
+                    : null);
+                const formatHours = (h: number) =>
+                  h < 1
+                    ? t("PanelForecastLessThanHour")
+                    : `${h < 10 ? Math.round(h * 10) / 10 : Math.round(h)} ${t("PanelForecastHoursUnit")}`;
+                return (
+                  <div
+                    className="menu-card__pace-runway"
+                    data-state={lasts ? "ok" : "warn"}
+                  >
+                    <span className="menu-card__pace-runway-status">
+                      {lasts ? <CheckIcon /> : <WarnIcon />}
+                      {lasts
+                        ? t("DetailPaceWillLastToReset")
+                        : t("DetailPaceRunsOutIn")}
+                    </span>
+                    {hours != null && (
+                      <strong className="menu-card__pace-runway-value">
+                        ≈ {formatHours(hours)}
+                      </strong>
+                    )}
+                  </div>
+                );
+              })()}
             </section>
           )}
 

@@ -270,6 +270,25 @@
   --provider-icon-ring: rgba(0, 0, 0, 0.08);
   --provider-icon-bg: rgba(0, 0, 0, 0.04);
 
+  /* These were only ever defined in [data-theme="dark"] — every consumer
+     (.menu-card__pace-track/-fill/-chip, .provider-quota__track's unfilled
+     portion) silently rendered as `transparent` in light theme: the track
+     and fill vanished entirely, and the chip fell back to inherited text
+     color with no pill behind it. Only `.menu-card__pace-marker` (uses
+     --text-primary, which WAS defined for light) stayed visible — exactly
+     the "lone vertical sliver" bug. Colors mirror the existing light-theme
+     semantic tones (--provider-status-ok/stale/error) for consistency. */
+  --usage-bar-track: rgba(0, 0, 0, 0.08);
+  --pace-slow-bg: rgba(0, 122, 255, 0.12);
+  --pace-slow-fg: #007aff;
+  --pace-steady-bg: rgba(21, 128, 61, 0.12);
+  --pace-steady-fg: #15803d;
+  --pace-racing-bg: rgba(180, 83, 9, 0.14);
+  --pace-racing-fg: #b45309;
+  --pace-burning-bg: rgba(185, 28, 28, 0.14);
+  --pace-burning-fg: #b91c1c;
+  --pace-track-expected-fg: rgba(0, 122, 255, 0.45);
+
   --chart-tooltip-bg: rgba(255, 255, 255, 0.96);
   --chart-tooltip-border: rgba(0, 0, 0, 0.12);
   --chart-tooltip-text: #1d1d1f;
@@ -2651,10 +2670,30 @@ body:has(.tray-panel-reveal) {
   font-weight: 500;
 }
 
-.provider-quota__percent {
+/* Secondary-window headline figure: a medium left-aligned number just under the
+   title (a size down from the hero's big number), so the hero and secondary
+   percentages line up on the same side. The used/left word stays small beside. */
+.provider-quota__sub-pct {
+  display: flex;
+  align-items: baseline;
+  gap: 5px;
+  white-space: nowrap;
+}
+.provider-quota__sub-pct-num {
+  font-size: 20px;
+  font-weight: 800;
+  line-height: 1;
+  letter-spacing: -0.02em;
   color: var(--text-primary);
-  font-size: var(--font-caption);
   font-variant-numeric: tabular-nums;
+}
+.provider-quota__sub-pct-suffix {
+  font-size: var(--font-caption);
+  font-weight: 500;
+  color: var(--text-secondary);
+}
+.provider-quota__sub-pct[data-exhausted="true"] .provider-quota__sub-pct-num {
+  color: var(--provider-status-error);
 }
 
 .provider-quota__track {
@@ -2679,9 +2718,9 @@ body:has(.tray-panel-reveal) {
   color: var(--text-secondary);
   font-size: var(--font-caption);
   text-align: right;
+  white-space: nowrap;
 }
 
-.provider-quota__percent[data-exhausted="true"],
 .provider-quota__exhausted {
   color: var(--provider-status-error);
 }
@@ -2776,26 +2815,24 @@ body:has(.tray-panel-reveal) {
   color: #fff;
 }
 
-/* Meta row under secondary bars: percentage only, right-aligned (the reset
-   time moved up into the header row next to the quota label). */
-.provider-quota__meta {
-  display: flex;
-  align-items: baseline;
-  justify-content: flex-end;
-  gap: 8px;
-}
 
 /* Real-time output speed highlight (Codex/Claude only) — tinted box with a
    big current tokens/sec reading and a small rolling sparkline. */
 .menu-card__speed {
   display: flex;
   align-items: center;
-  justify-content: flex-start;
+  justify-content: space-between;
   gap: 12px;
   margin-top: 8px;
   padding: 9px 12px;
   border-radius: 12px;
   background: color-mix(in srgb, var(--accent) 8%, transparent);
+}
+
+/* Rolling output-speed trend line, right-aligned in the speed box. */
+.menu-card__speed-spark {
+  flex-shrink: 0;
+  opacity: 0.9;
 }
 
 .menu-card__speed-label {
@@ -4758,12 +4795,10 @@ html:has(.menu-surface--tray) {
   margin-top: 0;
   font-size: 10px;
 }
-/* Hide pace section in tray — macOS doesn't show pace in the compact popover */
-.menu-surface--tray .menu-card__pace,
-.menu-surface--tray .menu-card__pace + .menu-card__divider,
-.menu-surface--tray .menu-card__content > .menu-card__divider:has(+ .menu-card__pace) {
-  display: none;
-}
+/* The pace ("进度") block now folds in the weekly usage forecast, so the tray
+   detail card DOES show it (its runway line is the only place that info lives).
+   It only appears in the single-provider detail view — the compact overview
+   still omits it because `compactMetrics` gates the whole block off there. */
 /* Hide large charts in tray; keep the compact local token/cost summary visible. */
 .menu-surface--tray .menu-card__charts,
 .menu-surface--tray .menu-card__local-chart {
@@ -4875,6 +4910,14 @@ html:has(.menu-surface--tray) {
   font-size: 12px;
   font-weight: 500;
   color: var(--text-secondary);
+}
+/* Rounded myriad-unit approximation (≈ 56.9万) next to the exact token count —
+   a quiet grey footnote, not a highlighted figure. */
+.menu-card__local-token-value .menu-card__local-token-approx {
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
 }
 .menu-card__local-equivalent {
   max-width: 100%;
@@ -5045,6 +5088,7 @@ html:has(.menu-surface--tray) {
 
 .menu-card__provider-icon {
   flex-shrink: 0;
+  align-self: center;
 }
 
 /* providerName: Font.headline + .semibold — use 500 on Windows for parity */
@@ -5369,43 +5413,89 @@ html:has(.menu-surface--tray) {
 
 /* ── Pace section (Tauri-only; sits below cost in the same card) ────── */
 
+/* The pace ("进度") block — "Runway" design (Option A): a self-contained inset
+   panel that folds in the weekly usage forecast, so runway info lives in one
+   cohesive place. Gauge-led title + a colored stage pill on top; a single
+   actual-usage bar with an "expected" marker; a status+hours runway line. */
 .menu-card__pace {
-  gap: 4px;
+  /* `.menu-card__group` (the shared class this section also carries) has NO
+     CSS rule anywhere in this file, so without an explicit `display: flex`
+     here `gap` silently no-ops on the plain block box — header/track/runway
+     rendered flush against each other with 0px between them (verified via
+     computed geometry: the intended 9px gap measured as 0px), which is what
+     made the block look like a jumbled mess. */
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  padding: 10px 12px;
+  border-radius: 13px;
+  background: var(--surface-elevated);
+  border: 1px solid var(--menu-popover-divider);
 }
 
 .menu-card__pace-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 8px;
+}
+
+.menu-card__pace-title {
+  display: inline-flex;
+  align-items: center;
   gap: 6px;
+  font-size: var(--font-caption);
+  font-weight: 700;
+  color: var(--text-secondary);
+}
+.menu-card__pace-title svg {
+  opacity: 0.75;
 }
 
-.menu-card__pace-label {
-  font-size: 11px;
-  font-weight: 600;
+/* Pace stage as a colored pill — blue (behind), green (on-track), orange
+   (racing), red (burning) — reusing the shared pace tint tokens. */
+.menu-card__pace-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: var(--font-caption);
+  font-weight: 700;
+  padding: 2px 8px;
+  border-radius: 999px;
+  white-space: nowrap;
 }
-
-.menu-card__pace-label[data-pace="slow"] { color: var(--pace-slow-fg); }
-.menu-card__pace-label[data-pace="steady"] { color: var(--pace-steady-fg); }
-.menu-card__pace-label[data-pace="racing"] { color: var(--pace-racing-fg); }
-.menu-card__pace-label[data-pace="burning"] { color: var(--pace-burning-fg); }
-
-.menu-card__pace-bars {
-  display: flex;
-  flex-direction: column;
-  gap: 3px;
+.menu-card__pace-chip svg {
+  width: 12px;
+  height: 12px;
 }
+.menu-card__pace-chip[data-pace="slow"] { background: var(--pace-slow-bg); color: var(--pace-slow-fg); }
+.menu-card__pace-chip[data-pace="steady"] { background: var(--pace-steady-bg); color: var(--pace-steady-fg); }
+.menu-card__pace-chip[data-pace="racing"] { background: var(--pace-racing-bg); color: var(--pace-racing-fg); }
+.menu-card__pace-chip[data-pace="burning"] { background: var(--pace-burning-bg); color: var(--pace-burning-fg); }
 
 .menu-card__pace-track {
-  height: 5px;
-  border-radius: 3px;
+  position: relative;
+  height: 7px;
+  border-radius: 999px;
   background: var(--usage-bar-track);
   overflow: hidden;
 }
 
+/* Slim tick marking the "expected by now" position on the actual-usage bar. */
+.menu-card__pace-marker {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  margin-left: -1px;
+  border-radius: 1px;
+  background: var(--text-primary);
+  opacity: 0.55;
+}
+
 .menu-card__pace-fill {
   height: 100%;
-  border-radius: 3px;
+  border-radius: 999px;
   background: var(--usage-bar-normal);
   transition: width 0.3s ease;
 }
@@ -5415,20 +5505,39 @@ html:has(.menu-surface--tray) {
 .menu-card__pace-fill[data-pace="racing"] { background: var(--pace-racing-fg); }
 .menu-card__pace-fill[data-pace="burning"] { background: var(--pace-burning-fg); }
 
-.menu-card__pace-fill--expected {
-  background: var(--pace-track-expected-fg) !important;
+/* Runway line — status (icon + text) on the left, estimated hours on the right. */
+.menu-card__pace-runway {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
 }
 
-.menu-card__pace-eta {
-  font-size: 11px;
-  font-weight: 500;
+.menu-card__pace-runway-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--font-caption);
+  font-weight: 600;
+}
+.menu-card__pace-runway-status svg {
+  flex: none;
+}
+
+.menu-card__pace-runway[data-state="ok"] .menu-card__pace-runway-status {
+  color: var(--pace-steady-fg);
+}
+
+.menu-card__pace-runway[data-state="warn"] .menu-card__pace-runway-status {
   color: var(--pace-racing-fg);
 }
 
-.menu-card__pace-ok {
-  font-size: 11px;
-  font-weight: 500;
-  color: var(--pace-steady-fg);
+.menu-card__pace-runway-value {
+  font-size: var(--font-caption);
+  font-weight: 800;
+  color: var(--text-primary);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
 
 .menu-card__charts {
@@ -5944,9 +6053,8 @@ html:has(.menu-surface--tray) {
   font-size: var(--font-caption);
 }
 .menu-card__cost-line,
-.menu-card__pace-label,
-.menu-card__pace-eta,
-.menu-card__pace-ok {
+.menu-card__pace-chip,
+.menu-card__pace-runway-status {
   font-size: var(--font-caption);
 }
 
@@ -7176,6 +7284,10 @@ html:has(.menu-surface--tray) {
   padding: 7px 12px;
 }
 
+:is(.menu-surface--tray, .provider-detail-live-card) .menu-card__pace {
+  padding: 8px 12px;
+}
+
 :is(.menu-surface--tray, .provider-detail-live-card) .menu-card__local-usage {
   padding: 10px 12px;
 }
@@ -7193,6 +7305,26 @@ html:has(.menu-surface--tray) {
   margin-top: 6px;
   font-size: 10px;
   line-height: 1.25;
+}
+
+/* Settings → Providers preview card: give every in-card separator the SAME
+   symmetric breathing room so the blocks read as an even stack rather than a
+   jumble of 8/10px gaps. The tray flyout deliberately stays tighter (8px)
+   above — its height is fixed, so it can't afford the extra air. Both the
+   session↔weekly hairline (a border-top on the second quota) and the
+   metrics↔pace divider now sit centered in a uniform 10px gutter. */
+.provider-detail-live-card .menu-card__content {
+  gap: 10px;
+}
+.provider-detail-live-card .menu-card__divider {
+  margin: 0;
+}
+.provider-detail-live-card .menu-card__metrics .provider-quota {
+  margin-bottom: 0;
+}
+.provider-detail-live-card .menu-card__metrics .provider-quota + .provider-quota {
+  margin-top: 10px;
+  padding-top: 10px;
 }
 
 /* Neutralise the legacy detail-only compression with equal specificity. */

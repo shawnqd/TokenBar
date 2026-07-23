@@ -5,7 +5,6 @@ import type {
   ProviderDetail,
   ProviderUsageSnapshot,
   LocalUsagePeriod,
-  MenuBarDisplayMode,
   RegionOption,
   SettingsSnapshot,
   SettingsUpdate,
@@ -52,7 +51,6 @@ interface Props {
   resetTimeRelative: boolean;
   showAsUsed: boolean;
   localUsagePeriod: LocalUsagePeriod;
-  menuBarDisplayMode: MenuBarDisplayMode;
   outputSpeedEnabled: boolean;
   providerMetrics: SettingsSnapshot["providerMetrics"];
   settingsDisabled: boolean;
@@ -76,7 +74,6 @@ export function ProviderDetailPane({
   resetTimeRelative,
   showAsUsed,
   localUsagePeriod,
-  menuBarDisplayMode,
   outputSpeedEnabled,
   providerMetrics,
   settingsDisabled,
@@ -214,7 +211,10 @@ export function ProviderDetailPane({
     ? detail.id
     : null;
   const providerOutputSpeed = speedProviderId ? outputSpeed?.[speedProviderId] ?? null : null;
-  const compactMetrics = menuBarDisplayMode !== "detailed";
+  // The Settings → Providers preview shows a single, explicitly-selected
+  // provider, so it always renders the full quota content regardless of the
+  // menu-bar display mode (which only governs the "all providers" overview).
+  const compactMetrics = false;
 
   const handleRefresh = async () => {
     setBusy(true);

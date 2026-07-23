@@ -21,7 +21,9 @@ use std::time::{Duration, Instant};
 
 const LOCAL_USAGE_TTL: Duration = Duration::from_secs(30);
 const PROVIDER_CHART_TTL: Duration = Duration::from_secs(5 * 60);
-const PROVIDER_CHART_CACHE_VERSION: u8 = 2;
+// v3: ProviderLocalUsageSummary gained per-period top-model fields; discard v2
+// caches so the new fields are recomputed instead of loading as null.
+const PROVIDER_CHART_CACHE_VERSION: u8 = 3;
 
 /// A single (date, value) point for cost or credits history charts.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -58,7 +60,11 @@ pub struct ProviderLocalUsageSummary {
     pub seven_day_tokens: Option<u64>,
     pub thirty_day_cost: Option<f64>,
     pub thirty_day_tokens: Option<u64>,
-    pub top_model: Option<String>,
+    /// Top model per window, so the panel's "top model" line matches whichever
+    /// period the user selected instead of always reflecting 30-day totals.
+    pub today_top_model: Option<String>,
+    pub seven_day_top_model: Option<String>,
+    pub thirty_day_top_model: Option<String>,
     pub estimate_note: String,
 }
 
@@ -377,7 +383,9 @@ fn load_local_usage_summary(
         seven_day_tokens: non_zero_u64(seven_day_tokens),
         thirty_day_cost: non_zero_f64(thirty_day.total_cost_usd),
         thirty_day_tokens: non_zero_u64(thirty_day_tokens),
-        top_model: top_model(&thirty_day),
+        today_top_model: top_model(&today),
+        seven_day_top_model: top_model(&seven_day),
+        thirty_day_top_model: top_model(&thirty_day),
         estimate_note: localized_estimate_note(provider_id, lang),
     })
 }

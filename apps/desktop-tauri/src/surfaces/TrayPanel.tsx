@@ -357,7 +357,11 @@ export default function TrayPanel({ state }: { state: BootstrapState }) {
         : 1,
     ),
   );
-  const compactMetrics = settings.menuBarDisplayMode !== "detailed";
+  // The display-mode setting only governs the "all providers" overview list.
+  // Opening a single provider is an explicit "show me everything" action, so
+  // its detail card always renders full content regardless of the mode.
+  const isDetailView = selectedProviderId !== null;
+  const compactMetrics = !isDetailView && settings.menuBarDisplayMode !== "detailed";
   // Minimal deliberately has its own render path. Reusing full MenuCards here
   // made its result indistinguishable from compact mode and, in a fixed-height
   // flyout, could leave users looking at an apparently empty scroll body.
@@ -382,7 +386,8 @@ export default function TrayPanel({ state }: { state: BootstrapState }) {
           onLayoutChange={requestLayout}
           outputSpeed={speedProviderId ? outputSpeed?.[speedProviderId] : null}
           localUsagePeriod={settings.localUsagePeriod}
-          hideLocalUsage={settings.menuBarDisplayMode !== "detailed"}
+          hideLocalUsage={!isDetailView && settings.menuBarDisplayMode !== "detailed"}
+          showProviderIcon={settings.switcherShowsIcons}
         />
       </div>
     );

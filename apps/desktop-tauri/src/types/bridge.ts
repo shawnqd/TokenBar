@@ -514,7 +514,9 @@ export interface ProviderLocalUsageSummary {
   sevenDayTokens: number | null;
   thirtyDayCost: number | null;
   thirtyDayTokens: number | null;
-  topModel: string | null;
+  todayTopModel: string | null;
+  sevenDayTopModel: string | null;
+  thirtyDayTopModel: string | null;
   estimateNote: string;
 }
 
