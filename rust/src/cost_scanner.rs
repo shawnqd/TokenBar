@@ -306,35 +306,60 @@ impl CostScanner {
     fn scan_codex_sessions_dir(
         &self,
         sessions_dir: &Path,
-        range: &CostUsageDayRange,
+        _range: &CostUsageDayRange,
         summary: &mut CostSummary,
         cancel: Option<&AtomicBool>,
     ) {
-        // Iterate through the date-based directory structure with one day of
-        // padding on each side. Codex JSONL timestamps are UTC, while the tray
-        // presents local calendar days; the parser filters back to `range`.
-        for date in codex_scan_dates(range) {
+        // Codex appends to *resumed* sessions, so a file created weeks ago (and
+        // filed under its original start-date folder, e.g. sessions/2026/05/21/)
+        // can still hold token records from today. Iterating only the folders
+        // whose date falls inside the window would miss all of those. Instead
+        // walk every session file and parse any modified recently enough to
+        // possibly contain in-range records; `parse_codex_file` then filters the
+        // individual records back to the exact day range by their timestamp.
+        let today = Local::now().date_naive();
+        let start_date = codex_period_start(today, self.days);
+        // One extra day of slack absorbs UTC-vs-local and clock skew; a file
+        // untouched since before this can't hold a record inside the window.
+        let mtime_cutoff = start_date - Duration::days(1);
+        self.walk_codex_files(sessions_dir, mtime_cutoff, summary, cancel);
+    }
+
+    fn walk_codex_files(
+        &self,
+        dir: &Path,
+        mtime_cutoff: NaiveDate,
+        summary: &mut CostSummary,
+        cancel: Option<&AtomicBool>,
+    ) {
+        let Ok(entries) = fs::read_dir(dir) else {
+            return;
+        };
+        for entry in entries.flatten() {
             if is_cancelled(cancel) {
                 break;
             }
-            let year = date.format("%Y").to_string();
-            let month = date.format("%m").to_string();
-            let day = date.format("%d").to_string();
-
-            let day_dir = sessions_dir.join(&year).join(&month).join(&day);
-            if !day_dir.exists() {
+            let path = entry.path();
+            let Ok(file_type) = entry.file_type() else {
                 continue;
-            }
-
-            if let Ok(entries) = fs::read_dir(&day_dir) {
-                for entry in entries.flatten() {
-                    if is_cancelled(cancel) {
-                        break;
-                    }
-                    let path = entry.path();
-                    if path.extension().is_some_and(|e| e == "jsonl") {
-                        self.parse_codex_file(&path, summary, cancel);
-                    }
+            };
+            if file_type.is_dir() {
+                self.walk_codex_files(&path, mtime_cutoff, summary, cancel);
+            } else if path.extension().is_some_and(|e| e == "jsonl") {
+                // Skip files untouched since before the window — their last
+                // write predates the earliest record we'd keep.
+                let recent = entry
+                    .metadata()
+                    .and_then(|meta| meta.modified())
+                    .map(|modified| {
+                        DateTime::<Utc>::from(modified)
+                            .with_timezone(&Local)
+                            .date_naive()
+                            >= mtime_cutoff
+                    })
+                    .unwrap_or(true);
+                if recent {
+                    self.parse_codex_file(&path, summary, cancel);
                 }
             }
         }

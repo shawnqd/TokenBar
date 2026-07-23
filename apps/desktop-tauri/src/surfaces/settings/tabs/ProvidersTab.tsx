@@ -149,7 +149,6 @@ export default function ProvidersTab({
             resetTimeRelative={settings.resetTimeRelative}
             showAsUsed={settings.showAsUsed}
             localUsagePeriod={settings.localUsagePeriod ?? "7d"}
-            menuBarDisplayMode={settings.menuBarDisplayMode}
             outputSpeedEnabled={settings.outputSpeedEnabled !== false}
             providerMetrics={settings.providerMetrics}
             settingsDisabled={saving}

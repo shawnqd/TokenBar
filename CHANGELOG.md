@@ -1,5 +1,38 @@
 # Changelog
 
+## [Windows] Unreleased
+
+### Added
+- Add provider brand icon to the usage card header, gated by the existing "show provider icons" setting.
+- Merge the weekly usage forecast into the pace ("进度") block as a single "Runway" panel (gauge-icon
+  title, colored stage chip, single actual-usage bar with an "expected" marker, status + ETA line) instead
+  of two separate, overlapping blocks.
+- Add Chinese magnitude units (万/亿) after local usage token counts.
+- Restore the output-speed sparkline in the usage card.
+- Localize the previously English-only "Credential Storage" block and surrounding provider-issue /
+  browser-cookie strings (zh-CN, zh-TW).
+- Add cross-tool development handoff docs (`COLLABORATION.md`, `CURRENT_TASK.md`, `AGENT_HANDOFF.md`,
+  `PROJECT_STATUS.md`, `CODE_REVIEW.md`, `DECISIONS.md`, `logs/dev_audit.jsonl`).
+
+### Fixed
+- Fix the Grok provider icon rendering solid black instead of its brand mark.
+- Fix the Grok plan-name pill disappearing on the cookie-auth login path (`login_method` fallback).
+- Fix "top model" always reflecting a fixed 30-day window regardless of the selected period; now computed
+  per period (today/7d/30d).
+- Fix Codex local usage scanning to zero: resumed Codex sessions append new records into session files
+  filed under their original (older) start date, and the scanner only walked date-matching folders. It now
+  walks every session file gated by file mtime.
+- Fix the menu-bar display mode (detailed/compact/minimal) leaking into the single-provider detail view;
+  it now only affects the "all providers" overview list, matching the intended scope.
+- Fix two light-theme rendering bugs in the pace block: `--usage-bar-track` and the four
+  `--pace-*-bg/-fg` token pairs were only ever defined under `[data-theme="dark"]`, and
+  `.menu-card__pace` never declared `display: flex`, silently no-oping its `gap`. Both were verified via
+  computed-style/geometry checks before and after the fix.
+- Restore per-block reset-time placement (top-right of each quota block) and reword session/weekly quota
+  labels ("5 小时额度" / "周额度").
+
+---
+
 ## [Windows] 0.41.2 - 2026-07-08
 
 ### Added

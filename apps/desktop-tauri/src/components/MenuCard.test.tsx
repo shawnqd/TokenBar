@@ -143,7 +143,9 @@ describe("MenuCard", () => {
         sevenDayTokens: null,
         thirtyDayCost: 1.23,
         thirtyDayTokens: 584_000,
-        topModel: "glim-4.6",
+        todayTopModel: null,
+        sevenDayTopModel: "glim-4.6",
+        thirtyDayTopModel: "glim-4.6",
         estimateNote: "Estimated from local logs",
       },
     });
@@ -207,7 +209,7 @@ describe("MenuCard", () => {
     renderCard(snapshot);
 
     expect(await screen.findByText("Additional Budget")).toBeInTheDocument();
-    expect(screen.getByText("58% left")).toBeInTheDocument();
+    expect(screen.getByText("58%")).toBeInTheDocument();
   });
 
   it("uses one quota structure and duration-based labels for Codex and Claude", async () => {

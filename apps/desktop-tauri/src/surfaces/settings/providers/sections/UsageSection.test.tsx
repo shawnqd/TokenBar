@@ -78,7 +78,7 @@ describe("UsageSection", () => {
     );
 
     expect(await screen.findByText("Additional Budget")).toBeInTheDocument();
-    expect(screen.getByText("42% PanelUsedSuffix")).toBeInTheDocument();
+    expect(screen.getByText("42%")).toBeInTheDocument();
     expect(document.querySelector(".provider-quota")).toBeInTheDocument();
   });
 

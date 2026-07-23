@@ -96,7 +96,10 @@ const RAW: Record<string, string> = {
   elevenlabs: tint(elevenlabs),
   factory: tint(factory),
   gemini: tint(gemini),
-  grok: tint(grok),
+  // Self-contained brand mark (black rounded badge + white glyph), like
+  // volcengineArk — must NOT be tinted, or the white glyph is recolored to
+  // the near-black brand color and the whole icon renders as a black square.
+  grok,
   groq: tint(groq),
   jetbrains: tint(jetbrains),
   kilo: tint(kilo),

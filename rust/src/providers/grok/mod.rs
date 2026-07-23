@@ -92,7 +92,8 @@ impl GrokProvider {
             "grok-browser",
             None,
             None,
-            None,
+            // Cookie auth can't read the tier; still surface a name in the bar.
+            Some("Grok".to_string()),
         ))
     }
 
@@ -275,8 +276,9 @@ impl GrokCredentials {
             Some("oidc") => Some("SuperGrok".to_string()),
             Some("session") => Some("session".to_string()),
             Some(other) => Some(other.to_string()),
-            None if self.expires_at.is_some() => Some("Grok".to_string()),
-            None => None,
+            // An authenticated Grok token always surfaces a name in the bar;
+            // fall back to the brand name when the auth mode is unknown.
+            None => Some("Grok".to_string()),
         }
     }
 }

@@ -90,19 +90,15 @@ export function ProviderQuotaBlock({
       </div>
     );
   }
-  const percentText = (
-    <span
-      className="provider-quota__percent"
-      data-exhausted={rate.isExhausted || undefined}
-    >
-      {Math.round(displayPercent)}% {showAsUsed ? usedLabel : remainingLabel}
-    </span>
-  );
+  const roundedPercent = Math.round(displayPercent);
+  const suffixLabel = showAsUsed ? usedLabel : remainingLabel;
 
   return (
     <div className={`provider-quota${hero ? " provider-quota--hero" : ""}`}>
-      {/* Every window shares the same header: quota label on the left, reset
-          time on the right. */}
+      {/* Header: quota label only. Every window then shows its percentage as a
+          left-aligned number just below the title — the hero large, secondary
+          windows a size down — so the figures line up on the same side. */}
+      {/* Header: quota label on the left, reset countdown on the right. */}
       <div className="provider-quota__header">
         {hero ? (
           <span className="provider-quota__hero-label">{title}</span>
@@ -111,12 +107,20 @@ export function ProviderQuotaBlock({
         )}
         {resetText && <span className="provider-quota__reset">{resetText}</span>}
       </div>
-      {hero && (
+      {hero ? (
         <div
           className="provider-quota__hero-pct"
           data-exhausted={rate.isExhausted || undefined}
         >
-          {Math.round(displayPercent)}%
+          {roundedPercent}%
+        </div>
+      ) : (
+        <div
+          className="provider-quota__sub-pct"
+          data-exhausted={rate.isExhausted || undefined}
+        >
+          <span className="provider-quota__sub-pct-num">{roundedPercent}%</span>
+          <span className="provider-quota__sub-pct-suffix">{suffixLabel}</span>
         </div>
       )}
       <div className="provider-quota__track">
@@ -142,10 +146,6 @@ export function ProviderQuotaBlock({
           </>
         )}
       </div>
-      {/* Secondary windows keep one meta row under the bar carrying the
-          percentage (right-aligned); the hero's percentage is the big
-          number above the bar, so it has no meta row. */}
-      {!hero && <div className="provider-quota__meta">{percentText}</div>}
       {rate.isExhausted && (
         <div className="provider-quota__exhausted">{exhaustedLabel}</div>
       )}
