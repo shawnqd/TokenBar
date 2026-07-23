@@ -1,5 +1,20 @@
 # Repository Guidelines
 
+## 跨终端交接文档（必须先读）
+
+本项目采用跨终端开发交接规范（Codex / Claude Code / OpenCode / Grok 等）。任何模型进入本仓库前，按以下顺序读取实际存在的文件：
+
+1. `README.md`
+2. [COLLABORATION.md](COLLABORATION.md) — 单一写入者、分支边界、跨工具协作规则
+3. [CURRENT_TASK.md](CURRENT_TASK.md) — 当前唯一任务包
+4. [AGENT_HANDOFF.md](AGENT_HANDOFF.md) — 唯一当前交接入口（最新 checkpoint 在顶部）
+5. [PROJECT_STATUS.md](PROJECT_STATUS.md) — 项目阶段、已完成、阻塞项
+6. 任务点名的领域文档（本文件其余部分、`docs/PROJECT_LINES.md` 等）
+7. [DECISIONS.md](DECISIONS.md) — 涉及产品、架构、安全或破坏性操作时必读
+8. 最近相关的 [CHANGELOG.md](CHANGELOG.md)、[CODE_REVIEW.md](CODE_REVIEW.md)
+
+`logs/dev_audit.jsonl` 是按行追加的执行审计日志；当前开发平台/模型在每轮 checkpoint 时负责追加，无法确认的字段写 `unknown`，不得猜测。
+
 ## Current Project State
 - This branch launches the Tauri desktop shell by default (`apps/desktop-tauri/src-tauri`), while
   `rust/` remains the shared backend/domain crate and standalone CLI.
