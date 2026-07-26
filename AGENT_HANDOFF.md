@@ -46,5 +46,12 @@ preserved in `docs/archive/` and must not be used as current scope.
 越界：否
 剩余风险：远端 skill 仓库后续更新仍需手动同步；应用工作区已有前序未提交改动
 下一步执行方：由用户决定
-提交状态：未提交
+提交状态：已提交并推送到 `origin/platform/windows`，提交 `e77cce2e`
 ```
+
+### Publication checkpoint
+
+- Documentation migration commit `e77cce2e` was pushed to
+  `origin/platform/windows`.
+- The unrelated application and runtime files remain uncommitted in the
+  worktree and were intentionally excluded.

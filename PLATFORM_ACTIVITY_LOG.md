@@ -11,7 +11,7 @@ Format:
 
 ## Entries
 
-2026-07-26 | TASK-DOC-SYNC-001 | Codex / unknown / project controller | Migrated project documentation to the current cross-tool workflow and preserved the previous handoff/task files under `docs/archive/` | documentation only, uncommitted | legacy docs retained as archive; current contract introduced | GitHub CLI source read passed; canonical document check passed; `git diff --check` passed | complete; no application code or data changes
+2026-07-26 | TASK-DOC-SYNC-001 | Codex / unknown / project controller | Migrated project documentation to the current cross-tool workflow and preserved the previous handoff/task files under `docs/archive/` | documentation only; commit `e77cce2e` pushed to `origin/platform/windows` | legacy docs retained as archive; current contract introduced | GitHub CLI source read passed; canonical document check passed; `git diff --check` passed | complete; unrelated application worktree changes remain uncommitted
 
 ## Constraints
 
