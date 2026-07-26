@@ -3,6 +3,9 @@
 ## [Windows] Unreleased
 
 ### Added
+- Synchronize the project handoff system with the current cross-tool workflow:
+  add `DOCUMENTATION.md`, `UNIVERSAL_EXECUTION_RULES.md` and
+  `PLATFORM_ACTIVITY_LOG.md`, and archive the legacy task/handoff documents.
 - Add provider brand icon to the usage card header, gated by the existing "show provider icons" setting.
 - Merge the weekly usage forecast into the pace ("进度") block as a single "Runway" panel (gauge-icon
   title, colored stage chip, single actual-usage bar with an "expected" marker, status + ETA line) instead

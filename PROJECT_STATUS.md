@@ -1,32 +1,44 @@
 # PROJECT_STATUS
 
-## 当前阶段
+## Current phase
 
-Windows（Tauri/React/Rust）端的截图驱动 UI 迭代 QA，聚焦托盘浮窗与设置页的用量卡片。本轮
-（2026-07-23）另外把跨终端开发交接文档体系（`COLLABORATION.md` / `CURRENT_TASK.md` /
-`AGENT_HANDOFF.md` / `PROJECT_STATUS.md` / `CODE_REVIEW.md` / `DECISIONS.md` /
-`logs/dev_audit.jsonl`）首次引入本仓库的 `platform/windows` 分支。
+Windows Tauri/React/Rust product line, branch `platform/windows`. The tray
+flyout has been rebuilt around a fixed native surface and the reference HTML's
+three density modes. The app is currently waiting for the user's final visual
+acceptance before a separately authorized commit.
 
-## 已完成
+## Completed
 
-- 大规模视觉/交互 QA（详见 git log 与历史 `AGENT_HANDOFF.md` checkpoint，涵盖设置窗口宽度统一、
-  开关/分段控件重做、浅色主题完整补齐、托盘浮层透明化与圆角修复、Providers 侧栏拖拽等，见仓库根
-  任务追踪历史）。
-- 本轮（2026-07-23）：Grok 图标与用量条品牌名修复、热门模型按周期计算、Codex 本地用量扫描器
-  真实 bug 修复（恢复会话记录归档问题）、中文数量单位、输出速度折线图恢复、会话/周额度视觉拆分、
-  显示模式作用域修正（只影响概览，不影响单服务商详情）、"进度 + 用量预测"合并为 Runway 设计、
-  卡头品牌图标、浅色主题 CSS 变量缺口修复、`.menu-card__pace` flex-gap 缺失修复、凭据存储区块
-  及周边 26 个键补齐汉化。
-- 跨终端交接文档体系落地到 `platform/windows` 分支（本次提交）。
+- Tray flyout routing and fixed geometry were rebuilt and verified with a debug
+  build and direct Windows launch.
+- Detailed, compact and minimal provider-card structures were aligned with
+  `design/floatbar-reference.html`.
+- Frontend checks passed: 33 test files / 159 tests; locale drift check passed;
+  debug Tauri build passed.
+- The project documentation system was migrated to the current
+  `cross-tool-dev-workflow` contract. See `DOCUMENTATION.md` and
+  `PLATFORM_ACTIVITY_LOG.md`.
 
-## 进行中
+## Known risks
 
-Runway 进度块（.menu-card__pace）样式迭代（两轮：去灰底/减字重 + 配色中性化 chip去色/fill统一蓝/runway去色）：代码与自测完成，reviewer 独立审查 Go（已修复图标去色问题），待用户真机视觉确认（仅改 styles.css，去灰底/减字重/降字号），待用户真机视觉确认。
+- Settings still has a separate window/proof route that requires a later,
+  explicitly scoped task; it is outside the flyout rewrite.
+- The Windows Vite/dev-server cache issue is documented as a runtime risk;
+  direct debug builds are the reliable validation path until that task is
+  separately investigated.
+- Existing uncommitted application changes predate the documentation migration.
 
-## 阻塞项
+## Next milestone
 
-无。
+User visual review of the rebuilt tray flyout, especially compact/minimal modes;
+then the user decides whether to authorize commit, push or merge. No external
+operation is implied by this status file.
 
-## 下一步
+## Branch and upstream boundary
 
-等待用户真机视觉确认（tray 浮窗 + settings 预览卡 + 浅色/深色）；reviewer 已审查 Go（tray 浮窗 + settings 预览卡 + 浅色/深色）；确认后授权 commit（pace 两轮改动一并提交）；或由用户指定新任务并写入 CURRENT_TASK.md。
+- `platform/windows` → `Finesssee/Win-CodexBar` direct Windows upstream.
+- `platform/macos` → independent macOS product line.
+- `main` → cross-line documentation and decisions only.
+
+Historical status and handoff records are preserved under `docs/archive/` and
+are not current task instructions.

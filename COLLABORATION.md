@@ -1,61 +1,72 @@
-# COLLABORATION
+# Collaboration Contract
 
-跨 Codex、Claude Code、OpenCode、Grok 或其他终端在本仓库协作时的稳定规则。完整背景见用户维护的通用模板
-[`cross-tool-dev-workflow`](https://github.com/shawnqd/ai-skills-vault/tree/main/workflows/cross-tool-dev-workflow)
-（私有仓库）；本文件是该模板在 TokenBar 项目上的落地版本，以本文件和下方各交接文档为准。
+This file is TokenBar's project-specific adaptation of the current
+[`cross-tool-dev-workflow`](https://github.com/shawnqd/ai-skills-vault/tree/main/workflows/cross-tool-dev-workflow).
+The shared safety baseline is `UNIVERSAL_EXECUTION_RULES.md`; the document map
+and update timing are in `DOCUMENTATION.md`.
 
-## 平台选择
+## User-controlled platform selection
 
-本轮执行平台由用户明确选择，不自动路由、不自动改派。未明确执行方时，停止修改并请求用户指定。
+The user chooses the executor for each task: Codex, Claude Code, OpenCode,
+Grok or another tool. Do not auto-route, auto-switch or silently reassign a
+task. If the executor is unclear, stop before writing and ask the user.
 
-## 分支边界（本项目对模板的调整）
+## TokenBar branch boundaries
 
-模板默认假设单一 `main` 工作分支。**TokenBar 不适用这条默认规则**——本仓库按
-[`docs/PROJECT_LINES.md`](docs/PROJECT_LINES.md) 同时维护两条独立产品线：
-
-| 分支 | 定位 | 应用代码 |
+| Branch | Product line | Code allowed |
 | --- | --- | --- |
-| `platform/macos` | macOS 原型（Swift/SwiftUI） | 只属于这条线 |
-| `platform/windows` | Windows 端（Tauri/React/Rust），当前默认活跃分支 | 只属于这条线 |
-| `main` | 仅存放跨线共享文档、分支说明、决策记录 | 不放应用代码 |
+| `platform/windows` | Windows Tauri/React/Rust product; current active line | Windows app code and its tests |
+| `platform/macos` | macOS Swift/SwiftUI product line | macOS app code and its tests |
+| `main` | Cross-line documentation, decisions and branch explanation | No platform application code |
 
-因此本项目的"单一写入者"规则落地为：**每条平台线各自的当前活跃分支只允许一个写入者**，不得跨
-Codex/Claude Code/OpenCode/Grok 并行修改同一平台线的同一批文件。本文件与
-`CURRENT_TASK.md`/`AGENT_HANDOFF.md`/`PROJECT_STATUS.md`/`CODE_REVIEW.md`/`DECISIONS.md`/`logs/dev_audit.jsonl`
-随 `platform/windows` 分支一起提交，不额外新建分支来维护它们。
+This is an intentional project adaptation: unlike a generic single-`main`
+repository, application code stays on its platform branch. Shared product
+rules and branch boundaries are documented on `main` when that branch is being
+maintained. Full upstream boundaries are in `docs/PROJECT_LINES.md`.
 
-跨线规则（不可覆盖，见 `docs/PROJECT_LINES.md`）：
+## Roles and write ownership
 
-1. 处理问题前先确认目标平台线；Windows 的问题只查 Windows 直接上游（`Finesssee/Win-CodexBar`）。
-2. 不跨线推断窗口、托盘、Cookie、认证、更新或 UI 行为。
-3. 共享产品规则、分支说明和决策记录只写入 `main` 文档；应用代码留在对应平台分支。
+1. **User** — owns scope, product tradeoffs, destructive actions and final
+   commit/push/merge authorization.
+2. **Project controller** — maintains the active task contract, handoff,
+   evidence and review state; it may execute when selected by the user.
+3. **Executor** — one selected tool/model at a time; implements only the task
+   package, tests it and reports facts.
+4. **Reviewer** — independently checks diff, tests, boundaries, runtime/data
+   effects and unresolved risks, then returns findings and Go/No-Go.
 
-## 角色模型
+Only one executor may write the shared worktree at a time. Read-only explorers
+and independent reviewers may work in parallel. Two writing agents must never
+edit the same worktree concurrently, even with disjoint file lists.
 
-1. **用户**：选择本轮执行平台，拥有产品范围、取舍、破坏性操作和最终 commit/push/merge 授权。
-2. **总控/项目维护者**：维护任务包和共享证据；用户选中时也可执行；不得自动改派执行方。
-3. **执行方**：同一时刻仅一个工具/模型；只实现任务包范围内的内容，自测并如实汇报。
-4. **审查方**：检查 diff、测试、边界、运行时/数据影响和未解决风险，输出 findings + Go/No-Go。
-
-## 标准流程
+## Standard flow
 
 ```text
-用户目标
-→ 用户选择一个执行方
-→ 更新 CURRENT_TASK.md
-→ 在 AGENT_HANDOFF.md 写一个任务包（如需要）
-→ 执行方开始 checkpoint 并实现、自测
-→ 执行方在 AGENT_HANDOFF.md 追加完成 checkpoint
-→ （如有审查方）审查方在 CODE_REVIEW.md 输出 findings 与 Go/No-Go
-→ 用户测试并明确授权后，才允许 commit / push / merge
+user goal
+→ user selects executor
+→ rewrite CURRENT_TASK.md
+→ write one package in AGENT_HANDOFF.md
+→ executor records start checkpoint and implements
+→ executor self-tests and records completion checkpoint
+→ append one factual PLATFORM_ACTIVITY_LOG.md entry
+→ reviewer reports findings and Go/No-Go
+→ user tests and explicitly authorizes commit/merge
 ```
 
-不让用户充当工具间的传话人；所有阻塞、测试结果、运行时变化和下一步都写进 `AGENT_HANDOFF.md`。
+The user must not act as a messenger between tools. Blockers, test results,
+runtime changes and next actions belong in `AGENT_HANDOFF.md`; concise platform
+history belongs in `PLATFORM_ACTIVITY_LOG.md`.
 
-## 安全与外部操作
+## Windows-specific boundary
 
-- 不记录 Token、Cookie、密码、真实个人数据或敏感原始截图。
-- 未经用户明确授权，不 commit、push、merge、发布、部署、迁移、删除或覆盖数据；本文件建立当轮的 commit
-  已由用户在对话中明确授权，push/merge 仍需另行授权。
-- 数据库/生产数据操作、依赖变更、外部服务变更必须暂停并获得授权。
-- 技术问题写入交接文档并推进；产品范围、费用、隐私、安全、外部服务和主观体验取舍交回用户。
+For `platform/windows`, investigate Windows behavior against the direct
+upstream `Finesssee/Win-CodexBar`. The macOS project is historical inspiration,
+not a Windows implementation source. Do not cross-import window, tray, cookie,
+authentication or update behavior without a Windows-specific decision.
+
+## Authorization and history
+
+Do not commit, push, merge, publish, deploy, migrate, delete or overwrite
+external data without explicit user authorization. `AGENT_HANDOFF.md` and
+`CURRENT_TASK.md` contain only current work; older material is preserved under
+`docs/archive/` and is not a source of current scope.
