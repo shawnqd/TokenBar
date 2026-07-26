@@ -4,8 +4,9 @@
 
 Windows Tauri/React/Rust product line, branch `platform/windows`. The tray
 flyout has been rebuilt around a fixed native surface and the reference HTML's
-three density modes. The app is currently waiting for the user's final visual
-acceptance before a separately authorized commit.
+three density modes. The documentation workflow migration is committed and
+pushed; application changes remain in the worktree while waiting for the
+user's final visual acceptance and separate application commit authorization.
 
 ## Completed
 
@@ -31,8 +32,9 @@ acceptance before a separately authorized commit.
 ## Next milestone
 
 User visual review of the rebuilt tray flyout, especially compact/minimal modes;
-then the user decides whether to authorize commit, push or merge. No external
-operation is implied by this status file.
+then the user decides whether to authorize committing and publishing the
+application changes. The documentation migration is already published; no
+application commit is implied by this status file.
 
 ## Branch and upstream boundary
 

@@ -39,19 +39,19 @@ preserved in `docs/archive/` and must not be used as current scope.
 执行方：Codex
 实际模型：unknown
 修改文件：.gitignore、AGENTS.md、COLLABORATION.md、CURRENT_TASK.md、AGENT_HANDOFF.md、DOCUMENTATION.md、UNIVERSAL_EXECUTION_RULES.md、PLATFORM_ACTIVITY_LOG.md、PROJECT_STATUS.md、DECISIONS.md、CHANGELOG.md、docs/archive/*
-明确未做：未修改应用代码、运行时数据、分支、提交或远端仓库
+明确未做：未修改应用代码或运行时数据；未提交应用代码；未创建分支或合并
 验证命令及真实结果：GitHub CLI 读取远端 workflow 文件成功；canonical document existence check passed；`git diff --check` passed
 运行时 / 服务变化：无
 数据 / schema 变化：无
 越界：否
 剩余风险：远端 skill 仓库后续更新仍需手动同步；应用工作区已有前序未提交改动
 下一步执行方：由用户决定
-提交状态：已提交并推送到 `origin/platform/windows`，提交 `e77cce2e`
+提交状态：文档迁移已提交并推送到 `origin/platform/windows`，最新提交 `d8dcf74c`；应用改动仍未提交
 ```
 
 ### Publication checkpoint
 
-- Documentation migration commit `e77cce2e` was pushed to
+- Documentation migration commits `e77cce2e` and `d8dcf74c` were pushed to
   `origin/platform/windows`.
 - The unrelated application and runtime files remain uncommitted in the
   worktree and were intentionally excluded.
