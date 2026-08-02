@@ -20,11 +20,13 @@ pub struct CookieFilePreviewBridge {
     pub unmatched_cookie_count: usize,
 }
 
+/// One cookie taken from somewhere outside the provider fetchers — a user's
+/// exported cookie file, or the in-app login window's own webview store.
 #[derive(Debug, Clone)]
-struct ImportedCookie {
-    domain: String,
-    name: String,
-    value: String,
+pub(crate) struct ImportedCookie {
+    pub(crate) domain: String,
+    pub(crate) name: String,
+    pub(crate) value: String,
 }
 
 /// Preview a user-exported Cookie file without persisting it. Supported formats
@@ -65,11 +67,7 @@ pub fn import_cookie_file(
         let Some(cookies) = grouped.get(&provider) else {
             continue;
         };
-        let header = cookies
-            .iter()
-            .map(|cookie| format!("{}={}", cookie.name, cookie.value))
-            .collect::<Vec<_>>()
-            .join("; ");
+        let header = cookie_header_from(cookies);
         validate_single_line_secret(&header, "Cookie header", MAX_COOKIE_HEADER_LEN)?;
         manual.set(provider.cli_name(), &header);
         imported += 1;
@@ -146,7 +144,22 @@ fn parse_json_cookie_file(contents: &str) -> Result<Vec<ImportedCookie>, String>
     Ok(cookies)
 }
 
-fn push_cookie(cookies: &mut Vec<ImportedCookie>, domain: &str, name: &str, value: &str) {
+/// Collapse cookies into the single-line `Cookie:` header a provider fetcher
+/// sends. Callers validate the result before it is stored.
+pub(crate) fn cookie_header_from(cookies: &[ImportedCookie]) -> String {
+    cookies
+        .iter()
+        .map(|cookie| format!("{}={}", cookie.name, cookie.value))
+        .collect::<Vec<_>>()
+        .join("; ")
+}
+
+pub(crate) fn push_cookie(
+    cookies: &mut Vec<ImportedCookie>,
+    domain: &str,
+    name: &str,
+    value: &str,
+) {
     let domain = domain.trim().trim_start_matches('.').to_ascii_lowercase();
     if domain.is_empty()
         || name.trim().is_empty()
@@ -190,7 +203,7 @@ fn group_cookies_by_provider(
 /// format). Sending those exact duplicates produces a malformed-looking Cookie
 /// header without adding any authentication data. Preserve genuinely distinct
 /// path/domain values while removing only byte-for-byte duplicates.
-fn dedupe_exact_cookies(cookies: Vec<ImportedCookie>) -> Vec<ImportedCookie> {
+pub(crate) fn dedupe_exact_cookies(cookies: Vec<ImportedCookie>) -> Vec<ImportedCookie> {
     let mut seen = std::collections::HashSet::new();
     cookies
         .into_iter()
@@ -207,7 +220,7 @@ fn dedupe_exact_cookies(cookies: Vec<ImportedCookie>) -> Vec<ImportedCookie> {
 /// Claude's browser session can legitimately span its public app domains.
 /// The web fetcher already tries these domains, so file import must retain the
 /// matching cookies instead of silently dropping the companion session keys.
-fn provider_domain_matches(
+pub(crate) fn provider_domain_matches(
     provider: codexbar::core::ProviderId,
     cookie_domain: &str,
     provider_domain: &str,

@@ -17,8 +17,8 @@ use crate::providers::{
     ManusProvider, MiMoApiProvider, MiMoProvider, MiniMaxProvider, MistralProvider,
     NanoGPTProvider, OllamaProvider, OpenAIApiProvider, OpenCodeGoProvider, OpenCodeProvider,
     OpenRouterProvider, PerplexityProvider, PoeProvider, QoderProvider, SakanaProvider,
-    StepFunProvider, Sub2ApiProvider, T3ChatProvider, VeniceProvider, VertexAIProvider, WarpProvider,
-    WayfinderProvider, WindsurfProvider, ZaiProvider, ZedProvider,
+    StepFunProvider, Sub2ApiProvider, T3ChatProvider, VeniceProvider, VertexAIProvider,
+    WarpProvider, WayfinderProvider, WindsurfProvider, ZaiProvider, ZedProvider,
 };
 
 /// Instantiate the concrete [`Provider`] implementation for a given [`ProviderId`].

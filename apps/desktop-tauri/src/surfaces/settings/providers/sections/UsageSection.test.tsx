@@ -2,8 +2,16 @@ import { render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { LocaleProvider } from "../../../../i18n/LocaleProvider";
 import { buildBundle } from "../../../../test/localeHarness";
+import type { QuotaDisplayContext } from "../../../../lib/quotaDisplay";
 import type { ProviderDetail } from "../../../../types/bridge";
 import { UsageSection } from "./UsageSection";
+
+const DISPLAY: QuotaDisplayContext = {
+  showAsUsed: true,
+  resetTimeRelative: true,
+  highUsageThreshold: 70,
+  criticalUsageThreshold: 90,
+};
 
 const tauriMocks = vi.hoisted(() => ({
   getLocaleStrings: vi.fn(),
@@ -24,7 +32,8 @@ function rateWindow(usedPercent: number, resetDescription: string | null = null)
   return {
     usedPercent,
     remainingPercent: 100 - usedPercent,
-    windowMinutes: null,
+kind: null,
+        windowMinutes: null,
     resetsAt: null,
     resetDescription,
     isExhausted: false,
@@ -73,7 +82,7 @@ describe("UsageSection", () => {
   it("renders extra Copilot budget windows in settings", async () => {
     render(
       <LocaleProvider>
-        <UsageSection provider={provider()} resetTimeRelative={true} t={(key) => key} />
+        <UsageSection provider={provider()} display={DISPLAY} t={(key) => key} />
       </LocaleProvider>,
     );
 
@@ -110,7 +119,7 @@ describe("UsageSection", () => {
 
     const { container } = render(
       <LocaleProvider>
-        <UsageSection provider={detail} resetTimeRelative={true} t={(key) => key} />
+        <UsageSection provider={detail} display={DISPLAY} t={(key) => key} />
       </LocaleProvider>,
     );
 

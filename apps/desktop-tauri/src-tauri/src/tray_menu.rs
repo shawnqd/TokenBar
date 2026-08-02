@@ -124,15 +124,15 @@ pub(crate) fn build_tray_menu_with(
     ));
     menu.push(TrayMenuEntry::item(
         "pop_out",
-        text(LocaleKey::TrayPopOutDashboard),
+        text(LocaleKey::TrayOpenPanel),
     ));
     menu.push(TrayMenuEntry::item(
         "show_panel",
-        text(LocaleKey::TrayShowWindow),
+        text(LocaleKey::TrayOpenDashboard),
     ));
     menu.push(TrayMenuEntry::check_item(
         "toggle_float_bar",
-        text(LocaleKey::TrayShowFloatBar),
+        text(LocaleKey::TrayShowMiniStatusBar),
         float_bar_enabled,
     ));
     menu.push(TrayMenuEntry::separator());
@@ -280,9 +280,9 @@ mod tests {
             items,
             vec![
                 "Refresh All",
-                "Pop Out Dashboard",
-                "Show Window",
-                "Show Float Bar",
+                "Open Tray Panel",
+                "Open Dashboard",
+                "Show Mini Status Bar",
                 "Providers",
                 "Settings...",
                 "About CodexBar",
@@ -361,7 +361,7 @@ mod tests {
             .find(|e| e.id.as_deref() == Some("toggle_float_bar"))
             .expect("float bar toggle present");
         assert_eq!(toggle.checked, Some(true));
-        assert_eq!(toggle.label, "Show Float Bar");
+        assert_eq!(toggle.label, "Show Mini Status Bar");
 
         let menu_off = build_tray_menu_with(
             &sample_provider_catalog(),
@@ -389,7 +389,7 @@ mod tests {
         let items = proof_menu_items(&menu, "tray").unwrap();
 
         assert!(items.iter().any(|item| item == "すべて更新"));
-        assert!(items.iter().any(|item| item == "ダッシュボードを開く"));
+        assert!(items.iter().any(|item| item == "トレイパネルを開く"));
         assert!(items.iter().any(|item| item == "設定..."));
         assert!(items.iter().any(|item| item == "終了"));
         assert!(!items.iter().any(|item| item == "Refresh All"));

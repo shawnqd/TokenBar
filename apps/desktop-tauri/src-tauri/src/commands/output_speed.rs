@@ -62,6 +62,22 @@ fn output_speed_sample(
     model: Option<String>,
 ) -> Option<OutputSpeedSample> {
     let elapsed_ms = completed_at_ms.saturating_sub(started_at_ms);
+    output_speed_sample_for_duration(tokens, elapsed_ms, completed_at_ms, model)
+}
+
+/// Build a sample from a duration that is already known.
+///
+/// Codex and Claude only let us bracket a response between two log lines, so
+/// they subtract timestamps. Grok records the generation duration itself
+/// (`usage.apiDurationMs`), which is strictly better — it excludes the time the
+/// agent spent running tools between model calls — so that path passes the
+/// measured duration straight through instead of re-deriving a worse one.
+fn output_speed_sample_for_duration(
+    tokens: u64,
+    elapsed_ms: i64,
+    completed_at_ms: i64,
+    model: Option<String>,
+) -> Option<OutputSpeedSample> {
     if tokens == 0 || elapsed_ms < 250 {
         return None;
     }
@@ -83,6 +99,7 @@ fn output_speed_sample(
 pub struct OutputSpeedSnapshot {
     pub codex: ProviderOutputSpeed,
     pub claude: ProviderOutputSpeed,
+    pub grok: ProviderOutputSpeed,
 }
 
 #[tauri::command]
@@ -97,6 +114,10 @@ pub fn get_output_speed_snapshot() -> OutputSpeedSnapshot {
             .and_then(|path| read_tail(&path).ok())
             .map(|text| parse_claude_tail(&text))
             .unwrap_or_else(|| ProviderOutputSpeed::unavailable("claude")),
+        grok: newest_grok_updates_log()
+            .and_then(|path| read_tail(&path).ok())
+            .map(|text| parse_grok_tail(&text))
+            .unwrap_or_else(|| ProviderOutputSpeed::unavailable("grok")),
     }
 }
 
@@ -134,6 +155,33 @@ fn claude_project_roots() -> Vec<PathBuf> {
         .unwrap_or_default()
 }
 
+/// The Grok CLI keeps one directory per session under `~/.grok/sessions`, and
+/// several `.jsonl` files inside each. Only `updates.jsonl` carries the usage
+/// record, so — unlike Codex and Claude, whose session file *is* the transcript
+/// — the newest file overall is the wrong pick here and the name has to be part
+/// of the search.
+fn newest_grok_updates_log() -> Option<PathBuf> {
+    let mut roots = Vec::new();
+    if let Ok(home) = std::env::var("GROK_HOME") {
+        let home = home.trim();
+        if !home.is_empty() {
+            roots.push(normalize_grok_sessions_root(PathBuf::from(home)));
+        }
+    }
+    if let Some(home) = user_home_dir() {
+        roots.push(home.join(".grok").join("sessions"));
+    }
+    newest_file_named_in_roots(&roots, "updates.jsonl")
+}
+
+fn normalize_grok_sessions_root(path: PathBuf) -> PathBuf {
+    if path.file_name().is_some_and(|name| name == "sessions") {
+        path
+    } else {
+        path.join("sessions")
+    }
+}
+
 fn user_home_dir() -> Option<PathBuf> {
     std::env::var_os("USERPROFILE")
         .or_else(|| std::env::var_os("HOME"))
@@ -141,9 +189,25 @@ fn user_home_dir() -> Option<PathBuf> {
 }
 
 fn newest_file_in_roots(roots: &[PathBuf]) -> Option<PathBuf> {
+    newest_matching_file_in_roots(roots, &|_| true)
+}
+
+fn newest_file_named_in_roots(roots: &[PathBuf], file_name: &str) -> Option<PathBuf> {
+    newest_matching_file_in_roots(roots, &|path| {
+        path.file_name().is_some_and(|name| name == file_name)
+    })
+}
+
+fn newest_matching_file_in_roots(
+    roots: &[PathBuf],
+    accept: &dyn Fn(&Path) -> bool,
+) -> Option<PathBuf> {
     let mut newest: Option<(SystemTime, PathBuf)> = None;
     for root in roots {
         visit_jsonl_files(root, &mut |path, modified| {
+            if !accept(path) {
+                return;
+            }
             if newest
                 .as_ref()
                 .is_none_or(|(current, _)| modified > *current)
@@ -364,6 +428,106 @@ fn parse_claude_tail(text: &str) -> ProviderOutputSpeed {
     }
 }
 
+/// Read the Grok CLI's per-session `updates.jsonl`.
+///
+/// # Why this provider is not like the other two
+///
+/// Codex and Claude log a token count and leave the timing to be inferred from
+/// surrounding records, so both parsers bracket a response between a user line
+/// and a usage line and divide. Grok instead emits one `turn_completed` update
+/// carrying a complete `usage` object:
+///
+/// ```text
+/// "usage":{"inputTokens":237473,"outputTokens":2764,"totalTokens":240237,
+///          "reasoningTokens":2155,"modelCalls":10,"apiDurationMs":104937,...}
+/// ```
+///
+/// `totalTokens == inputTokens + outputTokens` in every record observed, so
+/// `outputTokens` is the whole generated count (`reasoningTokens` is a subset of
+/// it, not an addition) and is directly comparable to Codex's
+/// `last_token_usage.output_tokens` and Claude's `usage.output_tokens`.
+///
+/// `apiDurationMs` is the summed model time across the turn's `modelCalls`. Wall
+/// clock would also count the seconds the agent spent running tools between
+/// those calls, which is not generation and would understate the rate on
+/// tool-heavy turns — so the reported duration is used as-is.
+fn parse_grok_tail(text: &str) -> ProviderOutputSpeed {
+    let mut awaiting_response = false;
+    let mut recent_rate = None;
+    let mut recent_tokens = None;
+    let mut recent_at = None;
+    let mut recent_samples = Vec::new();
+
+    for line in text.lines() {
+        let Ok(value) = serde_json::from_str::<Value>(line) else {
+            continue;
+        };
+        let Some(update) = value.pointer("/params/update") else {
+            continue;
+        };
+        match update
+            .get("sessionUpdate")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+        {
+            "user_message_chunk" => awaiting_response = true,
+            "turn_completed" => {
+                awaiting_response = false;
+                let Some(usage) = update.get("usage") else {
+                    continue;
+                };
+                // `agentTimestampMs` is the precise emission time; the sibling
+                // `timestamp` is only whole seconds, so it is the fallback.
+                let at = value
+                    .pointer("/_meta/agentTimestampMs")
+                    .and_then(Value::as_i64)
+                    .or_else(|| {
+                        value
+                            .get("timestamp")
+                            .and_then(Value::as_i64)
+                            .map(|seconds| seconds * 1000)
+                    });
+                let tokens = usage.get("outputTokens").and_then(Value::as_u64);
+                let duration = usage.get("apiDurationMs").and_then(Value::as_i64);
+                let (Some(tokens), Some(duration), Some(at)) = (tokens, duration, at) else {
+                    continue;
+                };
+                // `modelUsage` is keyed by model id; a turn can span more than
+                // one, so name a model only when the attribution is unambiguous.
+                let model = usage
+                    .get("modelUsage")
+                    .and_then(Value::as_object)
+                    .filter(|models| models.len() == 1)
+                    .and_then(|models| models.keys().next().cloned());
+                if let Some(sample) = output_speed_sample_for_duration(tokens, duration, at, model)
+                {
+                    recent_rate = Some(sample.tokens_per_second);
+                    recent_tokens = Some(tokens);
+                    recent_at = Some(at);
+                    push_recent_sample(&mut recent_samples, sample);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    ProviderOutputSpeed {
+        provider_id: "grok",
+        status: if awaiting_response {
+            "generating"
+        } else if recent_rate.is_some() {
+            "recent"
+        } else {
+            "unavailable"
+        },
+        tokens_per_second: recent_rate,
+        output_tokens: recent_tokens,
+        updated_at_ms: recent_at,
+        approximate: true,
+        recent_samples,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -411,5 +575,76 @@ mod tests {
         assert_eq!(result.recent_samples[0].tokens_per_second, 50.0);
         assert_eq!(result.recent_samples[1].tokens_per_second, 40.0);
         assert_eq!(result.tokens_per_second, Some(40.0));
+    }
+
+    /// Shapes taken from a real `~/.grok/sessions/<cwd>/<id>/updates.jsonl`.
+    #[test]
+    fn grok_measures_generation_against_reported_api_duration() {
+        let text = r#"
+{"timestamp":1784815000,"method":"session/update","params":{"sessionId":"s1","update":{"sessionUpdate":"user_message_chunk"}},"_meta":{"agentTimestampMs":1784815000000}}
+{"timestamp":1784815127,"method":"_x.ai/session/update","params":{"sessionId":"s1","update":{"sessionUpdate":"turn_completed","prompt_id":"p1","stop_reason":"end_turn","usage":{"inputTokens":237473,"outputTokens":2000,"totalTokens":239473,"reasoningTokens":1500,"modelCalls":10,"apiDurationMs":100000,"modelUsage":{"grok-4.5":{"outputTokens":2000}}}}},"_meta":{"agentTimestampMs":1784815127000}}
+"#;
+        let result = parse_grok_tail(text);
+        assert_eq!(result.status, "recent");
+        assert_eq!(result.output_tokens, Some(2000));
+        assert_eq!(result.tokens_per_second, Some(20.0));
+        assert_eq!(result.updated_at_ms, Some(1784815127000));
+        assert_eq!(
+            result.recent_samples[0].model.as_deref(),
+            Some("grok-4.5"),
+            "a single-model turn should name its model"
+        );
+        assert_eq!(
+            result.recent_samples[0].duration_ms, 100_000,
+            "the turn's own apiDurationMs is the duration, not the wall clock \
+             between the prompt and the completion"
+        );
+    }
+
+    /// A prompt with no `turn_completed` after it is still being answered.
+    #[test]
+    fn grok_reports_generation_while_a_turn_is_open() {
+        let text = r#"
+{"timestamp":1784815127,"method":"_x.ai/session/update","params":{"sessionId":"s1","update":{"sessionUpdate":"turn_completed","stop_reason":"end_turn","usage":{"outputTokens":500,"apiDurationMs":25000,"modelUsage":{"grok-4.5":{}}}}},"_meta":{"agentTimestampMs":1784815127000}}
+{"timestamp":1784815200,"method":"session/update","params":{"sessionId":"s1","update":{"sessionUpdate":"user_message_chunk"}},"_meta":{"agentTimestampMs":1784815200000}}
+{"timestamp":1784815205,"method":"session/update","params":{"sessionId":"s1","update":{"sessionUpdate":"tool_call"}},"_meta":{"agentTimestampMs":1784815205000}}
+"#;
+        let result = parse_grok_tail(text);
+        assert_eq!(result.status, "generating");
+        assert_eq!(
+            result.tokens_per_second,
+            Some(20.0),
+            "the last completed turn's rate stays on screen while the next runs"
+        );
+    }
+
+    /// Never invent a measurement: a turn that logged no usage yields nothing.
+    #[test]
+    fn grok_without_usage_reports_unavailable() {
+        let text = r#"
+{"timestamp":1784815127,"method":"session/update","params":{"sessionId":"s1","update":{"sessionUpdate":"turn_completed","stop_reason":"end_turn"}},"_meta":{"agentTimestampMs":1784815127000}}
+{"timestamp":1784815128,"method":"session/update","params":{"sessionId":"s1","update":{"sessionUpdate":"tool_call_update"}},"_meta":{"agentTimestampMs":1784815128000}}
+"#;
+        let result = parse_grok_tail(text);
+        assert_eq!(result.status, "unavailable");
+        assert_eq!(result.tokens_per_second, None);
+        assert!(result.recent_samples.is_empty());
+    }
+
+    /// Grok's own accounting: `totalTokens` is input + output, and reasoning is
+    /// a subset of output. If that ever changes the rate would silently double,
+    /// so the assumption is pinned here.
+    #[test]
+    fn grok_output_tokens_is_the_whole_generated_count() {
+        let text = r#"
+{"timestamp":1784815127,"method":"session/update","params":{"sessionId":"s1","update":{"sessionUpdate":"turn_completed","usage":{"inputTokens":30266,"outputTokens":532,"totalTokens":30798,"reasoningTokens":201,"apiDurationMs":26600}}},"_meta":{"agentTimestampMs":1784815127000}}
+"#;
+        let result = parse_grok_tail(text);
+        assert_eq!(result.output_tokens, Some(532));
+        assert_eq!(result.tokens_per_second, Some(20.0));
+        assert_eq!(
+            result.recent_samples[0].model, None,
+            "a turn with no modelUsage must not guess a model name"
+        );
     }
 }

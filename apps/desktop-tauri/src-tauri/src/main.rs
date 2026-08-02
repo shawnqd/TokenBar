@@ -11,8 +11,15 @@ mod proof_harness;
 mod shell;
 mod shortcut_bridge;
 mod state;
+mod provider_mark;
+mod quota_cycle;
 mod surface;
 mod surface_target;
+mod taskbar_entries;
+#[cfg(windows)]
+mod taskbar_text;
+#[cfg(windows)]
+mod taskbar_widget;
 mod tray_bridge;
 mod tray_menu;
 mod window_positioner;
@@ -144,16 +151,18 @@ fn main() {
             commands::get_provider_catalog,
             commands::get_settings_snapshot,
             commands::update_settings,
+            commands::get_taskbar_font_families,
+            commands::get_taskbar_window_availability,
+            commands::get_taskbar_preview_lines,
             commands::set_surface_mode,
             commands::dismiss_tray_panel,
             commands::begin_flyout_gesture,
             commands::end_flyout_gesture,
             commands::reveal_tray_panel_window,
+            commands::reveal_settings_window,
             commands::open_settings_window,
             commands::open_flyout_window,
             commands::close_settings_window,
-            commands::set_flyout_size,
-            commands::flyout_stored_size,
             commands::get_current_surface_mode,
             commands::get_current_surface_state,
             commands::get_proof_state,
@@ -179,6 +188,10 @@ fn main() {
             commands::remove_manual_cookie,
             commands::preview_cookie_file,
             commands::import_cookie_file,
+            commands::get_provider_login_target,
+            commands::open_provider_login,
+            commands::capture_provider_login,
+            commands::close_provider_login,
             commands::get_token_account_providers,
             commands::get_token_accounts,
             commands::add_token_account,
@@ -234,6 +247,20 @@ fn main() {
                 window.hide()?;
             }
             tray_bridge::setup(app)?;
+            // Preload the two tray-driven WebViews while keeping them hidden.
+            // Their frontend-ready handshakes prevent blank native surfaces,
+            // and the first user click no longer pays WebView2 creation cost.
+            if let Err(error) = shell::settings_window::prewarm(app.handle()) {
+                tracing::warn!("settings prewarm failed: {error}");
+            }
+            if let Err(error) = shell::flyout_window::prewarm(app.handle()) {
+                tracing::warn!("flyout prewarm failed: {error}");
+            }
+            #[cfg(windows)]
+            {
+                taskbar_widget::set_app_handle(app.handle());
+                taskbar_widget::install();
+            }
             shortcut_bridge::register(app.handle());
             floatbar::install(app.handle());
             auto_refresh::install(app.handle().clone());
@@ -294,14 +321,6 @@ fn main() {
                         launch,
                         proof_harness::is_proof_mode(window.app_handle()),
                     ) {
-                        return;
-                    }
-                    if let Some(st) = window.app_handle().try_state::<Mutex<AppState>>()
-                        && st
-                            .lock()
-                            .unwrap()
-                            .take_startup_tray_blur_grace(std::time::Instant::now())
-                    {
                         return;
                     }
                     // Grace period: ignore blur within 500ms of showing the panel.

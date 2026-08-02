@@ -10,10 +10,12 @@ import {
   quotaWindowLabel,
 } from "../../../../components/ProviderQuotaBlock";
 import { getProviderDetailBalance } from "../../../../lib/providerBalance";
+import type { QuotaDisplayContext } from "../../../../lib/quotaDisplay";
 
 interface Props {
   provider: ProviderDetail;
-  resetTimeRelative: boolean;
+  /** Follows the previewed component's context (the dashboard cards). */
+  display: QuotaDisplayContext;
   t: (key: LocaleKey) => string;
 }
 
@@ -28,7 +30,7 @@ interface BarSpec {
  * Mirrors the bars in
  * `rust/src/native_ui/preferences.rs::render_provider_detail_panel`.
  */
-export function UsageSection({ provider, resetTimeRelative, t }: Props) {
+export function UsageSection({ provider, display, t }: Props) {
   const bars: BarSpec[] = [];
   const balanceInfo = getProviderDetailBalance(provider);
 
@@ -101,8 +103,7 @@ export function UsageSection({ provider, resetTimeRelative, t }: Props) {
           key={b.key}
           title={b.label}
           rate={b.rate}
-          resetTimeRelative={resetTimeRelative}
-          showAsUsed={true}
+          display={display}
           usedLabel={t("PanelUsedSuffix")}
           remainingLabel={t("PanelLeftSuffix")}
           exhaustedLabel={t("DetailWindowExhausted")}

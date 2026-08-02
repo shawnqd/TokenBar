@@ -321,6 +321,46 @@ impl Provider for ClaudeProvider {
     }
 }
 
+/// One rung of Claude's `SourceMode::Auto` ladder.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum AutoSource {
+    AdminApi,
+    OAuth,
+    Cli,
+    Web,
+}
+
+impl AutoSource {
+    fn label(self) -> &'static str {
+        match self {
+            AutoSource::AdminApi => "Admin API",
+            AutoSource::OAuth => "OAuth",
+            AutoSource::Cli => "CLI",
+            AutoSource::Web => "Web",
+        }
+    }
+}
+
+/// The order `SourceMode::Auto` walks Claude's sources: local credentials
+/// before any browser session.
+///
+/// `claude login` already wrote a token to `~/.claude/.credentials.json`, so
+/// asking for it costs one file read and always reflects the account the user
+/// is actually working in. Reaching for browser cookies first meant every
+/// refresh paid for a DPAPI extraction that Chrome's App-Bound Encryption
+/// refuses, and that error was the reason a manual Cookie paste looked
+/// mandatory. This matches the priority the macOS line already documents:
+/// CLI config > OAuth API > cookies.
+///
+/// A cookie the user supplied on purpose never reaches this ladder —
+/// `build_fetch_context` sends those straight to `SourceMode::Web`.
+const AUTO_SOURCE_ORDER: [AutoSource; 4] = [
+    AutoSource::AdminApi,
+    AutoSource::OAuth,
+    AutoSource::Cli,
+    AutoSource::Web,
+];
+
 impl ClaudeProvider {
     async fn fetch_via_auto(
         &self,
@@ -328,42 +368,25 @@ impl ClaudeProvider {
     ) -> Result<ProviderFetchResult, ProviderError> {
         let mut failures = Vec::new();
 
-        if let Some(result) = self.try_auto_admin_api(ctx, &mut failures).await {
-            return Ok(result);
-        }
+        for source in AUTO_SOURCE_ORDER {
+            let attempt = match source {
+                AutoSource::AdminApi => {
+                    if !self.admin_fetcher.has_credentials(ctx) {
+                        continue;
+                    }
+                    self.fetch_via_admin_api(ctx).await
+                }
+                AutoSource::OAuth => self.fetch_via_oauth(ctx).await,
+                AutoSource::Cli => self.fetch_via_cli(ctx).await,
+                AutoSource::Web => self.fetch_via_web(ctx).await,
+            };
 
-        if let Some(result) =
-            record_auto_source(&mut failures, "Web", self.fetch_via_web(ctx).await)
-        {
-            return Ok(result);
-        }
-
-        if let Some(result) =
-            record_auto_source(&mut failures, "OAuth", self.fetch_via_oauth(ctx).await)
-        {
-            return Ok(result);
-        }
-
-        if let Some(result) =
-            record_auto_source(&mut failures, "CLI", self.fetch_via_cli(ctx).await)
-        {
-            return Ok(result);
+            if let Some(result) = record_auto_source(&mut failures, source.label(), attempt) {
+                return Ok(result);
+            }
         }
 
         Err(claude_auto_fetch_error(failures))
-    }
-
-    async fn try_auto_admin_api(
-        &self,
-        ctx: &FetchContext,
-        failures: &mut Vec<(&'static str, ProviderError)>,
-    ) -> Option<ProviderFetchResult> {
-        self.admin_fetcher
-            .has_credentials(ctx)
-            .then_some(async { self.fetch_via_admin_api(ctx).await })?
-            .await
-            .map_err(|error| failures.push(("Admin API", error)))
-            .ok()
     }
 
     async fn fetch_via_oauth(
@@ -1179,6 +1202,25 @@ Resets Dec 24 at 3:59pm (Europe/Paris)
             err.to_string(),
             "Claude usage failed from all configured sources. OAuth: OAuth error: token expired; Web: No cookies available for web API; CLI: Parse error: Empty output from Claude CLI"
         );
+    }
+
+    /// The ladder used to open with the browser session, so a user who was
+    /// already signed in through `claude login` still watched every refresh
+    /// fail on Chrome's App-Bound Encryption before anything read the token
+    /// sitting in `~/.claude/.credentials.json`. Locking the policy down here
+    /// keeps a future edit from quietly putting cookies back in front.
+    #[test]
+    fn auto_reads_local_credentials_before_any_browser_session() {
+        let rung = |source: AutoSource| {
+            AUTO_SOURCE_ORDER
+                .iter()
+                .position(|candidate| *candidate == source)
+                .expect("every source appears in the ladder")
+        };
+
+        assert!(rung(AutoSource::OAuth) < rung(AutoSource::Web));
+        assert!(rung(AutoSource::Cli) < rung(AutoSource::Web));
+        assert_eq!(rung(AutoSource::AdminApi), 0);
     }
 
     #[test]

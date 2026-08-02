@@ -37,7 +37,8 @@ function rateWindow(usedPercent: number) {
   return {
     usedPercent,
     remainingPercent: 100 - usedPercent,
-    windowMinutes: null,
+kind: null,
+        windowMinutes: null,
     resetsAt: null,
     resetDescription: null,
     isExhausted: false,

@@ -35,7 +35,12 @@ vi.mock("@tauri-apps/api/core", () => coreMocks);
 import FloatBar from "./FloatBar";
 import { LocaleProvider } from "../i18n/LocaleProvider";
 import { buildBundle } from "../test/localeHarness";
-import type { BootstrapState, ProviderUsageSnapshot, SettingsSnapshot } from "../types/bridge";
+import type {
+  BootstrapState,
+  FloatBarResetWindow,
+  ProviderUsageSnapshot,
+  SettingsSnapshot,
+} from "../types/bridge";
 
 function rateWindow(
   used: number,
@@ -48,7 +53,8 @@ function rateWindow(
   return {
     usedPercent: used,
     remainingPercent: 100 - used,
-    windowMinutes: null,
+kind: null,
+        windowMinutes: null,
     resetsAt: opts.resetsAt ?? null,
     resetDescription: opts.resetDescription ?? null,
     isExhausted: opts.exhausted ?? false,
@@ -103,7 +109,6 @@ function settings(overrides: Partial<SettingsSnapshot> = {}): SettingsSnapshot {
     trayIconMode: "single",
     switcherShowsIcons: true,
     menuBarShowsHighestUsage: false,
-    menuBarShowsPercent: false,
     showAsUsed: true,
     showAllTokenAccountsInMenu: false,
     enableAnimations: true,
@@ -132,6 +137,24 @@ function settings(overrides: Partial<SettingsSnapshot> = {}): SettingsSnapshot {
     floatBarDarkText: false,
     floatBarShowCost: false,
     floatBarShowResetInline: false,
+    floatBarResetWindows: ["primary"],
+    taskbarWidgetEnabled: false,
+    taskbarWidgetPosition: "notification",
+    taskbarWidgetFontWeight: 400,
+    taskbarWidgetContent: "usage",
+    taskbarWidgetEntries: [
+      { providerId: "auto", window: "session" },
+      { providerId: "auto", window: "weekly" },
+    ],
+    taskbarWidgetFontFamily: "Microsoft YaHei UI",
+    taskbarWidgetFontSize: 12,
+    taskbarWidgetWidth: 132,
+    taskbarWidgetTextAlign: "left",
+    floatBarShowAsUsed: true,
+    floatBarResetTimeRelative: true,
+    dashboardShowAsUsed: true,
+    dashboardResetTimeRelative: true,
+    taskbarShowAsUsed: true,
     ...overrides,
   };
 }
@@ -169,6 +192,8 @@ describe("FloatBar", () => {
         FloatBarThirtyDayShort: "30d",
         FloatBarNoProviders: "No providers",
         FloatBarRemainingSuffix: "remaining",
+        TodayAt: "Today at {}",
+        TomorrowAt: "Tomorrow at {}",
       }),
     );
     eventMocks.listen.mockResolvedValue(() => {});
@@ -225,15 +250,40 @@ describe("FloatBar", () => {
     tauriMocks.getCachedProviders.mockResolvedValue([
       snapshot("claude", "Claude", 20),
     ]);
-    tauriMocks.getSettingsSnapshot.mockResolvedValue(settings({ showAsUsed: false }));
+    tauriMocks.getSettingsSnapshot.mockResolvedValue(
+      settings({ floatBarShowAsUsed: false }),
+    );
 
-    const { container } = renderFloatBar(bootstrap({ showAsUsed: false }));
+    const { container } = renderFloatBar(bootstrap({ floatBarShowAsUsed: false }));
 
     await waitFor(() => {
       const title = container
         .querySelector(".floatbar__pill")
         ?.getAttribute("title");
       expect(title).toContain("Claude: 80% remaining");
+    });
+  });
+
+  /** The floating bar must not follow the dashboard's or the taskbar's choice. */
+  it("ignores the dashboard and taskbar show-as-used settings", async () => {
+    tauriMocks.getCachedProviders.mockResolvedValue([
+      snapshot("claude", "Claude", 20),
+    ]);
+    const overrides = {
+      floatBarShowAsUsed: true,
+      dashboardShowAsUsed: false,
+      taskbarShowAsUsed: false,
+    };
+    tauriMocks.getSettingsSnapshot.mockResolvedValue(settings(overrides));
+
+    const { container } = renderFloatBar(bootstrap(overrides));
+
+    await waitFor(() => {
+      const title = container
+        .querySelector(".floatbar__pill")
+        ?.getAttribute("title");
+      expect(title).toContain("Claude: 20%");
+      expect(title).not.toContain("80%");
     });
   });
 
@@ -379,6 +429,89 @@ describe("FloatBar", () => {
     });
   });
 
+  /// Providers disagree about which slot holds which cycle, so a named window
+  /// has to be matched by declared LENGTH. Claude keeps its weekly quota in
+  /// `secondary`; asking for "weekly" must not return the 5-hour `primary`.
+  it("shows a labelled reset per configured window, matched by cycle length", async () => {
+    const sessionReset = new Date(Date.now() + 2 * 60 * 60_000).toISOString();
+    const weeklyReset = new Date(Date.now() + 48 * 60 * 60_000).toISOString();
+    const provider = snapshot("claude", "Claude", 20, {
+      resetsAt: sessionReset,
+    });
+    provider.primary.windowMinutes = 300;
+    provider.primary.kind = "session";
+    provider.secondary = {
+      ...rateWindow(40, { resetsAt: weeklyReset }),
+      kind: "weekly",
+      windowMinutes: 10080,
+    };
+    tauriMocks.getCachedProviders.mockResolvedValue([provider]);
+    const withWindows = {
+      floatBarShowResetInline: true,
+      floatBarResetWindows: ["session", "weekly"] as FloatBarResetWindow[],
+    };
+    tauriMocks.getSettingsSnapshot.mockResolvedValue(settings(withWindows));
+
+    const { container } = renderFloatBar(bootstrap(withWindows));
+
+    await waitFor(() => {
+      const resets = container.querySelectorAll(".floatbar__reset");
+      expect(resets).toHaveLength(2);
+      // Two deadlines side by side are meaningless unless each is named. The
+      // locale harness echoes these keys back rather than the display strings.
+      expect(resets[0].textContent).toContain("TaskbarWindowSession");
+      expect(resets[0].textContent).toMatch(/1h 59m|2h/);
+      expect(resets[1].textContent).toContain("TaskbarWindowWeekly");
+      expect(resets[1].textContent).toMatch(/1d|2d/);
+    });
+  });
+
+  /// A provider that does not publish the requested cycle must show nothing
+  /// for it, never somebody else's window standing in.
+  it("prints nothing for a window the provider does not publish", async () => {
+    const provider = snapshot("codex", "Codex", 20, {
+      resetsAt: new Date(Date.now() + 3 * 60 * 60_000).toISOString(),
+    });
+    provider.primary.windowMinutes = 10080;
+    provider.primary.kind = "weekly";
+    tauriMocks.getCachedProviders.mockResolvedValue([provider]);
+    const monthlyOnly = {
+      floatBarShowResetInline: true,
+      floatBarResetWindows: ["monthly"] as FloatBarResetWindow[],
+    };
+    tauriMocks.getSettingsSnapshot.mockResolvedValue(settings(monthlyOnly));
+
+    const { container } = renderFloatBar(bootstrap(monthlyOnly));
+
+    await waitFor(() => {
+      expect(container.querySelector(".floatbar__pill")).not.toBeNull();
+    });
+    expect(container.querySelectorAll(".floatbar__reset")).toHaveLength(0);
+  });
+
+  /// `primary` and a named cycle routinely resolve to the same window — Codex's
+  /// primary IS its weekly — and printing it twice would read as two deadlines.
+  it("does not print the same window twice", async () => {
+    const provider = snapshot("codex", "Codex", 20, {
+      resetsAt: new Date(Date.now() + 24 * 60 * 60_000).toISOString(),
+    });
+    provider.primary.windowMinutes = 10080;
+    provider.primary.kind = "weekly";
+    tauriMocks.getCachedProviders.mockResolvedValue([provider]);
+    const both = {
+      floatBarShowResetInline: true,
+      floatBarResetWindows: ["primary", "weekly"] as FloatBarResetWindow[],
+    };
+    tauriMocks.getSettingsSnapshot.mockResolvedValue(settings(both));
+
+    const { container } = renderFloatBar(bootstrap(both));
+
+    await waitFor(() => {
+      expect(container.querySelector(".floatbar__pill")).not.toBeNull();
+    });
+    expect(container.querySelectorAll(".floatbar__reset")).toHaveLength(1);
+  });
+
   it("polls refreshProvidersIfStale on the configured interval", async () => {
     vi.useFakeTimers();
     try {
@@ -405,5 +538,95 @@ describe("FloatBar", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  /**
+   * The floating bar's two "用量显示" switches, end to end.
+   *
+   * `floatBarShowAsUsed` and `floatBarResetTimeRelative` were reported as
+   * having no effect on the bar. Both were covered only at their ends — Rust
+   * proves the patch persists, `quotaDisplay.test.ts` proves the helpers branch
+   * — with nothing asserting a rendered pill follows them.
+   */
+  describe("its own usage-display switches", () => {
+    const RESETS_AT = new Date(Date.now() + 2 * 3600_000 + 30 * 60_000).toISOString();
+
+    async function pillTitle(overrides: Partial<SettingsSnapshot>): Promise<string> {
+      const effective = settings(overrides);
+      tauriMocks.getCachedProviders.mockResolvedValue([
+        snapshot("claude", "Claude", 71, { resetsAt: RESETS_AT }),
+      ]);
+      tauriMocks.getSettingsSnapshot.mockResolvedValue(effective);
+      const { container, unmount } = renderFloatBar({
+        contractVersion: "v1",
+        providers: [],
+        settings: effective,
+      });
+      await waitFor(() => {
+        expect(container.querySelector(".floatbar__pill")).not.toBeNull();
+      });
+      const title = container.querySelector(".floatbar__pill")!.getAttribute("title") ?? "";
+      unmount();
+      return title;
+    }
+
+    it("flips the pill between used and remaining", async () => {
+      expect(await pillTitle({ floatBarShowAsUsed: true })).toContain("71% used");
+      expect(await pillTitle({ floatBarShowAsUsed: false })).toContain("29% remaining");
+    });
+
+    it("flips the pill tooltip between a countdown and a wall-clock time", async () => {
+      expect(await pillTitle({ floatBarResetTimeRelative: true })).toMatch(
+        /Resets in \d+h \d+m/,
+      );
+      const absolute = await pillTitle({ floatBarResetTimeRelative: false });
+      expect(absolute).toMatch(/(Today|Tomorrow) at /);
+      expect(absolute).not.toContain("Resets in");
+    });
+
+    /**
+     * Why the switch was reported as dead.
+     *
+     * The bar renders a reset chip only when `floatBarShowResetInline` is on,
+     * and that lives in a different section of the same page. With it off — the
+     * default — the reset-time mode reaches the hover tooltip and nothing else,
+     * which on screen is indistinguishable from a broken toggle. FloatBarTab
+     * now says so in the field description.
+     */
+    it("prints no reset chip at all until inline resets are switched on", async () => {
+      const withChips = async (showResetInline: boolean) => {
+        const effective = settings({ floatBarShowResetInline: showResetInline });
+        tauriMocks.getCachedProviders.mockResolvedValue([
+          snapshot("claude", "Claude", 71, { resetsAt: RESETS_AT }),
+        ]);
+        tauriMocks.getSettingsSnapshot.mockResolvedValue(effective);
+        const { container, unmount } = renderFloatBar({
+          contractVersion: "v1",
+          providers: [],
+          settings: effective,
+        });
+        await waitFor(() => {
+          expect(container.querySelector(".floatbar__pill")).not.toBeNull();
+        });
+        const count = container.querySelectorAll(".floatbar__reset").length;
+        unmount();
+        return count;
+      };
+
+      expect(await withChips(false)).toBe(0);
+      expect(await withChips(true)).toBe(1);
+    });
+
+    /// The dashboard owns a separate copy; the bar must ignore it entirely.
+    it("ignores the dashboard's copy of the same two choices", async () => {
+      const title = await pillTitle({
+        floatBarShowAsUsed: true,
+        floatBarResetTimeRelative: true,
+        dashboardShowAsUsed: false,
+        dashboardResetTimeRelative: false,
+      });
+      expect(title).toContain("71% used");
+      expect(title).toMatch(/Resets in \d+h \d+m/);
+    });
   });
 });

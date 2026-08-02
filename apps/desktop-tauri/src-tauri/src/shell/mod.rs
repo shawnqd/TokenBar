@@ -25,9 +25,7 @@ pub use position::{
 };
 pub use transition::{reopen_to_target, transition_to_target};
 #[allow(unused_imports)]
-pub use window::{
-    apply_window_properties, hide_to_tray, hide_to_tray_if_current, hide_to_tray_state,
-};
+pub use window::{apply_window_properties, hide_to_tray, hide_to_tray_if_current};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ShellTransitionRequest {

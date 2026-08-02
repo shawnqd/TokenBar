@@ -14,6 +14,7 @@ import {
 } from "../providers/ProvidersSidebar";
 import { ProviderDetailPane } from "../providers/ProviderDetailPane";
 import { CookieFileImport, COOKIE_IMPORT_ID } from "../providers/CookieFileImport";
+import { quotaDisplayContext } from "../../../lib/quotaDisplay";
 import { reorderProviders } from "../../../lib/tauri";
 import { useProviders } from "../../../hooks/useProviders";
 
@@ -146,8 +147,7 @@ export default function ProvidersTab({
             providerId={selectedId}
             providerSnapshot={selectedSnapshot}
             cookieDomain={selectedEntry?.cookieDomain ?? null}
-            resetTimeRelative={settings.resetTimeRelative}
-            showAsUsed={settings.showAsUsed}
+            display={quotaDisplayContext(settings, "dashboard")}
             localUsagePeriod={settings.localUsagePeriod ?? "7d"}
             outputSpeedEnabled={settings.outputSpeedEnabled !== false}
             providerMetrics={settings.providerMetrics}

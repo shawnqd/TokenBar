@@ -60,6 +60,9 @@
   --icon-sidebar: 20px;
   --icon-about: 92px;
   --about-icon-radius: 16px;
+  /* Shared outer-window geometry. The tray flyout and detached Settings
+     window intentionally use one radius so their silhouettes cannot drift. */
+  --window-radius: 24px;
 
   /* ── General surfaces / text ───────────────────────────────────── */
   --app-bg: #1c1c1e;
@@ -212,6 +215,15 @@
   --pace-burning-bg: rgba(239, 71, 111, 0.18);
   --pace-burning-fg: #ef476f;
 
+  /* Pace direction for the flyout's weekly pace line. "Over" (spending faster
+     than the week elapses) is a burnt orange picked for legibility at 11px —
+     5.4:1 on the light panel, where --pace-racing-fg (#b45309) manages only
+     4.1:1 and the quota bar's own yellow just 1.6:1 (it is a FILL colour, not
+     a text colour). "Under" (slack left) takes the bar's healthy blue.
+     See design/pace-color-options.html for the candidates and their ratios. */
+  --pace-ahead-fg: #ffa552;
+  --pace-behind-fg: var(--usage-bar-normal);
+
   --pace-track-expected-fg: rgba(10, 132, 255, 0.45);
   --chart-cost-fg: #0a84ff;
   --chart-credits-fg: #06d6a0;
@@ -287,6 +299,9 @@
   --pace-racing-fg: #b45309;
   --pace-burning-bg: rgba(185, 28, 28, 0.14);
   --pace-burning-fg: #b91c1c;
+  /* The dark theme's #ffa552 would sit at ~2:1 on this panel; the same burnt
+     orange darkened to #a04000 clears 5.4:1 while staying the same hue. */
+  --pace-ahead-fg: #a04000;
   --pace-track-expected-fg: rgba(0, 122, 255, 0.45);
 
   --chart-tooltip-bg: rgba(255, 255, 255, 0.96);
@@ -1145,6 +1160,40 @@ html {
   text-align: center;
 }
 
+/* In-app sign-in: the path that replaces exporting cookies by hand. It leads
+   the section, and the paste form below stays as the fallback. */
+.provider-login {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 8px 0 14px;
+  padding: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.provider-login__title {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: 0.82rem;
+  font-weight: 600;
+}
+
+.provider-login__hint {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 0.78rem;
+  line-height: 1.5;
+}
+
+.provider-login__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 4px;
+}
+
 .credential-add-form {
   display: flex;
   flex-direction: column;
@@ -1363,138 +1412,6 @@ html {
 }
 
 /* ── Tray Panel ───────────────────────────────────────────────────── */
-
-/* Hide the panel during the initial resize + reposition dance so the
-   user never sees the window jump around.  Once layout is measured and
-   the window is anchored in its final position, .tray-panel-reveal--ready
-   fades the content in smoothly. */
-/* The flyout OS window is created transparent (flyout_window.rs) so the
-   rounded `.menu-surface--tray` shell floats free — everything around it
-   must stay transparent or it paints an opaque square behind the corners. */
-html:has(.tray-panel-reveal),
-body:has(.tray-panel-reveal) {
-  background: transparent;
-  height: 100%;
-  overflow: hidden;
-}
-.tray-panel-reveal {
-  display: flex;
-  flex-direction: column;
-  height: 100vh;
-  min-height: 0;
-  overflow: hidden;
-  background: transparent;
-  opacity: 0;
-  /* Also covers the dip back to `--ready: false` on every later provider
-     switch (see useTrayPanelLayout) — without a transition here that dip
-     snaps to invisible instantly, only fading back in, which reads as a
-     blink rather than a crossfade. */
-  transition: opacity 80ms ease-out;
-}
-.tray-panel-reveal--ready {
-  opacity: 1;
-}
-@media (prefers-reduced-motion: reduce) {
-  .tray-panel-reveal {
-    transition: none;
-  }
-}
-
-/* The window is sized in JS from a measured content height (see
-   useTrayPanelLayout), and DPI-scaled physical↔logical pixel rounding can
-   leave the card's natural height a pixel or two short of the actual
-   window (100vh) — the gap showed the wrapper's flatter, shadow-less
-   background color as a visible strip along the bottom edge. Forcing the
-   card itself to fill the full viewport height (previously only done for
-   the dense-grid case) closes that gap for every non-user-resized layout. */
-.tray-panel-reveal .menu-surface--tray {
-  flex: 1 1 auto;
-  min-height: 0;
-  height: 100%;
-  max-height: 100%;
-}
-
-/* User-resized flyout: the window is a fixed (remembered) size, so the surface
-   fills the viewport height and its body scrolls instead of the window growing
-   to fit content. */
-.tray-panel-reveal--usersized { height: 100vh; min-height: 0; }
-
-/* User-sized flyout body must scroll vertically when content overflows the
-   remembered window height — the base `.menu-surface--tray .menu-surface__body`
-   rule (below) uses `overflow-y: visible` because auto-fit sizes the window to
-   content instead of scrolling. Usersized mode is a fixed window, so it needs
-   the opposite: clip + scroll. The body also flex-grows to absorb any free
-   space so the footer (Zoom/Refresh/Settings/About/Quit) pins to the bottom
-   edge instead of floating mid-panel after the user widens the flyout.
-   Scoped to `--usersized` only; auto-fit path is untouched. Applies in both
-   narrow (single column) and wide (side-by-side, see the 640px media query
-   below) layouts. */
-.tray-panel-reveal .menu-surface--tray .menu-surface__body {
-  flex: 1 1 auto;
-  min-height: 0;
-  overflow-y: auto;
-  overscroll-behavior: contain;
-}
-
-/* Side-by-side provider cards once the user has widened the flyout enough to
-   fit two columns. The columns are independent so a tall card in one column
-   doesn't force empty space under the shorter card beside it. */
-@media (min-width: 640px) {
-  .tray-panel-reveal .menu-surface--tray .menu-stack {
-    display: flex;
-    flex-direction: row;
-    align-content: flex-start;
-    align-items: flex-start;
-    gap: 12px 16px;
-    width: 100%;
-  }
-
-  .tray-panel-reveal .menu-surface--tray .menu-stack__column {
-    flex: 1 1 0;
-    min-width: min(300px, 100%);
-    display: flex;
-    flex-direction: column;
-    gap: 12px;
-  }
-
-  .tray-panel-reveal .menu-surface--tray .menu-stack__sep {
-    display: none;
-  }
-}
-
-/* Flyout resize grips (top / left / top-left corner). Invisible strips at the
-   window's in-screen edges; the cursor change signals they're draggable. */
-.tray-resize {
-  position: fixed;
-  z-index: 50;
-}
-.tray-resize--top {
-  top: 0;
-  left: 0;
-  right: 0;
-  height: 10px;
-  cursor: ns-resize;
-}
-.tray-resize--left {
-  top: 0;
-  left: 0;
-  bottom: 0;
-  width: 10px;
-  cursor: ew-resize;
-}
-.tray-resize--topleft {
-  top: 0;
-  left: 0;
-  width: 20px;
-  height: 20px;
-  cursor: nwse-resize;
-  z-index: 51;
-}
-
-.shell--tray-panel {
-  max-width: 320px;
-  padding: 8px 10px 12px;
-}
 
 /* spin animation for refresh */
 @keyframes spin {
@@ -2697,10 +2614,87 @@ body:has(.tray-panel-reveal) {
 }
 
 .provider-quota__track {
+  position: relative;
   height: var(--bar-height);
   border-radius: var(--bar-radius);
   background: var(--usage-bar-track);
   overflow: hidden;
+}
+
+/* Pace tip — ported from the macOS UsageProgressBar Canvas.
+   The bar itself carries the pace state rather than a caption above it: the
+   "where you should be by now" position is cut out of the fill and a single
+   coloured stripe is drawn in the gap. The two gutters flanking it are what
+   make the stripe legible against both the filled and unfilled sides, which a
+   plain overlaid line never achieves.
+
+   macOS punches through track AND fill (`destinationOut` at 0.9 opacity),
+   because its menu background is a vibrant material that reads as a dip. Here
+   the card behind is flat white, so punching the track too left a white hole
+   and the grey rail visibly broke. Instead the notch is painted in the TRACK
+   colour over the fill: the rail stays continuous and the notch reads as the
+   fill being interrupted, which is what it means.
+
+   A mask is deliberately not used — a CSS mask applies to the whole subtree, so
+   the stripe nested in it was erased by the very punch it fills.
+
+   `--pace-x` is the pace position as a percentage of the track, already mirrored
+   into the surface's used/remaining semantics by `forecastMarkerPercent`. */
+.provider-quota__bar {
+  position: relative;
+}
+
+/* The notch INTERRUPTS the fill so the real track shows through it.
+   Painting a track-coloured block over the fill does not work: the track colour
+   is a translucent overlay (rgba(0,0,0,.08)), so over blue it just tints the
+   blue instead of reading as the grey rail. Cutting the fill needs no colour
+   matching at all — whatever the rail is, that is what appears.
+   The mask is on the FILL, which has no children; the stripe is its sibling, so
+   it cannot be erased the way a stripe nested in a masked track was. */
+.provider-quota__fill[data-notch] {
+  -webkit-mask-image: linear-gradient(
+    90deg,
+    #000 0,
+    #000 calc(var(--pace-fill-x) - 3px),
+    transparent calc(var(--pace-fill-x) - 3px),
+    transparent calc(var(--pace-fill-x) + 3px),
+    #000 calc(var(--pace-fill-x) + 3px)
+  );
+  mask-image: linear-gradient(
+    90deg,
+    #000 0,
+    #000 calc(var(--pace-fill-x) - 3px),
+    transparent calc(var(--pace-fill-x) - 3px),
+    transparent calc(var(--pace-fill-x) + 3px),
+    #000 calc(var(--pace-fill-x) + 3px)
+  );
+}
+
+.provider-quota__pace {
+  position: absolute;
+  /* Overshoot vertically like the macOS path (stripeTopY/-BottomY extend past
+     the bar and are clipped), so the stripe reads as a full-height cut rather
+     than a floating tick. */
+  top: -1px;
+  bottom: -1px;
+  width: 2px;
+  left: var(--pace-x);
+  transform: translateX(-50%);
+  border-radius: 1px;
+  pointer-events: none;
+  z-index: 2;
+}
+
+.provider-quota__pace[data-pace-state="reserve"] {
+  background: var(--pace-steady-fg, #15803d);
+}
+
+.provider-quota__pace[data-pace-state="deficit"] {
+  background: var(--pace-burning-fg, #b91c1c);
+}
+
+.provider-quota__pace[data-pace-state="on-pace"] {
+  background: var(--text-secondary);
 }
 
 .provider-quota__fill {
@@ -4133,73 +4127,6 @@ body:has(.tray-panel-reveal) {
   min-height: 0;
 }
 
-/* Header bar — small CodexBar wordmark + iconified actions
-   (refresh / settings / pop-out). Upstream's NSMenu has no dedicated
-   title row; we keep one slim toolbar pinned to the top so the popover
-   exposes the same controls without dominating the layout. */
-.menu-surface__header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 6px;
-  padding: 0;
-  min-height: 24px;
-}
-
-.menu-surface__title {
-  font-size: 12px;
-  font-weight: 500;
-  letter-spacing: 0;
-  color: var(--text-secondary);
-}
-
-/* Wordmark cluster: small accent badge + "CodexBar" title.
-   Mirrors a menu-bar app brand glyph so the header isn't pure text. */
-.menu-surface__brand {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  min-width: 0;
-}
-
-.menu-surface__brand-icon {
-  width: 20px;
-  height: 20px;
-  border-radius: 4px;
-  object-fit: contain;
-  flex-shrink: 0;
-}
-
-.menu-surface__actions {
-  display: flex;
-  gap: 2px;
-}
-
-.menu-surface__btn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 20px;
-  height: 20px;
-  border: none;
-  border-radius: 4px;
-  background: transparent;
-  color: var(--text-secondary);
-  font-size: 12px;
-  cursor: pointer;
-  transition: background 0.12s, color 0.12s;
-}
-
-.menu-surface__btn:hover {
-  background: var(--surface-elevated);
-  color: var(--text-primary);
-}
-
-.menu-surface__btn:disabled {
-  opacity: 0.4;
-  cursor: not-allowed;
-}
-
 .menu-surface__summary {
   padding: 0;
   font-size: 11px;
@@ -4381,311 +4308,20 @@ body:has(.menu-surface--popout) .popout-scale-shell,
   overflow-y: auto;
 }
 
-/* Unlock html/body overflow for tray panel auto-sizing */
-body:has(.menu-surface--tray) {
-  overflow: visible;
-  min-height: 0;
-}
-html:has(.menu-surface--tray) {
-  overflow: visible;
-}
-
-/* Tray variant — auto-sized by JS, no forced min-height. The window itself
-   is the "outer shell": a soft gray backdrop (--app-bg, via --menu-popover-bg)
-   with generous rounding + inset padding, so the switcher/cards/footer read
-   as separate floating panels rather than flush strips. */
-.menu-surface--tray {
-  min-height: 0;
-  border-radius: 20px;
-  overflow: clip;
-  border: 1px solid rgba(255, 255, 255, 0.10);
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35);
-  padding: 10px;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  /* Auto-size to content; JS resizes the Tauri window to match.
-     No max-height here — JS sets an explicit pixel cap after measuring. */
-  height: auto;
-  box-sizing: border-box;
-}
-.menu-surface--tray .menu-surface__body {
-  flex: 1 1 auto;
-  overflow-y: auto;
-  overflow-x: hidden;
-  min-height: 0;
-  min-width: 0;
-  max-width: 100%;
-  /* No visible scrollbar in the flyout — wheel/touch scrolling still works. */
-  scrollbar-width: none;
-}
-.menu-surface--tray .menu-surface__fixed-header {
-  flex: 0 0 auto;
-  background: var(--panel-bg);
-  border-radius: 14px;
-  position: relative;
-  z-index: 1;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
-}
-.menu-surface--tray .menu-surface__fixed-header .provider-grid {
-  margin-bottom: 0;
-}
-.menu-surface--tray .menu-surface__body::-webkit-scrollbar {
-  display: none;
-}
-.menu-surface--tray .menu-surface__footer {
-  flex-shrink: 0;
-  position: relative;
-  z-index: 1;
-  background: var(--panel-bg);
-  border-radius: 14px;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
-  overflow: hidden;
-}
-.menu-surface--tray .menu-stack {
-  gap: 8px;
-  flex: 0 0 auto;
-  max-height: none;
-  overflow: visible;
-  min-width: 0;
-  /* The outer .menu-surface--tray padding now provides the horizontal
-     inset from the window edge — no extra side padding needed here. */
-  padding: 0;
-  box-sizing: border-box;
-}
-
-/* Minimal mode is intentionally a separate, always-visible provider list.
-   It is not a card stack with details hidden: every enabled provider occupies
-   one durable row, so the mode remains useful in the fixed-height flyout. */
-.tray-minimal-summary {
-  display: flex;
-  flex: 0 0 auto;
-  flex-direction: column;
-  gap: 5px;
-  padding: 8px 10px 10px;
-}
-
-.tray-minimal-summary__row {
-  display: grid;
-  grid-template-columns: 8px minmax(0, 1fr) minmax(58px, 0.7fr) 42px;
-  align-items: center;
-  gap: 8px;
-  width: 100%;
-  min-height: 35px;
-  padding: 7px 9px;
-  border: 1px solid color-mix(in srgb, var(--menu-divider) 80%, transparent);
-  border-radius: 8px;
-  background: color-mix(in srgb, var(--menu-popover-bg) 76%, transparent);
-  color: var(--text-primary);
-  font: inherit;
-  text-align: left;
-  cursor: pointer;
-}
-
-.tray-minimal-summary__row:hover,
-.tray-minimal-summary__row:focus-visible {
-  border-color: color-mix(in srgb, var(--accent) 62%, var(--menu-divider));
-  background: color-mix(in srgb, var(--accent) 10%, var(--menu-popover-bg));
-  outline: none;
-}
-
-.tray-minimal-summary__status {
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: #34c759;
-  box-shadow: 0 0 0 2px color-mix(in srgb, #34c759 18%, transparent);
-}
-
-.tray-minimal-summary__row[data-status="warning"] .tray-minimal-summary__status {
-  background: #ff9f0a;
-  box-shadow: 0 0 0 2px color-mix(in srgb, #ff9f0a 18%, transparent);
-}
-
-.tray-minimal-summary__row[data-status="exhausted"] .tray-minimal-summary__status,
-.tray-minimal-summary__row[data-status="error"] .tray-minimal-summary__status {
-  background: #ff453a;
-  box-shadow: 0 0 0 2px color-mix(in srgb, #ff453a 18%, transparent);
-}
-
-.tray-minimal-summary__name {
-  overflow: hidden;
-  font-size: 13px;
-  font-weight: 600;
-  line-height: 1.2;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.tray-minimal-summary__bar {
-  display: block;
-  height: 4px;
-  overflow: hidden;
-  border-radius: 999px;
-  background: color-mix(in srgb, var(--text-muted) 24%, transparent);
-}
-
-.tray-minimal-summary__bar > span {
-  display: block;
-  height: 100%;
-  min-width: 3px;
-  border-radius: inherit;
-  background: var(--accent);
-}
-
-.tray-minimal-summary__row[data-status="warning"] .tray-minimal-summary__bar > span {
-  background: #ff9f0a;
-}
-
-.tray-minimal-summary__row[data-status="exhausted"] .tray-minimal-summary__bar > span,
-.tray-minimal-summary__row[data-status="error"] .tray-minimal-summary__bar > span {
-  background: #ff453a;
-}
-
-.tray-minimal-summary__percent {
-  color: var(--text-secondary);
-  font-size: 12px;
-  font-variant-numeric: tabular-nums;
-  text-align: right;
-}
-
-/* Balance-type providers replace the bar+percent pair with the amount,
-   spanning both columns so it still lands flush against the row's right
-   edge instead of being squeezed into the narrow percent column alone. */
-.tray-minimal-summary__balance {
-  grid-column: 3 / span 2;
-  overflow: hidden;
-  color: var(--text-primary);
-  font-size: 12px;
-  font-weight: 600;
-  font-variant-numeric: tabular-nums;
-  text-align: right;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.tray-minimal-summary__balance[data-unavailable="true"] {
-  color: var(--text-secondary);
-  font-weight: 500;
-}
-
-/* Tray cards — each provider is its own bordered block so adjacent rows
-   read as distinct entries instead of one continuous wall of text (the
-   previous "flush, no container" look was hard to scan once more than a
-   couple of providers were stacked). Horizontal padding stays on the inner
-   MenuCard (--menu-card-x) — the item itself only adds the card chrome. */
-.menu-surface--tray .menu-stack__item {
-  background: var(--panel-bg);
-  border: 1px solid rgba(255, 255, 255, 0.07);
-  border-radius: 14px;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12);
-  padding: 1px 0;
-  min-width: 0;
-  max-width: 100%;
-  width: 100%;
-  box-sizing: border-box;
-  overflow: visible;
-  transition: background 0.12s ease, border-color 0.12s ease, box-shadow 0.12s ease;
-}
-/* Selected card — accent border on top of the base card chrome, like a
-   focused row rather than a flat highlight. */
-.menu-surface--tray .menu-stack__item--selected {
-  background: var(--panel-bg);
-  border-color: rgba(10, 132, 255, 0.4);
-  box-shadow: 0 0 0 1px rgba(10, 132, 255, 0.3), 0 1px 3px rgba(0, 0, 0, 0.12);
-}
-/* Separators are redundant now that every row has its own border — the
-   card boundary itself is the divider. */
-.menu-surface--tray .menu-stack__sep {
-  display: none;
-}
-[data-theme="light"] .menu-surface--tray .menu-stack__item {
-  border: 1px solid rgba(0, 0, 0, 0.06);
-}
-[data-theme="light"] .menu-surface--tray .menu-stack__item--selected {
-  border-color: rgba(0, 122, 255, 0.45);
-  box-shadow: 0 0 0 1px rgba(0, 122, 255, 0.16), 0 1px 3px rgba(0, 0, 0, 0.08);
-}
-/* Tray grid — flush with no background container, matching macOS */
-.menu-surface--tray .provider-grid {
-  background: transparent;
-  border: none;
-  border-radius: 0;
-  padding: 8px 12px 6px;
-  grid-template-columns: repeat(10, 24px);
-  justify-content: start;
-  gap: 8px 6px;
-}
-
-.menu-surface--tray .provider-grid--sparse {
-  grid-template-columns: repeat(auto-fit, 26px);
-  justify-content: start;
-  gap: 8px 7px;
-}
-
-.menu-surface--tray .provider-grid--sparse .provider-grid__item {
-  width: 26px;
-}
-
-.menu-surface--tray .provider-grid--sparse .provider-grid__label {
-  display: none;
-}
-/* Divider between provider grid and card stack */
-.menu-surface--tray .provider-grid__divider {
-  height: 1px;
-  margin: 7px 0;
-  background: rgba(255, 255, 255, 0.08);
-}
-
+/* Tray variant — auto-sized by JS, no forced min-height. Option B "unified
+   panel" shell: the window itself is one continuous --app-bg surface (via
+   --menu-popover-bg); the switcher/body/footer are flush sections separated
+   by hairline borders (border-bottom / border-top), not floating cards —
+   see the switcher/footer/stack-item rules below. */
+/* Option B "unified panel" — providers are NOT individually carded (no
+   per-item background/border/shadow); the whole flyout is one continuous
+   --app-bg surface and adjacent providers are separated only by the thin
+   .menu-stack__sep rule below. Each MenuCard's own two-zone tinted
+   backgrounds (.menu-card__zone, further down) are the sole grouping cue. */
+/* Thin hairline between providers in the overview list — replaces the old
+   per-item card border as the only visual separator between entries. */
 /* Tray font sizing — match macOS: .headline=13pt, .footnote=10pt */
 /* macOS v0.32.2: H padding 20, header-only V padding 7, section V padding 6 */
-.menu-surface--tray .menu-card {
-  /* Cards now sit inside a bordered .menu-stack__item (8px inset from the
-     stack, see above) — reduce the card's own inset from 20px to 12px so
-     the combined inset roughly matches the old flush layout's 20px. */
-  --menu-card-x: 12px;
-  gap: 6px;
-  padding: var(--menu-card-header-only-y) var(--menu-card-x);
-  min-width: 0;
-  width: 100%;
-  box-sizing: border-box;
-  overflow: visible;
-}
-
-.menu-surface--tray .menu-card--with-details {
-  padding-top: var(--menu-card-section-y);
-  padding-bottom: var(--menu-card-section-y);
-}
-
-/* Tray name-group — row layout like macOS: HStack { name — Spacer — email } */
-.menu-surface--tray .menu-card__name-group {
-  flex-direction: row;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 6px;
-  width: 100%;
-}
-
-/* Tray name — macOS: .font(.headline) = 13pt semibold */
-.menu-surface--tray .menu-card__name {
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--text-primary);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-/* Tray subtitle + error — match macOS .footnote=10pt */
-.menu-surface--tray .menu-card__subtitle,
-.menu-surface--tray .menu-card__error-text {
-  font-size: 10px;
-}
-/* Tray "Updated just now" — secondary color like macOS */
-.menu-surface--tray .menu-card__subtitle:not(.menu-card__subtitle--error) {
-  color: var(--text-secondary);
-}
-
 /* Copy-to-clipboard button — matches macOS CopyIconButton (doc.on.doc, 18×18) */
 .menu-card__copy-btn {
   display: inline-flex;
@@ -4714,10 +4350,6 @@ html:has(.menu-surface--tray) {
 
 /* Hide status dots in tray grid — macOS shows weekly indicators only on hover,
    not persistent colored dots under every icon */
-.menu-surface--tray .provider-grid__dot {
-  display: none;
-}
-
 /* ── Context actions (detail mode) ──────────────────────────────────
    Matches macOS actionsSection: "Usage Dashboard" + "Status Page"
    with SF Symbol–style icons. Shown only in detail (single provider) mode. */
@@ -4762,109 +4394,42 @@ html:has(.menu-surface--tray) {
   flex-shrink: 0;
 }
 
-/* Tray card content — match macOS spacing values from SwiftUI source */
-.menu-surface--tray .menu-card__divider {
-  margin: 3px 0;
-}
 /* macOS: VStack(spacing: 12) for content sections */
-.menu-surface--tray .menu-card__content {
-  gap: 12px;
-}
-/* macOS: MetricRow VStack(spacing: 6) */
-.menu-surface--tray .menu-metric {
-  gap: 6px;
-}
-/* macOS: .font(.body) .fontWeight(.medium) for metric titles */
-.menu-surface--tray .menu-metric__title {
-  font-size: 13px;
-  font-weight: 500;
-}
-/* macOS: UsageProgressBar .frame(height: 6) */
-.menu-surface--tray .menu-metric__bar {
-  height: 6px;
-  border-radius: 3px;
-  width: 100%;
-  box-sizing: border-box;
-  max-width: 100%;
-}
-.menu-surface--tray .menu-metric__pct,
-.menu-surface--tray .menu-metric__reset {
-  font-size: 10px;
-}
-.menu-surface--tray .menu-metric__reserve {
-  margin-top: 0;
-  font-size: 10px;
-}
 /* The pace ("进度") block now folds in the weekly usage forecast, so the tray
    detail card DOES show it (its runway line is the only place that info lives).
    It only appears in the single-provider detail view — the compact overview
    still omits it because `compactMetrics` gates the whole block off there. */
 /* Hide large charts in tray; keep the compact local token/cost summary visible. */
-.menu-surface--tray .menu-card__charts,
-.menu-surface--tray .menu-card__local-chart {
-  display: none;
-}
-.menu-surface--tray .menu-card__local-usage {
-  padding: 12px 14px;
-}
-.menu-surface--tray .menu-card__local-token-value strong {
-  font-size: clamp(24px, 8vw, 30px);
-}
-.menu-surface--tray .menu-card__local-equivalent {
-  font-size: 11px;
-  letter-spacing: -0.01em;
-}
-.menu-surface--tray .menu-card__local-note {
-  font-size: 10px;
-  line-height: 1.25;
-}
-/* Hide cost section in tray — macOS compact popover only shows usage metrics */
-.menu-surface--tray .menu-card__cost,
-.menu-surface--tray .menu-card__content > .menu-card__divider:has(+ .menu-card__cost) {
-  display: none;
-}
+/* ── Density tiers (detailed/compact/minimal) — MenuCard's `densityMode`
+   render path, tray flyout only (TrayPanel.tsx). Detail view always uses
+   densityMode="detailed" regardless of the menuBarDisplayMode setting; the
+   Settings preview card and PopOut never pass densityMode and are
+   untouched by every rule in this section. ─────────────────────────── */
 
-/* Detail mode (one provider selected): tighten the vertical rhythm so the
-   full card — hero metric, forecast, reset credits, output speed, local
-   stats — fits the flyout height without scrolling. Overview keeps the
-   roomier spacing above. */
-.tray-panel-reveal--detail .menu-surface--tray .menu-card__content {
-  gap: 8px;
-}
-.tray-panel-reveal--detail .menu-surface--tray .menu-card__divider {
-  margin: 2px 0;
-}
-.tray-panel-reveal--detail .provider-quota__hero-pct {
-  font-size: 28px;
-  margin-bottom: 0;
-}
-.tray-panel-reveal--detail .provider-quota--hero .provider-quota__track {
-  height: 20px;
-}
-.tray-panel-reveal--detail .menu-metric__forecast {
-  margin-top: 2px;
-  padding: 8px 12px;
-}
-.tray-panel-reveal--detail .menu-card__reset-credits {
-  padding: 8px 12px;
-}
-.tray-panel-reveal--detail .menu-card__speed {
-  margin-top: 0;
-  padding: 7px 12px;
-}
-.tray-panel-reveal--detail .menu-surface--tray .menu-card__local-usage {
-  padding: 10px 12px;
-}
-.tray-panel-reveal--detail .menu-surface--tray .menu-card__local-token-value strong {
-  font-size: 20px;
-}
-.tray-panel-reveal--detail .menu-card__local-empty {
-  font-size: 14px;
-}
-.tray-panel-reveal--detail .menu-card__local-note {
-  margin-top: 6px;
-}
+/* The two content zones (额度/quota, 洞察/insights) — tinted panels are the
+   only visual grouping left once per-provider card chrome is gone (see
+   .menu-stack__item above). Detailed shows both zones; compact shows only
+   the quota zone (plus a chip row below); minimal shows a bare metrics
+   block with no tint (see the JS: minimal deliberately skips this class). */
+/* Compact tier's secondary quota follows the reference card: a small label
+   row, percentage, and a thin progress track inside the same quota panel. */
+/* The reference compact/minimal cards omit the detailed forecast callout and
+   plan label; the detailed tier carries those details in the quota/insight
+   panels below. */
+/* Every remaining density type/spacing value (hero + secondary percentages,
+   track heights, panel padding, header sizing) is set in one place: the
+   "Reference replication" block at the end of this file. Per-tier overrides
+   used to be scattered here too and drifted from the reference. */
 
+/* Insights zone rows — speed / usage / pace. Each is an icon+label row
+   (left) with a value (right); usage and pace rows add extra lines below
+   via .menu-card__insight-block. */
+/* Pace row's "实际X% · 预期Y%(超前/落后Z%)" summary line — only the
+   "预期…" clause is colored (green when ahead, orange when behind); the
+   "实际…" prefix stays plain/secondary, matching the runway line's
+   existing green/orange pair below (--pace-steady-fg/--pace-racing-fg). */
+/* Compact tier's 3-chip row (speed / usage / pace-delta). */
+/* Minimal tier's one-line summary (secondary metric / speed / pace delta). */
 /* Grouped into one tinted panel (like the reset-credits/forecast boxes
    above it) instead of floating directly on the card background — reads as
    one "stats" unit rather than loose text. */
@@ -4931,11 +4496,6 @@ html:has(.menu-surface--tray) {
   font-size: 18px;
   line-height: 1.25;
   color: var(--text-primary);
-}
-.menu-card__local-divider {
-  height: 1px;
-  margin: 11px 0;
-  background: var(--panel-border);
 }
 .menu-card__local-chart {
   display: flex;
@@ -5006,37 +4566,8 @@ html:has(.menu-surface--tray) {
 }
 
 /* Tray footer — match macOS NSMenuItem native look (10pt, ~16px row height) */
-.menu-surface--tray .menu-surface__footer {
-  padding: 4px 0 3px;
-  margin-top: 2px;
-  border-top: 0.5px solid rgba(255, 255, 255, 0.12);
-}
-.menu-surface--tray .menu-surface__footer-row {
-  padding: 3px 16px;
-  font-size: 11px;
-  line-height: 1.3;
-  min-height: 18px;
-}
-/* Indent must override the tray padding above so iconless rows (Settings /
-   About / Quit) align with the iconified Refresh row. */
-.menu-surface--tray .menu-surface__footer-row--no-icon {
-  padding-left: calc(16px + 14px + 8px);
-}
-.menu-surface--tray .menu-surface__footer-icon {
-  font-size: 11px;
-  width: 14px;
-  opacity: 0.7;
-}
 /* Zoom row keeps a taller (16px) slider hit area even though the tray
    footer's row padding/font-size are otherwise compacted. */
-.menu-surface--tray .menu-surface__footer-zoom {
-  padding-top: 4px;
-  padding-bottom: 4px;
-}
-.menu-surface--tray .menu-surface__footer-zoom-value {
-  font-size: 10px;
-}
-
 /* ── Provider card — direct mirror of UsageMenuCardView ─────────────── */
 
 .menu-card {
@@ -5149,23 +4680,7 @@ html:has(.menu-surface--tray) {
 /* Error subtitle must wrap — override base truncation.
    width:0 + flex-grow:1 forces the flex item to respect container bounds
    instead of sizing to content width and overflowing. */
-.menu-card__subtitle.menu-card__subtitle--error {
-  width: 0;
-  flex-grow: 1;
-  white-space: normal;
-  overflow: hidden;
-  text-overflow: unset;
-  overflow-wrap: anywhere;
-  word-break: break-word;
-}
-
 /* plan: Font.footnote secondary ≈ 11px, no special weight upstream */
-.menu-card__plan {
-  font-size: 11px;
-  color: var(--text-secondary);
-  white-space: nowrap;
-}
-
 .menu-card__error {
   padding: 6px 8px;
   border-radius: 6px;
@@ -5273,12 +4788,56 @@ html:has(.menu-surface--tray) {
    not a big-text sentence. */
 .menu-metric__forecast {
   display: flex;
-  flex-direction: column;
-  gap: 3px;
-  margin-top: 4px;
-  padding: 9px 12px;
-  border-radius: 12px;
-  background: color-mix(in srgb, var(--accent) 8%, transparent);
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  margin-top: 5px;
+  font-size: var(--font-caption);
+  color: var(--text-secondary);
+}
+
+/* Only the unavailable state keeps a block layout: it has one sentence and no
+   right-hand value to align against. */
+.menu-metric__forecast--unavailable {
+  justify-content: flex-start;
+}
+
+.menu-metric__forecast-state {
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.menu-metric__forecast-state[data-pace-state="reserve"] {
+  color: var(--pace-steady-fg, #15803d);
+}
+
+.menu-metric__forecast-state[data-pace-state="deficit"] {
+  color: var(--pace-burning-fg, #b91c1c);
+}
+
+.menu-metric__forecast-runway {
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/* The runway leads with a status icon. This span deliberately stays INLINE:
+   its parent aligns on `baseline`, and turning it into an inline-flex box (the
+   pattern used by `.menu-card__pace-runway-status`, whose parent does not
+   baseline-align) takes the flex container's baseline from the icon instead of
+   the text and drops the whole "按当前速度…" clause 2.1px below "N% 超支".
+
+   So the icon is placed with `vertical-align` instead. An inline SVG defaults
+   to `baseline`, which rests its BOTTOM edge on the baseline — leaving it
+   hanging 2.1px above the text's optical centre, which is what read as a
+   crooked icon. Sizing it in `em` (rather than the 13px the component hardcodes)
+   makes it track the flyout's `--flyout-u` text scaling like every other icon
+   in this card, and keeps the -0.2em correction exact at every size: measured
+   0.00px off-centre at 10px, 11px and 13px. */
+.menu-metric__forecast-runway svg {
+  width: 1.2em;
+  height: 1.2em;
+  vertical-align: -0.2em;
 }
 
 .menu-metric__forecast-row {
@@ -5593,12 +5152,6 @@ html:has(.menu-surface--tray) {
   font-size: var(--font-body);
   line-height: var(--line-tight);
 }
-/* Re-assert tray overrides after the second .menu-surface rule (cascade order) */
-.menu-surface--tray {
-  border: 1px solid rgba(255, 255, 255, 0.10);
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35);
-  overflow: hidden;
-}
 .menu-surface--popout {
   width: 100%;
   border-radius: 0;
@@ -5608,53 +5161,13 @@ html:has(.menu-surface--tray) {
   max-height: 100vh;
   min-height: 0;
 }
-.menu-surface--tray {
-  border: 1px solid rgba(255, 255, 255, 0.10);
-  border-radius: 20px;
-  overflow: hidden;
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35);
-}
 [data-theme="light"] .menu-surface {
   background: var(--menu-popover-bg);
   border: 1px solid rgba(0, 0, 0, 0.15);
   box-shadow: 0 8px 32px rgba(0, 0, 0, 0.18), 0 0 1px rgba(0, 0, 0, 0.12);
 }
-/* Previously stripped to `none`/`none` — the tray popup floats directly
-   over the desktop, so with no border AND no shadow it had zero edge
-   definition against a light background (unlike dark mode, which keeps a
-   subtle border). Give it the same defined edge as the general light
-   `.menu-surface` above instead of erasing it. */
-[data-theme="light"] .menu-surface--tray {
-  border: 1px solid rgba(0, 0, 0, 0.12);
-  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.18), 0 0 1px rgba(0, 0, 0, 0.12);
-}
 [data-theme="light"] .menu-surface__footer {
   border-top-color: rgba(0, 0, 0, 0.1);
-}
-
-.menu-surface__header {
-  min-height: 20px;
-  padding: 0;
-}
-.menu-surface__title {
-  font-size: var(--font-caption2);
-  font-weight: 500;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-  color: var(--text-muted);
-}
-.menu-surface__brand-icon {
-  width: 20px;
-  height: 20px;
-  border-radius: 4px;
-  object-fit: contain;
-  flex-shrink: 0;
-}
-.menu-surface__btn {
-  width: 22px;
-  height: 22px;
-  border-radius: 5px;
-  font-size: 13px;
 }
 
 /* Footer of native-style menu rows (Settings… / About / Quit).
@@ -5727,80 +5240,6 @@ html:has(.menu-surface--tray) {
    (not a nav button), so it opts out of the button hover highlight and
    instead hosts a Win11-volume-style slider with a fixed-width % readout
    on the right (tabular nums + fixed width = no jitter while dragging). */
-.menu-surface__footer-zoom {
-  cursor: default;
-}
-.menu-surface__footer-zoom:hover,
-.menu-surface__footer-zoom:focus-visible {
-  background: transparent;
-}
-.menu-surface__footer-zoom-value {
-  width: 34px;
-  flex-shrink: 0;
-  text-align: right;
-  font-size: var(--font-caption2);
-  color: var(--text-muted);
-  font-variant-numeric: tabular-nums;
-}
-/* Win11-style range input: thin rounded 4px track, accent fill left of the
-   thumb (painted via the `--zoom-fill` custom property set inline from
-   React — WebKit has no ::fill pseudo), round accent thumb. WebView2 is
-   Chromium-only, so ::-webkit-* pseudos are sufficient. */
-.menu-surface__footer-zoom-slider {
-  -webkit-appearance: none;
-  appearance: none;
-  flex: 1 1 auto;
-  min-width: 0;
-  height: 16px;
-  margin: 0 2px;
-  padding: 0;
-  background: transparent;
-  cursor: pointer;
-}
-.menu-surface__footer-zoom-slider::-webkit-slider-runnable-track {
-  height: 4px;
-  border-radius: 2px;
-  background: linear-gradient(
-    to right,
-    var(--accent, #0a84ff) 0%,
-    var(--accent, #0a84ff) var(--zoom-fill, 0%),
-    rgba(255, 255, 255, 0.2) var(--zoom-fill, 0%)
-  );
-}
-.menu-surface__footer-zoom-slider::-webkit-slider-thumb {
-  -webkit-appearance: none;
-  width: 12px;
-  height: 12px;
-  margin-top: -4px; /* centres the 12px thumb on the 4px track */
-  border-radius: 50%;
-  background: var(--accent, #0a84ff);
-  box-shadow:
-    0 0 0 1px rgba(255, 255, 255, 0.35),
-    0 1px 2px rgba(0, 0, 0, 0.4);
-}
-.menu-surface__footer-zoom-slider:focus-visible {
-  outline: none;
-}
-.menu-surface__footer-zoom-slider:focus-visible::-webkit-slider-thumb {
-  box-shadow:
-    0 0 0 2px var(--accent-muted, rgba(10, 132, 255, 0.25)),
-    0 0 0 1px rgba(255, 255, 255, 0.35);
-}
-[data-theme="light"]
-  .menu-surface__footer-zoom-slider::-webkit-slider-runnable-track {
-  background: linear-gradient(
-    to right,
-    var(--accent, #007aff) 0%,
-    var(--accent, #007aff) var(--zoom-fill, 0%),
-    rgba(0, 0, 0, 0.15) var(--zoom-fill, 0%)
-  );
-}
-[data-theme="light"] .menu-surface__footer-zoom-slider::-webkit-slider-thumb {
-  box-shadow:
-    0 0 0 1px rgba(0, 0, 0, 0.15),
-    0 1px 2px rgba(0, 0, 0, 0.2);
-}
-
 /* ── Provider icon grid ──────────────────────────────────────────────
    Mirrors the upstream macOS ProviderSwitcherView. Each cell is a
    stacked icon+label tile with a 4px weekly indicator pinned to the
@@ -5956,28 +5395,6 @@ html:has(.menu-surface--tray) {
   background: rgba(0, 0, 0, 0.10);
 }
 
-.provider-grid__dot {
-  width: 5px;
-  height: 5px;
-  border-radius: 50%;
-  flex-shrink: 0;
-}
-.provider-grid__dot[data-status="ok"] {
-  background: #34c759;
-}
-.provider-grid__dot[data-status="warning"] {
-  background: #ffd60a;
-}
-.provider-grid__dot[data-status="exhausted"] {
-  background: #ff9f0a;
-}
-.provider-grid__dot[data-status="error"] {
-  background: #ff453a;
-}
-.provider-grid__item--active .provider-grid__dot {
-  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.3);
-}
-
 [data-theme="light"] .provider-grid__item:hover {
   background: rgba(0, 0, 0, 0.06);
 }
@@ -5999,14 +5416,9 @@ html:has(.menu-surface--tray) {
   font-weight: 500;
   letter-spacing: -0.005em;
 }
-.menu-card__email,
-.menu-card__plan,
 .menu-card__subtitle {
   font-size: var(--font-caption);
   font-weight: 400;
-}
-.menu-card__email {
-  color: var(--text-secondary);
 }
 .menu-card__group-title,
 .menu-metric__title {
@@ -6065,6 +5477,69 @@ html:has(.menu-surface--tray) {
   max-width: none;
   padding: 0;
 }
+
+/* Detached Settings uses the same transparent-window composition as the tray
+   flyout: the native window provides only a transparent canvas, while this
+   frontend frame owns the visible radius, border and shadow. Keeping these
+   effects inside a small transparent gutter avoids the square Win32 frame
+   that previously made Settings look flat and unrelated to the flyout. */
+html:has(.settings-window-frame),
+body:has(.settings-window-frame) {
+  width: 100%;
+  height: 100%;
+  background: transparent;
+  overflow: hidden;
+}
+
+.settings-surface--full.settings-window-frame {
+  width: 100%;
+  height: 100vh;
+  /* Transparent gutter that holds the drop shadow.
+     It must be WIDER than the shadow reaches, not equal to it: a box-shadow
+     extends |offset| + blur/2, so the old 12px gutter against a `0 4px 16px`
+     shadow left exactly 0px of headroom downward and the falloff was truncated
+     at the window edge — a hard outer ring instead of a fade. The shadow below
+     reaches 20px down and 14px sideways, so 24px clears it everywhere.
+     Unlike the tray flyout (which is anchored to the tray and deliberately has
+     no shadow at all), a Settings window floats on the desktop and needs the
+     separation. */
+  padding: 24px;
+  background: transparent;
+}
+
+.settings-window-frame .settings {
+  min-height: 0;
+  height: 100%;
+  /* Shape borrowed from `.menu-surface--tray`: `clip-path` is what actually
+     rounds the corners — `border-radius` alone leaves square corners on
+     descendants that paint their own background, such as the title bar. */
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: var(--window-radius);
+  clip-path: inset(0 round var(--window-radius));
+  background: var(--app-bg);
+  /* The shadow must fit inside the 12px transparent gutter above, because the
+     WebView has no canvas beyond it — anything wider is cut off by the window
+     edge and reads as a straight-edged rectangle, which is exactly the "square
+     shadow" this frame is supposed to avoid.
+     A box-shadow extends |offset| + blur/2 past the box: the previous
+     `0 8px 24px` needed 20px below and got 12px. `0 4px 16px` needs 12px below,
+     4px above and 8px at the sides, so it fades out completely inside the
+     gutter. */
+  /* Reaches 6 + 28/2 = 20px down and 14px sideways — inside the 24px gutter
+     with room to spare, so it fades out completely instead of being cut. */
+  box-shadow:
+    0 6px 28px rgba(0, 0, 0, 0.34),
+    0 1px 3px rgba(0, 0, 0, 0.22);
+  overflow: hidden;
+}
+
+[data-theme="light"] .settings-window-frame .settings {
+  border-color: rgba(0, 0, 0, 0.14);
+  box-shadow:
+    0 6px 28px rgba(0, 0, 0, 0.16),
+    0 1px 3px rgba(0, 0, 0, 0.10);
+}
+
 .settings {
   background: var(--app-bg);
   min-height: 100vh;
@@ -6137,9 +5612,26 @@ html:has(.menu-surface--tray) {
   color: #fff;
 }
 
+/* Keyboard focus only, and deliberately NOT the accent colour: a blue box
+   around the close button of an otherwise monochrome title bar reads as a
+   rendering fault rather than a focus cue. This uses the same neutral tint as
+   the hover state, one step stronger, so it is visible to a keyboard user
+   without looking like an artifact.
+   `:focus-visible` alone was not enough in practice — the control still showed a
+   ring when the window took focus on open, which is why the plain `:focus`
+   fallback is suppressed explicitly below. */
 .settings-titlebar__control:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: -2px;
+  outline: none;
+  box-shadow: inset 0 0 0 2px rgba(255, 255, 255, 0.34);
+}
+
+.settings-titlebar__control:focus:not(:focus-visible) {
+  outline: none;
+  box-shadow: none;
+}
+
+[data-theme="light"] .settings-titlebar__control:focus-visible {
+  box-shadow: inset 0 0 0 2px rgba(0, 0, 0, 0.28);
 }
 
 [data-theme="light"] .settings-titlebar {
@@ -6344,6 +5836,187 @@ html:has(.menu-surface--tray) {
 }
 .settings-section:last-child {
   margin-bottom: 0;
+}
+.settings-page-head {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 28px;
+  align-items: center;
+  margin: 0 0 22px;
+  padding: 18px 20px;
+  border: 1px solid var(--panel-border);
+  border-radius: 14px;
+  background:
+    linear-gradient(135deg, color-mix(in srgb, var(--accent) 9%, transparent), transparent 56%),
+    var(--surface-elevated);
+}
+[data-theme="light"] .settings-page-head {
+  background:
+    linear-gradient(135deg, color-mix(in srgb, var(--accent) 10%, white), white 62%);
+}
+.settings-page-head__eyebrow {
+  display: block;
+  margin-bottom: 5px;
+  color: var(--accent);
+  font-size: 0.67rem;
+  font-weight: 700;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+}
+.settings-page-head__title {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: 1.18rem;
+  font-weight: 650;
+  letter-spacing: -0.02em;
+}
+.settings-page-head__description {
+  max-width: 460px;
+  margin: 5px 0 0;
+  color: var(--text-muted);
+  font-size: var(--font-caption);
+  line-height: 1.5;
+}
+.taskbar-preview {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 6px;
+  min-width: 250px;
+}
+.taskbar-preview__label {
+  color: var(--text-muted);
+  font-size: 0.66rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+}
+.taskbar-preview__strip {
+  display: flex;
+  /* Entries 3 and 4 open a second COLUMN, not a third row — the strip is two
+     text rows tall and no taller. Columns here, rows inside each column, which
+     is the same column-major fill `taskbar_widget::cell_rects` uses. */
+  flex-direction: row;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 42px;
+  max-width: 240px;
+  padding: 4px 8px;
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--accent) 22%, var(--panel-border));
+  border-radius: 7px;
+  background: color-mix(in srgb, var(--text-primary) 8%, var(--surface-elevated));
+  color: var(--text-primary);
+  line-height: 1.35;
+  font-family: "Microsoft YaHei UI", "Segoe UI Variable Text", sans-serif;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  transition:
+    width 150ms ease,
+    opacity 150ms ease;
+}
+[data-theme="light"] .taskbar-preview__strip {
+  background: #edf0f2;
+}
+.taskbar-preview__strip.is-disabled {
+  opacity: 0.42;
+}
+.taskbar-preview__column {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  flex: 1 1 0;
+  min-width: 0;
+}
+.taskbar-preview__line {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* The renderer draws the mark in its own colour in a fixed-width column ahead
+   of the text, so every line's text starts at the same x. Reproduced here with
+   an inline-block of the same relative width rather than a plain space, which
+   would vary with the glyph. */
+.taskbar-preview__mark {
+  display: inline-block;
+  width: 1.15em;
+}
+.settings-section-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 0 2px 8px;
+}
+.settings-section-heading .settings-section__title {
+  margin: 0;
+  padding: 0;
+}
+.settings-section-heading__action {
+  border: 0;
+  background: transparent;
+  color: var(--accent);
+  font: inherit;
+  font-size: var(--font-caption);
+  cursor: pointer;
+}
+.settings-section-heading__action:hover:not(:disabled) {
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.settings-section-heading__action:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+.settings-value-with-unit {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--text-muted);
+  font-size: var(--font-caption);
+}
+.taskbar-weight-control {
+  width: min(300px, 100%);
+  display: grid;
+  gap: 7px;
+}
+.taskbar-weight-control input[type="range"] {
+  width: 100%;
+  margin: 0;
+  accent-color: var(--accent);
+}
+.taskbar-weight-control__scale {
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  align-items: center;
+  gap: 10px;
+  color: var(--text-muted);
+  font-size: var(--font-caption2);
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+}
+.taskbar-weight-control__scale output {
+  min-width: 42px;
+  padding: 3px 7px;
+  border: 1px solid var(--panel-border);
+  border-radius: 999px;
+  background: var(--surface-elevated);
+  color: var(--text-primary);
+  text-align: center;
+  font-size: var(--font-caption);
+  font-weight: 600;
+}
+.taskbar-weight-control__scale span:last-child {
+  text-align: right;
+}
+@media (max-width: 760px) {
+  .settings-page-head {
+    grid-template-columns: 1fr;
+  }
+  .taskbar-preview {
+    align-items: flex-start;
+    min-width: 0;
+  }
 }
 .settings-section__title {
   margin: 0 0 8px;
@@ -6672,11 +6345,6 @@ html:has(.menu-surface--tray) {
 }
 
 /* ── Refresh icon spin animation reused by header button ──────────── */
-.menu-surface__btn .spin {
-  display: inline-block;
-  animation: spin 0.8s linear infinite;
-}
-
 /* ── Reduce visual harshness of the menu summary line ─────────────── */
 .menu-surface__summary {
   font-size: var(--font-caption);
@@ -6739,15 +6407,6 @@ html:has(.menu-surface--tray) {
 
 /* ── macOS parity: inline error subtitle, divider spacing, footer icon
       opacity, and card bottom padding (final overlay) ─────────────────── */
-.menu-card__subtitle--error {
-  color: var(--provider-status-error);
-  line-height: 1.3;
-  white-space: normal;
-  overflow: hidden;
-  text-overflow: unset;
-  font-size: 11px;
-}
-
 .menu-card__divider {
   margin: 4px 0;
 }
@@ -6763,8 +6422,6 @@ html:has(.menu-surface--tray) {
 .menu-surface__footer-row:focus-visible .menu-surface__footer-icon {
   opacity: 0.8;
 }
-
-/* ── Provider tab status dots removed (replaced by .provider-grid__dot) */
 
 /* ── Card header: name + updated time on the same row ───────────────── */
 .menu-card__title-row {
@@ -6787,20 +6444,9 @@ html:has(.menu-surface--tray) {
   gap: 7px 4px;
 }
 
-.menu-surface--tray .provider-grid {
-  grid-template-columns: repeat(10, 24px);
-  gap: 8px 6px;
-}
-
 .menu-surface--popout .provider-grid {
   grid-template-columns: repeat(8, 38px);
   gap: 8px 6px;
-}
-
-.menu-surface--tray .provider-grid--sparse {
-  grid-template-columns: repeat(auto-fit, 26px);
-  justify-content: start;
-  gap: 8px 7px;
 }
 
 .menu-surface--popout .provider-grid--sparse {
@@ -6814,20 +6460,8 @@ html:has(.menu-surface--tray) {
   padding: 2px 2px 3px;
 }
 
-.menu-surface--tray .provider-grid__item {
-  width: 24px;
-  min-height: 26px;
-  padding: 3px 0;
-  gap: 0;
-  justify-content: center;
-}
-
 .provider-grid__label {
   max-width: 32px;
-}
-
-.menu-surface--tray .provider-grid__label {
-  display: none;
 }
 
 .provider-grid--compact {
@@ -6847,11 +6481,6 @@ html:has(.menu-surface--tray) {
   gap: 2px;
 }
 
-.menu-surface--tray .provider-grid--compact .provider-grid__item {
-  min-height: 26px;
-  gap: 0;
-}
-
 .provider-grid--compact .provider-grid__label {
   max-width: 32px;
   font-size: 9.5px;
@@ -6861,23 +6490,6 @@ html:has(.menu-surface--tray) {
 .provider-grid--compact .provider-grid__weekly-track {
   width: 20px;
   height: 3px;
-}
-
-.menu-surface--tray .provider-grid__weekly-track,
-.menu-surface--tray .provider-grid--compact .provider-grid__weekly-track {
-  width: 18px;
-  height: 3px;
-  margin-top: 2px;
-}
-
-.menu-surface--tray .provider-grid__percentage {
-  max-width: 24px;
-  overflow: hidden;
-  color: var(--text-secondary);
-  font-size: 7px;
-  line-height: 1;
-  text-align: center;
-  white-space: nowrap;
 }
 
 .provider-grid__item--more {
@@ -6946,15 +6558,13 @@ html:has(.menu-surface--tray) {
 }
 
 @media (max-height: 620px) {
-  .menu-surface--popout .provider-grid,
-  .menu-surface--tray .provider-grid {
+  .menu-surface--popout .provider-grid {
     gap: 6px 5px;
     padding-top: 6px;
     padding-bottom: 5px;
   }
 
-  .menu-surface--popout .provider-grid__item,
-  .menu-surface--tray .provider-grid__item {
+  .menu-surface--popout .provider-grid__item {
     min-height: 36px;
   }
 
@@ -7211,7 +6821,7 @@ html:has(.menu-surface--tray) {
 /* The overview card, selected-provider card and Settings preview are one
    component. Their internal type scale and vertical rhythm must not change
    when the surrounding surface changes. */
-:is(.menu-surface--tray, .provider-detail-live-card) .menu-card {
+.provider-detail-live-card .menu-card {
   --menu-card-x: 12px;
   --menu-card-header-only-y: 7px;
   --menu-card-section-y: 6px;
@@ -7221,82 +6831,74 @@ html:has(.menu-surface--tray) {
   padding-right: var(--menu-card-x);
 }
 
-:is(.menu-surface--tray, .provider-detail-live-card) .menu-card__name-group {
+.provider-detail-live-card .menu-card__name-group {
   flex-direction: row;
   align-items: baseline;
   justify-content: space-between;
   gap: 6px;
 }
 
-:is(.menu-surface--tray, .provider-detail-live-card) .menu-card__name {
+.provider-detail-live-card .menu-card__name {
   font-size: 13px;
   font-weight: 600;
   line-height: normal;
 }
 
-:is(.menu-surface--tray, .provider-detail-live-card) .menu-card__email {
-  max-width: 55%;
-  font-size: 11px;
-  line-height: normal;
-}
-
-:is(.menu-surface--tray, .provider-detail-live-card) .menu-card__subtitle,
-:is(.menu-surface--tray, .provider-detail-live-card) .menu-card__error-text {
+.provider-detail-live-card .menu-card__subtitle,
+.provider-detail-live-card .menu-card__error-text {
   font-size: 10px;
   line-height: normal;
 }
 
-:is(.menu-surface--tray, .provider-detail-live-card) .menu-card__divider {
+.provider-detail-live-card .menu-card__divider {
   margin: 2px 0;
 }
 
-:is(.menu-surface--tray, .provider-detail-live-card) .menu-card__content {
+.provider-detail-live-card .menu-card__content {
   gap: 8px;
 }
 
-:is(.menu-surface--tray, .provider-detail-live-card) .provider-quota__hero-pct {
+.provider-detail-live-card .provider-quota__hero-pct {
   margin-bottom: 0;
   font-size: 28px;
   line-height: 1;
 }
 
-:is(.menu-surface--tray, .provider-detail-live-card)
-  .provider-quota--hero .provider-quota__track {
+.provider-detail-live-card .provider-quota--hero .provider-quota__track {
   height: 20px;
 }
 
-:is(.menu-surface--tray, .provider-detail-live-card) .menu-metric__forecast {
+.provider-detail-live-card .menu-metric__forecast {
   margin-top: 2px;
   padding: 8px 12px;
 }
 
-:is(.menu-surface--tray, .provider-detail-live-card) .menu-card__reset-credits {
+.provider-detail-live-card .menu-card__reset-credits {
   padding: 8px 12px;
 }
 
-:is(.menu-surface--tray, .provider-detail-live-card) .menu-card__speed {
+.provider-detail-live-card .menu-card__speed {
   margin-top: 0;
   padding: 7px 12px;
 }
 
-:is(.menu-surface--tray, .provider-detail-live-card) .menu-card__pace {
+.provider-detail-live-card .menu-card__pace {
   padding: 8px 12px;
 }
 
-:is(.menu-surface--tray, .provider-detail-live-card) .menu-card__local-usage {
+.provider-detail-live-card .menu-card__local-usage {
   padding: 10px 12px;
 }
 
-:is(.menu-surface--tray, .provider-detail-live-card)
-  .menu-card__local-token-value strong {
+.provider-detail-live-card .menu-card__local-token-value strong {
   font-size: 20px;
 }
 
-:is(.menu-surface--tray, .provider-detail-live-card) .menu-card__local-empty {
+.provider-detail-live-card .menu-card__local-empty {
   font-size: 14px;
 }
 
-:is(.menu-surface--tray, .provider-detail-live-card) .menu-card__local-note {
+.provider-detail-live-card .menu-card__local-note {
   margin-top: 6px;
   font-size: 10px;
   line-height: 1.25;
@@ -7322,44 +6924,1208 @@ html:has(.menu-surface--tray) {
   padding-top: 10px;
 }
 
-/* Neutralise the legacy detail-only compression with equal specificity. */
-.tray-panel-reveal--detail .menu-surface--tray .menu-card__content {
-  gap: 8px;
+/* ═══════════════════════════════════════════════════════════════════════
+   Reference adaptation — design/floatbar-reference.html at flyout width
+   ═══════════════════════════════════════════════════════════════════════
+
+   Single authoritative source for the tray flyout's density typography and
+   spacing. The reference is a 660px-wide presentation card; the flyout is
+   328px. Scaling everything by the width ratio reproduces the layout
+   faithfully but drops body text to 8–9px, which is below what is
+   comfortable to read on Windows. So this uses TWO scales:
+
+     k_geo  = 328 / 660 ≈ 0.497   — padding, radii, bar heights, dividers,
+                                    gaps. Geometry keeps each element's
+                                    share of the card, so the layout is the
+                                    reference drawn smaller.
+
+     k_type = 12 / 17  ≈ 0.706    — every font-size. Because it is applied
+                                    uniformly, the reference's type hierarchy
+                                    (54 : 31 : 26 : 19 : 18 : 17) is preserved
+                                    exactly — the type is simply set larger
+                                    relative to the card than the reference
+                                    draws it.
+
+   Both are then multiplied by `--flyout-scale` (1.2), which is where the
+   12/17 above comes from: the original anchor was 10/17, chosen so the
+   reference's SMALLEST text (.usage-subline / .usage-model, 17px) landed on
+   10px — the practical floor for secondary text at this width. But a floor
+   is not a target: at 10px the detailed card filled only about three
+   quarters of the flyout's fixed 776px height and read as undersized in the
+   real window. 1.2 lifts that floor to 12px and the card to roughly 690px,
+   which uses the panel without crowding it. See the size comparison in
+   design/style-options.html's sibling page for the four steps that were
+   compared (1.0 / 1.1 / 1.2 / 1.3).
+
+   IMPORTANT: sizes below are written as `calc(N * var(--flyout-u))`, where N
+   is the value at scale 1 — i.e. N still reads as the `ref NN` derivation,
+   and the scale stays in exactly one place. Do not bake 1.2 into N.
+
+   Scope: everything the flyout draws — the card AND the provider switcher
+   strip above it. The switcher was excluded at first as "shared chrome", but
+   it only ever renders inside this flyout, and leaving it at scale 1 while
+   the card grew 20% made its icons read as undersized against the panel.
+
+   Not scaled: every 1px hairline (a 1.2px border renders blurry) and
+   --flyout-radius, which is the window's shape rather than card geometry.
+
+   Font WEIGHTS are copied verbatim and never scaled: the reference leaves
+   labels (.quota-label, .usage-title, .reset) at normal weight while the
+   figures carry 760 / 730 / 720.
+
+   Every rule carries its source as `ref NN`, so a future change can be
+   checked against the reference document instead of guessed.
+
+   Scope: the tray flyout only. The Settings preview card and the
+   PopOut dashboard never pass `densityMode`, so none of this reaches them.
+   ═══════════════════════════════════════════════════════════════════════ */
+
+/* ── Card frame ──────────────────────────────────────────────────────── */
+/* geo: ref .float-card padding 28 → 14 | .compact-card 25 → 12 |
+   .minimal-card 27 → 13 (horizontal)
+   geo: ref .provider-header margin-bottom 25 / 19 / 23 → the card flex gap */
+
+/* --------------------------------------------------------------------------
+   Tray flyout authority
+
+   Every selector for the dedicated flyout lives in this one continuous
+   section.  The native window is fixed at 328 x 776 logical px; this block
+   owns its transparent reveal wrapper, shell, provider switcher, footer, and
+   the three MenuCard density tiers.  Settings/PopOut keep the shared base
+   component rules above.
+   -------------------------------------------------------------------------- */
+
+html:has(.tray-panel-reveal),
+body:has(.tray-panel-reveal) {
+  height: 100%;
+  overflow: hidden;
+  background: transparent;
 }
 
-.tray-panel-reveal--detail .menu-surface--tray .menu-card__divider {
-  margin: 2px 0;
+.tray-panel-reveal {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  min-height: 0;
+  overflow: hidden;
+  background: transparent;
+  opacity: 0;
+  transition: opacity 80ms ease-out;
 }
 
-.tray-panel-reveal--detail .menu-surface--tray .provider-quota__hero-pct {
+.tray-panel-reveal--ready {
+  opacity: 1;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tray-panel-reveal {
+    transition: none;
+  }
+}
+
+.tray-panel-reveal .menu-surface--tray {
+  flex: 1 1 auto;
+  min-height: 0;
+  height: 100%;
+  max-height: 100%;
+}
+
+.menu-surface--tray {
+  /* One number scales the whole card. Every size below is written as
+     `calc(N * var(--flyout-u))`, where N is the value the reference
+     adaptation derived at scale 1. See the block header above for why this
+     is 1.2 and not 1. Changing this one value re-scales the card without
+     disturbing a single proportion. */
+  --flyout-scale: 1.2;
+  --flyout-u: calc(var(--flyout-scale) * 1px);
+  /* Window corner. Fixed, NOT scaled by --flyout-scale: it is the shape of
+     the panel itself, not part of the card's type/geometry system. */
+  --flyout-radius: var(--window-radius);
+  --flyout-detail-x: calc(14 * var(--flyout-u));
+  --flyout-zone-bg: #2c2c30;
+  --flyout-zone-hairline: rgba(255, 255, 255, 0.08);
+  --flyout-zone-shadow: 0 0 0 1px var(--flyout-zone-hairline),
+    inset 0 1px 0 rgba(255, 255, 255, 0.05),
+    0 4px 14px rgba(0, 0, 0, 0.4);
+  min-height: 0;
+  width: 100%;
+  height: 100%;
+  max-height: 100%;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  padding: 0;
+  overflow: hidden;
+  border: 0;
+  /* CSS is the only owner of the flyout's shape. A native acrylic backdrop
+     was tried and removed: DWM composites that material against the window's
+     RECTANGLE and ignores `SetWindowRgn`, so the only way to round it is
+     `DWMWA_WINDOW_CORNER_PREFERENCE` — a fixed ~8px that cannot be
+     configured. Keeping a frosted backdrop therefore meant giving up the
+     corner radius entirely. See AGENT_HANDOFF.md for the measurements. */
+  border-radius: var(--flyout-radius);
+  clip-path: inset(0 round var(--flyout-radius));
+  background: #161618;
+  color: var(--text-primary);
+  box-shadow: none;
+  filter: none;
+}
+
+[data-theme="light"] .menu-surface--tray {
+  --flyout-zone-bg: #ffffff;
+  --flyout-zone-hairline: rgba(0, 0, 0, 0.07);
+  --flyout-zone-shadow: 0 0 0 1px var(--flyout-zone-hairline),
+    0 1px 2px rgba(0, 0, 0, 0.05),
+    0 4px 12px rgba(0, 0, 0, 0.04);
+  background: #fbfbfc;
+  color: var(--text-primary);
+}
+
+.menu-surface--tray .menu-surface__fixed-header {
+  position: relative;
+  z-index: 1;
+  flex: 0 0 auto;
+  border-bottom: 1px solid var(--menu-popover-divider);
+}
+
+.menu-surface--tray .menu-surface__fixed-header .provider-grid {
   margin-bottom: 0;
-  font-size: 28px;
 }
 
-.tray-panel-reveal--detail .menu-surface--tray
-  .provider-quota--hero .provider-quota__track {
+.menu-surface--tray .menu-surface__body {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  max-width: 100%;
+  overflow-x: hidden;
+  overflow-y: auto;
+  padding: 8px 0 6px;
+  scrollbar-width: none;
+}
+
+.menu-surface--tray .menu-surface__body::-webkit-scrollbar {
+  display: none;
+}
+
+.menu-surface--tray .menu-stack {
+  display: flex;
+  flex: 0 0 auto;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+  max-height: none;
+  overflow: visible;
+  padding: 0;
+}
+
+.menu-surface--tray .menu-stack__item,
+.menu-surface--tray .menu-stack__item--selected {
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  box-sizing: border-box;
+  padding: 0;
+  overflow: visible;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.menu-surface--tray .menu-stack__sep {
+  display: block;
+  flex: none;
+  height: 1px;
+  margin: 0;
+  background: var(--menu-popover-divider);
+}
+
+/* The switcher scales with the card.
+   It was originally excluded on the grounds that it is shared chrome built
+   around a fixed 17px brand icon — but once --flyout-scale went to 1.2 the
+   card grew 20% and this strip did not, so the icons read as undersized
+   against the panel below them. "Shared chrome" was the wrong call: the strip
+   only ever appears inside this flyout, so it belongs to the flyout's scale. */
+.menu-surface--tray .provider-grid {
+  display: grid;
+  grid-template-columns: repeat(10, calc(24 * var(--flyout-u)));
+  justify-content: start;
+  gap: calc(8 * var(--flyout-u)) calc(6 * var(--flyout-u));
+  padding: calc(8 * var(--flyout-u)) calc(12 * var(--flyout-u)) calc(6 * var(--flyout-u));
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+}
+
+.menu-surface--tray .provider-grid--sparse {
+  grid-template-columns: repeat(auto-fit, calc(26 * var(--flyout-u)));
+  justify-content: start;
+  gap: calc(8 * var(--flyout-u)) calc(7 * var(--flyout-u));
+}
+
+.menu-surface--tray .provider-grid--sparse .provider-grid__item {
+  width: calc(26 * var(--flyout-u));
+}
+
+.menu-surface--tray .provider-grid__item,
+.menu-surface--tray .provider-grid--compact .provider-grid__item {
+  width: calc(24 * var(--flyout-u));
+  min-height: calc(26 * var(--flyout-u));
+  padding: calc(3 * var(--flyout-u)) 0;
+  gap: 0;
+  justify-content: center;
+  /* The selection chip wraps the brand icon, so its corner has to be the
+     icon's own corner PLUS the gap between them, or the two curves read as
+     unrelated. The shared 5px was set for a 24px cell and stayed literal
+     while the strip scaled, which left it visibly tighter than everything
+     around it. */
+  border-radius: calc(8 * var(--flyout-u));
+}
+
+/* ProviderIcon writes width/height as an inline style from its `size` prop,
+   and the shared base rule pins it to 17px !important — neither can see
+   --flyout-scale, so the size has to be reasserted here. */
+.menu-surface--tray .provider-grid__item .provider-icon {
+  width: calc(17 * var(--flyout-u)) !important;
+  height: calc(17 * var(--flyout-u)) !important;
+}
+
+.menu-surface--tray .provider-grid__label,
+.menu-surface--tray .provider-grid--sparse .provider-grid__label {
+  display: none;
+}
+
+.menu-surface--tray .provider-grid__weekly-track,
+.menu-surface--tray .provider-grid--compact .provider-grid__weekly-track {
+  width: calc(18 * var(--flyout-u));
+  height: calc(3 * var(--flyout-u));
+  margin-top: calc(2 * var(--flyout-u));
+}
+
+.menu-surface--tray .menu-card {
+  --menu-card-x: calc(12 * var(--flyout-u));
+  gap: calc(6 * var(--flyout-u));
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+  padding: var(--menu-card-header-only-y) var(--menu-card-x);
+  overflow: visible;
+}
+
+.menu-surface--tray .menu-card--with-details {
+  padding-top: var(--menu-card-section-y);
+  padding-bottom: var(--menu-card-section-y);
+}
+
+.menu-surface--tray .menu-card__name-group {
+  flex-direction: row;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: calc(6 * var(--flyout-u));
+  width: 100%;
+}
+
+.menu-surface--tray .menu-card__subtitle,
+.menu-surface--tray .menu-card__error-text {
+  font-size: calc(10 * var(--flyout-u));
+  line-height: normal;
+}
+
+.menu-surface--tray .menu-card__subtitle {
+  color: var(--text-secondary);
+}
+
+.menu-surface--tray .menu-card__content {
+  display: flex;
+  flex-direction: column;
+  gap: calc(10 * var(--flyout-u));
+  min-width: 0;
+}
+
+.menu-surface--tray .menu-card__charts,
+.menu-surface--tray .menu-card__local-chart,
+.menu-surface--tray .menu-card__cost,
+.menu-surface--tray .menu-card__content > .menu-card__divider:has(+ .menu-card__cost) {
+  display: none;
+}
+
+.menu-surface--tray .menu-card__local-usage {
+  padding: calc(12 * var(--flyout-u)) calc(14 * var(--flyout-u));
+}
+
+.menu-surface--tray .menu-card__local-token-value strong {
+  font-size: clamp(calc(24 * var(--flyout-u)), 8vw, calc(30 * var(--flyout-u)));
+}
+
+.menu-surface--tray .menu-card__local-equivalent {
+  font-size: calc(11 * var(--flyout-u));
+  letter-spacing: -0.01em;
+}
+
+.menu-surface--tray .menu-card__local-note {
+  font-size: calc(10 * var(--flyout-u));
+  line-height: 1.25;
+}
+
+.menu-surface--tray .menu-surface__footer {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  flex-shrink: 0;
+  flex-direction: column;
+  gap: 0;
+  margin-top: calc(2 * var(--flyout-u));
+  padding: calc(4 * var(--flyout-u)) 0 calc(3 * var(--flyout-u));
+  overflow: hidden;
+  border-top: 0.5px solid var(--menu-popover-divider);
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.menu-surface--tray .menu-surface__footer-row {
+  min-height: calc(18 * var(--flyout-u));
+  padding: calc(3 * var(--flyout-u)) calc(16 * var(--flyout-u));
+  font-size: calc(11 * var(--flyout-u));
+  line-height: 1.3;
+}
+
+/* Aligns a no-icon footer row with the labels of the rows that have one:
+   the row's own 16 left padding + the 14 icon column + the 8 gap. All three
+   scale with the card, so the sum has to as well. */
+.menu-surface--tray .menu-surface__footer-row--no-icon {
+  padding-left: calc((16 + 14 + 8) * var(--flyout-u));
+}
+
+.menu-surface--tray .menu-surface__footer-icon {
+  width: calc(14 * var(--flyout-u));
+  font-size: calc(11 * var(--flyout-u));
+  opacity: 0.7;
+}
+
+.menu-surface--tray .context-actions {
+  flex: 0 0 auto;
+  gap: calc(8 * var(--flyout-u));
+  margin-top: calc(8 * var(--flyout-u));
+  padding-inline: var(--flyout-detail-x);
+}
+
+.menu-surface--tray .context-actions__btn {
+  min-width: 0;
+  flex: 1 1 0;
+  padding: calc(7 * var(--flyout-u)) calc(10 * var(--flyout-u));
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  border-radius: 999px;
+  background: #2c2c30;
+  color: var(--text-primary);
+  font-size: var(--font-caption);
+}
+
+[data-theme="light"] .menu-surface--tray .context-actions__btn {
+  border-color: rgba(0, 0, 0, 0.08);
+  background: #ffffff;
+}
+
+.menu-surface--tray .context-actions__btn:hover,
+.menu-surface--tray .context-actions__btn:focus-visible {
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--panel-border));
+  background: color-mix(in srgb, var(--accent) 10%, #2c2c30);
+  color: var(--accent);
+  outline: none;
+}
+
+[data-theme="light"] .menu-surface--tray .context-actions__btn:hover,
+[data-theme="light"] .menu-surface--tray .context-actions__btn:focus-visible {
+  background: color-mix(in srgb, var(--accent) 10%, #ffffff);
+}
+
+.menu-surface--tray .menu-card__zone {
+  position: relative;
+  overflow: hidden;
+  border-radius: calc(12 * var(--flyout-u));
+  padding: calc(12 * var(--flyout-u));
+  background: var(--flyout-zone-bg);
+  box-shadow: var(--flyout-zone-shadow);
+}
+
+.menu-surface--tray .menu-card__zone--insights {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+
+.menu-surface--tray .menu-card__divider {
+  height: 1px;
+  flex-shrink: 0;
+  background: var(--flyout-zone-hairline);
+}
+
+.menu-surface--tray .menu-card__compact-secondary {
+  display: grid;
+  gap: calc(5 * var(--flyout-u));
+  margin-top: calc(9 * var(--flyout-u));
+  padding-top: 0;
+  border-top: 0;
+}
+
+.menu-surface--tray .menu-card__compact-secondary-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: calc(8 * var(--flyout-u));
+  font-size: calc(10 * var(--flyout-u));
+  font-weight: 400;
+}
+
+.menu-surface--tray .menu-card__compact-secondary-header span:first-child {
+  color: var(--text-secondary);
+}
+
+.menu-surface--tray .menu-card__compact-secondary-header strong {
+  color: var(--text-primary);
+  font-size: calc(10 * var(--flyout-u));
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.menu-surface--tray .menu-card__compact-secondary-track {
+  height: calc(4 * var(--flyout-u));
+  overflow: hidden;
+  border-radius: 999px;
+  background: var(--usage-bar-track);
+}
+
+.menu-surface--tray .menu-card__compact-secondary-track span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--usage-bar-normal);
+  transition: width 0.3s ease;
+}
+
+.menu-surface--tray .menu-card--compact .menu-metric__forecast,
+.menu-surface--tray .menu-card--minimal .menu-metric__forecast,
+.menu-surface--tray .menu-card--detailed .provider-quota__fill-label,
+.menu-surface--tray .menu-card--detailed .provider-quota__fill-label-clip,
+.menu-surface--tray .menu-card--detailed .provider-quota__sub-pct-suffix,
+.menu-surface--tray .menu-card--minimal .provider-quota__reset {
+  display: none;
+}
+
+.menu-surface--tray .menu-card__insight-block {
+  display: flex;
+  flex-direction: column;
+  gap: calc(7 * var(--flyout-u));
+}
+
+.menu-surface--tray .menu-card__insight-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: calc(6 * var(--flyout-u));
+}
+
+.menu-surface--tray .menu-card__insight-label {
+  display: inline-flex;
+  align-items: center;
+  gap: calc(5 * var(--flyout-u));
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-secondary);
+  font-size: calc(11 * var(--flyout-u));
+  font-weight: 400;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.menu-surface--tray .menu-card__insight-label svg {
+  flex: none;
+  width: calc(13 * var(--flyout-u));
+  height: calc(13 * var(--flyout-u));
+  opacity: 0.85;
+}
+
+.menu-surface--tray .menu-card__insight-value {
+  flex: none;
+  color: var(--text-primary);
+  font-size: calc(15 * var(--flyout-u));
+  font-weight: 720;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  text-align: right;
+}
+
+.menu-surface--tray .menu-card__insight-unit,
+.menu-surface--tray .menu-card__insight-approx {
+  color: var(--text-secondary);
+  font-size: calc(11 * var(--flyout-u));
+  font-weight: 500;
+}
+
+.menu-surface--tray .menu-card__chip-row {
+  display: flex;
+  gap: calc(5 * var(--flyout-u));
+}
+
+.menu-surface--tray .menu-card__chip {
+  display: flex;
+  flex: 1 1 0;
+  min-width: 0;
+  flex-direction: column;
+  align-items: center;
+  gap: calc(2 * var(--flyout-u));
+  padding: calc(8 * var(--flyout-u)) calc(4 * var(--flyout-u)) calc(7 * var(--flyout-u));
+  border-radius: calc(7 * var(--flyout-u));
+  background: var(--flyout-zone-bg);
+  box-shadow: 0 0 0 1px var(--flyout-zone-hairline);
+  text-align: center;
+}
+
+.menu-surface--tray .menu-card__chip-value {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: calc(3 * var(--flyout-u));
+  max-width: 100%;
+  overflow: hidden;
+  color: var(--text-primary);
+  font-size: calc(14 * var(--flyout-u));
+  font-weight: 720;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.menu-surface--tray .menu-card__chip-value svg {
+  flex: none;
+  width: calc(12 * var(--flyout-u));
+  height: calc(12 * var(--flyout-u));
+}
+
+.menu-surface--tray .menu-card__chip-caption {
+  max-width: 100%;
+  overflow: hidden;
+  color: var(--text-secondary);
+  font-size: calc(9 * var(--flyout-u));
+  font-weight: 450;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.menu-surface--tray .menu-card__minimal-line {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: calc(8 * var(--flyout-u));
+  color: var(--text-secondary);
+  font-size: calc(10 * var(--flyout-u));
+  font-weight: 400;
+}
+
+.menu-surface--tray .menu-card__minimal-segment {
+  display: inline-flex;
+  align-items: center;
+  gap: calc(3 * var(--flyout-u));
+  min-width: 0;
+  overflow: hidden;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.menu-surface--tray .menu-card__minimal-segment svg {
+  flex: none;
+  width: calc(10 * var(--flyout-u));
+  height: calc(10 * var(--flyout-u));
+}
+
+@media (max-height: 620px) {
+  .menu-surface--tray .provider-grid {
+    gap: calc(6 * var(--flyout-u)) calc(5 * var(--flyout-u));
+    padding-top: calc(6 * var(--flyout-u));
+    padding-bottom: calc(5 * var(--flyout-u));
+  }
+
+  .menu-surface--tray .provider-grid__item {
+    min-height: calc(36 * var(--flyout-u));
+  }
+}
+
+/* The detail view's gutter lives on the surface, not just the card, because
+   the action row (.context-actions) is a SIBLING of .menu-stack and so
+   inherits neither the card's padding nor its --menu-card-x. Sharing one
+   value keeps the quota panel, the insight panel and the action buttons on
+   the same left/right edge; previously the buttons ran the full body width
+   and sat 14px proud of the panels above them on each side. */
+.menu-surface--tray .menu-card--detailed {
+  --menu-card-x: var(--flyout-detail-x);
+  gap: calc(12 * var(--flyout-u));
+}
+.menu-surface--tray .menu-card--compact {
+  --menu-card-x: calc(12 * var(--flyout-u));
+  gap: calc(9 * var(--flyout-u));
+}
+.menu-surface--tray .menu-card--minimal {
+  --menu-card-x: calc(13 * var(--flyout-u));
+  gap: calc(11 * var(--flyout-u));
+}
+
+/* geo: ref .provider-header gap 17 → 8 */
+.menu-surface--tray
+  :is(.menu-card--detailed, .menu-card--compact, .menu-card--minimal)
+  .menu-card__title-row {
+  gap: calc(8 * var(--flyout-u));
+}
+
+/* The provider mark is sized from the reference's GLYPH (26px), not from the
+   45px rounded chip that encloses it — we render a bare brand icon with no
+   chip around it, so matching the chip made the logo read ~40% too heavy
+   against the name. In the reference the glyph and the provider name are
+   effectively the same size, so this follows the name's k_type: 26 → 15 at
+   scale 1, i.e. the same 15 as .menu-card__name below.
+
+   `!important` because ProviderIcon sets width/height as an inline style from
+   its `size` prop, which is a JS number and cannot see --flyout-scale. Same
+   approach the switcher grid already uses for .provider-grid__item. */
+.menu-surface--tray .menu-card--detailed .menu-card__provider-icon {
+  width: calc(15 * var(--flyout-u)) !important;
+  height: calc(15 * var(--flyout-u)) !important;
+}
+
+/* type: ref .provider-name 25 / 21 / 22 → 15 / 12 / 13, weight 700 */
+.menu-surface--tray .menu-card--detailed .menu-card__name {
+  font-size: calc(15 * var(--flyout-u));
+  font-weight: 700;
+  letter-spacing: -0.04em;
+  /* Negative tracking is applied AFTER the last glyph too, so the element's
+     content box ends 0.04em short of where the glyph actually paints. With
+     the `overflow: hidden` this class carries for its ellipsis, that shaves
+     the right edge off the final letter ("Codex" losing part of its x). The
+     padding gives that bearing back without moving the text. */
+  padding-inline-end: 0.08em;
+}
+.menu-surface--tray .menu-card--compact .menu-card__name {
+  font-size: calc(12 * var(--flyout-u));
+  font-weight: 700;
+  letter-spacing: -0.04em;
+}
+.menu-surface--tray .menu-card--minimal .menu-card__name {
+  font-size: calc(13 * var(--flyout-u));
+  font-weight: 700;
+  letter-spacing: -0.04em;
+}
+
+/* type: ref .updated 18 / 16 → 11 / 10, normal weight */
+.menu-surface--tray .menu-card--detailed .menu-card__updated {
+  font-size: calc(11 * var(--flyout-u));
+  font-weight: 400;
+}
+.menu-surface--tray
+  :is(.menu-card--compact, .menu-card--minimal)
+  .menu-card__updated {
+  font-size: calc(10 * var(--flyout-u));
+  font-weight: 400;
+}
+
+/* ── Quota panel — ref .quota-panel ──────────────────────────────────── */
+/* The shared zone owns the 12px radius; density changes only the inner spacing. */
+.menu-surface--tray .menu-card--detailed .menu-card__zone--quota {
+  padding: calc(12 * var(--flyout-u)) calc(12 * var(--flyout-u)) calc(11 * var(--flyout-u));
+}
+.menu-surface--tray .menu-card--compact .menu-card__zone--quota {
+  padding: calc(10 * var(--flyout-u));
+}
+
+/* The reference spaces everything inside a quota window with explicit
+   margins; neutralise the grid gap so the two do not stack. */
+.menu-surface--tray
+  :is(.menu-card--detailed, .menu-card--compact, .menu-card--minimal)
+  .provider-quota {
+  gap: 0;
+  margin-bottom: 0;
+}
+
+/* type: ref .quota-label / .reset 18 → 11 (compact 16 → 10, minimal 17 → 10).
+   The reference sets no font-weight on these, i.e. normal — NOT the 500 the
+   base tray rules use. */
+.menu-surface--tray .menu-card--detailed
+  :is(.provider-quota__hero-label, .provider-quota__title, .provider-quota__reset) {
+  font-size: calc(11 * var(--flyout-u));
+  font-weight: 400;
+}
+.menu-surface--tray .menu-card--compact
+  :is(.provider-quota__hero-label, .provider-quota__title, .provider-quota__reset) {
+  font-size: calc(10 * var(--flyout-u));
+  font-weight: 400;
+}
+.menu-surface--tray .menu-card--minimal .provider-quota__hero-label {
+  font-size: calc(10 * var(--flyout-u));
+  font-weight: 400;
+}
+
+/* type: ref .percentage 54 / 44 / 55 → 32 / 26 / 32, weight 760
+   geo:  ref margin 16 0 13 → 8 0 6 (compact 13 0 11 → 6 0 5) */
+.menu-surface--tray .menu-card--detailed .provider-quota__hero-pct {
+  font-size: calc(32 * var(--flyout-u));
+  font-weight: 760;
+  margin: calc(8 * var(--flyout-u)) 0 calc(6 * var(--flyout-u));
+  letter-spacing: -0.065em;
+}
+.menu-surface--tray .menu-card--compact .provider-quota__hero-pct {
+  font-size: calc(26 * var(--flyout-u));
+  font-weight: 760;
+  margin: calc(6 * var(--flyout-u)) 0 calc(5 * var(--flyout-u));
+  letter-spacing: -0.065em;
+}
+.menu-surface--tray .menu-card--minimal .provider-quota__hero-pct {
+  font-size: calc(32 * var(--flyout-u));
+  font-weight: 760;
+  margin: calc(6 * var(--flyout-u)) 0;
+  letter-spacing: -0.065em;
+}
+
+/* geo: ref .bar height 12 / 9 / 10 → 6 / 4 / 5 */
+.menu-surface--tray .menu-card--detailed .provider-quota__track,
+.menu-surface--tray .menu-card--detailed .provider-quota--hero .provider-quota__track {
+  height: calc(6 * var(--flyout-u));
+}
+.menu-surface--tray .menu-card--compact .provider-quota--hero .provider-quota__track {
+  height: calc(4 * var(--flyout-u));
+}
+.menu-surface--tray .menu-card--minimal .provider-quota--hero .provider-quota__track {
+  height: calc(5 * var(--flyout-u));
+}
+
+/* type: ref .weekly-value 31 → 18, weight 730
+   geo:  ref margin 8 0 12 → 4 0 6 */
+.menu-surface--tray .menu-card--detailed .provider-quota__sub-pct {
+  margin: calc(4 * var(--flyout-u)) 0 calc(6 * var(--flyout-u));
+}
+.menu-surface--tray .menu-card--detailed .provider-quota__sub-pct-num {
+  font-size: calc(18 * var(--flyout-u));
+  font-weight: 730;
+  letter-spacing: -0.05em;
+}
+
+/* geo: ref .divider height 2 → 1, margin 22 → 11 — between quota windows,
+   and above the reset-credits pill (MenuCard renders that hairline). */
+.menu-surface--tray .menu-card--detailed
+  .menu-card__metrics .provider-quota + .provider-quota {
+  margin-top: calc(11 * var(--flyout-u));
+  padding-top: calc(11 * var(--flyout-u));
+}
+.menu-surface--tray .menu-card--detailed
+  .menu-card__zone--quota .menu-card__divider {
+  margin: calc(11 * var(--flyout-u)) 0;
+}
+
+/* geo: ref .reset-credits margin-top 4 → 2, padding 14 16 → 7 8, radius 14 → 7
+   type: span 18 → 11 normal, strong 20 → 12 weight 720 */
+.menu-surface--tray .menu-card--detailed .menu-card__reset-credits {
+  margin-top: calc(2 * var(--flyout-u));
+  padding: calc(7 * var(--flyout-u)) calc(8 * var(--flyout-u));
+  border-radius: calc(7 * var(--flyout-u));
+  border: 0;
+  background: rgba(255, 255, 255, 0.05);
+  font-size: calc(11 * var(--flyout-u));
+  font-weight: 400;
+}
+[data-theme="light"] .menu-surface--tray .menu-card--detailed .menu-card__reset-credits {
+  background: rgba(0, 0, 0, 0.04);
+}
+.menu-surface--tray .menu-card--detailed .menu-card__reset-credits strong {
+  font-size: calc(12 * var(--flyout-u));
+  font-weight: 720;
+  letter-spacing: -0.02em;
+}
+
+/* ── Compact secondary quota — ref .compact-card .weekly-line + .bar ──── */
+/* The reference separates this row from the hero bar with whitespace only
+   (margin-top 19 → 9) — no hairline, unlike the detailed tier. Its label and
+   value inherit the card font (16 → 10); only the value is bold. */
+.menu-surface--tray .menu-card--compact .menu-card__compact-secondary {
+  margin-top: calc(9 * var(--flyout-u));
+  padding-top: 0;
+  border-top: none;
+  gap: calc(5 * var(--flyout-u));
+}
+.menu-surface--tray .menu-card--compact .menu-card__compact-secondary-header {
+  font-size: calc(10 * var(--flyout-u));
+  font-weight: 400;
+}
+.menu-surface--tray .menu-card--compact .menu-card__compact-secondary-header strong {
+  font-size: calc(10 * var(--flyout-u));
+  font-weight: 700;
+}
+.menu-surface--tray .menu-card--compact .menu-card__compact-secondary-track {
+  height: calc(4 * var(--flyout-u));
+}
+
+/* ── Insights panel (detailed) — ref .usage-panel ─────────────────────── */
+/* geo: ref .usage-panel margin-top 20 → 10 (the gap between the two zones) */
+.menu-surface--tray .menu-card--detailed .menu-card__content {
+  gap: calc(10 * var(--flyout-u));
+}
+
+/* The shared zone owns the 12px radius; the reference only changes padding here. */
+.menu-surface--tray .menu-card--detailed .menu-card__zone--insights {
+  padding: calc(12 * var(--flyout-u)) calc(12 * var(--flyout-u)) calc(11 * var(--flyout-u));
+  /* Separation comes entirely from the dividers below (ref 22 + 2 + 22), so
+     the flex gap must not add a second, competing gutter. */
+  gap: 0;
+}
+.menu-surface--tray .menu-card--detailed
+  .menu-card__zone--insights .menu-card__divider {
+  margin: calc(11 * var(--flyout-u)) 0;
+}
+
+/* Spacing inside an insight block uses two steps, so the rhythm reads as
+   grouping rather than an even stack:
+     7px — between a row and the element that supports it (value row → its
+           sub-lines; pace statement → its bar → the runway conclusion).
+     3px — between two sub-lines that are one continued thought
+           (equivalent value → top model), set below via margin.
+   ref .usage-row's grid gap 9 lands at ~4 under k_geo, but that applied to
+   every child equally and left the pace bar glued to the text on both
+   sides. */
+.menu-surface--tray .menu-card--detailed .menu-card__insight-block {
+  gap: calc(7 * var(--flyout-u));
+}
+.menu-surface--tray .menu-card--detailed .menu-card__insight-row {
+  gap: calc(6 * var(--flyout-u));
+}
+
+/* type: ref .usage-title 19 → 11, normal weight; .usage-icon 23 → 13 */
+.menu-surface--tray .menu-card--detailed .menu-card__insight-label {
+  font-size: calc(11 * var(--flyout-u));
+  font-weight: 400;
+  gap: calc(5 * var(--flyout-u));
+}
+.menu-surface--tray .menu-card--detailed .menu-card__insight-label svg {
+  width: calc(13 * var(--flyout-u));
+  height: calc(13 * var(--flyout-u));
+}
+
+/* type: ref .usage-value 26 → 15 weight 720, with small 18 → 11 weight 500 */
+.menu-surface--tray .menu-card--detailed .menu-card__insight-value {
+  font-size: calc(15 * var(--flyout-u));
+  font-weight: 720;
+}
+.menu-surface--tray .menu-card--detailed
+  :is(.menu-card__insight-unit, .menu-card__insight-approx) {
+  font-size: calc(11 * var(--flyout-u));
+  font-weight: 500;
+}
+
+/* type: ref .usage-subline / .usage-model 17 → 10 (the scale's anchor).
+   The equivalent-value line keeps the block's 7px gap from the value row it
+   describes; the top-model line pulls back to 3px so the two sub-lines read
+   as one continued thought rather than two separate facts. */
+.menu-surface--tray .menu-card--detailed .menu-card__local-equivalent,
+.menu-surface--tray .menu-card--detailed .menu-card__local-note {
+  font-size: calc(10 * var(--flyout-u));
+  font-weight: 400;
+  line-height: 1.3;
+}
+.menu-surface--tray .menu-card--detailed .menu-card__local-note {
+  margin-top: calc(-4 * var(--flyout-u));
+}
+
+/* type: ref .forecast-copy 19 → 11 (its strong is 700), .forecast-value 18 → 11
+   geo:  ref .forecast-track .bar 12 → 6 */
+.menu-surface--tray .menu-card--detailed .menu-card__pace-summary-text,
+.menu-surface--tray .menu-card--detailed .menu-card__pace-runway-status,
+.menu-surface--tray .menu-card--detailed .menu-card__pace-runway-value {
+  font-size: calc(11 * var(--flyout-u));
+}
+.menu-surface--tray .menu-card--detailed .menu-card__pace-track {
+  height: calc(6 * var(--flyout-u));
+}
+
+/* The runway line ("够用到重置") is a calm status, not an emphasis: normal
+   weight, and its icon takes the quota bar's healthy blue so the whole card
+   stays within the bar's own two hues instead of adding a third (green). */
+.menu-surface--tray .menu-card--detailed .menu-card__pace-runway-status {
+  font-weight: 400;
+}
+.menu-surface--tray .menu-card--detailed
+  .menu-card__pace-runway[data-state="ok"] .menu-card__pace-runway-status svg {
+  color: var(--pace-behind-fg);
+}
+
+/* ref .forecast — the reference renders the pace line as ONE flowing,
+   left-aligned line ("本周实际用量　52% · 预计 49.8%（超前 2.2%）") whose
+   entire text — icon, label and numbers — carries the pace colour. The
+   default insight row instead pushes a grey label away from a right-aligned
+   value, which both loses that colour and ellipsized the label. */
+.menu-surface--tray .menu-card--detailed
+  .menu-card__insight-row[data-pace-direction] {
+  justify-content: flex-start;
+}
+.menu-surface--tray .menu-card--detailed
+  .menu-card__insight-row[data-pace-direction] .menu-card__insight-label {
+  overflow: visible;
+  font-weight: 700;
+}
+.menu-surface--tray .menu-card--detailed .menu-card__pace-summary-text {
+  flex: 1 1 auto;
+  text-align: left;
+  white-space: normal;
+}
+/* Direction colours follow the quota bar's semantics, not a generic
+   good/bad pair: spending FASTER than the week elapses ("ahead") is the
+   state worth noticing, so it takes the bar's warning yellow, while having
+   slack ("behind") takes the bar's healthy blue. The previous green/orange
+   pair implied the opposite — green for burning quota fastest. */
+.menu-surface--tray .menu-card--detailed
+  .menu-card__insight-row[data-pace-direction="ahead"]
+  :is(.menu-card__insight-label, .menu-card__pace-summary-text) {
+  color: var(--pace-ahead-fg);
+}
+.menu-surface--tray .menu-card--detailed
+  .menu-card__insight-row[data-pace-direction="behind"]
+  :is(.menu-card__insight-label, .menu-card__pace-summary-text) {
+  color: var(--pace-behind-fg);
+}
+/* The "预期…" clause carries its own colour, so it needs the same remap —
+   otherwise it would stay green/orange inside an otherwise yellow line. */
+.menu-surface--tray .menu-card__pace-summary-highlight[data-pace-direction="ahead"],
+.menu-surface--tray .menu-card__chip-value[data-pace-direction="ahead"],
+.menu-surface--tray .menu-card__minimal-segment[data-pace-direction="ahead"] {
+  color: var(--pace-ahead-fg);
+}
+.menu-surface--tray .menu-card__pace-summary-highlight[data-pace-direction="behind"],
+.menu-surface--tray .menu-card__chip-value[data-pace-direction="behind"],
+.menu-surface--tray .menu-card__minimal-segment[data-pace-direction="behind"] {
+  color: var(--pace-behind-fg);
+}
+
+/* ── Compact metric chips — ref .compact-card .usage-panel / .metric ──── */
+/* geo: ref .usage-panel margin-top 14 → 7 (the content gap), grid gap 11 → 5 */
+.menu-surface--tray .menu-card--compact .menu-card__content {
+  gap: calc(7 * var(--flyout-u));
+}
+.menu-surface--tray .menu-card--compact .menu-card__chip-row {
+  gap: calc(5 * var(--flyout-u));
+}
+/* geo: ref .metric radius 15 → 7, padding 17 8 14 → 8 4 7 */
+.menu-surface--tray .menu-card--compact .menu-card__chip {
+  border-radius: calc(7 * var(--flyout-u));
+  padding: calc(8 * var(--flyout-u)) calc(4 * var(--flyout-u)) calc(7 * var(--flyout-u));
+  gap: calc(2 * var(--flyout-u));
+}
+/* type: ref .metric-value 23 → 14 weight 720, small 15 → 9 weight 450,
+   .metric-icon 20 → 12 */
+.menu-surface--tray .menu-card--compact .menu-card__chip-value {
+  font-size: calc(14 * var(--flyout-u));
+  font-weight: 720;
+}
+.menu-surface--tray .menu-card--compact .menu-card__chip-value svg {
+  width: calc(12 * var(--flyout-u));
+  height: calc(12 * var(--flyout-u));
+}
+.menu-surface--tray .menu-card--compact .menu-card__chip-caption {
+  font-size: calc(9 * var(--flyout-u));
+  font-weight: 450;
+}
+
+/* ── Minimal summary line — ref .minimal-card .weekly-line ────────────── */
+/* geo: ref margin-top 18 → 9 | type: ref font-size 17 → 10,
+   .metric-icon 17 → 10 */
+.menu-surface--tray .menu-card--minimal .menu-card__content {
+  gap: calc(9 * var(--flyout-u));
+}
+.menu-surface--tray .menu-card--minimal .menu-card__minimal-line {
+  font-size: calc(10 * var(--flyout-u));
+  font-weight: 400;
+}
+.menu-surface--tray .menu-card--minimal .menu-card__minimal-segment svg {
+  width: calc(10 * var(--flyout-u));
+  height: calc(10 * var(--flyout-u));
+}
+
+/* Taskbar strip entry composer (item G).
+   Built as rows of a `.settings-section__group` card so it matches every other
+   grouped list in Settings: same 6px/10px row padding, same hairline between
+   rows, no nested borders. A numbered list because order is a real setting —
+   the strip renders only the first `MAX_VISIBLE_LINES`, so the index says what
+   will actually appear, and rows past that are marked rather than hidden so a
+   configured-but-invisible entry is never a mystery. */
+.taskbar-entries {
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.taskbar-entries__row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 10px;
+}
+
+.taskbar-entries__row + .taskbar-entries__row {
+  border-top: 1px solid var(--panel-border);
+}
+
+/* Rows the strip has no room for. Dimming the whole row would also dim the
+   badge that explains why, so the controls fade and the badge does not. */
+.taskbar-entries__row[data-hidden="true"] > .dropdown,
+.taskbar-entries__row[data-hidden="true"] > .taskbar-entries__index {
+  opacity: 0.5;
+}
+
+.taskbar-entries__index {
+  flex: 0 0 auto;
+  width: 20px;
   height: 20px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 6px;
+  background: var(--surface-elevated);
+  color: var(--text-secondary);
+  font-size: var(--font-caption);
+  font-variant-numeric: tabular-nums;
 }
 
-.tray-panel-reveal--detail .menu-surface--tray .menu-metric__forecast {
-  margin-top: 2px;
-  padding: 8px 12px;
+.taskbar-entries__hidden-note {
+  flex: 0 0 auto;
+  padding: 2px 6px;
+  border-radius: 5px;
+  background: color-mix(in srgb, var(--text-muted) 16%, transparent);
+  color: var(--text-secondary);
+  font-size: var(--font-caption2, 0.72rem);
+  white-space: nowrap;
 }
 
-.tray-panel-reveal--detail .menu-surface--tray .menu-card__reset-credits {
-  padding: 8px 12px;
+/* Let each row's two dropdowns share the free width instead of hugging their
+   content, so the rows line up into columns. */
+.taskbar-entries__row > .dropdown {
+  flex: 1 1 0;
+  min-width: 0;
 }
 
-.tray-panel-reveal--detail .menu-surface--tray .menu-card__speed {
-  margin-top: 0;
-  padding: 7px 12px;
+.taskbar-entries__row > .dropdown .dropdown__trigger {
+  width: 100%;
+  max-width: none;
 }
 
-.tray-panel-reveal--detail .menu-surface--tray .menu-card__local-usage {
-  padding: 10px 12px;
+/* Reorder/remove controls: a single quiet cluster pushed to the row's end, so
+   the row reads as "position, provider, window" with the verbs out of the way. */
+.taskbar-entries__actions {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  margin-left: 2px;
 }
 
-.tray-panel-reveal--detail .menu-surface--tray
-  .menu-card__local-token-value strong {
-  font-size: 20px;
+.taskbar-entries__actions button {
+  width: 24px;
+  height: 24px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1;
+  cursor: pointer;
+  transition: background 0.12s ease, color 0.12s ease;
+}
+
+.taskbar-entries__actions button:hover:not(:disabled) {
+  background: var(--surface-elevated);
+  color: var(--text-primary);
+}
+
+.taskbar-entries__actions button:disabled {
+  opacity: 0.3;
+  cursor: default;
+}
+
+.taskbar-entries__actions button.is-destructive:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--provider-status-error) 18%, transparent);
+  color: var(--provider-status-error);
+}
+
+/* "Add entry" is a final row of the same card rather than a link below it, so
+   the card has one edge and the action sits where the list ends. */
+.taskbar-entries__add {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 8px 10px;
+  border: 0;
+  border-top: 1px solid var(--panel-border);
+  background: transparent;
+  color: var(--accent);
+  font: inherit;
+  font-size: var(--font-caption);
+  text-align: left;
+  cursor: pointer;
+}
+
+.taskbar-entries__add:hover:not(:disabled) {
+  background: var(--surface-elevated);
+}
+
+.taskbar-entries__add:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+/* Multi-select as a row of toggle chips.
+   Used where a setting takes several values at once and a `Select` cannot say
+   so — the floating bar's reset windows, for one. `aria-pressed` carries the
+   state, so it stays a real toggle for assistive tech. */
+.option-chips {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  justify-content: flex-end;
+}
+
+.option-chips__chip {
+  padding: 4px 9px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: 0.8rem;
+  line-height: 1.2;
+  cursor: pointer;
+  transition: background 0.12s ease, border-color 0.12s ease, color 0.12s ease;
+}
+
+.option-chips__chip:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.option-chips__chip[aria-pressed="true"] {
+  border-color: color-mix(in srgb, var(--accent) 60%, transparent);
+  background: color-mix(in srgb, var(--accent) 22%, transparent);
+  color: var(--text-primary);
+}
+
+.option-chips__chip:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+[data-theme="light"] .option-chips__chip {
+  border-color: var(--panel-border);
+  background: rgba(0, 0, 0, 0.04);
+}
+
+[data-theme="light"] .option-chips__chip:hover:not(:disabled) {
+  background: rgba(0, 0, 0, 0.07);
 }

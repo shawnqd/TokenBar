@@ -9,7 +9,8 @@ function mimoApiSnapshot(description: string): ProviderUsageSnapshot {
     primary: {
       usedPercent: 0,
       remainingPercent: 100,
-      windowMinutes: null,
+kind: null,
+            windowMinutes: null,
       resetsAt: null,
       resetDescription: description,
       isExhausted: false,

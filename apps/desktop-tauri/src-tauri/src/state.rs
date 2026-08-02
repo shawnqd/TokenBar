@@ -142,13 +142,17 @@ pub struct AppState {
     /// Instant when focus loss last dismissed the tray panel. The following
     /// tray click consumes this marker instead of reopening the panel.
     pub last_blur_dismissed_at: Option<std::time::Instant>,
-    /// One-shot grace for a blur event caused while revealing the tray panel
-    /// during explicit startup.
-    pub startup_tray_blur_grace_until: Option<std::time::Instant>,
-    /// Whether the explicit startup path may use its delayed shell fallback.
-    pub startup_tray_reveal_pending: bool,
+    /// Whether the hidden, prewarmed flyout WebView has completed its first
+    /// frontend layout handshake.
+    pub flyout_frontend_ready: bool,
     /// One-shot permission for frontend layout code to reveal a newly opened flyout.
     pub flyout_reveal_pending: bool,
+    /// Whether the hidden, prewarmed Settings WebView has rendered its lazy
+    /// Settings surface and can be shown without a blank flash.
+    pub settings_frontend_ready: bool,
+    /// Requested Settings tab waiting for the frontend-ready handshake. Its
+    /// presence is also the one-shot permission to reveal the hidden window.
+    pub settings_reveal_tab: Option<String>,
     /// Active while a user gesture (resize drag, HTML5 drag-reorder) is
     /// running a Win32 modal loop that transiently steals focus from the
     /// WebView2 child. `(began, until)` — `until` is the hard expiry;
@@ -196,9 +200,10 @@ impl AppState {
             notification_manager: codexbar::notifications::NotificationManager::new(),
             last_shown_at: None,
             last_blur_dismissed_at: None,
-            startup_tray_blur_grace_until: None,
-            startup_tray_reveal_pending: false,
+            flyout_frontend_ready: false,
             flyout_reveal_pending: false,
+            settings_frontend_ready: false,
+            settings_reveal_tab: None,
             gesture_blur_guard: None,
         }
     }
@@ -230,25 +235,16 @@ impl AppState {
             .is_some_and(|dismissed_at| now.duration_since(dismissed_at) <= max_age)
     }
 
-    #[allow(dead_code)]
-    // Retained for the legacy startup TrayPanel reveal fallback.
-    pub fn arm_startup_tray_reveal(&mut self, grace_until: std::time::Instant) {
-        self.startup_tray_blur_grace_until = Some(grace_until);
-        self.startup_tray_reveal_pending = true;
-    }
-
-    pub fn take_startup_tray_blur_grace(&mut self, now: std::time::Instant) -> bool {
-        self.startup_tray_blur_grace_until
-            .take()
-            .is_some_and(|until| now <= until)
-    }
-
-    pub fn take_startup_tray_reveal_fallback(&mut self) -> bool {
-        std::mem::take(&mut self.startup_tray_reveal_pending)
-    }
-
     pub fn arm_flyout_reveal(&mut self) {
         self.flyout_reveal_pending = true;
+    }
+
+    pub fn mark_flyout_frontend_ready(&mut self) {
+        self.flyout_frontend_ready = true;
+    }
+
+    pub fn is_flyout_frontend_ready(&self) -> bool {
+        self.flyout_frontend_ready
     }
 
     pub fn clear_flyout_reveal(&mut self) {
@@ -257,6 +253,22 @@ impl AppState {
 
     pub fn take_pending_flyout_reveal(&mut self) -> bool {
         std::mem::take(&mut self.flyout_reveal_pending)
+    }
+
+    pub fn arm_settings_reveal(&mut self, tab: &str) {
+        self.settings_reveal_tab = Some(tab.to_string());
+    }
+
+    pub fn mark_settings_frontend_ready(&mut self) {
+        self.settings_frontend_ready = true;
+    }
+
+    pub fn is_settings_frontend_ready(&self) -> bool {
+        self.settings_frontend_ready
+    }
+
+    pub fn take_pending_settings_reveal(&mut self) -> Option<String> {
+        self.settings_reveal_tab.take()
     }
 
     /// Arm the gesture blur guard for 15s. Called when the frontend reports
@@ -457,28 +469,6 @@ mod tests {
     }
 
     #[test]
-    fn startup_tray_blur_grace_is_consumed_once() {
-        let mut state = AppState::new();
-        let now = std::time::Instant::now();
-
-        state.arm_startup_tray_reveal(now + std::time::Duration::from_secs(1));
-
-        assert!(state.take_startup_tray_blur_grace(now));
-        assert!(!state.take_startup_tray_blur_grace(now));
-    }
-
-    #[test]
-    fn startup_tray_reveal_fallback_is_consumed_once() {
-        let mut state = AppState::new();
-        let now = std::time::Instant::now();
-
-        state.arm_startup_tray_reveal(now + std::time::Duration::from_secs(1));
-
-        assert!(state.take_startup_tray_reveal_fallback());
-        assert!(!state.take_startup_tray_reveal_fallback());
-    }
-
-    #[test]
     fn hidden_flyout_cannot_be_revealed_by_stale_layout_work() {
         let mut state = AppState::new();
 
@@ -506,14 +496,29 @@ mod tests {
     }
 
     #[test]
-    fn expired_startup_tray_blur_grace_is_consumed_without_suppressing() {
+    fn prewarmed_flyout_becomes_ready_without_becoming_pending() {
         let mut state = AppState::new();
-        let now = std::time::Instant::now();
 
-        state.arm_startup_tray_reveal(now - std::time::Duration::from_secs(1));
+        state.mark_flyout_frontend_ready();
 
-        assert!(!state.take_startup_tray_blur_grace(now));
-        assert!(!state.take_startup_tray_blur_grace(now));
+        assert!(state.is_flyout_frontend_ready());
+        assert!(!state.take_pending_flyout_reveal());
+    }
+
+    #[test]
+    fn pending_settings_reveal_keeps_latest_requested_tab() {
+        let mut state = AppState::new();
+
+        state.arm_settings_reveal("general");
+        state.arm_settings_reveal("about");
+        state.mark_settings_frontend_ready();
+
+        assert!(state.is_settings_frontend_ready());
+        assert_eq!(
+            state.take_pending_settings_reveal().as_deref(),
+            Some("about")
+        );
+        assert!(state.take_pending_settings_reveal().is_none());
     }
 
     #[test]

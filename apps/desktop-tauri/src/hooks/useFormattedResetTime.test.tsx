@@ -33,7 +33,10 @@ async function mountWithLocale(ui: React.ReactNode) {
       MetricResetsIn: "Resets in",
       ResetsInHoursMinutes: "Resets in {}h {}m",
       ResetsInDaysHours: "Resets in {}d {}h",
+      TodayAt: "Today at {}",
       TrayResetsDueNow: "Resetting",
+      QuotaResetExpiredWaiting: "Expired — waiting for refresh",
+      QuotaResetUnknown: "Reset time unknown",
     }),
   );
   const rendered = render(<LocaleProvider>{ui}</LocaleProvider>);
@@ -66,11 +69,30 @@ describe("useFormattedResetTime", () => {
     expect(screen.getByTestId("reset")).toHaveTextContent("3h");
   });
 
-  it("returns an absolute local time without the reset label", async () => {
+  it("names the day and the clock time in absolute mode", async () => {
     const target = new Date("2024-06-01T03:42:00Z").toISOString();
     await mountWithLocale(
       <Probe resetsAt={target} fallback="later" relative={false} />,
     );
-    expect(screen.getByTestId("reset")).not.toHaveTextContent("Resets in");
+    const node = screen.getByTestId("reset");
+    // The day is what makes the time readable; the slot already means "reset",
+    // so nothing prefixes it.
+    expect(node).not.toHaveTextContent("Resets in");
+    expect(node).toHaveTextContent("Today at");
+  });
+
+  it("reads an elapsed window as expired instead of counting down past zero", async () => {
+    const target = new Date("2024-05-31T23:00:00Z").toISOString();
+    await mountWithLocale(
+      <Probe resetsAt={target} fallback="later" relative={true} />,
+    );
+    const node = screen.getByTestId("reset");
+    expect(node).toHaveTextContent("Expired — waiting for refresh");
+    expect(node.textContent).not.toContain("-");
+  });
+
+  it("says the reset time is unknown when there is no timestamp or description", async () => {
+    await mountWithLocale(<Probe resetsAt={null} fallback={null} relative={true} />);
+    expect(screen.getByTestId("reset")).toHaveTextContent("Reset time unknown");
   });
 });

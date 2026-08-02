@@ -13,6 +13,7 @@ import MenuSurface, {
 } from "../components/MenuSurface";
 import ProviderGrid, { prioritizeProviders } from "../components/ProviderGrid";
 import { orderProviderSnapshots } from "../lib/providerOrder";
+import { quotaDisplayContext } from "../lib/quotaDisplay";
 
 /**
  * Pop-out window — dashboard and provider deep-links both keep the full card
@@ -34,6 +35,12 @@ export default function PopOutPanel({
   } = useProviders();
   const { settings } = useSettings(state.settings);
   const { t } = useLocale();
+  // The PopOut dashboard shares the "dashboard" component's settings with the
+  // tray flyout; it never reads the floating bar's or taskbar strip's choice.
+  const display = useMemo(
+    () => quotaDisplayContext(settings, "dashboard"),
+    [settings],
+  );
 
   const sorted = useMemo(() => {
     return orderProviderSnapshots(
@@ -138,7 +145,7 @@ export default function PopOutPanel({
     openSettingsWindow("general");
   }, []);
   const goTray = useCallback(() => {
-    // The flyout ("Pop Out Dashboard") is now its own dedicated OS window
+    // The "Open Tray Panel" surface is now its own dedicated OS window
     // rather than a state of the shared `main` window's surface-mode
     // machine, so "back to tray" opens it directly instead of switching
     // `main`'s mode.
@@ -210,7 +217,7 @@ export default function PopOutPanel({
       <ProviderGrid
         providers={sorted}
         selectedProviderId={selectedProviderId}
-        showAsUsed={settings.showAsUsed}
+        display={display}
         showProviderIcons={settings.switcherShowsIcons}
         expanded={gridExpanded}
         onExpandedChange={setGridExpanded}
@@ -234,8 +241,7 @@ export default function PopOutPanel({
             >
               <MenuCard
                 provider={p}
-                resetTimeRelative={settings.resetTimeRelative}
-                showAsUsed={settings.showAsUsed}
+                display={display}
                 compactMetrics={selectedProviderId === null}
                 localUsagePeriod={settings.localUsagePeriod}
               />

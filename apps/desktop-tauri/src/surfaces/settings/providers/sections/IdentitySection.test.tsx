@@ -7,7 +7,8 @@ function rateWindow(resetDescription: string): RateWindowSnapshot {
   return {
     usedPercent: 0,
     remainingPercent: 100,
-    windowMinutes: null,
+kind: null,
+        windowMinutes: null,
     resetsAt: null,
     resetDescription,
     isExhausted: false,

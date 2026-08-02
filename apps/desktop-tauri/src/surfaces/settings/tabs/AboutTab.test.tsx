@@ -27,7 +27,6 @@ const settings: SettingsSnapshot = {
   trayIconMode: "single",
   switcherShowsIcons: true,
   menuBarShowsHighestUsage: true,
-  menuBarShowsPercent: true,
   showAsUsed: false,
   showAllTokenAccountsInMenu: true,
   enableAnimations: true,
@@ -55,6 +54,24 @@ const settings: SettingsSnapshot = {
   floatBarProviderIds: [],
   floatBarDarkText: false,
   floatBarShowResetInline: false,
+  floatBarResetWindows: ["primary"],
+  taskbarWidgetEnabled: false,
+  taskbarWidgetPosition: "notification",
+  taskbarWidgetFontWeight: 400,
+  taskbarWidgetContent: "usage",
+  taskbarWidgetEntries: [
+    { providerId: "auto", window: "session" },
+    { providerId: "auto", window: "weekly" },
+  ],
+  taskbarWidgetFontFamily: "Microsoft YaHei UI",
+  taskbarWidgetFontSize: 12,
+  taskbarWidgetWidth: 132,
+  taskbarWidgetTextAlign: "left",
+  floatBarShowAsUsed: true,
+  floatBarResetTimeRelative: true,
+  dashboardShowAsUsed: true,
+  dashboardResetTimeRelative: true,
+  taskbarShowAsUsed: true,
 };
 
 describe("AboutTab", () => {

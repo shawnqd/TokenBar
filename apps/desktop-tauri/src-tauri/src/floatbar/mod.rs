@@ -128,6 +128,7 @@ pub struct SettingsPatch {
     pub provider_ids: Option<Vec<String>>,
     pub dark_text: Option<bool>,
     pub show_reset_inline: Option<bool>,
+    pub reset_windows: Option<Vec<String>>,
     pub show_cost: Option<bool>,
 }
 
@@ -142,6 +143,7 @@ impl SettingsPatch {
             && self.provider_ids.is_none()
             && self.dark_text.is_none()
             && self.show_reset_inline.is_none()
+            && self.reset_windows.is_none()
             && self.show_cost.is_none()
     }
 
@@ -174,6 +176,10 @@ impl SettingsPatch {
         }
         if let Some(v) = self.show_reset_inline {
             settings.float_bar_show_reset_inline = v;
+        }
+        if let Some(v) = &self.reset_windows {
+            settings.float_bar_reset_windows =
+                codexbar::settings::normalize_float_bar_reset_windows(v);
         }
         if let Some(v) = self.show_cost {
             settings.float_bar_show_cost = v;

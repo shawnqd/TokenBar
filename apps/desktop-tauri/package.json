@@ -6,8 +6,11 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "dev:windows": "powershell -NoProfile -ExecutionPolicy Bypass -File ../../scripts/dev-windows.ps1",
     "check-locale": "node scripts/check-locale-drift.mjs",
-    "prebuild": "pnpm run check-locale",
+    "check-provider-marks": "node scripts/check-provider-marks.mjs",
+    "check-chart-providers": "node scripts/check-chart-providers.mjs",
+    "prebuild": "pnpm run check-locale && pnpm run check-provider-marks && pnpm run check-chart-providers",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
     "test": "vitest run",

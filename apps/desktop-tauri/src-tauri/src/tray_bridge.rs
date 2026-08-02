@@ -10,7 +10,7 @@ use tauri::menu::{CheckMenuItemBuilder, IsMenuItem, Menu, MenuItem, PredefinedMe
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{AppHandle, Manager};
 
-use codexbar::tray::{render_bar_icon_rgba, render_percent_icon_rgba};
+use codexbar::tray::render_bar_icon_rgba;
 
 use crate::shell;
 use crate::state::{AppState, TrayAnchor};
@@ -149,13 +149,13 @@ fn build_native_tray_menu(
 
 fn resolve_menu_target(id: &str) -> Option<shell::ShellTransitionRequest> {
     match id {
-        // "Show Window" — the full draggable window (PopOut mode), unchanged.
+        // "Open Dashboard" — the full draggable window (PopOut mode), unchanged.
         "show_panel" => Some(shell::ShellTransitionRequest {
             mode: SurfaceMode::PopOut,
             target: SurfaceTarget::Dashboard,
             position: None,
         }),
-        // NOTE: "pop_out" ("Pop Out Dashboard") is NOT handled here — it opens
+        // NOTE: "pop_out" ("Open Tray Panel") is NOT handled here — it opens
         // the dedicated flyout window (MenuAction::OpenFlyout in
         // resolve_menu_action below), not a `shell::ShellTransitionRequest`
         // against the `main`-window surface-mode machine. `SurfaceMode::TrayPanel`
@@ -174,7 +174,7 @@ enum MenuAction {
     Transition(shell::ShellTransitionRequest),
     /// Open Settings/About in a detached window.
     OpenSettings(String),
-    /// Open (or focus) the dedicated flyout ("Pop Out Dashboard") window.
+    /// Open (or focus) the dedicated flyout ("Open Tray Panel") window.
     OpenFlyout,
     Refresh,
     /// Toggle the enabled/disabled state of the provider with the given CLI name.
@@ -272,7 +272,7 @@ pub fn setup(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
                     // Left-click toggles the dedicated flyout window (Pop Out
                     // Dashboard): open it, or cleanly close it when this same
                     // click already blur-dismissed it (no open→close flicker).
-                    // The full window stays available via "Show Window"
+                    // The full window stays available via "Open Dashboard"
                     // (SurfaceMode::PopOut on `main`) — the two now coexist as
                     // separate OS windows instead of mutually-exclusive states
                     // of one window. Called directly (not spawned): native
@@ -445,11 +445,110 @@ pub fn update_tray_icon_and_tooltip(
         ),
     };
 
-    let (rgba, w, h) = render_tray_icon_for_settings(&settings, session_pct, weekly_pct, all_error);
+    let (rgba, w, h) = render_bar_icon_rgba(session_pct, weekly_pct, all_error);
     let icon = Image::new_owned(rgba, w, h);
     let _ = tray.set_icon(Some(icon));
 
-    // ── Tooltip ───────────────────────────────────────────────────────────
+    // The taskbar strip renders the user's ordered entry list. Resolution and
+    // the "never a silent zero" rules live in `taskbar_entries`; this only turns
+    // resolved entries into localized strings.
+    #[cfg(windows)]
+    {
+        use codexbar::locale::{LocaleKey, get_text};
+        let lang = settings.ui_language;
+        let window_label = |kind: &str| {
+            get_text(
+                lang,
+                match kind {
+                    "weekly" => LocaleKey::TaskbarWindowWeekly,
+                    "daily" => LocaleKey::TaskbarWindowDaily,
+                    "monthly" => LocaleKey::TaskbarWindowMonthly,
+                    "balance" => LocaleKey::TaskbarWindowBalance,
+                    "speed" => LocaleKey::TaskbarWindowSpeed,
+                    _ => LocaleKey::TaskbarWindowSession,
+                },
+            )
+        };
+        let speed_snapshot = crate::commands::get_output_speed_snapshot();
+        let speed_for = |provider_id: &str| match provider_id {
+            "codex" => speed_snapshot.codex.tokens_per_second,
+            "claude" => speed_snapshot.claude.tokens_per_second,
+            "grok" => speed_snapshot.grok.tokens_per_second,
+            _ => None,
+        };
+
+        let resolved = crate::taskbar_entries::resolve_entries(
+            &settings,
+            snapshots,
+            picked,
+            &window_label,
+            &speed_for,
+        );
+
+        let lines = resolved
+            .into_iter()
+            .map(|entry| {
+                use crate::taskbar_entries::EntryUnavailable;
+                // The provider's NAME is the longest part of a cell — "Claude
+                // 5小时 12%" measures 103px against 77px for a mark plus the
+                // same numbers, and four cells in a two-column strip do not
+                // have that to spare. So when the provider has a brand mark the
+                // mark replaces the name; when it does not, the name stays and
+                // nothing is lost.
+                let mark = crate::provider_mark::provider_mark(&entry.provider_id);
+                let name = match mark {
+                    Some(_) => String::new(),
+                    None => format!("{} ", entry.provider_label),
+                };
+                // A balance is money and prints verbatim; the window word is
+                // dropped because the amount already says what it is and the
+                // cell has no room for both.
+                if let Some(ref amount) = entry.amount {
+                    return crate::taskbar_widget::StripLine {
+                        mark,
+                        text: format!("{name}{amount}"),
+                    };
+                }
+                // A `primary` entry whose provider publishes no cycle length
+                // resolves with an empty window label. Joining unconditionally
+                // would print a double space where the name should have been.
+                let window = if entry.window.is_empty() {
+                    String::new()
+                } else {
+                    format!("{} ", entry.window)
+                };
+                let text = match (entry.percent, entry.unavailable) {
+                    // Speed is a rate, not a percentage, so it keeps its unit.
+                    (Some(value), None) if entry.window == window_label("speed") => {
+                        format!("{name}{value:.1} t/s")
+                    }
+                    (Some(value), None) => {
+                        format!("{name}{window}{value:.0}%")
+                    }
+                    (_, Some(reason)) => {
+                        let key = match reason {
+                            EntryUnavailable::ProviderDisabled => {
+                                LocaleKey::TaskbarEntryProviderDisabled
+                            }
+                            EntryUnavailable::NoData => LocaleKey::TaskbarEntryNoData,
+                            EntryUnavailable::ProviderError => LocaleKey::TaskbarEntryError,
+                            EntryUnavailable::WindowUnsupported => {
+                                LocaleKey::TaskbarEntryUnsupported
+                            }
+                        };
+                        // The reason replaces the number outright — an entry that
+                        // cannot be measured must never print a percentage.
+                        format!("{name}{window}{}", get_text(lang, key))
+                    }
+                    _ => entry.provider_label.clone(),
+                };
+                crate::taskbar_widget::StripLine { mark, text }
+            })
+            .collect::<Vec<_>>();
+
+        crate::taskbar_widget::set_entries(lines);
+    }
+
     let tooltip = build_tooltip(snapshots, settings.ui_language);
     let _ = tray.set_tooltip(Some(tooltip));
 }
@@ -517,19 +616,6 @@ fn provider_status_label(
     )
 }
 
-fn render_tray_icon_for_settings(
-    settings: &Settings,
-    session_pct: f64,
-    weekly_pct: Option<f64>,
-    all_error: bool,
-) -> (Vec<u8>, u32, u32) {
-    if settings.menu_bar_shows_percent {
-        render_percent_icon_rgba(session_pct, all_error)
-    } else {
-        render_bar_icon_rgba(session_pct, weekly_pct, all_error)
-    }
-}
-
 /// Pick the provider whose usage the tray icon should render.
 ///
 /// Exposed so that the unit tests can exercise both `highest` and `first`
@@ -565,15 +651,16 @@ fn selected_tray_percents(
         .or_else(|| selected_metric_percent(snapshot, provider, MetricPreference::Automatic))
         .unwrap_or(snapshot.primary.used_percent);
 
+    // The notification-area icon and the taskbar status strip are one component
+    // in the settings model (both live on the Taskbar page), so both follow
+    // `taskbar_show_as_used` rather than the retired global `show_as_used`.
+    let show_as_used = settings.taskbar_show_as_used;
     let secondary = snapshot
         .secondary
         .as_ref()
-        .map(|w| display_metric_percent(w.used_percent, settings.show_as_used));
+        .map(|w| display_metric_percent(w.used_percent, show_as_used));
 
-    (
-        display_metric_percent(primary, settings.show_as_used),
-        secondary,
-    )
+    (display_metric_percent(primary, show_as_used), secondary)
 }
 
 fn display_metric_percent(used_percent: f64, show_as_used: bool) -> f64 {
@@ -851,9 +938,9 @@ mod tests {
 
     #[test]
     fn pop_out_menu_routes_to_open_flyout_action() {
-        // "Pop Out Dashboard" opens the dedicated flyout window — not a
+        // "Open Tray Panel" opens the dedicated flyout window — not a
         // `shell::ShellTransitionRequest` against the `main`-window surface
-        // machine — which is what lets it coexist with "Show Window"
+        // machine — which is what lets it coexist with "Open Dashboard"
         // (SurfaceMode::PopOut, which stays on `main`) instead of the two
         // being mutually-exclusive states of one window.
         let action = resolve_menu_action("pop_out").expect("pop_out action");
@@ -868,9 +955,9 @@ mod tests {
 
         // SurfaceMode::TrayPanel is retained purely as a data key (geometry
         // key / window_properties source / panel-size reference) for the
-        // flyout window's builder — the properties themselves are unchanged.
+        // fixed flyout window's builder.
         let props = SurfaceMode::TrayPanel.window_properties();
-        assert!(props.resizable && props.blur_dismiss && props.skip_taskbar);
+        assert!(!props.resizable && props.blur_dismiss && props.skip_taskbar);
     }
 
     #[test]
@@ -1008,6 +1095,10 @@ mod tests {
             primary: crate::commands::RateWindowSnapshot {
                 used_percent,
                 remaining_percent: 100.0 - used_percent,
+                // These fixtures exercise tray ICON/label selection, which reads
+                // percentages only. No length or slot name is declared, so there
+                // is no cycle to name.
+                kind: None,
                 window_minutes: None,
                 resets_at: None,
                 reset_description: None,
@@ -1022,6 +1113,7 @@ mod tests {
             secondary: secondary_percent.map(|pct| crate::commands::RateWindowSnapshot {
                 used_percent: pct,
                 remaining_percent: 100.0 - pct,
+                kind: None,
                 window_minutes: None,
                 resets_at: None,
                 reset_description: None,
@@ -1037,6 +1129,7 @@ mod tests {
             tertiary: tertiary_percent.map(|pct| crate::commands::RateWindowSnapshot {
                 used_percent: pct,
                 remaining_percent: 100.0 - pct,
+                kind: None,
                 window_minutes: None,
                 resets_at: None,
                 reset_description: None,
@@ -1086,6 +1179,7 @@ mod tests {
             window: crate::commands::RateWindowSnapshot {
                 used_percent: percent,
                 remaining_percent: 100.0 - percent,
+                kind: None,
                 window_minutes: None,
                 resets_at: None,
                 reset_description: None,
@@ -1181,26 +1275,6 @@ mod tests {
             labels,
             vec![("status_summary".to_string(), "Claude 72%".to_string())]
         );
-    }
-
-    #[test]
-    fn tray_icon_renderer_uses_percent_mode_when_enabled() {
-        let bar_settings = Settings {
-            menu_bar_shows_percent: false,
-            ..Settings::default()
-        };
-        let percent_settings = Settings {
-            menu_bar_shows_percent: true,
-            ..Settings::default()
-        };
-
-        let (bar, bar_w, bar_h) =
-            render_tray_icon_for_settings(&bar_settings, 72.0, Some(40.0), false);
-        let (percent, pct_w, pct_h) =
-            render_tray_icon_for_settings(&percent_settings, 72.0, Some(40.0), false);
-
-        assert_eq!((bar_w, bar_h), (pct_w, pct_h));
-        assert_ne!(bar, percent);
     }
 
     #[test]
@@ -1318,7 +1392,7 @@ mod tests {
     #[test]
     fn selected_tray_percent_respects_remaining_display_mode() {
         let mut settings = Settings {
-            show_as_used: false,
+            taskbar_show_as_used: false,
             ..Settings::default()
         };
         settings.set_provider_metric(ProviderId::Cursor, MetricPreference::ExtraUsage);
@@ -1335,6 +1409,23 @@ mod tests {
 
         assert_eq!(primary, 85.0);
         assert_eq!(secondary, Some(80.0));
+    }
+
+    /// The tray icon and taskbar strip must not follow the dashboard's or the
+    /// floating bar's preference — only their own.
+    #[test]
+    fn selected_tray_percent_ignores_other_components_display_mode() {
+        let settings = Settings {
+            taskbar_show_as_used: true,
+            dashboard_show_as_used: false,
+            float_bar_show_as_used: false,
+            ..Settings::default()
+        };
+        let snapshot = fake_snapshot("codex", "Codex", 30.0);
+
+        let (primary, _) = selected_tray_percents(&snapshot, &settings);
+
+        assert_eq!(primary, 30.0, "stayed on the used figure");
     }
 
     #[test]

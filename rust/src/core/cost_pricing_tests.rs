@@ -216,4 +216,3 @@ fn test_codex_display_label() {
     );
     assert_eq!(CostUsagePricing::codex_display_label("gpt-5.4"), None);
 }
-

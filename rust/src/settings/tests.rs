@@ -810,3 +810,185 @@ fn test_per_provider_defaults_applied() {
     assert!(!settings.historical_tracking(ProviderId::Codex));
     assert!(!settings.avoid_keychain_prompts(ProviderId::Claude));
 }
+
+#[test]
+fn taskbar_font_weight_migrates_legacy_named_value() {
+    let settings: Settings =
+        serde_json::from_str(r#"{"taskbar_widget_font_weight":"semibold"}"#).unwrap();
+    assert_eq!(settings.taskbar_widget_font_weight, 600);
+}
+
+/// The weight is an OpenType `wght` axis value now, so it is clamped to the
+/// axis range rather than snapped to installed faces. The old GDI renderer
+/// forced three stops because `CreateFontW` could not do better; the
+/// DirectWrite renderer drives the axis directly and intermediate values render
+/// distinctly (measured in `taskbar_text::tests`). Quantizing here again would
+/// silently discard the setting the user actually chose.
+#[test]
+fn taskbar_font_weight_is_a_continuous_axis_value() {
+    for (input, expected) in [(100, 100), (325, 325), (430, 430), (560, 560), (975, 975)] {
+        let settings: Settings =
+            serde_json::from_str(&format!(r#"{{"taskbar_widget_font_weight":{input}}}"#)).unwrap();
+        assert_eq!(
+            settings.taskbar_widget_font_weight, expected,
+            "weight {input} must survive as an axis value"
+        );
+    }
+
+    let settings: Settings = serde_json::from_str(r#"{"taskbar_widget_font_weight":430}"#).unwrap();
+    let json = serde_json::to_string(&settings).unwrap();
+    assert!(json.contains(r#""taskbar_widget_font_weight":430"#));
+}
+
+#[test]
+fn taskbar_font_weight_clamps_to_the_axis_range() {
+    for (input, expected) in [(0, 100), (50, 100), (1200, 1000)] {
+        let settings: Settings =
+            serde_json::from_str(&format!(r#"{{"taskbar_widget_font_weight":{input}}}"#)).unwrap();
+        assert_eq!(settings.taskbar_widget_font_weight, expected);
+    }
+}
+
+/// The family must be a real name the renderer can pass to DirectWrite; an
+/// empty or whitespace value falls back rather than asking DirectWrite to
+/// resolve "".
+#[test]
+fn taskbar_font_family_defaults_when_blank() {
+    let settings: Settings =
+        serde_json::from_str(r#"{"taskbar_widget_font_family":"   "}"#).unwrap();
+    assert_eq!(settings.taskbar_widget_font_family, "Microsoft YaHei UI");
+
+    let settings: Settings =
+        serde_json::from_str(r#"{"taskbar_widget_font_family":"Bahnschrift"}"#).unwrap();
+    assert_eq!(settings.taskbar_widget_font_family, "Bahnschrift");
+}
+
+/// A pre-split `settings.json` only has the global pair. Every component must
+/// adopt those values so the first launch after the upgrade looks unchanged.
+#[test]
+fn per_component_display_settings_seed_from_legacy_globals() {
+    let settings: Settings =
+        serde_json::from_str(r#"{"show_as_used":false,"reset_time_relative":false}"#).unwrap();
+
+    assert!(!settings.float_bar_show_as_used);
+    assert!(!settings.dashboard_show_as_used);
+    assert!(!settings.taskbar_show_as_used);
+    assert!(!settings.float_bar_reset_time_relative);
+    assert!(!settings.dashboard_reset_time_relative);
+}
+
+/// An explicitly stored `false` must not be mistaken for an absent key and
+/// re-seeded from the legacy global, which is why the raw fields are `Option`.
+#[test]
+fn per_component_display_settings_keep_explicit_values_over_legacy_globals() {
+    let settings: Settings = serde_json::from_str(
+        r#"{
+            "show_as_used": true,
+            "reset_time_relative": true,
+            "float_bar_show_as_used": false,
+            "taskbar_show_as_used": false
+        }"#,
+    )
+    .unwrap();
+
+    assert!(!settings.float_bar_show_as_used, "explicit false is preserved");
+    assert!(!settings.taskbar_show_as_used, "explicit false is preserved");
+    // Untouched components still follow the legacy global.
+    assert!(settings.dashboard_show_as_used);
+    assert!(settings.float_bar_reset_time_relative);
+    assert!(settings.dashboard_reset_time_relative);
+}
+
+/// Components are independent after the seed: a file that stores different
+/// values per component round-trips without any of them bleeding into another.
+#[test]
+fn per_component_display_settings_round_trip_independently() {
+    let mut settings = Settings::default();
+    settings.float_bar_show_as_used = false;
+    settings.dashboard_show_as_used = true;
+    settings.taskbar_show_as_used = false;
+    settings.float_bar_reset_time_relative = true;
+    settings.dashboard_reset_time_relative = false;
+
+    let json = serde_json::to_string(&settings).unwrap();
+    let restored: Settings = serde_json::from_str(&json).unwrap();
+
+    assert!(!restored.float_bar_show_as_used);
+    assert!(restored.dashboard_show_as_used);
+    assert!(!restored.taskbar_show_as_used);
+    assert!(restored.float_bar_reset_time_relative);
+    assert!(!restored.dashboard_reset_time_relative);
+}
+
+/// The taskbar deliberately has no reset-time mode: its native renderer shows
+/// no reset text, so such a setting would be inert. Guard against a later agent
+/// re-adding one out of symmetry.
+#[test]
+fn taskbar_has_no_reset_time_mode_setting() {
+    let json = serde_json::to_string(&Settings::default()).unwrap();
+    assert!(
+        !json.contains("taskbar_reset_time_relative"),
+        "the taskbar must not persist a reset-time mode it cannot render"
+    );
+}
+
+/// Fresh installs show usage as "used" with relative reset times on every
+/// component, matching the pre-split default behavior.
+#[test]
+fn per_component_display_settings_default_to_used_and_relative() {
+    let settings = Settings::default();
+    assert!(settings.float_bar_show_as_used);
+    assert!(settings.dashboard_show_as_used);
+    assert!(settings.taskbar_show_as_used);
+    assert!(settings.float_bar_reset_time_relative);
+    assert!(settings.dashboard_reset_time_relative);
+}
+
+/// The floating bar showed the provider's own leading window before this
+/// setting existed. An upgrade must not change what is on screen, so an old
+/// settings file with no key at all has to land on exactly that.
+#[test]
+fn float_bar_reset_windows_default_to_the_provider_window() {
+    let settings: Settings = serde_json::from_str("{}").unwrap();
+    assert_eq!(settings.float_bar_reset_windows, vec!["primary".to_string()]);
+    assert_eq!(
+        Settings::default().float_bar_reset_windows,
+        vec!["primary".to_string()]
+    );
+}
+
+#[test]
+fn float_bar_reset_windows_drop_unknown_values_and_duplicates() {
+    let normalized = normalize_float_bar_reset_windows(&[
+        "Weekly".to_string(),
+        "weekly".to_string(),
+        "fortnightly".to_string(),
+        "  session ".to_string(),
+    ]);
+    assert_eq!(
+        normalized,
+        vec!["weekly".to_string(), "session".to_string()],
+        "names are case- and space-insensitive, deduped, and unknown ones vanish"
+    );
+}
+
+#[test]
+fn float_bar_reset_windows_are_capped() {
+    let normalized = normalize_float_bar_reset_windows(&[
+        "primary".to_string(),
+        "session".to_string(),
+        "daily".to_string(),
+        "weekly".to_string(),
+        "monthly".to_string(),
+    ]);
+    assert_eq!(normalized.len(), FLOAT_BAR_MAX_RESET_WINDOWS);
+    assert_eq!(normalized[0], "primary", "the user's order is preserved");
+}
+
+/// Clearing every window is a real choice — "show no reset text" — so it must
+/// survive normalization instead of being helpfully refilled.
+#[test]
+fn float_bar_reset_windows_may_be_empty() {
+    assert!(normalize_float_bar_reset_windows(&[]).is_empty());
+    assert!(normalize_float_bar_reset_windows(&["nonsense".to_string()]).is_empty());
+}

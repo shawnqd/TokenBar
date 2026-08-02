@@ -96,7 +96,7 @@ pub(super) fn visible_surface_position_for_mode_with_fallbacks(
         ));
     }
 
-    // No usable tray anchor (e.g. a right-click menu "Pop Out Dashboard" with no
+    // No usable tray anchor (e.g. a right-click menu "Open Tray Panel" with no
     // prior left-click, or a proof/automation launch). The tray icon lives on
     // the primary (taskbar) monitor, so anchor the surface there. Crucially, do
     // NOT fall through to the hidden main window's `current_monitor`: after a
@@ -232,13 +232,9 @@ pub fn remember_current_geometry_if_eligible(window: &tauri::Window) {
         let guard = st.lock().unwrap();
         guard.surface_machine.current()
     };
-    // The TrayPanel flyout persists its size explicitly from the frontend (only
-    // on genuine user drag-resizes, never on its own auto-fit resizes), so skip
-    // the automatic capture here — otherwise an auto-fit resize would be saved
-    // and freeze the panel at that size.
-    if current_mode == SurfaceMode::TrayPanel
-        || !crate::geometry_store::should_remember(current_mode)
-    {
+    // The fixed tray flyout is not eligible for geometry persistence; the
+    // shared store owns only user-movable PopOut and Settings windows.
+    if !crate::geometry_store::should_remember(current_mode) {
         return;
     }
 
