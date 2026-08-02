@@ -50,12 +50,14 @@ export function RegionSection({
   return (
     <section className="provider-detail-section provider-detail-region">
       <h4>{t("ProviderRegion")}</h4>
-      <Select
-        value={selected}
-        options={options}
-        disabled={busy}
-        onChange={(v) => void handleChange(v)}
-      />
+      <div className="provider-detail-setting-row provider-detail-setting-row--control-only">
+        <Select
+          value={selected}
+          options={options}
+          disabled={busy}
+          onChange={(v) => void handleChange(v)}
+        />
+      </div>
       {error && <p className="provider-detail-error">{error}</p>}
     </section>
   );

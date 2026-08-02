@@ -165,6 +165,7 @@ export function CookieSection({ providerId, cookieDomain }: Props) {
       {notice && <ProviderStatusLine tone="ok">{notice}</ProviderStatusLine>}
 
       <ProviderAuthMethod
+        className="provider-auth-method--cookie"
         title={t("ProviderLoginSectionTitle")}
         badge={
           saved ? t("BrowserCookieSavedBadge") : t("BrowserCookieNoneSaved")

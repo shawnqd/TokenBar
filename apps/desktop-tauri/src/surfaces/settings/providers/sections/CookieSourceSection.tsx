@@ -51,44 +51,47 @@ export function CookieSourceSection({
   return (
     <section className="provider-detail-section provider-detail-cookie-source">
       <h4>{t("ProviderCookieSource")}</h4>
-      <div
-        role="radiogroup"
-        aria-label={t("ProviderCookieSource")}
-        className="provider-detail-segmented"
-      >
+      <div className="provider-detail-setting-row provider-detail-setting-row--stack-mobile">
+        <div className="provider-detail-setting-copy">
+          <strong>{selectedOption?.label ?? t("ProviderCookieSource")}</strong>
+          <span>{selectedOption?.description ?? ""}</span>
+        </div>
         <div
-          className="provider-detail-segmented__thumb"
-          aria-hidden
-          style={{
-            width: `calc((100% - 4px) / ${options.length})`,
-            transform: `translateX(${Math.max(
-              0,
-              options.findIndex((o) => o.value === selected),
-            ) * 100}%)`,
-          }}
-        />
-        {options.map((opt) => {
-          const isActive = opt.value === selected;
-          return (
-            <button
-              key={opt.value}
-              type="button"
-              role="radio"
-              aria-checked={isActive}
-              disabled={busy}
-              className={`provider-detail-segmented__option${
-                isActive ? " is-active" : ""
-              }`}
-              onClick={() => void handleSelect(opt.value)}
-            >
-              {opt.label}
-            </button>
-          );
-        })}
+          role="radiogroup"
+          aria-label={t("ProviderCookieSource")}
+          className="provider-detail-segmented"
+        >
+          <div
+            className="provider-detail-segmented__thumb"
+            aria-hidden
+            style={{
+              width: `calc((100% - 4px) / ${options.length})`,
+              transform: `translateX(${Math.max(
+                0,
+                options.findIndex((o) => o.value === selected),
+              ) * 100}%)`,
+            }}
+          />
+          {options.map((opt) => {
+            const isActive = opt.value === selected;
+            return (
+              <button
+                key={opt.value}
+                type="button"
+                role="radio"
+                aria-checked={isActive}
+                disabled={busy}
+                className={`provider-detail-segmented__option${
+                  isActive ? " is-active" : ""
+                }`}
+                onClick={() => void handleSelect(opt.value)}
+              >
+                {opt.label}
+              </button>
+            );
+          })}
+        </div>
       </div>
-      {selectedOption?.description && (
-        <p className="provider-detail-helper">{selectedOption.description}</p>
-      )}
       {error && <p className="provider-detail-error">{error}</p>}
     </section>
   );

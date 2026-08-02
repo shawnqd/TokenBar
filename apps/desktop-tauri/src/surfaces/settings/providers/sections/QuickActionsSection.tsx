@@ -31,12 +31,17 @@ export function QuickActionsSection({
   t,
 }: Props) {
   return (
-    <section className="provider-detail-section">
-      <h4>{t("QuickActions")}</h4>
-      <div className="provider-detail-actions">
+    <section
+      className="provider-detail-section provider-detail-quick-actions"
+      aria-label={t("QuickActions")}
+    >
+      <div className="provider-detail-quick-actions__header">
+        <h4>{t("QuickActions")}</h4>
+      </div>
+      <div className="provider-detail-actions provider-detail-actions--toolbar">
         <button
           type="button"
-          className="btn btn--ghost"
+          className="credential-btn credential-btn--primary"
           onClick={onRefresh}
           disabled={busy}
         >

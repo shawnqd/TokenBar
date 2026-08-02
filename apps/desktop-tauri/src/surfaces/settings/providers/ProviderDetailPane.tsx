@@ -73,11 +73,11 @@ interface Props {
  *
  * Workspace order (empty blocks omit themselves):
  *   1. Provider header (fixed shell)
- *   2. Status / quota overview (subscription or balance variant)
- *   3. Recent data (stats / charts)
- *   4. Auth & credentials (primary expanded, secondary collapsed)
- *   5. Display settings
- *   6. Quick actions
+ *   2. Quick actions (sticky toolbar)
+ *   3. Status / quota overview (subscription or balance variant)
+ *   4. Recent data (stats / charts)
+ *   5. Auth & credentials (primary expanded, secondary collapsed)
+ *   6. Display settings
  */
 export function ProviderDetailPane({
   providerId,
@@ -309,6 +309,21 @@ export function ProviderDetailPane({
         />
       )}
 
+      {/* Keep provider actions visible before the long quota/credential stack. */}
+      {detail && (
+        <QuickActionsSection
+          provider={detail}
+          busy={busy}
+          onRefresh={handleRefresh}
+          onSwitchAccount={handleSwitchAccount}
+          onOpenDashboard={handleOpenDashboard}
+          onOpenStatusPage={handleOpenStatusPage}
+          onCopyError={handleCopyError}
+          onBuyCredits={handleBuyCredits}
+          t={t}
+        />
+      )}
+
       {/* 2. Status & quota overview */}
       {providerSnapshot ? (
         <div className="provider-detail-live-card provider-detail-overview">
@@ -386,20 +401,6 @@ export function ProviderDetailPane({
         </div>
       )}
 
-      {/* 6. Quick actions */}
-      {detail && (
-        <QuickActionsSection
-          provider={detail}
-          busy={busy}
-          onRefresh={handleRefresh}
-          onSwitchAccount={handleSwitchAccount}
-          onOpenDashboard={handleOpenDashboard}
-          onOpenStatusPage={handleOpenStatusPage}
-          onCopyError={handleCopyError}
-          onBuyCredits={handleBuyCredits}
-          t={t}
-        />
-      )}
     </div>
   );
 }

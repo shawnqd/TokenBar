@@ -49,10 +49,11 @@ export function MenuBarMetricSection({
   return (
     <section className="provider-detail-section provider-detail-menu-metric">
       <h4>{t("TrayDisplayTitle")}</h4>
-      <div className="provider-detail-field provider-detail-field--row">
-        <span className="provider-detail-field__label">
-          {t("MenuBarMetric")}
-        </span>
+      <div className="provider-detail-setting-row">
+        <div className="provider-detail-setting-copy">
+          <strong>{t("MenuBarMetric")}</strong>
+          <span>{t("MenuBarMetricHelper")}</span>
+        </div>
         <Select
           value={selected}
           options={options}
@@ -60,7 +61,6 @@ export function MenuBarMetricSection({
           onChange={(v) => handleChange(v as MetricPreference)}
         />
       </div>
-      <p className="provider-detail-helper">{t("MenuBarMetricHelper")}</p>
       {error && <p className="provider-detail-error">{error}</p>}
     </section>
   );

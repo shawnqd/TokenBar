@@ -8255,3 +8255,135 @@ body:has(.tray-panel-reveal) {
 [data-theme="light"] .option-chips__chip:hover:not(:disabled) {
   background: rgba(0, 0, 0, 0.07);
 }
+
+/* Provider detail polish -------------------------------------------------
+   Keep the action strip and setting rows compact and predictable. These rules
+   are intentionally at the end of the provider-detail layer so older phase
+   overrides cannot reintroduce the stacked, misaligned controls. */
+.provider-detail-quick-actions {
+  position: sticky;
+  top: 4px;
+  z-index: 4;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 10px 12px;
+  background: color-mix(in srgb, var(--panel-bg) 94%, transparent);
+  box-shadow: 0 4px 14px color-mix(in srgb, var(--text-primary) 9%, transparent);
+  backdrop-filter: blur(12px);
+}
+
+.provider-detail-quick-actions__header {
+  flex: 0 0 auto;
+}
+
+.provider-detail-quick-actions__header h4 {
+  margin: 0;
+  white-space: nowrap;
+}
+
+.provider-detail-actions--toolbar {
+  flex: 1 1 auto;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.provider-detail-actions--toolbar .credential-btn {
+  white-space: nowrap;
+}
+
+.provider-detail-setting-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  min-height: 40px;
+}
+
+.provider-detail-setting-copy {
+  display: flex;
+  flex: 1 1 auto;
+  min-width: 0;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.provider-detail-setting-copy strong {
+  color: var(--text-primary);
+  font-size: var(--font-body);
+  font-weight: 600;
+  line-height: 1.25;
+}
+
+.provider-detail-setting-copy span {
+  color: var(--text-secondary);
+  font-size: var(--font-caption);
+  line-height: 1.4;
+}
+
+.provider-detail-setting-row--control-only {
+  justify-content: flex-end;
+}
+
+.provider-detail-menu-metric .dropdown__trigger,
+.provider-detail-region .dropdown__trigger {
+  min-width: 132px;
+}
+
+.provider-detail-cookie-source .provider-detail-setting-row {
+  align-items: flex-start;
+}
+
+.provider-detail-cookie-source .provider-detail-segmented {
+  flex: 0 0 auto;
+  min-width: 220px;
+}
+
+.provider-auth-method--cookie {
+  padding: 0;
+  border-color: transparent;
+  background: transparent;
+  box-shadow: none;
+}
+
+.provider-auth-method--cookie:hover {
+  border-color: transparent;
+  background: transparent;
+}
+
+.provider-auth-method--cookie .provider-auth-method__body {
+  margin-top: 12px;
+}
+
+.provider-auth-method--cookie .credential-add-form {
+  padding-top: 12px;
+  border-top: 1px solid var(--panel-border);
+}
+
+@media (max-width: 760px) {
+  .provider-detail-quick-actions {
+    align-items: stretch;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .provider-detail-actions--toolbar {
+    justify-content: flex-start;
+  }
+
+  .provider-detail-setting-row,
+  .provider-detail-setting-row--stack-mobile {
+    align-items: stretch;
+    flex-direction: column;
+    gap: 10px;
+  }
+
+  .provider-detail-setting-row--control-only {
+    align-items: flex-end;
+  }
+
+  .provider-detail-cookie-source .provider-detail-segmented {
+    width: 100%;
+    min-width: 0;
+  }
+}
