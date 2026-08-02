@@ -11,6 +11,13 @@ const webviewWindowMocks = vi.hoisted(() => ({
   label: "main",
 }));
 
+const surfaceSnapshotMocks = vi.hoisted(() => ({
+  current: {
+    mode: "hidden",
+    target: { kind: "summary" },
+  },
+}));
+
 vi.mock("@tauri-apps/api/webviewWindow", () => ({
   getCurrentWebviewWindow: () => ({ label: webviewWindowMocks.label }),
 }));
@@ -21,6 +28,7 @@ const tauriMocks = vi.hoisted(() => ({
   checkForUpdates: vi.fn(),
   downloadUpdate: vi.fn(),
   setSurfaceMode: vi.fn(),
+  revealSettingsWindow: vi.fn(),
   getLocaleStrings: vi.fn(),
   setUiLanguage: vi.fn(),
   getCurrentSurfaceState: vi.fn(),
@@ -49,10 +57,7 @@ vi.mock("./floatbar/FloatBar", () => ({
 }));
 
 vi.mock("./hooks/useSurfaceSnapshot", () => ({
-  useSurfaceSnapshot: () => ({
-    mode: "hidden",
-    target: { kind: "summary" },
-  }),
+  useSurfaceSnapshot: () => surfaceSnapshotMocks.current,
 }));
 
 import App from "./App";
@@ -74,7 +79,6 @@ function settings(overrides: Partial<SettingsSnapshot> = {}): SettingsSnapshot {
     trayIconMode: "single",
     switcherShowsIcons: true,
     menuBarShowsHighestUsage: false,
-    menuBarShowsPercent: false,
     showAsUsed: true,
     showAllTokenAccountsInMenu: false,
     enableAnimations: true,
@@ -104,6 +108,24 @@ function settings(overrides: Partial<SettingsSnapshot> = {}): SettingsSnapshot {
     floatBarProviderIds: [],
     floatBarDarkText: false,
     floatBarShowResetInline: false,
+    floatBarResetWindows: ["primary"],
+    taskbarWidgetEnabled: false,
+    taskbarWidgetPosition: "notification",
+    taskbarWidgetFontWeight: 400,
+    taskbarWidgetContent: "usage",
+    taskbarWidgetEntries: [
+      { providerId: "auto", window: "session" },
+      { providerId: "auto", window: "weekly" },
+    ],
+    taskbarWidgetFontFamily: "Microsoft YaHei UI",
+    taskbarWidgetFontSize: 12,
+    taskbarWidgetWidth: 132,
+    taskbarWidgetTextAlign: "left",
+    floatBarShowAsUsed: true,
+    floatBarResetTimeRelative: true,
+    dashboardShowAsUsed: true,
+    dashboardResetTimeRelative: true,
+    taskbarShowAsUsed: true,
     ...overrides,
   };
 }
@@ -120,8 +142,13 @@ describe("App window-label routing", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     webviewWindowMocks.label = "main";
+    surfaceSnapshotMocks.current = {
+      mode: "hidden",
+      target: { kind: "summary" },
+    };
     tauriMocks.getBootstrapState.mockResolvedValue(bootstrap());
     tauriMocks.getSettingsSnapshot.mockResolvedValue(settings());
+    tauriMocks.revealSettingsWindow.mockResolvedValue(undefined);
     tauriMocks.checkForUpdates.mockResolvedValue({
       status: "idle",
       version: null,
@@ -161,6 +188,9 @@ describe("App window-label routing", () => {
     await waitFor(() => {
       expect(queryByTestId("surface-settings")).not.toBeNull();
     });
+    await waitFor(() => {
+      expect(tauriMocks.revealSettingsWindow).toHaveBeenCalledTimes(1);
+    });
     expect(queryByTestId("surface-tray-panel")).toBeNull();
   });
 
@@ -197,6 +227,23 @@ describe("App window-label routing", () => {
     });
     await waitFor(() => {
       expect(container.querySelector("main.shell")).toBeNull();
+    });
+    expect(queryByTestId("surface-tray-panel")).toBeNull();
+    expect(container.firstChild).toBeNull();
+  });
+
+  it("fails closed for an unknown main-window surface mode", async () => {
+    webviewWindowMocks.label = "main";
+    surfaceSnapshotMocks.current = {
+      mode: "future-mode",
+      target: { kind: "summary" },
+    };
+
+    const { container, queryByTestId } = render(<App />);
+
+    await waitFor(() => {
+      expect(tauriMocks.getBootstrapState).toHaveBeenCalled();
+      expect(tauriMocks.getLocaleStrings).toHaveBeenCalled();
     });
     expect(queryByTestId("surface-tray-panel")).toBeNull();
     expect(container.firstChild).toBeNull();

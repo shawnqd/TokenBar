@@ -18,6 +18,7 @@ are configuration inputs only and never replace these documents.
 | `CHANGELOG.md` | User-visible or formal engineering changes |
 | `CODE_REVIEW.md` | Current findings, verification gaps and Go/No-Go |
 | `DECISIONS.md` | Durable product, architecture, security and destructive-action decisions |
+| `docs/CLAUDE_TASK_PACKAGE_018.md` | Current Claude handoff package for quota presentation and taskbar configuration |
 
 ## Activity and machine logs
 

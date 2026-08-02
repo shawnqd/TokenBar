@@ -81,17 +81,25 @@ pub struct Settings {
     #[serde(default)]
     pub menu_bar_shows_highest_usage: bool,
 
-    /// Replace bar-only tray display with provider branding plus percent text where supported
-    #[serde(default)]
-    pub menu_bar_shows_percent: bool,
-
-    /// Show usage bars as "used" (true) or "remaining" (false)
+    /// Legacy global "show usage bars as used (true) or remaining (false)".
+    ///
+    /// Superseded by the per-component fields
+    /// [`float_bar_show_as_used`](Settings::float_bar_show_as_used),
+    /// [`dashboard_show_as_used`](Settings::dashboard_show_as_used) and
+    /// [`taskbar_show_as_used`](Settings::taskbar_show_as_used). It is retained
+    /// only so existing `settings.json` files keep loading and can seed those
+    /// fields once; no display surface reads it any more.
     pub show_as_used: bool,
 
     /// Enable UI animations (chart entrances, transitions)
     pub enable_animations: bool,
 
-    /// Show reset times as relative (e.g., "2h 30m" instead of "3:00 PM")
+    /// Legacy global "show reset times as relative (e.g. "2h 30m") instead of
+    /// absolute ("3:00 PM")".
+    ///
+    /// Superseded by the per-component `*_reset_time_relative` fields and kept
+    /// only as a migration source, exactly like
+    /// [`show_as_used`](Settings::show_as_used).
     pub reset_time_relative: bool,
 
     /// Menu bar display mode: "minimal", "compact", or "detailed"
@@ -206,21 +214,320 @@ pub struct Settings {
     #[serde(default)]
     pub float_bar_dark_text: bool,
 
-    /// When true, show the primary window's next reset inline in each pill.
+    /// When true, show the next reset inline in each pill.
     #[serde(default)]
     pub float_bar_show_reset_inline: bool,
+
+    /// Which quota windows' resets the floating bar prints, in order.
+    ///
+    /// The bar used to hardcode the provider's `primary` window, which means
+    /// different providers were silently showing different cycles — Codex's
+    /// weekly next to Claude's 5-hour session, with nothing on screen saying
+    /// so. Naming the windows explicitly makes the bar comparable across
+    /// providers, and `primary` stays available (and is the default) so an
+    /// upgrade changes nothing until the user asks for it.
+    #[serde(default = "default_float_bar_reset_windows")]
+    pub float_bar_reset_windows: Vec<String>,
 
     /// When true, show local cost summaries in the floating bar.
     #[serde(default)]
     pub float_bar_show_cost: bool,
+
+    /// When true, embed a usage readout strip directly in the Windows
+    /// taskbar (next to the running-app icons), in addition to the tray
+    /// icon. Windows only; ignored on other platforms.
+    #[serde(default)]
+    pub taskbar_widget_enabled: bool,
+
+    /// Taskbar overlay placement: "notification" (before the notification
+    /// area) or "left" (at the left edge of the taskbar).
+    #[serde(default = "default_taskbar_widget_position")]
+    pub taskbar_widget_position: String,
+
+    /// Windows taskbar text weight as an OpenType `wght` axis value, 100..=1000.
+    ///
+    /// Genuinely continuous on a variable font: the native strip renders through
+    /// DirectWrite's `SetFontAxisValues`, which was measured on this machine to
+    /// produce distinct stroke weights for values between the named stops. On a
+    /// static family DirectWrite still picks the nearest installed face, which is
+    /// why [`taskbar_widget_font_family`] is a user choice and the UI reports
+    /// which families support the axis.
+    #[serde(default = "default_taskbar_widget_font_weight")]
+    pub taskbar_widget_font_weight: u16,
+
+    /// DirectWrite font family for the taskbar strip.
+    ///
+    /// Must be a real installed family; the settings UI populates the choices
+    /// from `IDWriteFontCollection` rather than a hardcoded list, so it can never
+    /// offer something this machine cannot render.
+    #[serde(default = "default_taskbar_widget_font_family")]
+    pub taskbar_widget_font_family: String,
+
+    /// Legacy single-choice taskbar content: usage, speed, or usage_speed.
+    ///
+    /// **Migration source only.** Superseded by [`taskbar_widget_entries`],
+    /// which can express the same three shapes and much more. Still
+    /// deserialized so an older `settings.json` seeds the ordered list once.
+    #[serde(default = "default_taskbar_widget_content")]
+    pub taskbar_widget_content: String,
+
+    /// Ordered taskbar strip entries: which provider's which quota window, in
+    /// the order the user wants them stacked.
+    ///
+    /// An ordered list rather than a widening enum because the user composes
+    /// this freely (`Codex · 5h`, `Claude · weekly`, ...) and order is itself a
+    /// setting — the strip has room for only the first few, so position decides
+    /// what survives truncation.
+    #[serde(default = "default_taskbar_widget_entries")]
+    pub taskbar_widget_entries: Vec<TaskbarEntry>,
+
+    /// Taskbar status text size in logical pixels (10..=16).
+    #[serde(default = "default_taskbar_widget_font_size")]
+    pub taskbar_widget_font_size: u8,
+
+    /// Taskbar status strip width in logical pixels (96..=240).
+    #[serde(default = "default_taskbar_widget_width")]
+    pub taskbar_widget_width: u16,
+
+    /// Taskbar status text alignment: left, center, or right.
+    #[serde(default = "default_taskbar_widget_text_align")]
+    pub taskbar_widget_text_align: String,
+
+    // ── Per-component quota presentation ─────────────────────────────
+    //
+    // The floating bar, the dashboard surfaces (tray flyout + PopOut panel)
+    // and the Windows taskbar strip each own their own used-vs-remaining and
+    // relative-vs-absolute reset choice. They are seeded once from the legacy
+    // global fields when an older `settings.json` is loaded and are fully
+    // independent afterwards, so changing one surface never silently changes
+    // another.
+    /// Floating bar: show quota as used (`true`) or remaining (`false`).
+    #[serde(default = "default_true")]
+    pub float_bar_show_as_used: bool,
+
+    /// Floating bar: show reset times as relative (`true`) or absolute (`false`).
+    #[serde(default = "default_true")]
+    pub float_bar_reset_time_relative: bool,
+
+    /// Dashboard surfaces: show quota as used (`true`) or remaining (`false`).
+    #[serde(default = "default_true")]
+    pub dashboard_show_as_used: bool,
+
+    /// Dashboard surfaces: relative (`true`) or absolute (`false`) reset times.
+    #[serde(default = "default_true")]
+    pub dashboard_reset_time_relative: bool,
+
+    /// Windows taskbar strip and notification-area icon: show quota as used
+    /// (`true`) or remaining (`false`). Consumed by
+    /// `tray_bridge::selected_tray_percents`, which feeds both.
+    ///
+    /// There is deliberately no `taskbar_reset_time_relative` companion: the
+    /// native strip renders no reset text, and the Taskbar settings page in the
+    /// task package does not define a reset-time mode. Adding the field without
+    /// a renderer would be an inert setting.
+    #[serde(default = "default_true")]
+    pub taskbar_show_as_used: bool,
 }
 
 fn default_window_scale_percent() -> u16 {
     100
 }
 
+fn default_taskbar_widget_position() -> String {
+    "notification".to_string()
+}
+
+fn default_taskbar_widget_font_weight() -> u16 {
+    400
+}
+
+/// Clamp a taskbar weight to the OpenType `wght` axis range.
+///
+/// This used to snap to 300/400/700 because the old GDI renderer could not do
+/// anything else — `CreateFontW` collapsed 100..=550 to Regular and everything
+/// above to Bold. The DirectWrite renderer drives the real axis, so intermediate
+/// values are now meaningful and must not be quantized away. Legacy persisted
+/// values (including the old three stops) remain valid inputs.
+pub fn normalize_taskbar_widget_font_weight(value: u16) -> u16 {
+    value.clamp(100, 1000)
+}
+
+/// Default taskbar font family.
+///
+/// Microsoft YaHei UI is the safe default because the strip routinely renders
+/// Chinese labels and it is present on every target machine. It is a *static*
+/// family, so the weight control is stepped rather than continuous until the
+/// user picks a variable family — the UI says so rather than pretending.
+fn default_taskbar_widget_font_family() -> String {
+    "Microsoft YaHei UI".to_string()
+}
+
+fn default_taskbar_widget_content() -> String {
+    "usage".to_string()
+}
+
+/// One taskbar strip entry: a provider and which of its quota windows to show.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TaskbarEntry {
+    /// Provider CLI name, or [`TASKBAR_PROVIDER_AUTO`] to follow whichever
+    /// provider the tray icon is currently showing.
+    pub provider_id: String,
+    /// Which window: see [`normalize_taskbar_window`].
+    pub window: String,
+}
+
+/// Follows the tray's own provider pick instead of naming one.
+///
+/// This is what lets the pre-entries default keep behaving exactly as before,
+/// where the strip simply mirrored whatever the tray icon had selected.
+pub const TASKBAR_PROVIDER_AUTO: &str = "auto";
+
+/// Window kinds a taskbar entry may reference.
+///
+/// `speed` is not a quota window but is offered alongside them because the
+/// legacy content setting could show it, and dropping it on migration would
+/// silently remove a display the user had chosen.
+/// Window kinds an entry may name.
+///
+/// `primary` is first and is the only one guaranteed to resolve: it means "this
+/// provider's main quota, whatever cycle that turns out to be". The four named
+/// cycles below it are matched by the window's DECLARED LENGTH against fixed
+/// bands (session ≤6h, daily 20–28h, weekly 6–8d, monthly ≥27d), which is a
+/// taxonomy, and a taxonomy always has providers that fall outside it — one
+/// with a 14-day cycle, or one that reports a percentage without publishing a
+/// length at all. Those used to be unrenderable no matter what the user picked.
+/// Adding a provider must not require touching these bands.
+pub const TASKBAR_WINDOWS: [&str; 7] = [
+    "primary", "session", "weekly", "daily", "monthly", "balance", "speed",
+];
+
+/// Most entries the strip will keep. Beyond this the list is user noise: the
+/// strip renders at most a couple of lines, and an unbounded list would let a
+/// corrupt settings file grow without limit.
+pub const TASKBAR_MAX_ENTRIES: usize = 6;
+
+pub fn normalize_taskbar_window(value: &str) -> Option<String> {
+    let lowered = value.trim().to_ascii_lowercase();
+    TASKBAR_WINDOWS
+        .iter()
+        .find(|candidate| **candidate == lowered)
+        .map(|candidate| (*candidate).to_string())
+}
+
+/// Canonicalize a requested entry list: drop unknown windows, drop blank
+/// providers, drop duplicates, and cap the length.
+///
+/// Returns the migrated default when nothing valid survives, so the strip is
+/// never left with an empty configuration it cannot render.
+pub fn normalize_taskbar_entries(requested: &[TaskbarEntry]) -> Vec<TaskbarEntry> {
+    let mut seen = HashSet::new();
+    let mut out = Vec::new();
+    for entry in requested {
+        let provider = entry.provider_id.trim();
+        if provider.is_empty() {
+            continue;
+        }
+        let Some(window) = normalize_taskbar_window(&entry.window) else {
+            continue;
+        };
+        let key = (provider.to_ascii_lowercase(), window.clone());
+        if !seen.insert(key) {
+            continue;
+        }
+        out.push(TaskbarEntry {
+            provider_id: provider.to_string(),
+            window,
+        });
+        if out.len() >= TASKBAR_MAX_ENTRIES {
+            break;
+        }
+    }
+    if out.is_empty() {
+        return default_taskbar_widget_entries();
+    }
+    out
+}
+
+/// Translate the retired single-choice content setting into the ordered list.
+///
+/// The mappings reproduce exactly what each legacy value used to render, so an
+/// upgrade is invisible to the user.
+pub fn taskbar_entries_from_legacy_content(content: &str) -> Vec<TaskbarEntry> {
+    let auto = |window: &str| TaskbarEntry {
+        provider_id: TASKBAR_PROVIDER_AUTO.to_string(),
+        window: window.to_string(),
+    };
+    match content.trim() {
+        "speed" => vec![auto("speed")],
+        "usage_speed" => vec![auto("session"), auto("speed")],
+        // "usage" and anything unrecognized: the session line plus the weekly
+        // line, which is what the strip has always shown by default.
+        _ => vec![auto("session"), auto("weekly")],
+    }
+}
+
+fn default_taskbar_widget_entries() -> Vec<TaskbarEntry> {
+    taskbar_entries_from_legacy_content("usage")
+}
+
+fn default_taskbar_widget_font_size() -> u8 {
+    12
+}
+
+fn default_taskbar_widget_width() -> u16 {
+    132
+}
+
+fn default_taskbar_widget_text_align() -> String {
+    "left".to_string()
+}
+
 pub fn clamp_window_scale_percent(value: u16) -> u16 {
     value.clamp(100, 250)
+}
+
+/// Window kinds the floating bar can print a reset for.
+///
+/// `primary` means "whichever window this provider leads with" and is what the
+/// bar did before the setting existed. The rest select by the window's declared
+/// length, the same rule the taskbar strip uses.
+pub const FLOAT_BAR_RESET_WINDOWS: [&str; 5] =
+    ["primary", "session", "weekly", "daily", "monthly"];
+
+/// Most resets one pill will print. Each one costs horizontal space in a bar
+/// that is meant to stay small, and beyond three the pill stops being glanceable.
+pub const FLOAT_BAR_MAX_RESET_WINDOWS: usize = 3;
+
+fn default_float_bar_reset_windows() -> Vec<String> {
+    vec!["primary".to_string()]
+}
+
+/// Canonicalize the requested reset windows: drop unknown names and duplicates,
+/// keep the user's order, and cap the length.
+///
+/// An empty result is returned as-is rather than replaced by the default: the
+/// user clearing every window is a legitimate way to say "no reset text", and
+/// silently re-adding one would override that.
+pub fn normalize_float_bar_reset_windows(requested: &[String]) -> Vec<String> {
+    let mut seen = HashSet::new();
+    let mut out = Vec::new();
+    for value in requested {
+        let lowered = value.trim().to_ascii_lowercase();
+        let Some(known) = FLOAT_BAR_RESET_WINDOWS
+            .iter()
+            .find(|candidate| **candidate == lowered)
+        else {
+            continue;
+        };
+        if !seen.insert(*known) {
+            continue;
+        }
+        out.push((*known).to_string());
+        if out.len() >= FLOAT_BAR_MAX_RESET_WINDOWS {
+            break;
+        }
+    }
+    out
 }
 
 fn default_tray_scale_percent() -> u16 {
@@ -364,7 +671,6 @@ impl Default for Settings {
             tray_icon_mode: TrayIconMode::default(), // Single icon by default
             switcher_shows_icons: true,
             menu_bar_shows_highest_usage: false,
-            menu_bar_shows_percent: false,
             show_as_used: true,        // Show as "used" by default
             enable_animations: true,   // Animations enabled by default
             reset_time_relative: true, // Show relative times by default
@@ -395,7 +701,22 @@ impl Default for Settings {
             float_bar_provider_ids: Vec::new(),
             float_bar_dark_text: false,
             float_bar_show_reset_inline: false,
+            float_bar_reset_windows: default_float_bar_reset_windows(),
             float_bar_show_cost: false,
+            taskbar_widget_enabled: false,
+            taskbar_widget_position: default_taskbar_widget_position(),
+            taskbar_widget_font_weight: default_taskbar_widget_font_weight(),
+            taskbar_widget_font_family: default_taskbar_widget_font_family(),
+            taskbar_widget_content: default_taskbar_widget_content(),
+            taskbar_widget_entries: default_taskbar_widget_entries(),
+            taskbar_widget_font_size: default_taskbar_widget_font_size(),
+            taskbar_widget_width: default_taskbar_widget_width(),
+            taskbar_widget_text_align: default_taskbar_widget_text_align(),
+            float_bar_show_as_used: true,
+            float_bar_reset_time_relative: true,
+            dashboard_show_as_used: true,
+            dashboard_reset_time_relative: true,
+            taskbar_show_as_used: true,
         }
     }
 }

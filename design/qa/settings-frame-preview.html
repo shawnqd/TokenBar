@@ -1,0 +1,22 @@
+<!doctype html><html data-theme="light"><meta charset="utf-8"><title>settings frame</title>
+<link rel="stylesheet" href="../../apps/desktop-tauri/src/styles.css?v=1785549312">
+<style>
+body{margin:0;background:#c9ced6}
+/* The dashed box is the WINDOW boundary: the shadow must fade out before it. */
+.window{position:relative;width:504px;height:340px;margin:40px;background:transparent;
+        outline:1px dashed rgba(255,0,0,.55)}
+</style>
+<div class="window">
+  <main class="settings-surface settings-surface--full settings-window-frame">
+    <div class="settings">
+      <div class="settings-titlebar">
+        <span class="settings-titlebar__title">设置</span>
+        <div class="settings-titlebar__controls">
+          <button class="settings-titlebar__control settings-titlebar__control--minimize"></button>
+          <button class="settings-titlebar__control settings-titlebar__control--close" id="closeBtn">×</button>
+        </div>
+      </div>
+    </div>
+  </main>
+</div>
+</html>

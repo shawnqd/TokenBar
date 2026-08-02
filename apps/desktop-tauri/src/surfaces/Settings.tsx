@@ -12,10 +12,13 @@ import { useLocale } from "../hooks/useLocale";
 import type { LocaleKey } from "../i18n/keys";
 import { closeSettingsWindow, getWorkAreaRect, setSurfaceMode } from "../lib/tauri";
 import GeneralTab from "./settings/tabs/GeneralTab";
+import DashboardTab from "./settings/tabs/DashboardTab";
 import DisplayTab from "./settings/tabs/DisplayTab";
+import FloatBarTab from "./settings/tabs/FloatBarTab";
 import AdvancedTab from "./settings/tabs/AdvancedTab";
 import AboutTab from "./settings/tabs/AboutTab";
 import ProvidersTab from "./settings/tabs/ProvidersTab";
+import TaskbarTab from "./settings/tabs/TaskbarTab";
 
 // ── tab types ────────────────────────────────────────────────────────
 
@@ -68,16 +71,26 @@ const TabIcons: Record<SettingsTab, ReactElement> = {
   ),
   menuBar: (
     <Svg>
-      <path d="M1.5 8c1.6-3 4-4.5 6.5-4.5S13 5 14.5 8c-1.5 3-4 4.5-6.5 4.5S3.1 11 1.5 8Z" />
-      <circle cx="8" cy="8" r="2" />
+      <rect x="1.5" y="3" width="13" height="9.5" rx="1.6" />
+      <path d="M3.5 8.5h3.2M9.2 6.5h2.8M9.2 9.5h2.8" />
+    </Svg>
+  ),
+  dashboard: (
+    <Svg>
+      <rect x="1.8" y="2.5" width="12.4" height="11" rx="1.8" />
+      <path d="M1.8 6h12.4M6 6v7.5" />
+    </Svg>
+  ),
+  floatBar: (
+    <Svg>
+      <rect x="1.5" y="5.5" width="13" height="5" rx="2.5" />
+      <path d="M4.5 8h2.5" />
     </Svg>
   ),
   menu: (
     <Svg>
-      <rect x="2" y="2" width="5" height="5" rx="1" />
-      <rect x="9" y="2" width="5" height="5" rx="1" />
-      <rect x="2" y="9" width="5" height="5" rx="1" />
-      <rect x="9" y="9" width="5" height="5" rx="1" />
+      <path d="M1.5 8c1.6-3 4-4.5 6.5-4.5S13 5 14.5 8c-1.5 3-4 4.5-6.5 4.5S3.1 11 1.5 8Z" />
+      <circle cx="8" cy="8" r="2" />
     </Svg>
   ),
   advanced: (
@@ -104,8 +117,11 @@ const TAB_META: { id: SettingsTab; labelKey: LocaleKey }[] = [
   { id: "general", labelKey: "TabGeneral" },
   { id: "providers", labelKey: "TabProviders" },
   { id: "notifications", labelKey: "SectionNotifications" },
-  { id: "menuBar", labelKey: "MenuBar" },
-  { id: "menu", labelKey: "SectionMenuContent" },
+  // One page per component (item H): each writes only its own keys.
+  { id: "floatBar", labelKey: "TabFloatBar" },
+  { id: "dashboard", labelKey: "TabDashboard" },
+  { id: "menuBar", labelKey: "TaskbarWidgetTab" },
+  { id: "menu", labelKey: "TabDisplay" },
   { id: "advanced", labelKey: "TabAdvanced" },
   { id: "about", labelKey: "TabAbout" },
 ];
@@ -304,10 +320,16 @@ export default function Settings({ state, initialTab: propTab }: { state: Bootst
           <GeneralTab mode="notifications" settings={settings} set={set} saving={saving} />
         )}
         {activeTab === "menuBar" && (
-          <DisplayTab mode="menuBar" settings={settings} set={set} saving={saving} />
+          <TaskbarTab settings={settings} set={set} saving={saving} />
+        )}
+        {activeTab === "dashboard" && (
+          <DashboardTab settings={settings} set={set} saving={saving} />
+        )}
+        {activeTab === "floatBar" && (
+          <FloatBarTab settings={settings} set={set} saving={saving} />
         )}
         {activeTab === "menu" && (
-          <DisplayTab mode="menu" settings={settings} set={set} saving={saving} />
+          <DisplayTab settings={settings} set={set} saving={saving} />
           )}
           {activeTab === "advanced" && (
             <AdvancedTab settings={settings} set={set} saving={saving} />

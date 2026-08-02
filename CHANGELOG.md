@@ -3,6 +3,21 @@
 ## [Windows] Unreleased
 
 ### Added
+- Give the floating bar, the dashboard surfaces (tray flyout and PopOut panel)
+  and the Windows taskbar strip their own used-versus-remaining and
+  relative-versus-absolute reset-time choices instead of one global pair.
+  Existing settings files seed all three from the old global values on first
+  load, after which the three are independent.
+- Add a shared quota presentation layer (`lib/quotaDisplay.ts`) that resolves
+  percentages, alarm thresholds, reset-time state and forecast availability once
+  for every surface, so the data rules and terminology cannot drift apart.
+- Add a dedicated taskbar status-strip settings section with live controls for
+  placement, font weight, and content (usage, output speed, or both).
+- Add taskbar usage-strip placement options for the left side or immediately
+  before the notification area, persisted and applied live from Display settings.
+- Add the single-command Windows hot-reload entry (`scripts/dev-windows.ps1`)
+  with a hidden VBS wrapper, checkout-scoped process cleanup and development
+  logs under `%TEMP%\tokenbar-dev\`.
 - Synchronize the project handoff system with the current cross-tool workflow:
   add `DOCUMENTATION.md`, `UNIVERSAL_EXECUTION_RULES.md` and
   `PLATFORM_ACTIVITY_LOG.md`, and archive the legacy task/handoff documents.
@@ -18,6 +33,36 @@
   `PROJECT_STATUS.md`, `CODE_REVIEW.md`, `DECISIONS.md`, `logs/dev_audit.jsonl`).
 
 ### Fixed
+- Stop the provider switcher from drawing a 0% usage bar for accounts that have
+  no percentage quota at all — subscription-only providers and prepaid-balance
+  accounts now show an explicit "no percentage quota" marker instead of an empty
+  track that reads like a real measurement.
+- Make the Taskbar settings preview follow the taskbar's own used-versus-remaining
+  choice instead of always showing a fixed sample percentage.
+- Stop quota bars from alarming in a direction that contradicts the number they
+  show. Risk is now graded from used-percent against the user's configured
+  high/critical thresholds, which the previous hardcoded 25%/5% remaining-percent
+  cutoffs ignored entirely.
+- Show an expired quota window as "expired, waiting for refresh" instead of a
+  perpetual "resetting now", and say the reset time is unknown when the provider
+  supplies neither a timestamp nor a description, rather than leaving the row
+  blank. Absolute reset times now include the date whenever the reset crosses a
+  local day boundary.
+- Prevent the detached Settings window from flashing a blank WebView on first
+  open, and make the first tray-icon click responsive by prewarming both hidden
+  windows and revealing them only after their frontend-ready handshakes.
+- Refine the taskbar usage strip into a compact, transparent two-line readout
+  aligned to the taskbar row, with theme-aware text colors instead of a solid
+  floating panel.
+- Rework the Windows taskbar usage strip to follow TrafficMonitor's native
+  child-window path (`SetParent` into `Shell_TrayWnd`), with taskbar-client
+  geometry reassertion, taskbar-color-matched GDI rendering, and a native
+  right-click menu for panel, refresh, settings, and exit actions.
+- Replace duplicate tray menu terminology with the canonical `Open Tray Panel`,
+  `Open Dashboard` and `Show Mini Status Bar` labels across active locale and
+  menu paths.
+- Make Tauri development watch the shared `rust/` crate so Rust and locale
+  changes automatically trigger the normal native dev rebuild/restart.
 - Fix the Grok provider icon rendering solid black instead of its brand mark.
 - Fix the Grok plan-name pill disappearing on the cookie-auth login path (`login_method` fallback).
 - Fix "top model" always reflecting a fixed 30-day window regardless of the selected period; now computed

@@ -277,8 +277,12 @@ fn provider_cookie_source_set_rejects_unknown_provider() {
     assert!(err.contains("nope"));
 }
 
+/// Without a stored cookie the provider is left on its own source ladder
+/// rather than pinned to one source. Pinning is what made a manual Cookie
+/// paste feel mandatory — a provider that also holds a local CLI token never
+/// got to try it.
 #[test]
-fn fetch_context_defaults_to_manual_cookies_without_browser_import() {
+fn fetch_context_without_a_cookie_lets_the_provider_choose_its_source() {
     let settings = Settings::default();
     let cookies = ManualCookies::default();
     let api_keys = ApiKeys::default();
@@ -292,12 +296,12 @@ fn fetch_context_defaults_to_manual_cookies_without_browser_import() {
         &token_accounts,
     );
 
-    assert_eq!(ctx.source_mode, SourceMode::Cli);
+    assert_eq!(ctx.source_mode, SourceMode::Auto);
     assert!(ctx.manual_cookie_header.is_none());
 }
 
 #[test]
-fn fetch_context_claude_uses_oauth_without_manual_cookie() {
+fn fetch_context_claude_uses_its_full_ladder_without_manual_cookie() {
     let settings = Settings::default();
     let cookies = ManualCookies::default();
     let api_keys = ApiKeys::default();
@@ -311,7 +315,10 @@ fn fetch_context_claude_uses_oauth_without_manual_cookie() {
         &token_accounts,
     );
 
-    assert_eq!(ctx.source_mode, SourceMode::OAuth);
+    // Auto is a superset of the OAuth-only mode this used to force: Claude's
+    // ladder reads `~/.claude/.credentials.json` first, then the CLI, and only
+    // then a browser session.
+    assert_eq!(ctx.source_mode, SourceMode::Auto);
     assert!(ctx.manual_cookie_header.is_none());
 }
 
@@ -1098,4 +1105,72 @@ fn bootstrap_payload_exposes_every_provider_variant() {
     assert!(encoded.contains("contractVersion"));
     assert!(encoded.contains("\"providers\""));
     assert!(encoded.contains("\"settings\""));
+}
+
+/// The taskbar entry composer was fully built and fully inert: `SettingsUpdate`
+/// had no `taskbar_widget_entries` field at all, and serde silently drops
+/// unknown keys, so every edit was accepted by the UI and thrown away. Neither
+/// the TypeScript test (which asserts `set` was called) nor the shared-Rust test
+/// (which asserts normalization works) could see the gap between them.
+#[test]
+fn settings_update_accepts_taskbar_entries_from_the_frontend() {
+    let patch: super::SettingsUpdate = serde_json::from_str(
+        r#"{"taskbarWidgetEntries":[{"providerId":"claude","window":"weekly"}]}"#,
+    )
+    .expect("camelCase entries must deserialize");
+
+    let entries = patch
+        .taskbar_widget_entries
+        .as_ref()
+        .expect("the field must be populated, not silently dropped");
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0].provider_id, "claude");
+    assert_eq!(entries[0].window, "weekly");
+}
+
+/// Unknown windows must not reach the strip: it renders what it is given.
+#[test]
+fn settings_update_normalizes_taskbar_entries_before_storing() {
+    let patch: super::SettingsUpdate = serde_json::from_str(
+        r#"{"taskbarWidgetEntries":[
+             {"providerId":"codex","window":"fortnightly"},
+             {"providerId":"codex","window":"weekly"},
+             {"providerId":"codex","window":"weekly"}
+           ]}"#,
+    )
+    .unwrap();
+
+    let requested: Vec<codexbar::settings::TaskbarEntry> = patch
+        .taskbar_widget_entries
+        .as_ref()
+        .unwrap()
+        .iter()
+        .map(Into::into)
+        .collect();
+    let stored = codexbar::settings::normalize_taskbar_entries(&requested);
+
+    assert_eq!(stored.len(), 1, "unknown window dropped, duplicate deduped");
+    assert_eq!(stored[0].window, "weekly");
+}
+
+/// `#[serde(rename_all = "camelCase")]` renames a struct's OWN fields only, not
+/// a nested type's. Sending the snake_case on-disk `TaskbarEntry` straight
+/// through shipped `provider_id` to a frontend reading `providerId`, which is
+/// why the provider dropdown rendered blank with no error anywhere.
+#[test]
+fn taskbar_entries_cross_the_bridge_in_camel_case() {
+    let bridged = super::TaskbarEntryBridge::from(&codexbar::settings::TaskbarEntry {
+        provider_id: "auto".into(),
+        window: "session".into(),
+    });
+    let encoded = serde_json::to_string(&bridged).unwrap();
+
+    assert!(
+        encoded.contains("\"providerId\""),
+        "frontend reads providerId; got {encoded}"
+    );
+    assert!(
+        !encoded.contains("provider_id"),
+        "snake_case must not leak across the bridge; got {encoded}"
+    );
 }

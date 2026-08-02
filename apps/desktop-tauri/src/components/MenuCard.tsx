@@ -1,8 +1,9 @@
-import { useCallback, useEffect, useState } from "react";
+import { Fragment, useCallback, useEffect, useState } from "react";
 import type {
   DailyCostPoint,
   Language,
   LocalUsagePeriod,
+  MenuBarDisplayMode,
   PaceSnapshot,
   ProviderChartData,
   ProviderLocalUsageSummary,
@@ -13,6 +14,14 @@ import type {
 import { getProviderChartData } from "../lib/tauri";
 import { useLocale } from "../hooks/useLocale";
 import { useFormattedResetTime } from "../hooks/useFormattedResetTime";
+import {
+  FORECAST_UNAVAILABLE,
+  forecastMarkerPercent,
+  quotaForecastDisplay,
+  quotaPercentDisplay,
+  type QuotaDisplayContext,
+  type QuotaForecastDisplay,
+} from "../lib/quotaDisplay";
 import { formatRelativeUpdated } from "../lib/relativeTime";
 import type { LocaleKey } from "../i18n/keys";
 import { paceCategory } from "../surfaces/tray/paceCategory";
@@ -28,41 +37,82 @@ import {
   quotaWindowLabel,
 } from "./ProviderQuotaBlock";
 
-/** Line icons for the pace ("进度") block — 1.5–2pt stroke, inherit currentColor. */
+/**
+ * Card line icons. One family: open stroked paths on a 24×24 grid with
+ * `fill: none; stroke-width: 1.8; stroke-linecap/linejoin: round`, colour
+ * always inherited from the surrounding row via `currentColor`.
+ *
+ * These replaced the glyphs lifted from design/floatbar-reference.html's
+ * sprite, whose semantics did not survive the move — most visibly its
+ * `#icon-support` (a headphone set, meaning customer support) had been
+ * standing in for "够用到重置". Candidates and the chosen set are recorded in
+ * design/icon-options.html. Each name below describes what it DRAWS, so a
+ * future swap does not leave a `BoltIcon` rendering a speedometer.
+ */
 const paceIconProps = {
   width: 13,
   height: 13,
   viewBox: "0 0 24 24",
   fill: "none",
   stroke: "currentColor",
-  strokeWidth: 2,
+  strokeWidth: 1.8,
   strokeLinecap: "round" as const,
   strokeLinejoin: "round" as const,
   "aria-hidden": true,
 };
-const GaugeIcon = () => (
+/** Speedometer — output speed (t/s). */
+const SpeedIcon = () => (
   <svg {...paceIconProps}>
-    <path d="M4 15a8 8 0 1 1 16 0" />
-    <path d="M12 15l4-3" />
+    <path d="M4.5 17.5a8.5 8.5 0 1 1 15 0" />
+    <path d="M12 15.5l4-4.5" />
   </svg>
 );
+/** Stacked layers — accumulated token usage. */
+const UsageIcon = () => (
+  <svg {...paceIconProps}>
+    <path d="M12 3l8.5 4.5L12 12 3.5 7.5 12 3z" />
+    <path d="M3.5 12.5L12 17l8.5-4.5" />
+  </svg>
+);
+/** The enclosing ring shared by PaceIcon / CheckIcon / WarnIcon.
+ *
+ *  Was hand-written as two arcs, `M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18z`. Its
+ *  chord is exactly the diameter, which is the degenerate case for the
+ *  large-arc flag (both halves are the same semicircle), and the closing `z`
+ *  adds a zero-length segment that still takes a line join. A `<circle>` states
+ *  the same shape from an exact centre and radius, with no degenerate input for
+ *  the rasteriser to resolve. */
+const RingPath = () => <circle cx="12" cy="12" r="9" />;
+/** Clock — the weekly pace line compares elapsed TIME against usage, so a
+ *  time glyph reads truer here than a generic rising arrow. */
+const PaceIcon = () => (
+  <svg {...paceIconProps}>
+    <RingPath />
+    <path d="M12 7.5V12l3.5 2" />
+  </svg>
+);
+/** Rising arrow — kept only for the legacy card's pace STAGE badge, where the
+ *  glyph marks a direction rather than the pace concept itself. */
 const TrendIcon = () => (
   <svg {...paceIconProps}>
-    <path d="M3 17l6-6 4 4 8-8" />
-    <path d="M15 7h6v6" />
+    <path d="M4 16l5-5 4 3 7-7" />
+    <path d="M15 7h5v5" />
   </svg>
 );
+/** Check in a circle — quota lasts to reset. */
 const CheckIcon = () => (
   <svg {...paceIconProps}>
-    <circle cx="12" cy="12" r="9" />
-    <path d="M8.5 12.5l2.5 2.5 4.5-5" />
+    <RingPath />
+    <path d="M8.5 12.3l2.4 2.4 4.6-5" />
   </svg>
 );
+/** Exclamation in a circle — quota is tight. Shares the circle with
+ *  CheckIcon so the healthy and warning states read as one pair. */
 const WarnIcon = () => (
   <svg {...paceIconProps}>
-    <path d="M12 3l9 16H3z" />
-    <path d="M12 10v4" />
-    <circle cx="12" cy="17" r="0.6" fill="currentColor" stroke="none" />
+    <RingPath />
+    <path d="M12 7.8v5" />
+    <circle cx="12" cy="16.3" r="0.55" fill="currentColor" stroke="none" />
   </svg>
 );
 
@@ -95,10 +145,14 @@ function CopyIconButton({ text }: { text: string }) {
 
 interface MenuCardProps {
   provider: ProviderUsageSnapshot;
-  resetTimeRelative: boolean;
-  showAsUsed?: boolean;
+  /**
+   * The owning surface's quota presentation choice, from
+   * `quotaDisplayContext(settings, component)`. The card never reads settings
+   * itself, so the same card renders correctly for the dashboard, the settings
+   * preview, or any future surface with its own preference.
+   */
+  display: QuotaDisplayContext;
   compactMetrics?: boolean;
-  onLayoutChange?: () => void;
   /** Most recent completed-response speed for Codex or Claude. */
   outputSpeed?: ProviderOutputSpeed | null;
   /** Which period the local-usage stats block leads with (Settings-driven). */
@@ -108,6 +162,16 @@ interface MenuCardProps {
   /** Show the provider brand icon in the card header. Governed by the
    * "show provider icons" setting on the tray; defaults on elsewhere. */
   showProviderIcon?: boolean;
+  /**
+   * Tray-flyout-only density tier ("detailed" | "compact" | "minimal").
+   * When set, the card renders the density-aware two-zone layout (see
+   * `styles.css` `.menu-surface--tray .menu-card__zone*`) instead of the
+   * legacy content below. Leave unset (the default) for every other call
+   * site (Settings preview card, PopOut dashboard) — their rendering is
+   * governed entirely by `compactMetrics`/`hideLocalUsage` as before and
+   * must not change when this prop is introduced.
+   */
+  densityMode?: MenuBarDisplayMode;
 }
 
 const SPARK_W = 68;
@@ -285,9 +349,71 @@ function formatCompactTokens(value: number, language: Language): string | null {
   }).format(value);
 }
 
+/**
+ * The token figure as the card shows it: the rounded form ("≈ 11.2億") when
+ * there is one, the exact count otherwise.
+ *
+ * The guard matters because `Intl`'s compact notation returns the plain
+ * digits for values below a language's first compact unit — Japanese renders
+ * 1200 as "1200", not "1.2千". Printing "≈ 1200" would put an approximation
+ * marker on an exact number, and drop the thousands separator while doing it.
+ * So the compact string is only used when it actually differs from the digits
+ * it came from.
+ */
+function formatApproxTokens(value: number, language: Language): string {
+  const compact = formatCompactTokens(value, language);
+  const isRounded =
+    compact != null &&
+    compact.replace(/[\s, ]/g, "") !== String(Math.round(value));
+  return isRounded ? `≈ ${compact}` : formatTokenCount(value);
+}
+
 function formatApiEquivalentValue(amount: number): string {
   const cnyEstimate = amount * USD_TO_CNY_REFERENCE_RATE;
   return `${formatCurrency(amount, "USD")} · ¥${cnyEstimate.toFixed(2)}`;
+}
+
+interface LocalUsageLead {
+  label: string;
+  tokens: number | null;
+  cost: number | null;
+  topModel: string | null;
+  empty: string;
+}
+
+/** Picks the period-appropriate label/tokens/cost/topModel out of a local-usage
+ * summary — shared by the legacy `LocalUsageBlock` and the tray density-tier
+ * insight row so both read the same Settings-driven `localUsagePeriod`. */
+function resolveLocalUsageLead(
+  period: LocalUsagePeriod,
+  summary: ProviderLocalUsageSummary,
+  t: (key: LocaleKey) => string,
+): LocalUsageLead {
+  if (period === "today") {
+    return {
+      label: t("PanelTodayUsage"),
+      tokens: summary.todayTokens,
+      cost: summary.todayCost,
+      topModel: summary.todayTopModel,
+      empty: t("PanelNoUsageToday"),
+    };
+  }
+  if (period === "30d") {
+    return {
+      label: t("PanelThirtyDayUsage"),
+      tokens: summary.thirtyDayTokens,
+      cost: summary.thirtyDayCost,
+      topModel: summary.thirtyDayTopModel,
+      empty: t("PanelNoUsageThirtyDays"),
+    };
+  }
+  return {
+    label: t("PanelSevenDayUsage"),
+    tokens: summary.sevenDayTokens,
+    cost: summary.sevenDayCost,
+    topModel: summary.sevenDayTopModel,
+    empty: t("PanelNoUsageSevenDays"),
+  };
 }
 
 export function LocalUsageBlock({
@@ -310,30 +436,7 @@ export function LocalUsageBlock({
   const maxCost = Math.max(...visibleHistory.map((point) => point.value), 0);
 
   // The flyout follows the selected range literally: one choice, one block.
-  const lead =
-    period === "today"
-      ? {
-          label: t("PanelTodayUsage"),
-          tokens: summary.todayTokens,
-          cost: summary.todayCost,
-          topModel: summary.todayTopModel,
-          empty: t("PanelNoUsageToday"),
-        }
-      : period === "30d"
-        ? {
-            label: t("PanelThirtyDayUsage"),
-            tokens: summary.thirtyDayTokens,
-            cost: summary.thirtyDayCost,
-            topModel: summary.thirtyDayTopModel,
-            empty: t("PanelNoUsageThirtyDays"),
-          }
-        : {
-            label: t("PanelSevenDayUsage"),
-            tokens: summary.sevenDayTokens,
-            cost: summary.sevenDayCost,
-            topModel: summary.sevenDayTopModel,
-            empty: t("PanelNoUsageSevenDays"),
-          };
+  const lead = resolveLocalUsageLead(period, summary, t);
   const compactTokens =
     lead.tokens != null ? formatCompactTokens(lead.tokens, language) : null;
   return (
@@ -471,7 +574,43 @@ function paceStageKey(stage: PaceSnapshot["stage"]): LocaleKey {
   }
 }
 
-const WEEKLY_WINDOW_MINUTES = 7 * 24 * 60;
+/** Runway line shared by the legacy pace section and the tray density-tier
+ * pace row — the weekly usage forecast merged in: status (icon + text) on
+ * the left, the estimated hours on the right. */
+function PaceRunway({
+  pace,
+  weeklyForecast,
+  t,
+}: {
+  pace: PaceSnapshot;
+  weeklyForecast: ReturnType<typeof getPaceEstimate>;
+  t: (key: LocaleKey) => string;
+}) {
+  const lasts = weeklyForecast
+    ? weeklyForecast.lastsUntilReset
+    : pace.willLastToReset;
+  const hours =
+    weeklyForecast?.hoursRemaining ??
+    (pace.etaSeconds != null ? pace.etaSeconds / 3600 : null);
+  const formatHours = (h: number) =>
+    h < 1
+      ? t("PanelForecastLessThanHour")
+      : `${h < 10 ? Math.round(h * 10) / 10 : Math.round(h)} ${t("PanelForecastHoursUnit")}`;
+  return (
+    <div className="menu-card__pace-runway" data-state={lasts ? "ok" : "warn"}>
+      <span className="menu-card__pace-runway-status">
+        {lasts ? <CheckIcon /> : <WarnIcon />}
+        {lasts ? t("DetailPaceWillLastToReset") : t("DetailPaceRunsOutIn")}
+      </span>
+      {hours != null && (
+        <strong className="menu-card__pace-runway-value">
+          ≈ {formatHours(hours)}
+        </strong>
+      )}
+    </div>
+  );
+}
+
 
 interface MetricEntry {
   id: string;
@@ -487,9 +626,7 @@ type MetricPaceView =
 function getMetricPaceView(snap: RateWindowSnapshot): MetricPaceView {
   if (snap.isExhausted) return { kind: "none" };
 
-  const isWeeklyWindow =
-    snap.windowMinutes != null && snap.windowMinutes >= WEEKLY_WINDOW_MINUTES;
-  const estimate = isWeeklyWindow ? getPaceEstimate(snap) : null;
+  const estimate = isWeeklyWindow(snap) ? getPaceEstimate(snap) : null;
   if (estimate) return { kind: "forecast", estimate };
 
   if (snap.reservePercent != null) {
@@ -497,6 +634,126 @@ function getMetricPaceView(snap: RateWindowSnapshot): MetricPaceView {
   }
 
   return { kind: "none" };
+}
+
+/**
+ * True when this window is the weekly one the pace snapshot describes.
+ *
+ * `kind` is decided once in Rust (`quota_cycle.rs`). This used to test
+ * `windowMinutes >= 7 days` — an open-ended bound with no upper limit — so a
+ * MONTHLY window also answered true and collected the weekly forecast, while the
+ * taskbar strip, using closed bands, called the same window monthly.
+ */
+function isWeeklyWindow(snap: RateWindowSnapshot): boolean {
+  return snap.kind === "weekly";
+}
+
+/**
+ * The weekly forecast, rendered inside the weekly quota block (item A).
+ *
+ * Previously the card drew the weekly quota bar here and a second, visually
+ * identical "pace" bar further down with its own actual/expected track — two
+ * weekly blocks describing the same window. The forecast now annotates the quota
+ * bar the block already draws: the expected position becomes a marker on that
+ * track, and this component contributes only the words.
+ *
+ * When there is no usable forecast it says so. Rendering `0` or an em dash here
+ * would read as "you are 0% ahead", which is a measurement the data does not
+ * support.
+ */
+/**
+ * Under- or over-spent for how far the window has elapsed.
+ *
+ * `deltaPercent` is actual minus expected, so a positive delta means burning
+ * faster than the clock — a deficit — and negative means reserve. Same mapping
+ * as the macOS card, and shared by the bar stripe and the label so the colour
+ * and the words can never disagree.
+ *
+ * The dead band is +/-2 points, copied from macOS `UsagePace.stage(for:)` where
+ * `absDelta <= 2` is `onTrack`. An earlier version treated anything that did not
+ * round to 0 as off-pace, so a 0.6-point drift already shouted "in reserve" and
+ * "On pace" was effectively unreachable.
+ */
+const ON_PACE_DEAD_BAND = 2;
+
+function paceStateOf(
+  forecast: QuotaForecastDisplay,
+): "reserve" | "deficit" | "on-pace" {
+  // Prefer the stage shared Rust already computed. `UsagePace::stage_for_delta`
+  // owns the +/-2, 6, 12 thresholds; re-deriving them here once drifted and made
+  // "on pace" unreachable, so this collapses its seven stages rather than
+  // recomputing the buckets.
+  if (forecast.stage) {
+    if (forecast.stage === "on_track") return "on-pace";
+    return forecast.stage.endsWith("ahead") ? "deficit" : "reserve";
+  }
+  // Frontend-derived forecast: no Rust stage, so apply the same dead band.
+  const delta = forecast.deltaPercent;
+  if (delta == null || Math.abs(delta) <= ON_PACE_DEAD_BAND) return "on-pace";
+  return delta > 0 ? "deficit" : "reserve";
+}
+
+function WeeklyForecast({
+  forecast,
+  t,
+}: {
+  forecast: QuotaForecastDisplay;
+  t: (key: LocaleKey) => string;
+}) {
+  if (!forecast.available || forecast.projectedUsedPercent == null) {
+    return (
+      <div className="menu-metric__forecast menu-metric__forecast--unavailable">
+        <span className="menu-metric__forecast-note">
+          {t("QuotaForecastUnavailable")}
+        </span>
+      </div>
+    );
+  }
+
+  const state = paceStateOf(forecast);
+  const delta = Math.abs(forecast.deltaPercent ?? 0);
+  const lasts = forecast.lastsToReset ?? true;
+  const hours =
+    forecast.etaSeconds != null && forecast.etaSeconds > 0
+      ? forecast.etaSeconds / 3600
+      : null;
+  const formatHours = (h: number) =>
+    h < 1
+      ? t("PanelForecastLessThanHour")
+      : `${h < 10 ? Math.round(h * 10) / 10 : Math.round(h)} ${t("PanelForecastHoursUnit")}`;
+
+  // Left / right exactly as macOS `UsagePaceText.weeklyDetail` composes them.
+  //
+  // Left is the verdict: "On pace" / "N% in reserve" / "N% in deficit". The
+  // elapsed-percent yardstick is deliberately NOT repeated — the punched stripe
+  // on the bar above IS that number, which is the point of the merge.
+  //
+  // Right follows `detailRightLabel`: when the window lasts to reset it says so
+  // and shows NO duration. A duration appears only when it will run out, as
+  // "runs out in <time>". Printing hours in both cases (the earlier version)
+  // made the healthy case read like a countdown to exhaustion.
+  const stateText =
+    state === "on-pace"
+      ? t("QuotaPaceOnPace")
+      : `${delta.toFixed(1)}% ${
+          state === "reserve" ? t("QuotaPaceInReserve") : t("QuotaPaceInDeficit")
+        }`;
+  const runwayText = lasts
+    ? t("DetailPaceWillLastToReset")
+    : hours != null
+      ? `${t("DetailPaceRunsOutIn")} ${formatHours(hours)}`
+      : t("DetailPaceRunsOutIn");
+
+  return (
+    <div className="menu-metric__forecast">
+      <span className="menu-metric__forecast-state" data-pace-state={state}>
+        {stateText}
+      </span>
+      <span className="menu-metric__forecast-runway" data-lasts={lasts ? "yes" : "no"}>
+        {lasts ? <CheckIcon /> : <WarnIcon />} {runwayText}
+      </span>
+    </div>
+  );
 }
 
 /**
@@ -509,71 +766,92 @@ function MetricRow({
   title,
   snap,
   exhaustedLabel,
-  resetTimeRelative,
-  showAsUsed,
+  display,
   hero = false,
   planLabel = null,
-  suppressForecast = false,
+  pace = null,
+  showForecast = false,
 }: {
   title: string;
   snap: RateWindowSnapshot;
   exhaustedLabel: string;
-  resetTimeRelative: boolean;
-  showAsUsed: boolean;
+  display: QuotaDisplayContext;
   hero?: boolean;
   planLabel?: string | null;
-  /** When the card also renders a dedicated pace ("进度") block, the weekly
-   * forecast box is redundant — its "hours remaining" just restates the reset
-   * countdown and its "lasts until reset" note duplicates the pace status. Hide
-   * it here so the runway information lives in exactly one place. */
-  suppressForecast?: boolean;
+  /** The provider's weekly pace snapshot, or null when it has none. */
+  pace?: PaceSnapshot | null;
+  /**
+   * Render the merged weekly forecast inside this block. Set only for the weekly
+   * window, because that is the window `provider.pace` actually measures — the
+   * bridge selects it by window length, not by slot.
+   */
+  showForecast?: boolean;
 }) {
   const { t } = useLocale();
-  const paceView = getMetricPaceView(snap);
   const reserveDescription = formatReserveDescription(snap, t);
-  const formatHours = (hours: number) => {
-    if (hours < 1) return t("PanelForecastLessThanHour");
-    const rounded = hours < 10 ? Math.round(hours * 10) / 10 : Math.round(hours);
-    return `${rounded} ${t("PanelForecastHoursUnit")}`;
-  };
+  // A forecast is only meaningful for the weekly window, and only when the
+  // window itself carries a real quota — projecting over a balance provider's
+  // synthetic 0% window would fabricate a number (item A.4).
+  const forecast = showForecast
+    ? quotaForecastDisplay(pace, snap)
+    : FORECAST_UNAVAILABLE;
+  const marker = forecastMarkerPercent(forecast, display);
+  const reservePercent =
+    !snap.isExhausted && snap.reservePercent != null ? snap.reservePercent : null;
+
   return (
     <ProviderQuotaBlock
       title={title}
       rate={snap}
-      resetTimeRelative={resetTimeRelative}
-      showAsUsed={showAsUsed}
+      display={display}
       usedLabel={t("PanelUsedSuffix")}
       remainingLabel={t("PanelLeftSuffix")}
       exhaustedLabel={exhaustedLabel}
       hero={hero}
       planLabel={planLabel}
+      markerPercent={marker}
+      paceState={paceStateOf(forecast)}
+      expectedLabel={t("PanelExpected")}
     >
-      {paceView.kind === "forecast" && !suppressForecast && (
-        <div className="menu-metric__forecast">
-          <div className="menu-metric__forecast-row">
-            <span className="menu-metric__forecast-label">
-              {t("PanelUsageForecast")}
-            </span>
-            <strong className="menu-metric__forecast-value">
-              ≈ {formatHours(paceView.estimate.hoursRemaining)}
-            </strong>
-          </div>
-          <span className="menu-metric__forecast-note">
-            {paceView.estimate.lastsUntilReset
-              ? t("PanelForecastUntilReset")
-              : t("PanelForecastPrefix")}
-          </span>
-        </div>
+      {showForecast && !snap.isInformational && !snap.isExhausted && (
+        <WeeklyForecast forecast={forecast} t={t} />
       )}
-      {paceView.kind === "reserve" && (
+      {reservePercent != null && (
         <div className="menu-metric__row menu-metric__reserve">
-          <span className="menu-metric__pct">{Math.round(paceView.percent)}% {t("PanelReserveSuffix")}</span>
+          <span className="menu-metric__pct">{Math.round(reservePercent)}% {t("PanelReserveSuffix")}</span>
           {reserveDescription && (
             <span className="menu-metric__reset">{reserveDescription}</span>
           )}
         </div>
       )}
     </ProviderQuotaBlock>
+  );
+}
+
+/** The compact reference card keeps the secondary quota as a weekly summary
+ * row (label + percentage + track), instead of collapsing it into a plain
+ * text line. This mirrors the reference HTML's shorter vertical rhythm. */
+function CompactSecondaryQuota({
+  title,
+  rate,
+  display,
+}: {
+  title: string;
+  rate: RateWindowSnapshot;
+  display: QuotaDisplayContext;
+}) {
+  const percent = quotaPercentDisplay(rate, display);
+
+  return (
+    <div className="menu-card__compact-secondary">
+      <div className="menu-card__compact-secondary-header">
+        <span>{title}</span>
+        <strong>{percent.rounded}%</strong>
+      </div>
+      <div className="menu-card__compact-secondary-track">
+        <span style={{ width: `${percent.fillPercent}%` }} />
+      </div>
+    </div>
   );
 }
 
@@ -596,22 +874,21 @@ function MetricRow({
  */
 export default function MenuCard({
   provider,
-  resetTimeRelative,
-  showAsUsed = false,
+  display,
   compactMetrics = false,
-  onLayoutChange,
   outputSpeed = null,
   localUsagePeriod = "7d",
   hideLocalUsage = false,
   showProviderIcon = true,
+  densityMode,
 }: MenuCardProps) {
-  const { t } = useLocale();
+  const { t, language } = useLocale();
   const [chartData, setChartData] = useState<ProviderChartData | null>(null);
   const [isChartDataLoading, setIsChartDataLoading] = useState(false);
   const formattedCostReset = useFormattedResetTime(
     provider.cost?.resetsAt ?? null,
     null,
-    resetTimeRelative,
+    display.resetTimeRelative,
   );
 
   useEffect(() => {
@@ -630,7 +907,6 @@ export default function MenuCard({
       .then((data) => {
         if (!cancelled) {
           setChartData(data);
-          requestAnimationFrame(() => onLayoutChange?.());
         }
       })
       .catch(() => {
@@ -639,13 +915,12 @@ export default function MenuCard({
       .finally(() => {
         if (!cancelled) {
           setIsChartDataLoading(false);
-          requestAnimationFrame(() => onLayoutChange?.());
         }
       });
     return () => {
       cancelled = true;
     };
-  }, [provider.providerId, provider.accountEmail, onLayoutChange]);
+  }, [provider.providerId, provider.accountEmail]);
 
   const isWayfinder = provider.providerId === "wayfinder";
   const planName = isWayfinder ? null : displayPlanName(provider.planName);
@@ -709,21 +984,14 @@ export default function MenuCard({
   // card. Keep only the primary quota and omit secondary diagnostics below.
   const visibleMetrics = compactMetrics ? metrics.slice(0, 1) : metrics;
 
-  // The weekly usage forecast is folded INTO the dedicated pace ("进度") block
-  // below (rather than shown as its own box) whenever that block renders — see
-  // `suppressForecast`. Compute the estimate here so the pace block can present
-  // the runway hours next to the pace bar instead of duplicating them.
-  const weeklyForecast = compactMetrics
+  // Which visible row owns the weekly forecast (item A). `provider.pace` is
+  // computed by the bridge against the weekly window specifically, so the
+  // forecast must attach to that row and to no other — attaching it to whatever
+  // sits in `primary` is the bug that once made Claude's 5-hour usage render as
+  // its weekly pace. Compact rows are a summary and get no forecast at all.
+  const weeklyMetricId = compactMetrics
     ? null
-    : (() => {
-        const weekly = metrics.find(
-          (m) =>
-            m.snap.windowMinutes != null &&
-            m.snap.windowMinutes >= WEEKLY_WINDOW_MINUTES &&
-            !m.snap.isExhausted,
-        );
-        return weekly ? getPaceEstimate(weekly.snap) : null;
-      })();
+    : (metrics.find((m) => isWeeklyWindow(m.snap))?.id ?? null);
 
   const hasCostHistory =
     !compactMetrics &&
@@ -758,13 +1026,289 @@ export default function MenuCard({
       showLocalUsagePlaceholder ||
       !!wayfinderUsage);
   const displayError = provider.error ? localizeProviderError(provider.error, t) : null;
+
+  // ── Tray flyout density tiers (detailed/compact/minimal) ────────────
+  // Only active when the caller passes `densityMode` (TrayPanel's overview
+  // list + single-provider detail view). Every other call site (Settings
+  // preview card, PopOut) leaves this undefined and renders the legacy
+  // `.menu-card__content` below exactly as before — none of the variables
+  // in this block affect their output.
+  const primaryMetric = metrics[0] ?? null;
+  const secondaryMetric = metrics[1] ?? null;
+  const hasPaceForDensity = !provider.error && !!provider.pace;
+  const densityLocalUsageLead =
+    !provider.error && chartData?.localUsage
+      ? resolveLocalUsageLead(localUsagePeriod, chartData.localUsage, t)
+      : null;
+  const hasDensityOutputSpeed =
+    !provider.error &&
+    !!outputSpeed &&
+    outputSpeed.tokensPerSecond != null &&
+    outputSpeed.tokensPerSecond > 0;
+  const hasDensityUsage =
+    !!densityLocalUsageLead &&
+    densityLocalUsageLead.tokens != null &&
+    densityLocalUsageLead.tokens > 0;
+  const hasDensityContent =
+    !provider.error &&
+    (metrics.length > 0 ||
+      !!balance ||
+      hasPaceForDensity ||
+      hasDensityUsage ||
+      hasDensityOutputSpeed ||
+      !!wayfinderUsage);
+
+  const effectiveHasDetails = densityMode ? hasDensityContent : hasDetails;
   const cardClassName = [
     "menu-card",
+    densityMode ? `menu-card--${densityMode}` : null,
     provider.error ? "menu-card--error" : null,
-    hasDetails ? "menu-card--with-details" : "menu-card--header-only",
+    effectiveHasDetails ? "menu-card--with-details" : "menu-card--header-only",
   ]
     .filter(Boolean)
     .join(" ");
+
+  // Detailed/compact/minimal share one card header; only the "updated"
+  // timestamp differs — compact/minimal drop the trailing "更新" (Chinese
+  // "…updated") suffix and use a slightly smaller font. Locales whose
+  // `UpdatedMinutesAgo`-family strings don't end in "更新" (i.e. every
+  // non-Chinese locale) are unaffected — the replace is a no-op there.
+  const useShortUpdatedTime = densityMode === "compact" || densityMode === "minimal";
+  const rawUpdatedText = Number.isNaN(Date.parse(provider.updatedAt))
+    ? provider.updatedAt
+    : formatRelativeUpdated(Date.parse(provider.updatedAt), t);
+  const updatedText = useShortUpdatedTime
+    ? rawUpdatedText.replace(/更新$/, "")
+    : rawUpdatedText;
+  const providerIconSize = densityMode === "detailed" ? 22 : 18;
+
+  const densityPrimaryRow = primaryMetric ? (
+    <MetricRow
+      title={primaryMetric.label}
+      snap={primaryMetric.snap}
+      exhaustedLabel={t("DetailWindowExhausted")}
+      display={display}
+      hero
+      // The reference FloatBar keeps the plan name out of the quota bar;
+      // detailed/compact/minimal all reserve that space for the percentage.
+      planLabel={null}
+      pace={provider.pace}
+      // Only the detailed tier has room for the forecast copy; compact and
+      // minimal are summaries by design.
+      showForecast={
+        densityMode === "detailed" && primaryMetric.id === weeklyMetricId
+      }
+    />
+  ) : balance ? (
+    <ProviderBalanceBlock balance={balance} showTitle={false} />
+  ) : null;
+
+  const densitySecondaryPercent = (rate: RateWindowSnapshot): number =>
+    quotaPercentDisplay(rate, display).rounded;
+
+  // Detailed shows every remaining metric window as its own hero-less row
+  // (matches the legacy metrics section — a provider with 3+ quota windows,
+  // e.g. Copilot's extra budget window, still shows all of them in detail).
+  // Compact/minimal are intentionally summaries: compact adds one plain
+  // (no-bar) secondary row when present; minimal shows only the hero row.
+  const zone1 = (() => {
+    if (densityMode === "detailed") {
+      return (
+        <section className="menu-card__zone menu-card__zone--quota menu-card__metrics">
+          {metrics.length > 0
+            ? metrics.map((m, idx) => (
+                <MetricRow
+                  key={m.id}
+                  title={m.label}
+                  snap={m.snap}
+                  exhaustedLabel={t("DetailWindowExhausted")}
+                  display={display}
+                  hero={idx === 0}
+                  planLabel={null}
+                  pace={provider.pace}
+                  showForecast={m.id === weeklyMetricId}
+                />
+              ))
+            : balance && <ProviderBalanceBlock balance={balance} showTitle={false} />}
+          {!provider.error && hasResetCredits && (
+            <>
+              {/* The reference card separates the reset-credits pill from the
+                  quota windows above it with the same hairline it uses between
+                  quota windows (see the `.divider` before `.reset-credits` in
+                  design/floatbar-reference.html). */}
+              <div className="menu-card__divider" />
+              <section className="menu-card__reset-credits" aria-label={t("PanelResetCreditsTitle")}>
+                <span>{t("PanelResetCreditsTitle")}</span>
+                <strong>
+                  {t("PanelResetCreditsRemaining")} {resetCreditsAvailable} {t("PanelResetCreditsUnit")}
+                </strong>
+              </section>
+            </>
+          )}
+        </section>
+      );
+    }
+    if (densityMode === "compact") {
+      return (
+        <section className="menu-card__zone menu-card__zone--quota menu-card__metrics">
+          {densityPrimaryRow}
+          {secondaryMetric && (
+            <CompactSecondaryQuota
+              title={secondaryMetric.label}
+              rate={secondaryMetric.snap}
+              display={display}
+            />
+          )}
+        </section>
+      );
+    }
+    // minimal — bare metrics block, no tinted zone background (kept
+    // deliberately lighter-weight than the detailed/compact zones).
+    return <section className="menu-card__metrics">{densityPrimaryRow}</section>;
+  })();
+
+  const densityInsightsZone = (() => {
+    if (densityMode !== "detailed") return null;
+    const speedNode = hasDensityOutputSpeed && outputSpeed ? (
+      <div className="menu-card__insight-row">
+        <span className="menu-card__insight-label">
+          <SpeedIcon />
+          {t("OutputSpeedTitle")}
+        </span>
+        <span className="menu-card__insight-value">
+          {outputSpeed.tokensPerSecond!.toFixed(1)}
+          <span className="menu-card__insight-unit"> t/s</span>
+        </span>
+      </div>
+    ) : null;
+    const usageNode = hasDensityUsage && densityLocalUsageLead ? (
+      <div className="menu-card__insight-block">
+        <div className="menu-card__insight-row">
+          <span className="menu-card__insight-label">
+            <UsageIcon />
+            {densityLocalUsageLead.label}
+          </span>
+          {/* Only the rounded figure ("≈ 11.2亿"). The exact count was here
+              too, as the reference card prints it, but at nine digits it
+              carried no information anyone reads at a glance while dominating
+              the row. It falls back to the exact count when the language has
+              no compact form to render. No "Token" unit word either — the
+              reference omits it, and it made the value wide enough to
+              ellipsize the label beside it. The speed row above does keep its
+              "t/s", which the reference shows. */}
+          <span className="menu-card__insight-value">
+            {formatApproxTokens(densityLocalUsageLead.tokens!, language)}
+          </span>
+        </div>
+        {densityLocalUsageLead.cost != null && (
+          <div className="menu-card__local-equivalent">
+            {t("PanelApiEquivalentValue")} ≈ {formatApiEquivalentValue(densityLocalUsageLead.cost)}
+          </div>
+        )}
+        {densityLocalUsageLead.topModel && (
+          <div className="menu-card__local-note">
+            {t("PanelTopModelPrefix")}: {densityLocalUsageLead.topModel}
+          </div>
+        )}
+      </div>
+    ) : null;
+    // The density tiers used to repeat the pace summary and its own weekly
+    // actual/expected track here. Both now live inside the weekly quota row, so
+    // this zone carries only speed, local usage and Wayfinder.
+    const wayfinderNode = wayfinderUsage ? <WayfinderUsageBlock usage={wayfinderUsage} /> : null;
+    const nodes = [speedNode, usageNode, wayfinderNode].filter(
+      (node): node is React.ReactElement => node !== null,
+    );
+    if (nodes.length === 0) return null;
+    return (
+      <section className="menu-card__zone menu-card__zone--insights">
+        {nodes.map((node, idx) => (
+          <Fragment key={idx}>
+            {idx > 0 && <div className="menu-card__divider" />}
+            {node}
+          </Fragment>
+        ))}
+      </section>
+    );
+  })();
+
+  const densityChipRow = (() => {
+    if (densityMode !== "compact") return null;
+    const chips: React.ReactElement[] = [];
+    if (hasDensityOutputSpeed && outputSpeed) {
+      chips.push(
+        <div className="menu-card__chip" key="speed">
+          <span className="menu-card__chip-value">
+            <SpeedIcon />
+            {outputSpeed.tokensPerSecond!.toFixed(1)}
+          </span>
+          <span className="menu-card__chip-caption">t/s</span>
+        </div>,
+      );
+    }
+    if (hasDensityUsage && densityLocalUsageLead) {
+      const approx = formatCompactTokens(densityLocalUsageLead.tokens!, language);
+      chips.push(
+        <div className="menu-card__chip" key="usage">
+          <span className="menu-card__chip-value">
+            {approx ?? formatTokenCount(densityLocalUsageLead.tokens!)}
+          </span>
+          <span className="menu-card__chip-caption">{densityLocalUsageLead.label}</span>
+        </div>,
+      );
+    }
+    if (hasPaceForDensity && provider.pace) {
+      const ahead = provider.pace.deltaPercent >= 0;
+      chips.push(
+        <div className="menu-card__chip" key="pace">
+          <span
+            className="menu-card__chip-value"
+            data-pace-direction={ahead ? "ahead" : "behind"}
+          >
+            {ahead ? "+" : ""}
+            {provider.pace.deltaPercent.toFixed(1)}%
+          </span>
+          <span className="menu-card__chip-caption">{t(paceStageKey(provider.pace.stage))}</span>
+        </div>,
+      );
+    }
+    if (chips.length === 0) return null;
+    return <div className="menu-card__chip-row">{chips}</div>;
+  })();
+
+  const densityMinimalSummaryLine = (() => {
+    if (densityMode !== "minimal") return null;
+    const segments: React.ReactElement[] = [];
+    if (secondaryMetric) {
+      segments.push(
+        <span className="menu-card__minimal-segment" key="secondary">
+          {secondaryMetric.label} {densitySecondaryPercent(secondaryMetric.snap)}%
+        </span>,
+      );
+    }
+    if (hasDensityOutputSpeed && outputSpeed) {
+      segments.push(
+        <span className="menu-card__minimal-segment" key="speed">
+          <SpeedIcon /> {outputSpeed.tokensPerSecond!.toFixed(1)}t/s
+        </span>,
+      );
+    }
+    if (hasPaceForDensity && provider.pace) {
+      const ahead = provider.pace.deltaPercent >= 0;
+      segments.push(
+        <span
+          className="menu-card__minimal-segment"
+          data-pace-direction={ahead ? "ahead" : "behind"}
+          key="pace"
+        >
+          {ahead ? "+" : ""}
+          {provider.pace.deltaPercent.toFixed(1)}%
+        </span>,
+      );
+    }
+    if (segments.length === 0) return null;
+    return <div className="menu-card__minimal-line">{segments}</div>;
+  })();
 
   return (
     <article className={cardClassName}>
@@ -773,7 +1317,7 @@ export default function MenuCard({
           {showProviderIcon && (
             <ProviderIcon
               providerId={provider.providerId}
-              size={18}
+              size={providerIconSize}
               className="menu-card__provider-icon"
             />
           )}
@@ -781,10 +1325,10 @@ export default function MenuCard({
             <span className="menu-card__name">{provider.displayName}</span>
           </div>
           {!provider.error && (
-            <span className="menu-card__subtitle menu-card__updated">
-              {Number.isNaN(Date.parse(provider.updatedAt))
-                ? provider.updatedAt
-                : formatRelativeUpdated(Date.parse(provider.updatedAt), t)}
+            <span
+              className={`menu-card__subtitle menu-card__updated${useShortUpdatedTime ? " menu-card__updated--short" : ""}`}
+            >
+              {updatedText}
             </span>
           )}
         </div>
@@ -796,9 +1340,22 @@ export default function MenuCard({
         )}
       </header>
 
-      {hasDetails && <div className="menu-card__divider" />}
+      {/* The reference card has no rule under the name/updated row — its
+          header is separated from the quota panel by whitespace alone, not
+          a divider. That only applies to the new density layout; the legacy
+          (non-densityMode) layout below keeps its original hairline. */}
+      {effectiveHasDetails && !densityMode && <div className="menu-card__divider" />}
 
-      {hasDetails && (
+      {effectiveHasDetails && densityMode && (
+        <div className="menu-card__content">
+          {zone1}
+          {densityInsightsZone}
+          {densityChipRow}
+          {densityMinimalSummaryLine}
+        </div>
+      )}
+
+      {effectiveHasDetails && !densityMode && (
         <div className="menu-card__content">
           {!provider.error && hasMetrics && (
             <section className="menu-card__group menu-card__metrics">
@@ -808,11 +1365,11 @@ export default function MenuCard({
                   title={m.label}
                   snap={m.snap}
                   exhaustedLabel={t("DetailWindowExhausted")}
-                  resetTimeRelative={resetTimeRelative}
-                  showAsUsed={showAsUsed}
+                  display={display}
                   hero={idx === 0}
                   planLabel={idx === 0 && !suppressPlanBadge ? planName : null}
-                  suppressForecast={hasPace}
+                  pace={provider.pace}
+                  showForecast={m.id === weeklyMetricId}
                 />
               ))}
             </section>
@@ -889,76 +1446,12 @@ export default function MenuCard({
             </section>
           )}
 
-          {hasPace && provider.pace && (
-            <section className="menu-card__group menu-card__pace">
-              <div className="menu-card__pace-header">
-                <span className="menu-card__pace-title">
-                  <GaugeIcon />
-                  {t("DetailPaceTitle")}
-                </span>
-                <span
-                  className="menu-card__pace-chip"
-                  data-pace={paceCategory(provider.pace.stage)}
-                >
-                  <TrendIcon />
-                  {t(paceStageKey(provider.pace.stage))} (
-                  {provider.pace.deltaPercent >= 0 ? "+" : ""}
-                  {provider.pace.deltaPercent.toFixed(1)}%)
-                </span>
-              </div>
-              {/* One track: the actual-usage fill, with a slim marker at the
-                  "expected by now" position — cleaner than two stacked bars. */}
-              <div className="menu-card__pace-track" title={t("PanelActual")}>
-                <div
-                  className="menu-card__pace-fill"
-                  data-pace={paceCategory(provider.pace.stage)}
-                  style={{ width: `${provider.pace.actualUsedPercent.toFixed(1)}%` }}
-                />
-                <span
-                  className="menu-card__pace-marker"
-                  style={{ left: `${provider.pace.expectedUsedPercent.toFixed(1)}%` }}
-                  title={t("PanelExpected")}
-                  aria-hidden
-                />
-              </div>
-              {/* Runway line — the weekly usage forecast merged in: status on
-                  the left, the estimated hours on the right. */}
-              {(() => {
-                const lasts = weeklyForecast
-                  ? weeklyForecast.lastsUntilReset
-                  : provider.pace.willLastToReset;
-                const hours =
-                  weeklyForecast?.hoursRemaining ??
-                  (provider.pace.etaSeconds != null
-                    ? provider.pace.etaSeconds / 3600
-                    : null);
-                const formatHours = (h: number) =>
-                  h < 1
-                    ? t("PanelForecastLessThanHour")
-                    : `${h < 10 ? Math.round(h * 10) / 10 : Math.round(h)} ${t("PanelForecastHoursUnit")}`;
-                return (
-                  <div
-                    className="menu-card__pace-runway"
-                    data-state={lasts ? "ok" : "warn"}
-                  >
-                    <span className="menu-card__pace-runway-status">
-                      {lasts ? <CheckIcon /> : <WarnIcon />}
-                      {lasts
-                        ? t("DetailPaceWillLastToReset")
-                        : t("DetailPaceRunsOutIn")}
-                    </span>
-                    {hours != null && (
-                      <strong className="menu-card__pace-runway-value">
-                        ≈ {formatHours(hours)}
-                      </strong>
-                    )}
-                  </div>
-                );
-              })()}
-            </section>
-          )}
+          {/* The standalone "进度" section used to live here with its own
+              actual/expected track. That was a second weekly block describing
+              the same window as the weekly quota row above it, which item A
+              forbids — the forecast now annotates that row's own bar instead. */}
 
-          {(hasMetrics || hasCost || hasPace) && hasCharts && (
+          {(hasMetrics || hasCost) && hasCharts && (
             <div className="menu-card__divider" />
           )}
 

@@ -1,0 +1,978 @@
+<meta charset="utf-8" />
+<title>浮窗风格方向候选</title>
+<!--
+  design/style-options.html
+
+  Style DIRECTIONS for the detailed tray card — the answer to "排版没问题，
+  但风格太沉闷了". Layout, type scale and copy are frozen at what is already
+  shipped; every variant here changes only SURFACE and COLOUR.
+
+  Rendered at the real 328px flyout width, on the real composited panel
+  colours, with the real type scale (k_type = 10/17). Numbers are a realistic
+  Claude snapshot. See design/README.md for the scales.
+
+  The five levers are independent — a final look can combine them (e.g. "D 的
+  面板 + C 的数字色"). Each variant below states which levers it pulls.
+-->
+<style>
+  :root {
+    font-family: "Segoe UI", "Microsoft YaHei UI", system-ui, sans-serif;
+    color-scheme: light dark;
+  }
+  body {
+    margin: 0;
+    padding: 28px 32px 64px;
+    background: #fafafa;
+    color: #1d1d1f;
+  }
+  h1 {
+    font-size: 19px;
+    font-weight: 700;
+    letter-spacing: -0.02em;
+    margin: 0 0 4px;
+  }
+  .lede {
+    font-size: 13px;
+    line-height: 1.6;
+    color: #5b5b60;
+    max-width: 720px;
+    margin: 0 0 28px;
+  }
+  .lede code {
+    font-family: Consolas, monospace;
+    font-size: 12px;
+    background: rgba(0, 0, 0, 0.06);
+    padding: 1px 4px;
+    border-radius: 3px;
+  }
+
+  .variant {
+    border-top: 1px solid rgba(0, 0, 0, 0.12);
+    padding-top: 20px;
+    margin-top: 28px;
+  }
+  .variant__head {
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+    margin-bottom: 3px;
+  }
+  .variant__key {
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    color: #fff;
+    background: #1d1d1f;
+    border-radius: 4px;
+    padding: 2px 7px;
+  }
+  .variant__name {
+    font-size: 16px;
+    font-weight: 700;
+    letter-spacing: -0.02em;
+  }
+  .variant__lever {
+    font-size: 11px;
+    font-weight: 600;
+    color: #5b5b60;
+    background: rgba(0, 0, 0, 0.05);
+    border-radius: 999px;
+    padding: 2px 9px;
+  }
+  .variant__chosen {
+    font-size: 11px;
+    font-weight: 700;
+    color: #fff;
+    background: #15803d;
+    border-radius: 999px;
+    padding: 2px 10px;
+    letter-spacing: 0.04em;
+  }
+  .variant--chosen {
+    background: rgba(21, 128, 61, 0.05);
+    border: 1px solid rgba(21, 128, 61, 0.28);
+    border-radius: 12px;
+    padding: 20px 20px 24px;
+    margin-inline: -20px;
+  }
+  .variant--chosen .variant__key {
+    background: #15803d;
+  }
+  .variant__desc {
+    font-size: 13px;
+    line-height: 1.65;
+    color: #3a3a3e;
+    max-width: 660px;
+    margin: 0 0 16px;
+  }
+  .variant__desc b {
+    font-weight: 650;
+    color: #1d1d1f;
+  }
+  .variant__cost {
+    font-size: 12px;
+    line-height: 1.6;
+    color: #6b6b70;
+    max-width: 660px;
+    margin: 8px 0 16px;
+  }
+
+  .pair {
+    display: flex;
+    gap: 24px;
+    align-items: flex-start;
+    flex-wrap: wrap;
+  }
+  .slot {
+    display: flex;
+    flex-direction: column;
+    gap: 7px;
+  }
+  .slot__cap {
+    font-size: 11px;
+    font-weight: 600;
+    color: #86868b;
+    letter-spacing: 0.04em;
+  }
+
+  /* ══ The flyout itself ════════════════════════════════════════════════
+     328px is the real logical width. Body colour and zone colour are the
+     composited values from design/README.md, not eyeballed. */
+  .flyout {
+    width: 328px;
+    padding: 12px 0 14px;
+    border-radius: 10px;
+    background: var(--bg);
+    color: var(--text);
+    font-size: 11px;
+    box-shadow: 0 6px 24px rgba(0, 0, 0, 0.14);
+
+    /* Baseline tokens — variants override a subset of these. */
+    --bg: #f5f5f7;
+    --text: #1d1d1f;
+    --text2: #5b5b60;
+    --muted: rgba(60, 60, 67, 0.75);
+    --zone-bg: #e9e9eb;
+    --zone-border: transparent;
+    --zone-shadow: none;
+    --zone-radius: 10px;
+    --zone-rail: transparent;
+    --divider: rgba(0, 0, 0, 0.1);
+    --bar-track: rgba(0, 0, 0, 0.08);
+    --bar-fill: #007aff;
+    --bar-fill-2: #007aff;
+    --hero-fg: var(--text);
+    --value-fg: var(--text);
+    --label-fg: var(--text2);
+    --ahead: #a04000;
+    --behind: #007aff;
+    --chip-bg: rgba(0, 0, 0, 0.05);
+    --chip-fg: var(--text2);
+    --pill-bg: rgba(0, 0, 0, 0.05);
+    --btn-bg: rgba(0, 0, 0, 0.05);
+    --btn-fg: var(--text);
+    --btn-border: transparent;
+  }
+  .flyout.dark {
+    --bg: #1c1c1e;
+    --text: #f5f5f7;
+    --text2: #8e8e93;
+    --muted: rgba(235, 235, 245, 0.65);
+    --zone-bg: #272729;
+    --divider: rgba(255, 255, 255, 0.1);
+    --bar-track: rgba(255, 255, 255, 0.15);
+    --bar-fill: #0a84ff;
+    --bar-fill-2: #0a84ff;
+    --ahead: #ffa552;
+    --behind: #0a84ff;
+    --chip-bg: rgba(255, 255, 255, 0.05);
+    --chip-fg: var(--text2);
+    --pill-bg: rgba(255, 255, 255, 0.05);
+    --btn-bg: rgba(255, 255, 255, 0.06);
+  }
+
+  .card {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    padding-inline: 14px;
+  }
+
+  /* header */
+  .title-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .pico {
+    width: 18px;
+    height: 18px;
+    flex: none;
+    border-radius: 5px;
+    background: var(--chip-bg);
+    color: var(--chip-fg);
+    display: grid;
+    place-items: center;
+    font-size: 10px;
+    font-weight: 700;
+  }
+  .name-group {
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+    min-width: 0;
+  }
+  .name {
+    font-size: 15px;
+    font-weight: 700;
+    letter-spacing: -0.04em;
+  }
+  .updated {
+    font-size: 11px;
+    font-weight: 400;
+    color: var(--text2);
+  }
+
+  .content {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+
+  /* zones */
+  .zone {
+    position: relative;
+    border-radius: var(--zone-radius);
+    padding: 12px 12px 11px;
+    background: var(--zone-bg);
+    border: 1px solid var(--zone-border);
+    box-shadow: var(--zone-shadow);
+    overflow: hidden;
+  }
+  /* Variant E's rail. Transparent by default, so the element costs nothing
+     in the other variants. */
+  .zone::before {
+    content: "";
+    position: absolute;
+    inset: 0 auto 0 0;
+    width: 3px;
+    background: var(--zone-rail);
+  }
+
+  .divider {
+    height: 1px;
+    background: var(--divider);
+    margin: 11px 0;
+  }
+
+  /* quota */
+  .q-header {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 8px;
+  }
+  .q-label,
+  .q-reset {
+    font-size: 11px;
+    font-weight: 400;
+    color: var(--label-fg);
+  }
+  .hero-pct {
+    font-size: 32px;
+    font-weight: 760;
+    letter-spacing: -0.065em;
+    margin: 8px 0 6px;
+    color: var(--hero-fg);
+    line-height: 1;
+  }
+  .sub-pct {
+    display: flex;
+    align-items: baseline;
+    gap: 4px;
+    margin: 4px 0 6px;
+  }
+  .sub-num {
+    font-size: 18px;
+    font-weight: 730;
+    letter-spacing: -0.05em;
+    color: var(--value-fg);
+  }
+  .sub-suffix {
+    font-size: 11px;
+    color: var(--text2);
+  }
+  .track {
+    height: 6px;
+    border-radius: 999px;
+    background: var(--bar-track);
+    overflow: hidden;
+  }
+  .fill {
+    height: 100%;
+    border-radius: 999px;
+    background: linear-gradient(90deg, var(--bar-fill), var(--bar-fill-2));
+    box-shadow: var(--bar-glow, none);
+  }
+
+  .reset-credits {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    margin-top: 2px;
+    padding: 7px 8px;
+    border-radius: 7px;
+    background: var(--pill-bg);
+    font-size: 11px;
+    font-weight: 400;
+    color: var(--text2);
+  }
+  .reset-credits strong {
+    font-size: 12px;
+    font-weight: 720;
+    letter-spacing: -0.02em;
+    color: var(--value-fg);
+  }
+
+  /* insights */
+  .zone--insights {
+    display: flex;
+    flex-direction: column;
+    gap: 0;
+  }
+  .block {
+    display: flex;
+    flex-direction: column;
+    gap: 7px;
+  }
+  .row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 6px;
+  }
+  .label {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    font-size: 11px;
+    font-weight: 400;
+    color: var(--label-fg);
+    white-space: nowrap;
+  }
+  .label svg {
+    width: 13px;
+    height: 13px;
+    flex: none;
+  }
+  .value {
+    font-size: 15px;
+    font-weight: 720;
+    color: var(--value-fg);
+    white-space: nowrap;
+  }
+  .unit,
+  .approx {
+    font-size: 11px;
+    font-weight: 500;
+    color: var(--text2);
+  }
+  .sub-line {
+    font-size: 10px;
+    font-weight: 400;
+    line-height: 1.3;
+    color: var(--muted);
+  }
+  .sub-line.note {
+    margin-top: -4px;
+  }
+
+  .row.pace {
+    justify-content: flex-start;
+  }
+  .row.pace .label {
+    font-weight: 700;
+    color: var(--ahead);
+  }
+  .pace-text {
+    flex: 1 1 auto;
+    font-size: 11px;
+    color: var(--ahead);
+  }
+  .pace-track {
+    position: relative;
+    height: 6px;
+    border-radius: 999px;
+    background: var(--bar-track);
+  }
+  .pace-fill {
+    height: 100%;
+    border-radius: 999px;
+    background: var(--ahead);
+    opacity: 0.75;
+  }
+  .pace-marker {
+    position: absolute;
+    top: -2px;
+    bottom: -2px;
+    width: 1.5px;
+    border-radius: 1px;
+    background: var(--text);
+  }
+  .runway-status {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    font-size: 11px;
+    font-weight: 400;
+    color: var(--text2);
+  }
+  .runway-status svg {
+    width: 13px;
+    height: 13px;
+    color: var(--behind);
+  }
+
+  /* actions */
+  .actions {
+    display: flex;
+    gap: 8px;
+  }
+  .actions button {
+    flex: 1;
+    font: inherit;
+    font-size: 11px;
+    font-weight: 500;
+    padding: 7px 0;
+    border-radius: 999px;
+    border: 1px solid var(--btn-border);
+    background: var(--btn-bg);
+    color: var(--btn-fg);
+    cursor: default;
+  }
+
+  /* ══ Variant overrides ═══════════════════════════════════════════════ */
+
+  /* B — 品牌暖调.
+     Two shades of the same hue on purpose: the FILLS (panel tint, chip
+     background, borders) use the saturated #c2410c, while anything that is
+     TEXT drops to #9a3412 — #c2410c reads only 4.16:1 on the tinted panel,
+     and the provider name at 15px/700 is still below WCAG's large-text
+     threshold, so it needs the full 4.5:1. */
+  [data-v="b"] {
+    --brand: #9a3412;
+    --zone-bg: #ece5e1;
+    --zone-border: rgba(194, 65, 12, 0.14);
+    --chip-bg: rgba(194, 65, 12, 0.12);
+    --chip-fg: #9a3412;
+    --pill-bg: rgba(194, 65, 12, 0.08);
+    --label-fg: #6b5750;
+    --btn-bg: rgba(194, 65, 12, 0.09);
+    --btn-fg: #8a3208;
+  }
+  [data-v="b"].dark {
+    --brand: #e08c62;
+    --zone-bg: #2b2624;
+    --zone-border: rgba(224, 140, 98, 0.16);
+    --chip-bg: rgba(224, 140, 98, 0.16);
+    --chip-fg: #e08c62;
+    --pill-bg: rgba(224, 140, 98, 0.1);
+    --label-fg: #a49489;
+    --btn-bg: rgba(224, 140, 98, 0.12);
+    --btn-fg: #e8a684;
+  }
+  [data-v="b"] .name {
+    color: var(--brand);
+  }
+
+  /* C — 数据高亮 */
+  [data-v="c"] {
+    --hero-fg: #0060df;
+    --value-fg: #0060df;
+    --bar-fill: #0a84ff;
+    --bar-fill-2: #46b1ff;
+  }
+  [data-v="c"].dark {
+    --hero-fg: #4aa8ff;
+    --value-fg: #4aa8ff;
+    --bar-fill: #0a84ff;
+    --bar-fill-2: #5ac8fa;
+  }
+  [data-v="c"] .sub-num {
+    color: var(--hero-fg);
+  }
+
+  /* D — 分层立体 */
+  [data-v="d"] {
+    --bg: #eeeef0;
+    --zone-bg: #ffffff;
+    --zone-border: rgba(0, 0, 0, 0.07);
+    --zone-shadow: 0 1px 2px rgba(0, 0, 0, 0.05), 0 4px 12px rgba(0, 0, 0, 0.04);
+    --zone-radius: 12px;
+    --divider: rgba(0, 0, 0, 0.07);
+    --pill-bg: rgba(0, 0, 0, 0.04);
+    --btn-bg: #ffffff;
+    --btn-border: rgba(0, 0, 0, 0.08);
+  }
+  [data-v="d"].dark {
+    --bg: #161618;
+    --zone-bg: #2c2c30;
+    --zone-border: rgba(255, 255, 255, 0.08);
+    --zone-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05), 0 4px 14px rgba(0, 0, 0, 0.4);
+    --divider: rgba(255, 255, 255, 0.08);
+    --pill-bg: rgba(255, 255, 255, 0.05);
+    --btn-bg: #2c2c30;
+    --btn-border: rgba(255, 255, 255, 0.09);
+  }
+
+  /* E — 强调导轨 */
+  [data-v="e"] {
+    --zone-bg: #ffffff;
+    --zone-border: rgba(0, 0, 0, 0.07);
+    --zone-radius: 12px;
+    --zone-rail: #007aff;
+    --divider: rgba(0, 0, 0, 0.07);
+    --bg: #eeeef0;
+    --btn-bg: #ffffff;
+    --btn-border: rgba(0, 0, 0, 0.08);
+  }
+  [data-v="e"].dark {
+    --zone-bg: #2c2c30;
+    --zone-border: rgba(255, 255, 255, 0.08);
+    --zone-rail: #0a84ff;
+    --divider: rgba(255, 255, 255, 0.08);
+    --bg: #161618;
+    --btn-bg: #2c2c30;
+    --btn-border: rgba(255, 255, 255, 0.09);
+  }
+  [data-v="e"] .zone {
+    padding-left: 15px;
+  }
+  [data-v="e"] .zone--insights {
+    --zone-rail: var(--ahead);
+  }
+  [data-v="e"] .q-label,
+  [data-v="e"] .zone--insights .label:not(.pace .label) {
+    letter-spacing: 0.06em;
+  }
+
+  /* F — 渐变主块.
+     The gradient is darker than a "pretty" blue would be because the labels
+     inside it are 11px: white at 82% needs the base under it to sit near
+     L≈0.10 to clear 4.5:1. A #0a6cff start only managed 3.1:1. */
+  [data-v="f"] .zone--quota {
+    background: linear-gradient(140deg, #0552c4 0%, #3a2a9e 100%);
+    border-color: transparent;
+    box-shadow: 0 4px 16px rgba(5, 82, 196, 0.28);
+    --label-fg: rgba(255, 255, 255, 0.82);
+    --text2: rgba(255, 255, 255, 0.82);
+    --value-fg: #ffffff;
+    --hero-fg: #ffffff;
+    --divider: rgba(255, 255, 255, 0.18);
+    --bar-track: rgba(255, 255, 255, 0.22);
+    --bar-fill: #ffffff;
+    --bar-fill-2: rgba(255, 255, 255, 0.86);
+    --pill-bg: rgba(255, 255, 255, 0.14);
+  }
+  [data-v="f"] .zone--quota .reset-credits strong {
+    color: #ffffff;
+  }
+  [data-v="f"] {
+    --zone-radius: 12px;
+  }
+  [data-v="f"].dark .zone--quota {
+    background: linear-gradient(140deg, #0a5ad6 0%, #3a2ba8 100%);
+    box-shadow: 0 4px 16px rgba(10, 90, 214, 0.32);
+    --label-fg: rgba(255, 255, 255, 0.85);
+    --text2: rgba(255, 255, 255, 0.85);
+  }
+
+  .spec {
+    margin-top: 44px;
+    border: 1px solid rgba(21, 128, 61, 0.28);
+    background: rgba(21, 128, 61, 0.04);
+    border-radius: 12px;
+    padding: 20px 24px 24px;
+    max-width: 780px;
+  }
+  .spec h2 {
+    font-size: 16px;
+    font-weight: 700;
+    margin: 0 0 10px;
+    color: #14532d;
+  }
+  .spec h3 {
+    font-size: 13px;
+    font-weight: 700;
+    margin: 22px 0 8px;
+    color: #14532d;
+  }
+  .spec p,
+  .spec li {
+    font-size: 13px;
+    line-height: 1.7;
+    color: #3a3a3e;
+  }
+  .spec p {
+    margin: 0 0 12px;
+  }
+  .spec ol {
+    margin: 0;
+    padding-left: 20px;
+  }
+  .spec li {
+    margin-bottom: 10px;
+  }
+  .spec table {
+    border-collapse: collapse;
+    width: 100%;
+    margin: 14px 0 4px;
+  }
+  .spec th,
+  .spec td {
+    text-align: left;
+    vertical-align: top;
+    font-size: 12px;
+    line-height: 1.6;
+    padding: 7px 10px;
+    border-bottom: 1px solid rgba(21, 128, 61, 0.16);
+  }
+  .spec th {
+    font-weight: 700;
+    color: #14532d;
+  }
+  .spec code {
+    font-family: Consolas, monospace;
+    font-size: 11.5px;
+    background: rgba(0, 0, 0, 0.05);
+    padding: 1px 4px;
+    border-radius: 3px;
+  }
+
+  .footnote {
+    margin-top: 40px;
+    border-top: 1px solid rgba(0, 0, 0, 0.12);
+    padding-top: 16px;
+    font-size: 12px;
+    line-height: 1.7;
+    color: #5b5b60;
+    max-width: 720px;
+  }
+  .footnote b {
+    color: #1d1d1f;
+  }
+</style>
+
+<h1>浮窗风格方向候选</h1>
+<p class="lede">
+  排版、字号、文案全部冻结在已上线的状态——每个方向只动<b>表面与颜色</b>。都按真实的
+  328px 宽度、真实的合成底色（浅 <code>#e9e9eb</code> / 深 <code>#272729</code>）渲染，明暗各一份。<br />
+  五个杠杆彼此独立，最终可以组合，例如「D 的面板 + C 的数字色」。
+</p>
+
+<div id="mount"></div>
+
+<div class="spec">
+  <h2>已选定：D 分层立体 — 实现规格</h2>
+  <p>
+    以下是 D 相对现状的<b>全部</b>差异。除这些之外不动任何东西：排版、字号、字重、间距、
+    文案、图标、语义色（进度条蓝/黄、节奏橙/蓝）全部保持现状。
+  </p>
+
+  <table>
+    <tr><th>目标</th><th>浅色</th><th>深色</th></tr>
+    <tr>
+      <td>面板底色<br /><code>.menu-card__zone</code></td>
+      <td><code>#ffffff</code>（原 <code>var(--surface-elevated)</code>）</td>
+      <td><code>#2c2c30</code></td>
+    </tr>
+    <tr>
+      <td>面板描边</td>
+      <td><code>rgba(0,0,0,.07)</code></td>
+      <td><code>rgba(255,255,255,.08)</code></td>
+    </tr>
+    <tr>
+      <td>面板投影</td>
+      <td><code>0 1px 2px rgba(0,0,0,.05), 0 4px 12px rgba(0,0,0,.04)</code></td>
+      <td><code>inset 0 1px 0 rgba(255,255,255,.05), 0 4px 14px rgba(0,0,0,.4)</code></td>
+    </tr>
+    <tr><td>面板圆角</td><td colspan="2"><code>10px → 12px</code></td></tr>
+    <tr>
+      <td>浮窗背板<br /><code>.menu-surface--tray</code></td>
+      <td><code>#f5f5f7 → #eeeef0</code></td>
+      <td><code>#1c1c1e → #161618</code></td>
+    </tr>
+    <tr>
+      <td>卡内分隔线</td>
+      <td><code>rgba(0,0,0,.10) → rgba(0,0,0,.07)</code></td>
+      <td><code>rgba(255,255,255,.10) → rgba(255,255,255,.08)</code></td>
+    </tr>
+    <tr>
+      <td>重置额度胶囊</td>
+      <td>填充 <code>rgba(0,0,0,.04)</code>，去掉原描边</td>
+      <td>填充 <code>rgba(255,255,255,.05)</code>，去掉原描边</td>
+    </tr>
+    <tr>
+      <td>底部两个按钮</td>
+      <td><code>#ffffff</code> + <code>1px rgba(0,0,0,.08)</code></td>
+      <td><code>#2c2c30</code> + <code>1px rgba(255,255,255,.09)</code></td>
+    </tr>
+  </table>
+
+  <h3>四个实现约束</h3>
+  <ol>
+    <li>
+      <b>描边用 <code>box-shadow</code> 的第一层，不要用 <code>border</code>。</b>
+      真 border 会给面板加 2px 宽高并把内容内移 1px，破坏 <code>k_geo</code> 推出来的
+      <code>padding: 12px 12px 11px</code>。写成
+      <code>box-shadow: 0 0 0 1px &lt;描边色&gt;, &lt;投影&gt;</code> 则完全不影响布局，
+      现有 padding 一个数都不用改。
+    </li>
+    <li>
+      <b>圆角要改两处。</b><code>.menu-surface--tray .menu-card__zone</code> 的
+      <code>border-radius: 10px</code> 之外，「Reference adaptation」段里
+      <code>.menu-card--detailed .menu-card__zone--quota</code> 和
+      <code>--compact</code> 各还有一条 <code>border-radius: 10px</code>，特异性更高，
+      漏改的话详细档不会生效。
+    </li>
+    <li>
+      <b>背板色只能覆盖在 <code>.menu-surface--tray</code> 上。</b>
+      它现在取自 <code>--menu-popover-bg</code> → <code>--app-bg</code>，
+      而 <code>--app-bg</code> 是全局令牌，设置页和 PopOut 都在用。改全局会波及那两个界面。
+    </li>
+    <li>
+      <b>只影响详细档和紧凑档。</b>极简档<em>刻意</em>不带 <code>.menu-card__zone</code>
+      （见 MenuCard 的注释），这次不给它补面板。
+    </li>
+  </ol>
+
+  <h3>验收</h3>
+  <p>
+    浅色下白面板压在 <code>#eeeef0</code> 背板上、深色下 <code>#2c2c30</code> 压在
+    <code>#161618</code> 上，两块面板应当明显浮起——这是本次唯一的目的。
+    对照标准就是本页 D 那两张卡。文字对比度不受影响（面板变亮只会提高浅色下的对比度；
+    深色下弱化文字实测 5.15:1）。
+  </p>
+</div>
+
+<div class="footnote">
+  <b>为什么现在显得沉闷：</b>整张卡只有中性灰加一条蓝色进度条，颜色在全卡只出现两次（进度条、"用超"）。
+  最大的两块面板 <code>rgba(0,0,0,.05)</code> 与背板只差 5% 亮度，等于没有分层；所有数字都是同一个
+  <code>--text-primary</code>，没有主次。<br /><br />
+  <b>约束：</b>「用超」的焦糖橙 <code>#a04000 / #ffa552</code> 是上一轮按对比度定下来的，任何方向都不应该
+  再引入第三个暖色跟它抢；进度条的蓝/黄是状态语义色，也不能被装饰色占用。<br /><br />
+  <b>对比度（已实测，全部 ≥ 4.5:1）：</b>B 品牌名 <code>#9a3412</code> 5.87 / 次级文字 5.43，深色 5.76 / 5.11；
+  C 数字 <code>#0060df</code> 4.63，深色 <code>#4aa8ff</code> 5.92；D 弱化文字 5.15；
+  F 渐变块内小字 5.22–7.58，深色 4.84–7.67。<br />
+  这里有两处是为了达标才偏离「好看的那个色」的：B 的品牌色<b>填充用 <code>#c2410c</code>、文字用 <code>#9a3412</code></b>（前者作文字只有 4.16，
+  而 15px/700 仍达不到 WCAG 大字号豁免线）；F 的渐变<b>比一般的蓝紫更暗</b>（起点 <code>#0552c4</code> 而不是 <code>#0a6cff</code>，
+  后者托不住 11px 的白色小字，只有 3.1）。
+</div>
+
+<template id="card-tpl">
+  <div class="card">
+    <div class="title-row">
+      <span class="pico">C</span>
+      <div class="name-group">
+        <span class="name">Claude</span>
+        <span class="updated">12 秒前更新</span>
+      </div>
+    </div>
+    <div class="content">
+      <section class="zone zone--quota">
+        <div class="q-header">
+          <span class="q-label">5 小时额度</span>
+          <span class="q-reset">3 小时后重置</span>
+        </div>
+        <div class="hero-pct">35%</div>
+        <div class="track"><div class="fill" style="width: 35%"></div></div>
+        <div class="divider"></div>
+        <div class="q-header">
+          <span class="q-label">7 天额度</span>
+          <span class="q-reset">4 天后重置</span>
+        </div>
+        <div class="sub-pct">
+          <span class="sub-num">68%</span><span class="sub-suffix">已用</span>
+        </div>
+        <div class="track"><div class="fill" style="width: 68%"></div></div>
+        <div class="divider"></div>
+        <section class="reset-credits">
+          <span>重置额度</span><strong>剩余 3 次</strong>
+        </section>
+      </section>
+
+      <section class="zone zone--insights">
+        <div class="block">
+          <div class="row">
+            <span class="label">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4.5 17.5a8.5 8.5 0 1 1 15 0" /><path d="M12 15.5l4-4.5" /></svg>
+              最近输出速度
+            </span>
+            <span class="value">42.3<span class="unit"> t/s</span></span>
+          </div>
+        </div>
+        <div class="divider"></div>
+        <div class="block">
+          <div class="row">
+            <span class="label">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l8.5 4.5L12 12 3.5 7.5 12 3z" /><path d="M3.5 12.5L12 17l8.5-4.5" /></svg>
+              近 7 天使用
+            </span>
+            <span class="value">921,605<span class="approx"> ≈ 92.2万</span></span>
+          </div>
+          <div class="sub-line">等额 API 价值 ≈ $37.42</div>
+          <div class="sub-line note">热门模型: claude-sonnet-4-5</div>
+        </div>
+        <div class="divider"></div>
+        <div class="block">
+          <div class="row pace">
+            <span class="label">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18z" /><path d="M12 7.5V12l3.5 2" /></svg>
+            </span>
+            <span class="pace-text">本周已过 81%，用超 7.7%</span>
+          </div>
+          <div class="pace-track">
+            <div class="pace-fill" style="width: 88.7%"></div>
+            <span class="pace-marker" style="left: 81%"></span>
+          </div>
+          <div>
+            <span class="runway-status">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18z" /><path d="M8.5 12.3l2.4 2.4 4.6-5" /></svg>
+              够用到重置
+            </span>
+          </div>
+        </div>
+      </section>
+    </div>
+    <div class="actions">
+      <button>刷新</button><button>设置</button>
+    </div>
+  </div>
+</template>
+
+<script>
+  const VARIANTS = [
+    {
+      key: "A",
+      v: "a",
+      name: "现状（对照）",
+      lever: "—",
+      desc:
+        "现在浮窗的样子。放在最前面只为对照——后面每一个方向都应该跟它比，而不是跟脑子里的印象比。",
+      cost: "",
+    },
+    {
+      key: "B",
+      v: "b",
+      name: "品牌暖调",
+      lever: "杠杆：面板染色 + 图标芯片",
+      desc:
+        "把 provider 的品牌色（Claude 的赤陶色）掺进面板底色、图标底、按钮和标题里，浓度都在 <b>8%–14%</b>。" +
+        "卡片一眼能认出是哪家；灰调被整体暖化，但数字本身不动。",
+      cost:
+        "代价：这是唯一一个<b>每家 provider 长得不一样</b>的方向——多卡堆叠时会出现橙 / 绿 / 紫相邻。" +
+        "另外赤陶色跟「用超」的焦糖橙同属暖色，我已经把品牌色只留给外围结构（面板、图标、按钮）、" +
+        "不碰任何数字，否则两个橙会打架。",
+    },
+    {
+      key: "C",
+      v: "c",
+      name: "数据高亮",
+      lever: "杠杆：数字着色 + 进度条渐变",
+      desc:
+        "外壳完全不动，只让<b>数字</b>亮起来：主百分比、周百分比、重置次数都取蓝色，进度条改成蓝→青渐变。" +
+        "沉闷的根因之一是所有数字同色、没有主次，这个方向直接治那一条。",
+      cost:
+        "代价：改动最小、风险最低，但也最保守——面板之间的分层问题没解决，远看还是两块灰。",
+    },
+    {
+      key: "D",
+      v: "d",
+      chosen: true,
+      name: "分层立体",
+      lever: "杠杆：面板抬升（描边 + 投影 + 更大圆角）",
+      desc:
+        "两块面板从「比背板亮 5%」变成<b>真正的浮起表面</b>：浅色用纯白 + 1px 描边 + 柔投影，" +
+        "深色用更亮的面 + 顶部内高光；背板同时压暗一档拉开差距，圆角 10→12。" +
+        "颜色一个没加，靠光影解决沉闷。",
+      cost:
+        "代价：最接近 Windows 11 / macOS 原生观感，最不容易过时；但如果你想要的是「有颜色」，这个方向给不了。",
+    },
+    {
+      key: "E",
+      v: "e",
+      name: "强调导轨",
+      lever: "杠杆：面板抬升 + 左侧色条",
+      desc:
+        "在 D 的基础上给每块面板加一条 <b>3px 的左侧色条</b>：额度块取蓝（跟进度条同源），" +
+        "洞察块取节奏色（现在是「用超」的焦糖橙，会随状态变蓝）。" +
+        "色条把两块面板变成两个有身份的分区，颜色出现在结构上而不是文字上。",
+      cost:
+        "代价：色条会跟着节奏状态变色，等于多了一处需要维护的状态色；好处是它天然复用已有的语义色，不引入新颜色。",
+    },
+    {
+      key: "F",
+      v: "f",
+      name: "渐变主块",
+      lever: "杠杆：主块反白 + 渐变",
+      desc:
+        "额度块整块变成<b>蓝→靛紫渐变的实心块</b>，里面全部反白，进度条改成白色；洞察块保持中性。" +
+        "主次一下就出来了：最重要的额度是一块发光的卡，其余是配文。这是六个里最不沉闷的。",
+      cost:
+        "代价：也是最激进的一个。渐变块吃掉了进度条原本的颜色语义——额度告急时该由条子变黄/变红来提示，" +
+        "在白条上要另想办法（例如整块底色转暖）。选它的话我需要额外设计告警态。",
+    },
+  ];
+
+  const tpl = document.getElementById("card-tpl");
+  const mount = document.getElementById("mount");
+
+  for (const variant of VARIANTS) {
+    const section = document.createElement("section");
+    section.className = "variant" + (variant.chosen ? " variant--chosen" : "");
+
+    const head = document.createElement("div");
+    head.className = "variant__head";
+    head.innerHTML =
+      '<span class="variant__key">' + variant.key + "</span>" +
+      '<span class="variant__name">' + variant.name + "</span>" +
+      (variant.chosen ? '<span class="variant__chosen">已选定</span>' : "") +
+      '<span class="variant__lever">' + variant.lever + "</span>";
+    section.appendChild(head);
+
+    const desc = document.createElement("p");
+    desc.className = "variant__desc";
+    desc.innerHTML = variant.desc;
+    section.appendChild(desc);
+
+    if (variant.cost) {
+      const cost = document.createElement("p");
+      cost.className = "variant__cost";
+      cost.innerHTML = variant.cost;
+      section.appendChild(cost);
+    }
+
+    const pair = document.createElement("div");
+    pair.className = "pair";
+    for (const theme of ["浅色", "深色"]) {
+      const slot = document.createElement("div");
+      slot.className = "slot";
+
+      const cap = document.createElement("div");
+      cap.className = "slot__cap";
+      cap.textContent = theme;
+      slot.appendChild(cap);
+
+      const flyout = document.createElement("div");
+      flyout.className = "flyout" + (theme === "深色" ? " dark" : "");
+      flyout.dataset.v = variant.v;
+      flyout.appendChild(tpl.content.cloneNode(true));
+      slot.appendChild(flyout);
+
+      pair.appendChild(slot);
+    }
+    section.appendChild(pair);
+    mount.appendChild(section);
+  }
+</script>

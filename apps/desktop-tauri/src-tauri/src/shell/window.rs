@@ -63,9 +63,8 @@ pub fn apply_window_layout(
     }
 
     if props.visible {
-        // The flyout ("Pop Out Dashboard") window is sized entirely by the
-        // frontend (content auto-fit, or the user's remembered size applied
-        // on open via `flyout_window::open_or_focus` + `set_flyout_size`) —
+        // The "Open Tray Panel" surface is a separate fixed-size window;
+        // this function only lays out the main window's surfaces.
         // it is its own dedicated window now, never `main`, so this function
         // (which only ever runs against `main`'s window; see callers in
         // `shell/transition.rs`) needs no special-case for it. `main`'s
@@ -90,6 +89,16 @@ pub fn apply_window_layout(
         } else {
             window
                 .set_min_size::<tauri::LogicalSize<f64>>(None)
+                .map_err(map_err)?;
+        }
+
+        if let (Some(max_w), Some(max_h)) = (props.max_width, props.max_height) {
+            window
+                .set_max_size(Some(tauri::LogicalSize::new(max_w, max_h)))
+                .map_err(map_err)?;
+        } else {
+            window
+                .set_max_size::<tauri::LogicalSize<f64>>(None)
                 .map_err(map_err)?;
         }
 
@@ -118,10 +127,11 @@ pub(super) fn logical_size_from_geometry(
         .map(|height| height.max(1) as f64)
         .unwrap_or(props.height);
 
-    (
-        props.min_width.map_or(width, |min| width.max(min)),
-        props.min_height.map_or(height, |min| height.max(min)),
-    )
+    let width = props.min_width.map_or(width, |min| width.max(min));
+    let height = props.min_height.map_or(height, |min| height.max(min));
+    let width = props.max_width.map_or(width, |max| width.min(max));
+    let height = props.max_height.map_or(height, |max| height.min(max));
+    (width, height)
 }
 
 fn capped_logical_size(window: &WebviewWindow, width: f64, height: f64) -> (f64, f64) {
@@ -190,11 +200,6 @@ where
         let _ = window.hide();
         Ok(Some(SurfaceMode::Hidden))
     }
-}
-
-#[allow(dead_code)]
-pub fn hide_to_tray_state(state: &mut AppState) {
-    let _ = prepare_hide_to_tray_if_current(state, |_| true);
 }
 
 pub(super) fn prepare_hide_to_tray_if_current<P>(

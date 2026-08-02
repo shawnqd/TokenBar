@@ -26,7 +26,8 @@ function provider(id: string, usedPercent = 20): ProviderUsageSnapshot {
     primary: {
       usedPercent,
       remainingPercent: 100 - usedPercent,
-      windowMinutes: null,
+kind: null,
+            windowMinutes: null,
       resetsAt: null,
       resetDescription: null,
       isExhausted: false,
@@ -152,7 +153,8 @@ describe("useProviders", () => {
         primary: {
           usedPercent: 25,
           remainingPercent: 75,
-          windowMinutes: null,
+kind: null,
+                    windowMinutes: null,
           resetsAt: null,
           resetDescription: null,
           isExhausted: false,

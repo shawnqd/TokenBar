@@ -1,5 +1,31 @@
 use super::*;
 
+/// Accept both the old named weight values and the numeric weight setting.
+/// The next save writes one of the three weights that the native GDI renderer
+/// can display distinctly with the installed Microsoft YaHei UI faces.
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+enum RawTaskbarWidgetFontWeight {
+    Numeric(u16),
+    Legacy(String),
+}
+
+impl RawTaskbarWidgetFontWeight {
+    fn normalized(self) -> u16 {
+        let value = match self {
+            Self::Numeric(value) => value,
+            Self::Legacy(value) => match value.as_str() {
+                "medium" => 500,
+                "semibold" => 600,
+                "bold" => 700,
+                "normal" => 400,
+                _ => value.parse::<u16>().unwrap_or(400),
+            },
+        };
+        normalize_taskbar_widget_font_weight(value)
+    }
+}
+
 /// Raw on-disk shape of [`Settings`] used purely for deserialization.
 ///
 /// It mirrors the canonical `Settings` fields but ALSO accepts the legacy
@@ -29,7 +55,6 @@ pub(super) struct RawSettings {
     #[serde(default = "default_true")]
     switcher_shows_icons: bool,
     menu_bar_shows_highest_usage: bool,
-    menu_bar_shows_percent: bool,
     show_as_used: bool,
     enable_animations: bool,
     reset_time_relative: bool,
@@ -136,7 +161,76 @@ pub(super) struct RawSettings {
     float_bar_dark_text: bool,
     #[serde(default)]
     float_bar_show_reset_inline: bool,
+    #[serde(default = "default_float_bar_reset_windows")]
+    float_bar_reset_windows: Vec<String>,
     float_bar_show_cost: bool,
+    #[serde(default)]
+    taskbar_widget_enabled: bool,
+    #[serde(default = "default_taskbar_widget_position")]
+    taskbar_widget_position: String,
+    #[serde(default = "default_taskbar_widget_font_weight")]
+    taskbar_widget_font_weight: RawTaskbarWidgetFontWeight,
+    #[serde(default = "default_taskbar_widget_content")]
+    taskbar_widget_content: String,
+    // `Option` so an absent key is distinguishable from an explicitly stored
+    // empty list: absent seeds from the legacy content setting, while an empty
+    // list means the user cleared it and normalization restores the default.
+    #[serde(default)]
+    taskbar_widget_entries: Option<Vec<TaskbarEntry>>,
+    #[serde(default = "default_taskbar_widget_font_family")]
+    taskbar_widget_font_family: String,
+    #[serde(default = "default_taskbar_widget_font_size")]
+    taskbar_widget_font_size: u8,
+    #[serde(default = "default_taskbar_widget_width")]
+    taskbar_widget_width: u16,
+    #[serde(default = "default_taskbar_widget_text_align")]
+    taskbar_widget_text_align: String,
+
+    // ── Per-component quota presentation ─────────────────────────────
+    //
+    // `Option` rather than `bool` on purpose: the field-level `#[serde(default)]`
+    // yields `None` for a key that is absent from the file, which is how
+    // `From<RawSettings>` distinguishes "old file, seed from the legacy global
+    // setting" from "new file that explicitly stored `false`". A struct-level
+    // default would have produced `Some(true)` and destroyed that distinction.
+    #[serde(default)]
+    float_bar_show_as_used: Option<bool>,
+    #[serde(default)]
+    float_bar_reset_time_relative: Option<bool>,
+    #[serde(default)]
+    dashboard_show_as_used: Option<bool>,
+    #[serde(default)]
+    dashboard_reset_time_relative: Option<bool>,
+    #[serde(default)]
+    taskbar_show_as_used: Option<bool>,
+}
+
+fn default_taskbar_widget_position() -> String {
+    "notification".to_string()
+}
+
+fn default_taskbar_widget_font_weight() -> RawTaskbarWidgetFontWeight {
+    RawTaskbarWidgetFontWeight::Numeric(400)
+}
+
+fn default_taskbar_widget_content() -> String {
+    "usage".to_string()
+}
+
+fn default_taskbar_widget_font_family() -> String {
+    "Microsoft YaHei UI".to_string()
+}
+
+fn default_taskbar_widget_font_size() -> u8 {
+    12
+}
+
+fn default_taskbar_widget_width() -> u16 {
+    132
+}
+
+fn default_taskbar_widget_text_align() -> String {
+    "left".to_string()
 }
 
 impl Default for RawSettings {
@@ -157,7 +251,6 @@ impl Default for RawSettings {
             tray_icon_mode: s.tray_icon_mode,
             switcher_shows_icons: s.switcher_shows_icons,
             menu_bar_shows_highest_usage: s.menu_bar_shows_highest_usage,
-            menu_bar_shows_percent: s.menu_bar_shows_percent,
             show_as_used: s.show_as_used,
             enable_animations: s.enable_animations,
             reset_time_relative: s.reset_time_relative,
@@ -216,7 +309,24 @@ impl Default for RawSettings {
             float_bar_provider_ids: s.float_bar_provider_ids,
             float_bar_dark_text: s.float_bar_dark_text,
             float_bar_show_reset_inline: s.float_bar_show_reset_inline,
+            float_bar_reset_windows: s.float_bar_reset_windows,
             float_bar_show_cost: s.float_bar_show_cost,
+            taskbar_widget_enabled: s.taskbar_widget_enabled,
+            taskbar_widget_position: s.taskbar_widget_position,
+            taskbar_widget_font_weight: RawTaskbarWidgetFontWeight::Numeric(
+                s.taskbar_widget_font_weight,
+            ),
+            taskbar_widget_content: s.taskbar_widget_content,
+            taskbar_widget_entries: Some(s.taskbar_widget_entries),
+            taskbar_widget_font_family: s.taskbar_widget_font_family.clone(),
+            taskbar_widget_font_size: s.taskbar_widget_font_size,
+            taskbar_widget_width: s.taskbar_widget_width,
+            taskbar_widget_text_align: s.taskbar_widget_text_align,
+            float_bar_show_as_used: Some(s.float_bar_show_as_used),
+            float_bar_reset_time_relative: Some(s.float_bar_reset_time_relative),
+            dashboard_show_as_used: Some(s.dashboard_show_as_used),
+            dashboard_reset_time_relative: Some(s.dashboard_reset_time_relative),
+            taskbar_show_as_used: Some(s.taskbar_show_as_used),
         }
     }
 }
@@ -442,7 +552,6 @@ impl From<RawSettings> for Settings {
             tray_icon_mode: raw.tray_icon_mode,
             switcher_shows_icons: raw.switcher_shows_icons,
             menu_bar_shows_highest_usage: raw.menu_bar_shows_highest_usage,
-            menu_bar_shows_percent: raw.menu_bar_shows_percent,
             show_as_used: raw.show_as_used,
             enable_animations: raw.enable_animations,
             reset_time_relative: raw.reset_time_relative,
@@ -477,7 +586,49 @@ impl From<RawSettings> for Settings {
             float_bar_provider_ids: raw.float_bar_provider_ids,
             float_bar_dark_text: raw.float_bar_dark_text,
             float_bar_show_reset_inline: raw.float_bar_show_reset_inline,
+            float_bar_reset_windows: normalize_float_bar_reset_windows(
+                &raw.float_bar_reset_windows,
+            ),
             float_bar_show_cost: raw.float_bar_show_cost,
+            taskbar_widget_enabled: raw.taskbar_widget_enabled,
+            taskbar_widget_position: match raw.taskbar_widget_position.as_str() {
+                "left" => "left".to_string(),
+                _ => "notification".to_string(),
+            },
+            taskbar_widget_font_weight: raw.taskbar_widget_font_weight.normalized(),
+            // Absent list: seed from whatever the old single-choice setting said,
+            // so upgrading an existing install changes nothing on screen.
+            taskbar_widget_entries: normalize_taskbar_entries(
+                &raw.taskbar_widget_entries.clone().unwrap_or_else(|| {
+                    taskbar_entries_from_legacy_content(&raw.taskbar_widget_content)
+                }),
+            ),
+            taskbar_widget_content: match raw.taskbar_widget_content.as_str() {
+                "speed" | "usage_speed" => raw.taskbar_widget_content,
+                _ => "usage".to_string(),
+            },
+            taskbar_widget_font_family: if raw.taskbar_widget_font_family.trim().is_empty() {
+                default_taskbar_widget_font_family()
+            } else {
+                raw.taskbar_widget_font_family.clone()
+            },
+            taskbar_widget_font_size: raw.taskbar_widget_font_size.clamp(10, 16),
+            taskbar_widget_width: raw.taskbar_widget_width.clamp(96, 240),
+            taskbar_widget_text_align: match raw.taskbar_widget_text_align.as_str() {
+                "center" | "right" => raw.taskbar_widget_text_align,
+                _ => "left".to_string(),
+            },
+            // One-time seeding from the legacy globals. A file written by this
+            // version stores all six keys, so this only fires for older files.
+            float_bar_show_as_used: raw.float_bar_show_as_used.unwrap_or(raw.show_as_used),
+            float_bar_reset_time_relative: raw
+                .float_bar_reset_time_relative
+                .unwrap_or(raw.reset_time_relative),
+            dashboard_show_as_used: raw.dashboard_show_as_used.unwrap_or(raw.show_as_used),
+            dashboard_reset_time_relative: raw
+                .dashboard_reset_time_relative
+                .unwrap_or(raw.reset_time_relative),
+            taskbar_show_as_used: raw.taskbar_show_as_used.unwrap_or(raw.show_as_used),
         }
     }
 }

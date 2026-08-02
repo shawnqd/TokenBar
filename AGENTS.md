@@ -30,8 +30,27 @@ cost or destructive decisions. Read domain documents, `CODE_REVIEW.md`,
   code stays on its platform branch; see `docs/PROJECT_LINES.md`.
 - One executor writes the worktree at a time. Read-only exploration and review
   may run in parallel, but concurrent writing agents are forbidden.
+- The Windows taskbar usage strip follows the TrafficMonitor native-child path:
+  create a native popup, attach it to `Shell_TrayWnd`, convert it to `WS_CHILD`,
+  and reassert taskbar-client geometry. Read the latest `AGENT_HANDOFF.md`
+  taskbar entry before touching this area; do not silently replace it with a
+  floating overlay without new Windows evidence.
 
 ## Build and test
+
+For Windows development, use the repository-root launcher as the only
+supported entry point:
+
+```powershell
+.\scripts\dev-windows.ps1
+```
+
+Do not start `pnpm dev`, `tauri dev`, or a stale `target\debug` executable
+directly for interactive work. `pnpm dev` is an internal Vite prerequisite of
+the launcher; using it alone creates a frontend-only process that is detached
+from the Rust/Tauri process and can make an agent edit or verify the wrong
+runtime. Use `-DryRun` to inspect cleanup without changing process state, or
+`-StopOnly` to leave the checkout with no running TokenBar development chain.
 
 From `apps/desktop-tauri/`:
 

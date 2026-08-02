@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const tauriMocks = vi.hoisted(() => ({
@@ -37,11 +37,8 @@ const tauriMocks = vi.hoisted(() => ({
   endFlyoutGesture: vi.fn().mockResolvedValue(undefined),
   openSettingsWindow: vi.fn(),
   quitApp: vi.fn(),
-  getWorkAreaRect: vi.fn(),
   reanchorTrayPanel: vi.fn(),
   revealTrayPanelWindow: vi.fn(),
-  flyoutStoredSize: vi.fn().mockResolvedValue(null),
-  setFlyoutSize: vi.fn().mockResolvedValue(undefined),
   openProviderDashboard: vi.fn(),
   openProviderStatusPage: vi.fn(),
   getProviderChartData: vi.fn(),
@@ -86,7 +83,8 @@ function rateWindow(used: number) {
   return {
     usedPercent: used,
     remainingPercent: 100 - used,
-    windowMinutes: null,
+kind: null,
+        windowMinutes: null,
     resetsAt: null,
     resetDescription: null,
     isExhausted: false,
@@ -133,7 +131,6 @@ function settings(overrides: Partial<SettingsSnapshot> = {}): SettingsSnapshot {
     trayIconMode: "single",
     switcherShowsIcons: true,
     menuBarShowsHighestUsage: false,
-    menuBarShowsPercent: false,
     showAsUsed: true,
     showAllTokenAccountsInMenu: false,
     enableAnimations: true,
@@ -162,6 +159,24 @@ function settings(overrides: Partial<SettingsSnapshot> = {}): SettingsSnapshot {
     floatBarProviderIds: [],
     floatBarDarkText: false,
     floatBarShowResetInline: false,
+    floatBarResetWindows: ["primary"],
+    taskbarWidgetEnabled: false,
+    taskbarWidgetPosition: "notification",
+    taskbarWidgetFontWeight: 400,
+    taskbarWidgetContent: "usage",
+    taskbarWidgetEntries: [
+      { providerId: "auto", window: "session" },
+      { providerId: "auto", window: "weekly" },
+    ],
+    taskbarWidgetFontFamily: "Microsoft YaHei UI",
+    taskbarWidgetFontSize: 12,
+    taskbarWidgetWidth: 132,
+    taskbarWidgetTextAlign: "left",
+    floatBarShowAsUsed: true,
+    floatBarResetTimeRelative: true,
+    dashboardShowAsUsed: true,
+    dashboardResetTimeRelative: true,
+    taskbarShowAsUsed: true,
     ...overrides,
   };
 }
@@ -209,17 +224,10 @@ describe("TrayPanel provider grid", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     eventMocks.listeners.clear();
-    tauriMocks.flyoutStoredSize.mockResolvedValue(null);
     tauriMocks.refreshProviders.mockResolvedValue(undefined);
     tauriMocks.refreshProvidersIfStale.mockResolvedValue(undefined);
     tauriMocks.dismissTrayPanel.mockResolvedValue(undefined);
     tauriMocks.reanchorTrayPanel.mockResolvedValue(undefined);
-    tauriMocks.getWorkAreaRect.mockResolvedValue({
-      x: 0,
-      y: 0,
-      width: 1440,
-      height: 900,
-    });
     tauriMocks.getCurrentSurfaceState.mockResolvedValue({
       mode: "trayPanel",
       target: { kind: "summary" },
@@ -264,7 +272,7 @@ describe("TrayPanel provider grid", () => {
     tauriMocks.getLocaleStrings.mockResolvedValue(
       buildBundle({
         ActionRefresh: "Refresh",
-        TrayShowWindow: "Open dashboard",
+        TrayOpenDashboard: "Open Dashboard",
         MenuQuit: "Quit",
         MenuSettings: "Settings...",
         PanelAllProviders: "All providers",
@@ -273,6 +281,10 @@ describe("TrayPanel provider grid", () => {
         PanelShowAllProviders: "Show all providers",
         PanelShowFewerProviders: "Show fewer providers",
         PanelUsedSuffix: "used",
+        ResetsInHoursMinutes: "Resets in {}h {}m",
+        ResetsInDaysHours: "Resets in {}d {}h",
+        TodayAt: "Today at {}",
+        TomorrowAt: "Tomorrow at {}",
       }),
     );
     eventMocks.listen.mockImplementation(
@@ -285,6 +297,10 @@ describe("TrayPanel provider grid", () => {
     );
   });
   afterEach(() => {
+    // Unmount while the Tauri bridge mocks still retain their Promise-returning
+    // implementations. Restoring first can race pending MenuCard effects in the
+    // full suite and turn getProviderChartData() into undefined during cleanup.
+    cleanup();
     vi.restoreAllMocks();
   });
 
@@ -295,8 +311,7 @@ describe("TrayPanel provider grid", () => {
     // can never report "trayPanel" anymore (main only holds
     // Hidden/PopOut/Settings post-refactor). Overriding the snapshot mock to
     // something else confirms the fixed-size restore + reveal gate
-    // (isFlyoutOpen, hardcoded true in TrayPanel.tsx) is no longer wired to
-    // useSurfaceMode() at all.
+    // is no longer wired to useSurfaceMode() at all.
     tauriMocks.getCurrentSurfaceState.mockResolvedValue({
       mode: "popOut",
       target: { kind: "dashboard" },
@@ -309,18 +324,35 @@ describe("TrayPanel provider grid", () => {
     });
   });
 
-  it("renders a one-line provider status list in minimal mode", async () => {
+  it("reveals before the first provider refresh completes", async () => {
+    // The native flyout starts hidden. A slow cache/network response must not
+    // leave it invisible: data is content, not the window reveal handshake.
+    tauriMocks.getCachedProviders.mockReturnValue(new Promise(() => {}));
+
+    const { container } = renderTrayPanel([]);
+
+    await waitFor(() => {
+      expect(container.querySelector(".tray-panel-reveal--ready")).not.toBeNull();
+    });
+  });
+
+  it("renders a hero quota row plus a one-line summary in minimal mode", async () => {
+    // Minimal density always renders inside the normal .menu-stack card
+    // list (MenuCard's densityMode="minimal"), not a separate flat list —
+    // only the secondary metric row is dropped, folded into the summary
+    // line instead alongside speed/pace.
     const { container } = renderTrayPanel(
       [provider("claude", "Claude", 35)],
       { menuBarDisplayMode: "minimal" },
     );
 
     await waitFor(() => {
-      expect(container.querySelector(".tray-minimal-summary__row")).not.toBeNull();
+      expect(container.querySelector(".menu-stack")).not.toBeNull();
     });
-    expect(container.querySelector(".tray-minimal-summary__name")?.textContent).toBe("Claude");
-    expect(container.querySelector(".tray-minimal-summary__percent")?.textContent).toBe("35%");
-    expect(container.querySelector(".menu-stack")).toBeNull();
+    expect(container.querySelector(".menu-card__name")?.textContent).toBe("Claude");
+    expect(container.querySelector(".provider-quota__hero-pct")?.textContent).toBe("35%");
+    expect(container.querySelector(".menu-card__minimal-line")).not.toBeNull();
+    expect(container.querySelector(".tray-minimal-summary")).toBeNull();
   });
 
   it("shows the balance amount instead of a meaningless 0% for balance-only providers in minimal mode", async () => {
@@ -334,10 +366,10 @@ describe("TrayPanel provider grid", () => {
     const { container } = renderTrayPanel([deepseek], { menuBarDisplayMode: "minimal" });
 
     await waitFor(() => {
-      expect(container.querySelector(".tray-minimal-summary__row")).not.toBeNull();
+      expect(container.querySelector(".provider-balance__amount")).not.toBeNull();
     });
-    expect(container.querySelector(".tray-minimal-summary__balance")?.textContent).toBe("¥38.81");
-    expect(container.querySelector(".tray-minimal-summary__percent")).toBeNull();
+    expect(container.querySelector(".provider-balance__amount")?.textContent).toBe("¥38.81");
+    expect(container.querySelector(".provider-quota__hero-pct")).toBeNull();
   });
 
   it("dismisses the tray panel on unmodified Escape", async () => {
@@ -438,7 +470,10 @@ describe("TrayPanel provider grid", () => {
     expect(screen.queryByText("過去30日間")).not.toBeInTheDocument();
     expect(container.querySelector(".menu-card__subtitle")?.textContent).toContain("日前");
     expect(screen.getByText("1,200")).toBeInTheDocument();
-    expect(screen.getByText("Token")).toBeInTheDocument();
+    // The tray density card prints the count without a "Token" unit word, as
+    // the reference card does (design/floatbar-reference.html shows
+    // "921,605  ≈92.2万"). The legacy Settings/PopOut card still labels it.
+    expect(screen.queryByText("Token")).not.toBeInTheDocument();
     expect(screen.getByText("トップモデル: gpt-5.5")).toBeInTheDocument();
     // The local-estimate note line was removed from the token usage block.
     expect(screen.queryByText("ローカルログによる参考値")).not.toBeInTheDocument();
@@ -570,8 +605,7 @@ describe("TrayPanel provider grid", () => {
     ).toEqual(["Codex", "Claude", "Cursor", "Factory", "Gemini"]);
   });
 
-  it("uses independent columns for a wide user-sized overview", async () => {
-    tauriMocks.flyoutStoredSize.mockResolvedValue([700, 700]);
+  it("uses a fixed 328px tray width with vertically stacked cards", async () => {
     const providers = [
       provider("codex", "Codex"),
       provider("claude", "Claude"),
@@ -587,37 +621,15 @@ describe("TrayPanel provider grid", () => {
       expect(container.querySelector(".tray-panel-reveal--fixed-height")).not.toBeNull();
     });
 
+    expect(windowMocks.PhysicalSize).toHaveBeenCalledWith(328, 776);
     expect(
-      Array.from(container.querySelectorAll(".menu-stack__column")).map((column) =>
-        Array.from(column.querySelectorAll(".menu-stack__item")).map(
-          (item) => item.id,
-        ),
-      ),
+      Array.from(container.querySelectorAll(".menu-stack__item")).map((item) => item.id),
     ).toEqual([
-      ["card-codex", "card-antigravity"],
-      ["card-claude", "card-copilot"],
+      "card-codex",
+      "card-claude",
+      "card-antigravity",
+      "card-copilot",
     ]);
-    expect(container.querySelector(".menu-stack__sep")).toBeNull();
-  });
-
-  it("keeps the stacked layout when the saved flyout width is narrow", async () => {
-    vi.spyOn(window, "innerWidth", "get").mockReturnValue(700);
-    tauriMocks.flyoutStoredSize.mockResolvedValue([500, 700]);
-    const providers = [
-      provider("codex", "Codex"),
-      provider("claude", "Claude"),
-      provider("antigravity", "Antigravity"),
-      provider("copilot", "GitHub Copilot"),
-    ];
-
-    const { container } = renderTrayPanel(providers, {
-      enabledProviders: providers.map((snapshot) => snapshot.providerId),
-    });
-
-    await waitFor(() => {
-      expect(container.querySelector(".tray-panel-reveal--fixed-height")).not.toBeNull();
-    });
-
     expect(container.querySelector(".menu-stack__column")).toBeNull();
     expect(container.querySelectorAll(".menu-stack__sep")).toHaveLength(3);
   });
@@ -703,10 +715,10 @@ describe("TrayPanel provider grid", () => {
     );
   });
 
-  it("provider grid indicator follows the show-as-used setting", async () => {
+  it("provider grid indicator follows the dashboard show-as-used setting", async () => {
     const { container, rerender } = renderTrayPanel(
       [provider("claude", "Claude", 35)],
-      { showAsUsed: true },
+      { dashboardShowAsUsed: true },
     );
 
     await waitFor(() => {
@@ -719,10 +731,12 @@ describe("TrayPanel provider grid", () => {
     tauriMocks.getCachedProviders.mockResolvedValue([
       provider("claude", "Claude", 35),
     ]);
-    tauriMocks.getSettingsSnapshot.mockResolvedValue(settings({ showAsUsed: false }));
+    tauriMocks.getSettingsSnapshot.mockResolvedValue(
+      settings({ dashboardShowAsUsed: false }),
+    );
     rerender(
       <LocaleProvider>
-        <TrayPanel state={bootstrap({ showAsUsed: false })} />
+        <TrayPanel state={bootstrap({ dashboardShowAsUsed: false })} />
       </LocaleProvider>,
     );
 
@@ -732,6 +746,57 @@ describe("TrayPanel provider grid", () => {
       );
       expect(track?.style.getPropertyValue("--weekly-pct")).toBe("65%");
     });
+  });
+
+  /**
+   * The per-component split exists so one surface's preference cannot move
+   * another's. The dashboard must ignore the floating bar's and the taskbar
+   * strip's choice even when they disagree with its own.
+   */
+  it("ignores the floating bar and taskbar show-as-used settings", async () => {
+    const { container } = renderTrayPanel([provider("claude", "Claude", 35)], {
+      dashboardShowAsUsed: true,
+      floatBarShowAsUsed: false,
+      taskbarShowAsUsed: false,
+    });
+
+    await waitFor(() => {
+      const track = container.querySelector<HTMLElement>(
+        ".provider-grid__weekly-track",
+      );
+      expect(track?.style.getPropertyValue("--weekly-pct")).toBe("35%");
+    });
+  });
+
+  /**
+   * A provider with no percentage quota (sub2api-style "Subscription active"
+   * rows, or a balance provider's synthetic carrier window) must not get a
+   * percentage track in the grid — a 0%/empty bar reads as a real measurement.
+   */
+  it("draws no percentage track for a provider with no percentage quota", async () => {
+    const informational = provider("sub2api", "Sub2API", 0);
+    informational.primary = {
+      ...informational.primary,
+      isInformational: true,
+      resetDescription: "Subscription active",
+    };
+    const quota = provider("claude", "Claude", 35);
+
+    const { container } = renderTrayPanel([quota, informational]);
+
+    await waitFor(() => {
+      expect(
+        container.querySelectorAll(".provider-grid__weekly-track").length,
+      ).toBe(1);
+    });
+
+    const informationalItem = container.querySelector<HTMLElement>(
+      '.provider-grid__item[aria-label="Sub2API"]',
+    );
+    expect(informationalItem).not.toBeNull();
+    expect(
+      informationalItem?.querySelector(".provider-grid__weekly-track"),
+    ).toBeNull();
   });
 
   it("hides provider grid icons when the display setting is disabled", async () => {
@@ -751,7 +816,7 @@ describe("TrayPanel provider grid", () => {
     expect(container.querySelector(".provider-grid__icon-overview")).toBeNull();
   });
 
-  it("applies the saved tray flyout scale with no inline zoom control", async () => {
+  it("keeps fixed-size tray content unscaled until native resizing is implemented", async () => {
     const { container } = renderTrayPanel(
       [provider("claude", "Claude", 35)],
       { trayScalePercent: 150 },
@@ -763,13 +828,13 @@ describe("TrayPanel provider grid", () => {
 
     expect(container.querySelector(".menu-surface__footer-zoom")).toBeNull();
     const surface = container.querySelector<HTMLElement>(".menu-surface--tray")!;
-    expect(surface.style.zoom).toBe("1.5");
+    expect(surface.style.getPropertyValue("zoom")).toBe("");
   });
 
   it("opens the full dashboard from the tray and then dismisses the flyout", async () => {
     renderTrayPanel([provider("claude", "Claude", 35)]);
 
-    fireEvent.click(await screen.findByText("Open dashboard"));
+    fireEvent.click(await screen.findByText("Open Dashboard"));
 
     await waitFor(() => {
       expect(tauriMocks.setSurfaceMode).toHaveBeenCalledWith("popOut", {
@@ -779,7 +844,7 @@ describe("TrayPanel provider grid", () => {
     });
   });
 
-  it("reveals the tray panel if the native resize pass fails", async () => {
+  it("reveals the fixed tray panel if native sizing fails", async () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     windowMocks.getCurrentWindow.mockReturnValue({
       setSize: vi.fn().mockRejectedValue(new Error("resize failed")),
@@ -870,5 +935,56 @@ describe("TrayPanel provider grid", () => {
     expect(body?.querySelector(".menu-surface__footer")).toBeNull();
     expect(container.querySelector(".menu-surface__fixed-header")).not.toBeNull();
     expect(container.querySelector(".menu-surface__footer")).not.toBeNull();
+  });
+
+  /**
+   * The reset-time mode toggle, end to end.
+   *
+   * `dashboardResetTimeRelative` had unit coverage on both ends — Rust proved the
+   * patch persists, `quotaDisplay.test.ts` proved the formatter branches — and
+   * nothing proved the setting actually reaches a rendered card. That is the same
+   * gap that let the taskbar entry composer ship inert, so the assertion belongs
+   * here, on a real card built from a real settings snapshot.
+   */
+  describe("reset time mode", () => {
+    function providerWithReset(): ProviderUsageSnapshot {
+      const base = provider("claude", "Claude", 35);
+      return {
+        ...base,
+        primary: {
+          ...base.primary,
+kind: "session",
+                    windowMinutes: 300,
+          // Far enough out to be unambiguous, close enough that the wording is
+          // either "today" or "tomorrow" — both carry the label, which is what
+          // this asserts. Anchoring to the real clock keeps the fake-timer
+          // machinery out of an async render.
+          resetsAt: new Date(Date.now() + 4 * 3600_000 + 33 * 60_000).toISOString(),
+        },
+      };
+    }
+
+    async function resetTextWith(relative: boolean): Promise<string> {
+      const { container, unmount } = renderTrayPanel([providerWithReset()], {
+        dashboardResetTimeRelative: relative,
+      });
+      await waitFor(() => {
+        expect(container.querySelector(".provider-quota__reset")).not.toBeNull();
+      });
+      const text = container.querySelector(".provider-quota__reset")!.textContent ?? "";
+      unmount();
+      return text;
+    }
+
+    it("counts down while the toggle is on", async () => {
+      const text = await resetTextWith(true);
+      expect(text).toMatch(/^Resets in \d+h \d+m$/);
+    });
+
+    it("switches the same row to a labelled wall-clock time when the toggle is off", async () => {
+      const text = await resetTextWith(false);
+      expect(text).toMatch(/^(Today|Tomorrow) at /);
+      expect(text).not.toContain("Resets in");
+    });
   });
 });

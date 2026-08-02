@@ -82,7 +82,8 @@ function rateWindow(used: number) {
   return {
     usedPercent: used,
     remainingPercent: 100 - used,
-    windowMinutes: null,
+kind: null,
+        windowMinutes: null,
     resetsAt: null,
     resetDescription: null,
     isExhausted: false,
@@ -129,7 +130,6 @@ function settings(): SettingsSnapshot {
     trayIconMode: "single",
     switcherShowsIcons: true,
     menuBarShowsHighestUsage: false,
-    menuBarShowsPercent: false,
     showAsUsed: true,
     showAllTokenAccountsInMenu: false,
     enableAnimations: true,
@@ -157,6 +157,24 @@ function settings(): SettingsSnapshot {
     floatBarProviderIds: [],
     floatBarDarkText: false,
     floatBarShowResetInline: false,
+    floatBarResetWindows: ["primary"],
+    taskbarWidgetEnabled: false,
+    taskbarWidgetPosition: "notification",
+    taskbarWidgetFontWeight: 400,
+    taskbarWidgetContent: "usage",
+    taskbarWidgetEntries: [
+      { providerId: "auto", window: "session" },
+      { providerId: "auto", window: "weekly" },
+    ],
+    taskbarWidgetFontFamily: "Microsoft YaHei UI",
+    taskbarWidgetFontSize: 12,
+    taskbarWidgetWidth: 132,
+    taskbarWidgetTextAlign: "left",
+    floatBarShowAsUsed: true,
+    floatBarResetTimeRelative: true,
+    dashboardShowAsUsed: true,
+    dashboardResetTimeRelative: true,
+    taskbarShowAsUsed: true,
   };
 }
 

@@ -150,6 +150,21 @@ cd Win-CodexBar
 .\scripts\dev.ps1
 ```
 
+For Windows hot-reload development, use the single-entry launcher instead:
+
+```powershell
+.\scripts\dev-windows.ps1
+```
+
+For a no-console double-click launch, open `scripts\dev-windows.vbs`; it
+forwards to the same launcher with a hidden window.
+
+It cleans up only TokenBar processes from this checkout, then starts one hidden
+`tauri dev` chain (including Vite). Use `-DryRun` to inspect the cleanup set
+without changing process state. Logs are written to `%TEMP%\tokenbar-dev\` so
+the launcher does not open an additional console window or duplicate the tray
+instance.
+
 Useful dev flags:
 
 ```powershell

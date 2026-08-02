@@ -1,42 +1,46 @@
-# Local Usage Card Design QA
+# Tray Flyout Design QA
 
-- Source visual truth: `C:\Users\13701\AppData\Local\Temp\codex-clipboard-7950f22a-50be-45e7-a33e-b020a8373224.png`
-- Implementation screenshot: `C:\Users\13701\Documents\Man Worker\TokenBar\design\qa\local-usage-implementation-final.png`
-- Combined focused comparison: `C:\Users\13701\Documents\Man Worker\TokenBar\design\qa\local-usage-comparison.png`
-- Viewport: 329 x 824 logical pixels
-- State: Windows tray panel, light theme, Codex card scrolled to the local usage section; live local data loaded
+Date: 2026-07-26
+Task: `TASK-FLYOUT-REFERENCE-CLEANUP-003`
+Branch: `platform/windows`
 
-## Full-view comparison evidence
+## Visual authority
 
-The implementation screenshot verifies the redesigned section inside the real fixed-height tray panel. The fixed provider switcher and footer remain visible while the card body scrolls. The local usage card stays within the existing rounded, elevated panel system and does not alter adjacent quota, forecast, output-speed, or Claude sections.
+- Layout and content: `design/floatbar-reference.html`
+- Surface treatment: option D in `design/style-options.html`
+- Production size: 328 x 776 logical px
+- Windows validation scale: 125%, captured as 410 x 970 physical px
 
-## Focused region comparison evidence
+## Evidence
 
-The combined comparison verifies the reference hierarchy directly against the implemented card: period label first, full Token count as the dominant line, and estimated API value as the secondary line. A focused comparison was required because those typography and wrapping details are too small to judge reliably in the full tray screenshot.
+- Real Tauri flyout: `design/qa/flyout-live-light-detailed.png`
+- Reference adaptation: `design/qa/flyout-current-light-detailed-fixed-dpi.png`
 
-## Findings
+## Result
 
-- Fonts and typography: passed. The Token count is the strongest element, the unit is subordinate, and the estimate uses the existing secondary-text style. The empty state remains explicit instead of displaying a dash.
-- Spacing and layout rhythm: passed. Today and 30-day periods are separated by one divider and use the same vertical rhythm. The section follows the current card padding and radius tokens.
-- Colors and visual tokens: passed. Existing light/dark theme variables are used; no new hard-coded surface or text colors were introduced.
-- Image quality and asset fidelity: not applicable. The reference and implementation contain no image assets or non-standard icons in this section.
-- Copy and content: passed. “最新令牌” was removed, today and 30-day usage are named accurately, USD and approximate CNY values share one line, and the estimate disclaimer is shortened.
-- Interaction: passed. Scrolling the real tray panel exposes the complete section while the fixed header and footer remain available.
+The dedicated `flyout` window renders the fixed provider switcher, scrollable
+model-card body, and fixed action footer without clipping. Detailed cards match
+the reference hierarchy: provider header, quota zone, insight zone, progress
+bars, reset credits, output speed, local usage, pace and runway.
 
-## Comparison history
+Option D is scoped to the tray flyout: elevated theme-aware zones, 12 px radii,
+hairline-first shadows, and a separate flyout backdrop. Settings and dashboard
+surfaces do not inherit these overrides.
 
-1. First pass: P2 at the 329-pixel tray width. The API-equivalent line reached the right edge and risked clipping.
-   - Fix: reduced only the tray-specific estimate text to 11px and enabled safe wrapping without changing the desktop card scale.
-   - Post-fix evidence: `design\qa\local-usage-implementation-final.png` and `design\qa\local-usage-comparison.png` show the full USD and CNY values inside the card.
-2. Second pass: no actionable P0, P1, or P2 differences remained. The extra 30-day block, top-model line, and local-estimate note are intentional product data not represented in the compact visual reference.
+Detailed, compact and minimal structures are covered by `MenuCard` and
+`TrayPanel` tests. Minimal remains a readable flat summary rather than a blank
+panel. The fixed-size phase deliberately ignores legacy content `zoom`; native
+resize/scale is a separate future task.
 
-## Implementation checklist
+## Acceptance
 
-- [x] Replace the four-cell cost/token grid with period-based hierarchy.
-- [x] Use the existing daily token total as “today usage”.
-- [x] Show full Token counts with grouping separators.
-- [x] Show USD and approximate CNY API value together.
-- [x] Add explicit empty states and loading skeletons.
-- [x] Verify the narrow tray viewport and localized labels.
+- [x] Fixed 328 x 776 logical window.
+- [x] Dedicated flyout route only; unknown/main surfaces fail closed.
+- [x] Detailed reference hierarchy and proportional type/spacing.
+- [x] Compact and minimal have distinct tested DOM structures.
+- [x] Light/dark colors use theme tokens.
+- [x] Header and footer stay fixed while provider cards scroll.
+- [x] No open P0/P1/P2 mismatch in the captured detailed state.
 
-final result: passed
+Final result: passed for the fixed-size reference implementation. Automated
+coverage validates the non-captured density/theme branches.

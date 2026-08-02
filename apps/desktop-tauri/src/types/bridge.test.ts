@@ -52,7 +52,6 @@ describe("Language type", () => {
       trayIconMode: "single",
       switcherShowsIcons: true,
       menuBarShowsHighestUsage: true,
-      menuBarShowsPercent: true,
       showAsUsed: false,
       showAllTokenAccountsInMenu: true,
       enableAnimations: true,
@@ -80,6 +79,24 @@ describe("Language type", () => {
       floatBarProviderIds: [],
       floatBarDarkText: false,
       floatBarShowResetInline: false,
+      floatBarResetWindows: ["primary"],
+      taskbarWidgetEnabled: false,
+      taskbarWidgetPosition: "notification",
+      taskbarWidgetFontWeight: 400,
+      taskbarWidgetContent: "usage",
+      taskbarWidgetEntries: [
+        { providerId: "auto", window: "session" },
+        { providerId: "auto", window: "weekly" },
+      ],
+      taskbarWidgetFontFamily: "Microsoft YaHei UI",
+      taskbarWidgetFontSize: 12,
+      taskbarWidgetWidth: 132,
+      taskbarWidgetTextAlign: "left",
+      floatBarShowAsUsed: true,
+      floatBarResetTimeRelative: true,
+      dashboardShowAsUsed: true,
+      dashboardResetTimeRelative: true,
+      taskbarShowAsUsed: true,
     };
     expect(snap.uiLanguage).toBe("spanish");
 

@@ -43,13 +43,18 @@ import { CookieSection } from "./CookieSection";
 import { MenuBarMetricSection } from "./sections/MenuBarMetricSection";
 import MenuCard from "../../../components/MenuCard";
 import { useOutputSpeedSnapshot } from "../../../hooks/useOutputSpeedSnapshot";
+import { outputSpeedProviderId } from "../../../lib/outputSpeed";
+import type { QuotaDisplayContext } from "../../../lib/quotaDisplay";
 
 interface Props {
   providerId: string | null;
   providerSnapshot?: ProviderUsageSnapshot | null;
   cookieDomain?: string | null;
-  resetTimeRelative: boolean;
-  showAsUsed: boolean;
+  /**
+   * The detail pane is a data preview, so per TASK-018 item B it follows the
+   * display context of the component it previews — the dashboard cards.
+   */
+  display: QuotaDisplayContext;
   localUsagePeriod: LocalUsagePeriod;
   outputSpeedEnabled: boolean;
   providerMetrics: SettingsSnapshot["providerMetrics"];
@@ -71,8 +76,7 @@ export function ProviderDetailPane({
   providerId,
   providerSnapshot = null,
   cookieDomain = null,
-  resetTimeRelative,
-  showAsUsed,
+  display,
   localUsagePeriod,
   outputSpeedEnabled,
   providerMetrics,
@@ -207,9 +211,7 @@ export function ProviderDetailPane({
   if (!detail) return null;
 
   const subtitle = buildSubtitle(detail, t);
-  const speedProviderId = detail.id === "codex" || detail.id === "claude"
-    ? detail.id
-    : null;
+  const speedProviderId = outputSpeedProviderId(detail.id);
   const providerOutputSpeed = speedProviderId ? outputSpeed?.[speedProviderId] ?? null : null;
   // The Settings → Providers preview shows a single, explicitly-selected
   // provider, so it always renders the full quota content regardless of the
@@ -284,8 +286,7 @@ export function ProviderDetailPane({
               below so the page never stacks three different stat UIs. */}
           <MenuCard
             provider={providerSnapshot}
-            resetTimeRelative={resetTimeRelative}
-            showAsUsed={showAsUsed}
+            display={display}
             compactMetrics={compactMetrics}
             localUsagePeriod={localUsagePeriod}
             hideLocalUsage
@@ -305,11 +306,7 @@ export function ProviderDetailPane({
       )}
 
       {!providerSnapshot && (
-        <UsageSection
-          provider={detail}
-          resetTimeRelative={resetTimeRelative}
-          t={t}
-        />
+        <UsageSection provider={detail} display={display} t={t} />
       )}
       <StatsSection
         providerId={detail.id}

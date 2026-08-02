@@ -15,7 +15,8 @@ function snapshot(providerId: string, displayName: string): ProviderUsageSnapsho
     primary: {
       usedPercent: 0,
       remainingPercent: 100,
-      windowMinutes: null,
+kind: null,
+            windowMinutes: null,
       resetsAt: null,
       resetDescription: null,
       isExhausted: false,

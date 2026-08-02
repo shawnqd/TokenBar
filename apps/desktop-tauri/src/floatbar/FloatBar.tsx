@@ -10,6 +10,11 @@ import {
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useFormattedResetTime } from "../hooks/useFormattedResetTime";
+import {
+  quotaDisplayContext,
+  quotaPercentDisplay,
+  type QuotaDisplayContext,
+} from "../lib/quotaDisplay";
 import { useLocale } from "../hooks/useLocale";
 import { useProviders } from "../hooks/useProviders";
 import {
@@ -21,10 +26,13 @@ import { ProviderIcon } from "../components/providers/ProviderIcon";
 import { getProviderIcon } from "../components/providers/providerIcons";
 import type {
   BootstrapState,
+  FloatBarResetWindow,
   ProviderLocalUsageSummary,
   ProviderUsageSnapshot,
+  RateWindowSnapshot,
   SettingsSnapshot,
 } from "../types/bridge";
+import { windowByKind } from "../lib/quotaWindows";
 import { FLOAT_BAR_CONFIG_CHANGED_EVENT, resizeFloatBar } from "./api";
 import "./FloatBar.css";
 
@@ -54,6 +62,21 @@ function ResetIcon({ size }: { size: number }) {
     </svg>
   );
 }
+
+/**
+ * Short names for the reset cycles.
+ *
+ * The `TaskbarWindow*` strings are plain cycle names ("5h", "weekly"), not
+ * taskbar-specific wording, so both surfaces name the same cycle identically —
+ * which is the point of letting the user pick a cycle by name at all.
+ */
+const RESET_WINDOW_LABEL_KEYS = {
+  primary: "FloatBarResetWindowPrimary",
+  session: "TaskbarWindowSession",
+  weekly: "TaskbarWindowWeekly",
+  daily: "TaskbarWindowDaily",
+  monthly: "TaskbarWindowMonthly",
+} as const;
 
 function inlineResetTime(resetText: string): string {
   const normalized = resetText.trim();
@@ -151,6 +174,78 @@ function CostPill({
   );
 }
 /**
+ * One reset readout inside a pill.
+ *
+ * Its own component because the formatting is a hook: the pill can show several
+ * resets now, and hooks cannot be called in a loop whose length varies.
+ */
+function ResetChip({
+  window,
+  label,
+  relative,
+  iconSize,
+}: {
+  window: RateWindowSnapshot;
+  /** Which cycle this is, shown only when the pill carries more than one. */
+  label: string | null;
+  relative: boolean;
+  iconSize: number;
+}) {
+  const resetText = useFormattedResetTime(
+    window.resetsAt,
+    window.resetDescription,
+    relative,
+  );
+  if (!resetText) return null;
+  const inline = inlineResetTime(resetText);
+  if (!inline) return null;
+  const title = label ? `${label} · ${resetText}` : resetText;
+
+  return (
+    <span
+      className="floatbar__reset"
+      title={title}
+      aria-label={title}
+      data-tauri-drag-region
+    >
+      <ResetIcon size={iconSize} />
+      {label && (
+        <span className="floatbar__reset-window" data-tauri-drag-region>
+          {label}
+        </span>
+      )}
+      <span className="floatbar__reset-time" data-tauri-drag-region>
+        {inline}
+      </span>
+    </span>
+  );
+}
+
+/** The reset windows this provider can actually answer for, in configured order. */
+function resolveResetWindows(
+  provider: ProviderUsageSnapshot,
+  kinds: FloatBarResetWindow[],
+  windowLabel: (kind: FloatBarResetWindow) => string,
+): Array<{ key: string; window: RateWindowSnapshot; label: string }> {
+  const seen = new Set<string>();
+  const out: Array<{ key: string; window: RateWindowSnapshot; label: string }> =
+    [];
+  for (const kind of kinds) {
+    const window = windowByKind(provider, kind);
+    if (!window) continue;
+    // "primary" and a named cycle routinely resolve to the same window — Codex's
+    // primary IS its weekly. Printing it twice would look like two deadlines.
+    const identity = `${window.windowMinutes ?? "?"}:${window.resetsAt ?? ""}:${
+      window.resetDescription ?? ""
+    }`;
+    if (seen.has(identity)) continue;
+    seen.add(identity);
+    out.push({ key: kind, window, label: windowLabel(kind) });
+  }
+  return out;
+}
+
+/**
  * The capacity pill shown for a single provider.
  *
  * Color follows usage: green default, amber when remaining drops below the
@@ -159,73 +254,85 @@ function CostPill({
  */
 function ProviderPill({
   provider,
-  highRemaining,
-  critRemaining,
-  showAsUsed,
+  display,
   scale,
   showResetInline,
-  resetRelative,
+  resetWindows,
+  windowLabel,
   usedSuffix,
   remainingSuffix,
 }: {
   provider: ProviderUsageSnapshot;
-  highRemaining: number;
-  critRemaining: number;
-  showAsUsed: boolean;
+  /** The floating bar's own presentation choice — never the dashboard's. */
+  display: QuotaDisplayContext;
   scale: number;
   showResetInline: boolean;
-  resetRelative: boolean;
+  resetWindows: FloatBarResetWindow[];
+  windowLabel: (kind: FloatBarResetWindow) => string;
   usedSuffix: string;
   remainingSuffix: string;
 }) {
-  const remaining = Math.max(0, Math.min(100, provider.primary.remainingPercent));
-  const used = Math.max(0, Math.min(100, provider.primary.usedPercent));
-  const displayPercent = showAsUsed ? used : remaining;
-  const displaySuffix = showAsUsed ? usedSuffix : remainingSuffix;
-  const exhausted = provider.primary.isExhausted || provider.error;
-  let tone: "ok" | "warn" | "crit" = "ok";
-  if (exhausted || remaining <= critRemaining) tone = "crit";
-  else if (remaining <= highRemaining) tone = "warn";
+  const percent = quotaPercentDisplay(provider.primary, display);
+  const displaySuffix = percent.semantics === "used" ? usedSuffix : remainingSuffix;
+  // A failed fetch is as actionable as an exhausted quota, so it shares the
+  // critical tone. Everything else comes from the shared grading.
+  const tone: "ok" | "warn" | "crit" = provider.error
+    ? "crit"
+    : percent.level === "exhausted" || percent.level === "critical"
+      ? "crit"
+      : percent.level === "high"
+        ? "warn"
+        : "ok";
 
   const brand = getProviderIcon(provider.providerId).brandColor;
-  const label = provider.error ? "—" : `${Math.round(displayPercent)}%`;
-  const resetText = useFormattedResetTime(
+  const label = provider.error ? "—" : `${percent.rounded}%`;
+  const resets = showResetInline
+    ? resolveResetWindows(provider, resetWindows, windowLabel)
+    : [];
+  // The tooltip always carries the provider's own next reset, whether or not
+  // the inline chips are switched on — hovering is how you check a deadline
+  // without giving the bar the width to print one.
+  const primaryReset = useFormattedResetTime(
     provider.primary.resetsAt,
     provider.primary.resetDescription,
-    resetRelative,
+    display.resetTimeRelative,
   );
-  const resetSuffix = resetText ? `\n${resetText}` : "";
-  const inlineReset = resetText ? inlineResetTime(resetText) : null;
-  const iconSize = Math.round(11 * scale);
-  const resetIconSize = Math.round(10 * scale);
+  // Icon sizes are forced even so the SVG lands on whole device pixels. At
+  // 11px an odd box left the artwork on a half-pixel and it read as tilted.
+  const iconSize = Math.max(10, Math.round((11 * scale) / 2) * 2);
+  const resetIconSize = Math.max(8, Math.round((10 * scale) / 2) * 2);
 
   return (
     <div
       className={`floatbar__pill floatbar__pill--${tone}`}
-      title={`${provider.displayName}: ${label} ${displaySuffix}${resetSuffix}`}
+      title={`${provider.displayName}: ${label} ${displaySuffix}${
+        primaryReset ? `\n${primaryReset}` : ""
+      }`}
       data-tauri-drag-region
       style={{ "--brand": brand } as CSSProperties}
     >
-      <span className="floatbar__provider-icon" data-tauri-drag-region>
+      <span
+        className="floatbar__provider-icon"
+        data-tauri-drag-region
+        style={{ width: iconSize, height: iconSize }}
+      >
         <ProviderIcon providerId={provider.providerId} size={iconSize} />
       </span>
       <span className="floatbar__text" data-tauri-drag-region>
         <span className="floatbar__pct" data-tauri-drag-region>
           {label}
         </span>
-        {showResetInline && resetText && inlineReset && (
-          <span
-            className="floatbar__reset"
-            title={resetText}
-            aria-label={resetText}
-            data-tauri-drag-region
-          >
-            <ResetIcon size={resetIconSize} />
-            <span className="floatbar__reset-time" data-tauri-drag-region>
-              {inlineReset}
-            </span>
-          </span>
-        )}
+        {resets.map((reset) => (
+          <ResetChip
+            key={reset.key}
+            window={reset.window}
+            /* A single reset needs no name — it is the pill's own quota. Two or
+               more do, otherwise the pill shows unlabelled rival deadlines. */
+            label={resets.length > 1 ? reset.label : null}
+            relative={display.resetTimeRelative}
+            iconSize={resetIconSize}
+          />
+        ))}
       </span>
     </div>
   );
@@ -292,7 +399,20 @@ export default function FloatBar({ state }: { state: BootstrapState }) {
   const filterIds = settings.floatBarProviderIds;
   const scale = Math.max(0.75, Math.min(2, settings.floatBarScale / 100));
   const showResetInline = settings.floatBarShowResetInline;
+  // Default to the pre-setting behaviour when the key is absent, so an older
+  // settings file keeps showing exactly the reset it showed yesterday.
+  const resetWindows = settings.floatBarResetWindows ?? ["primary"];
+  const windowLabel = useCallback(
+    (kind: FloatBarResetWindow) => t(RESET_WINDOW_LABEL_KEYS[kind]),
+    [t],
+  );
   const showCost = settings.floatBarShowCost;
+  // The floating bar's own used/remaining and reset-format choice. Changing the
+  // dashboard's or the taskbar strip's preference must not move this bar.
+  const display = useMemo(
+    () => quotaDisplayContext(settings, "floatBar"),
+    [settings],
+  );
   const visible = useMemo(() => {
     const enabled = new Set(settings.enabledProviders);
     let list = providers.filter((p) => enabled.has(p.providerId));
@@ -399,7 +519,8 @@ export default function FloatBar({ state }: { state: BootstrapState }) {
     style,
     scale,
     showResetInline,
-    settings.resetTimeRelative,
+    resetWindows.join(","),
+    display.resetTimeRelative,
   ]);
 
   useEffect(() => {
@@ -419,8 +540,6 @@ export default function FloatBar({ state }: { state: BootstrapState }) {
     [],
   );
 
-  const highRemaining = 100 - settings.highUsageThreshold;
-  const critRemaining = 100 - settings.criticalUsageThreshold;
   const opacityFraction = Math.max(0.3, Math.min(1, settings.floatBarOpacity / 100));
 
   return (
@@ -446,12 +565,11 @@ export default function FloatBar({ state }: { state: BootstrapState }) {
             <ProviderPill
               key={providerCostKey(p)}
               provider={p}
-              highRemaining={highRemaining}
-              critRemaining={critRemaining}
-              showAsUsed={settings.showAsUsed}
+              display={display}
               scale={scale}
               showResetInline={showResetInline}
-              resetRelative={settings.resetTimeRelative}
+              resetWindows={resetWindows}
+              windowLabel={windowLabel}
               usedSuffix={t("PanelUsedSuffix")}
               remainingSuffix={t("FloatBarRemainingSuffix")}
             />

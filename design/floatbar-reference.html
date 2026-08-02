@@ -1,0 +1,416 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>TokenBar FloatBar 参考稿</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        --canvas: #050505;
+        --card: #f4f4f6;
+        --panel: #e9e9ec;
+        --line: #d4d4d7;
+        --ink: #202023;
+        --muted: #6d6d74;
+        --blue: #087ff5;
+        --blue-soft: #dceeff;
+        --green: #168d45;
+        --orange: #d97956;
+        --shadow: 0 20px 45px rgb(0 0 0 / 32%), 0 2px 5px rgb(0 0 0 / 14%);
+      }
+
+      * { box-sizing: border-box; }
+
+      .icon-sprite { position: absolute; width: 0; height: 0; overflow: hidden; }
+
+      body {
+        margin: 0;
+        min-width: 320px;
+        background: var(--canvas);
+        color: #dedee2;
+        font-family: "Segoe UI Variable", "Microsoft YaHei UI", "PingFang SC", sans-serif;
+        letter-spacing: -0.015em;
+      }
+
+      .page {
+        width: min(100%, 760px);
+        margin: 0 auto;
+        padding: 42px 24px 72px;
+      }
+
+      .page-header {
+        display: flex;
+        align-items: end;
+        justify-content: space-between;
+        gap: 18px;
+        margin-bottom: 36px;
+      }
+
+      .eyebrow {
+        margin: 0 0 8px;
+        color: #85858b;
+        font-size: 12px;
+        letter-spacing: .16em;
+        text-transform: uppercase;
+      }
+
+      h1 {
+        margin: 0;
+        color: #f1f1f3;
+        font-size: clamp(24px, 5vw, 36px);
+        font-weight: 720;
+        letter-spacing: -0.045em;
+      }
+
+      .intro {
+        max-width: 360px;
+        margin: 0;
+        color: #85858b;
+        font-size: 13px;
+        line-height: 1.55;
+        text-align: right;
+      }
+
+      .density-switcher {
+        display: flex;
+        gap: 7px;
+        width: fit-content;
+        margin: 0 auto 42px;
+        padding: 5px;
+        border: 1px solid #29292d;
+        border-radius: 14px;
+        background: #111113;
+      }
+
+      .density-switcher button {
+        border: 0;
+        border-radius: 9px;
+        padding: 9px 16px;
+        color: #85858b;
+        background: transparent;
+        font: inherit;
+        font-size: 13px;
+        cursor: pointer;
+        transition: .18s ease;
+      }
+
+      .density-switcher button:hover { color: #f4f4f6; }
+      .density-switcher button[aria-selected="true"] {
+        color: #fff;
+        background: #2d2d31;
+        box-shadow: inset 0 0 0 1px #444449;
+      }
+
+      .specimen { display: none; }
+      .specimen.is-active { display: block; animation: rise .32s ease both; }
+
+      .specimen-label {
+        margin: 0 0 12px;
+        color: #86868c;
+        font-size: 16px;
+        font-weight: 680;
+        letter-spacing: .02em;
+      }
+
+      .float-card {
+        overflow: hidden;
+        width: min(100%, 660px);
+        margin: 0 auto;
+        border: 1px solid #c9c9cd;
+        border-radius: 25px;
+        padding: 28px;
+        color: var(--ink);
+        background: var(--card);
+        box-shadow: var(--shadow);
+      }
+
+      .provider-header {
+        display: flex;
+        align-items: center;
+        gap: 17px;
+        margin-bottom: 25px;
+      }
+
+      .provider-mark {
+        display: grid;
+        flex: 0 0 45px;
+        width: 45px;
+        height: 45px;
+        place-items: center;
+        border-radius: 11px;
+        color: #fff;
+        background: var(--orange);
+        font-size: 0;
+      }
+
+      .provider-glyph { width: 26px; height: 26px; fill: none; stroke: rgb(255 255 255 / 94%); stroke-width: 2.2; stroke-linecap: round; stroke-linejoin: round; }
+
+      .provider-name { margin: 0; font-size: 25px; font-weight: 700; letter-spacing: -0.04em; }
+      .updated { margin-left: auto; color: var(--muted); font-size: 18px; }
+
+      .quota-panel,
+      .usage-panel {
+        border-radius: 21px;
+        padding: 25px 25px 22px;
+        background: var(--panel);
+      }
+
+      .quota-row,
+      .metric-row,
+      .usage-heading,
+      .reserve-row {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 18px;
+      }
+
+      .quota-label,
+      .usage-label { color: var(--muted); font-size: 18px; }
+      .reset { color: var(--muted); font-size: 18px; white-space: nowrap; }
+      .percentage { margin: 16px 0 13px; font-size: 54px; font-weight: 760; letter-spacing: -0.065em; }
+
+      .bar {
+        height: 12px;
+        overflow: hidden;
+        border-radius: 99px;
+        background: #d2d2d5;
+      }
+
+      .bar > span { display: block; height: 100%; border-radius: inherit; background: var(--blue); }
+      .bar--weekly > span { width: 52%; }
+      .bar--five-hour > span { width: 22%; }
+
+      .divider { height: 2px; margin: 22px 0; background: var(--line); }
+      .weekly-value { margin: 8px 0 12px; font-size: 31px; font-weight: 730; letter-spacing: -0.05em; }
+
+      /* Codex-only, detailed-density-only: additional manual reset credits.
+         Bordered pill (not a plain row) so it reads as its own "extra" unit
+         rather than another quota window — mirrors production's
+         .menu-card__reset-credits. Compact/minimal omit this entirely. */
+      .reset-credits {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 14px;
+        margin-top: 4px;
+        padding: 14px 16px;
+        border: 1px solid var(--line);
+        border-radius: 14px;
+      }
+      .reset-credits span { color: var(--muted); font-size: 18px; }
+      .reset-credits strong { font-size: 20px; font-weight: 720; letter-spacing: -0.02em; }
+
+      .usage-panel { margin-top: 20px; }
+      .usage-row { display: grid; grid-template-columns: 28px minmax(0, 1fr) auto; align-items: center; gap: 9px; }
+      .usage-row + .usage-row { margin-top: 18px; }
+      .usage-icon { width: 23px; height: 23px; color: #717177; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+      .usage-title { color: var(--muted); font-size: 19px; }
+      .usage-value { font-size: 26px; font-weight: 720; white-space: nowrap; }
+      .usage-value small { color: var(--muted); font-size: 18px; font-weight: 500; }
+      .usage-subline { grid-column: 2 / -1; margin-top: -3px; color: var(--muted); font-size: 17px; }
+      .usage-model { grid-column: 2 / -1; margin-top: -2px; color: var(--muted); font-size: 17px; }
+      .usage-model strong { color: #55555b; font-weight: 680; }
+
+      .forecast { display: grid; grid-template-columns: 28px minmax(0, 1fr) auto; align-items: center; gap: 9px; }
+      .forecast .usage-icon { color: var(--green); }
+      .forecast-copy { color: var(--green); font-size: 19px; }
+      .forecast-copy strong { font-weight: 700; }
+      .forecast-value { color: var(--muted); font-size: 18px; white-space: nowrap; }
+      .forecast-track { grid-column: 2 / -1; position: relative; margin-top: 2px; }
+      .forecast-track .bar > span { width: 52%; }
+      .forecast-marker { position: absolute; top: -5px; left: 52%; width: 3px; height: 22px; background: #5c5c61; }
+
+      .compact-card { padding: 25px; }
+      .compact-card .provider-header { margin-bottom: 19px; }
+      .compact-card .provider-mark { flex-basis: 37px; width: 37px; height: 37px; border-radius: 10px; }
+      .compact-card .provider-name { font-size: 21px; }
+      .compact-card .updated { font-size: 16px; }
+      .compact-card .quota-panel { padding: 21px; }
+      .compact-card .quota-label,
+      .compact-card .reset { font-size: 16px; }
+      .compact-card .percentage { margin: 13px 0 11px; font-size: 44px; }
+      .compact-card .bar { height: 9px; }
+      .compact-card .divider { margin: 18px 0; }
+      .compact-card .weekly-value { display: none; }
+      .compact-card .weekly-line {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        margin-top: 19px;
+      }
+      /* Sibling, not a child — .bar sits directly after .weekly-line in the
+         markup, so the gap has to land on the adjacent-sibling combinator. */
+      .compact-card .weekly-line + .bar { margin-top: 11px; }
+      .compact-card .usage-panel { display: grid; grid-template-columns: repeat(3, 1fr); gap: 11px; margin-top: 14px; padding: 13px; background: transparent; }
+      .compact-card .metric { min-width: 0; border-radius: 15px; padding: 17px 8px 14px; text-align: center; background: var(--panel); }
+      .compact-card .metric-icon { width: 20px; height: 20px; color: #68686d; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+      .compact-card .metric-value { display: block; margin-top: 3px; font-size: 23px; font-weight: 720; }
+      .compact-card .metric-value small { display: block; margin-top: 3px; color: var(--muted); font-size: 15px; font-weight: 450; }
+      .compact-card .metric--green .metric-value { color: var(--green); }
+
+      .minimal-card { padding: 23px 27px 24px; }
+      .minimal-card .provider-header { margin-bottom: 23px; }
+      .minimal-card .provider-mark { flex-basis: 36px; width: 36px; height: 36px; border-radius: 9px; }
+      .minimal-card .provider-name { font-size: 22px; }
+      .minimal-card .updated { font-size: 16px; }
+      .minimal-card .quota-label { font-size: 17px; }
+      .minimal-card .reset { display: none; }
+      .minimal-card .percentage { margin: 13px 0 13px; font-size: 55px; }
+      .minimal-card .bar { height: 10px; }
+      .minimal-card .weekly-line { display: flex; align-items: center; justify-content: space-between; margin-top: 18px; color: var(--muted); font-size: 17px; }
+      .minimal-card .usage-panel { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 21px; padding: 0; background: transparent; }
+      .minimal-card .metric { color: var(--muted); font-size: 17px; }
+      .minimal-card .metric strong { color: var(--ink); font-size: 21px; }
+      .minimal-card .metric--green,
+      .minimal-card .metric--green strong { color: var(--green); }
+      .minimal-card .weekly-line .metric-icon { width: 17px; height: 17px; vertical-align: -3px; }
+
+      .notes {
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 12px;
+        margin: 40px auto 0;
+        color: #77777d;
+        font-size: 12px;
+        line-height: 1.45;
+      }
+
+      .note { border-top: 1px solid #26262a; padding-top: 12px; }
+      .note strong { display: block; margin-bottom: 3px; color: #c4c4c8; font-weight: 600; }
+
+      @keyframes rise { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+
+      @media (max-width: 620px) {
+        .page { padding: 28px 15px 54px; }
+        .page-header { display: block; }
+        .intro { margin-top: 13px; text-align: left; }
+        .density-switcher { margin-bottom: 30px; }
+        .density-switcher button { padding: 8px 11px; }
+        .float-card { border-radius: 20px; padding: 18px; }
+        .provider-header { gap: 12px; margin-bottom: 19px; }
+        .provider-mark { flex-basis: 37px; width: 37px; height: 37px; }
+        .provider-name { font-size: 21px; }
+        .updated { font-size: 14px; }
+        .quota-panel, .usage-panel { padding: 18px; border-radius: 16px; }
+        .quota-label, .reset, .usage-label, .forecast-copy { font-size: 15px; }
+        .percentage { font-size: 46px; }
+        .usage-value { font-size: 21px; }
+        .usage-value small, .usage-subline, .usage-model, .forecast-value { font-size: 14px; }
+        .notes { grid-template-columns: 1fr; }
+      }
+    </style>
+  </head>
+  <body>
+    <svg class="icon-sprite" aria-hidden="true" width="0" height="0">
+      <symbol id="icon-speed" viewBox="0 0 24 24"><path d="M3 12h3l2-5 4 10 2-5h7" /></symbol>
+      <symbol id="icon-tokens" viewBox="0 0 24 24"><path d="M5 20V11M12 20V5M19 20v-8M3 20h18" /></symbol>
+      <symbol id="icon-forecast" viewBox="0 0 24 24"><path d="M4 16l5-5 4 3 7-7M15 7h5v5" /></symbol>
+      <symbol id="icon-support" viewBox="0 0 24 24"><path d="M5 12a7 7 0 0 1 14 0v5M5 14H3v4h4v-4M19 14h2v4h-4v-4" /></symbol>
+      <symbol id="icon-claude" viewBox="0 0 24 24"><path d="M12 2v20M2 12h20M4.9 4.9l14.2 14.2M19.1 4.9L4.9 19.1" /></symbol>
+    </svg>
+    <main class="page">
+      <header class="page-header">
+        <div>
+          <p class="eyebrow">TokenBar / FloatBar reference</p>
+          <h1>悬浮窗密度参考</h1>
+        </div>
+        <p class="intro">静态视觉稿。后续接入真实服务商数据时，只替换数据层，不改变卡片结构。</p>
+      </header>
+
+      <nav class="density-switcher" aria-label="切换展示密度" role="tablist">
+        <button type="button" role="tab" aria-selected="true" data-density="detail">详细</button>
+        <button type="button" role="tab" aria-selected="false" data-density="compact">紧凑</button>
+        <button type="button" role="tab" aria-selected="false" data-density="minimal">极简</button>
+      </nav>
+
+      <section class="specimen is-active" data-specimen="detail" role="tabpanel">
+        <h2 class="specimen-label">详细 · 最终版</h2>
+        <article class="float-card">
+          <header class="provider-header">
+            <span class="provider-mark" aria-label="Claude"><svg class="provider-glyph"><use href="#icon-claude"></use></svg></span>
+            <h3 class="provider-name">Claude</h3>
+            <span class="updated">3 分钟前更新</span>
+          </header>
+          <section class="quota-panel" aria-label="额度使用情况">
+            <div class="quota-row"><span class="quota-label">5 小时额度</span><span class="reset">3小时57分后重置</span></div>
+            <div class="percentage">22%</div>
+            <div class="bar bar--five-hour"><span></span></div>
+            <div class="divider"></div>
+            <div class="quota-row"><span class="quota-label">周额度</span><span class="reset">3天2小时后重置</span></div>
+            <div class="weekly-value">52%</div>
+            <div class="bar bar--weekly"><span></span></div>
+            <div class="divider"></div>
+            <div class="reset-credits"><span class="quota-label">额外重置次数</span><strong>剩余 3 次</strong></div>
+          </section>
+          <section class="usage-panel" aria-label="本地用量情况">
+            <div class="usage-row">
+              <svg class="usage-icon" aria-hidden="true"><use href="#icon-speed"></use></svg><span class="usage-title">最近输出速度</span><strong class="usage-value">64.9 <small>t/s</small></strong>
+            </div>
+            <div class="divider"></div>
+            <div class="usage-row">
+              <svg class="usage-icon" aria-hidden="true"><use href="#icon-tokens"></use></svg><span class="usage-title">近7天使用</span><strong class="usage-value">921,605 <small>≈92.2万</small></strong>
+              <span class="usage-subline">等额 API 价值 ≈ $151.53 · ¥1091.05</span>
+              <span class="usage-model"><strong>热门模型：</strong> claude-opus-4-8</span>
+            </div>
+            <div class="divider"></div>
+            <div class="forecast">
+              <svg class="usage-icon" aria-hidden="true"><use href="#icon-forecast"></use></svg><span class="forecast-copy"><strong>本周实际用量</strong>　52% · 预计 49.8%（超前 2.2%）</span>
+              <span class="forecast-value"></span>
+              <div class="forecast-track"><div class="bar bar--weekly"><span></span></div><i class="forecast-marker" aria-hidden="true"></i></div>
+              <svg class="usage-icon" aria-hidden="true"><use href="#icon-support"></use></svg><span class="forecast-copy">足以支持到重置</span><span class="forecast-value">≈ 74 小时</span>
+            </div>
+          </section>
+        </article>
+      </section>
+
+      <section class="specimen" data-specimen="compact" role="tabpanel">
+        <h2 class="specimen-label">紧凑 · 最终版</h2>
+        <article class="float-card compact-card">
+          <header class="provider-header"><span class="provider-mark" aria-label="Claude"><svg class="provider-glyph"><use href="#icon-claude"></use></svg></span><h3 class="provider-name">Claude</h3><span class="updated">3分钟前</span></header>
+          <section class="quota-panel" aria-label="额度使用情况">
+            <div class="quota-row"><span class="quota-label">5小时额度</span><span class="reset">3h57m 后重置</span></div>
+            <div class="percentage">22%</div><div class="bar bar--five-hour"><span></span></div>
+            <div class="weekly-line"><span>周额度</span><strong>52%</strong></div><div class="bar bar--weekly"><span></span></div>
+          </section>
+          <section class="usage-panel" aria-label="摘要指标">
+            <div class="metric"><svg class="metric-icon" aria-hidden="true"><use href="#icon-speed"></use></svg><strong class="metric-value">64.9<small>t/s</small></strong></div>
+            <div class="metric"><svg class="metric-icon" aria-hidden="true"><use href="#icon-tokens"></use></svg><strong class="metric-value">92.2万<small>近7天</small></strong></div>
+            <div class="metric metric--green"><svg class="metric-icon" aria-hidden="true"><use href="#icon-forecast"></use></svg><strong class="metric-value">+2.2%<small>略超前</small></strong></div>
+          </section>
+        </article>
+      </section>
+
+      <section class="specimen" data-specimen="minimal" role="tabpanel">
+        <h2 class="specimen-label">极简 · 最终版</h2>
+        <article class="float-card minimal-card">
+          <header class="provider-header"><span class="provider-mark" aria-label="Claude"><svg class="provider-glyph"><use href="#icon-claude"></use></svg></span><h3 class="provider-name">Claude</h3><span class="updated">3分钟前</span></header>
+          <section aria-label="主要额度">
+            <div class="quota-label">5 小时额度</div><div class="percentage">22%</div><div class="bar bar--five-hour"><span></span></div>
+            <div class="weekly-line"><span>周额度 52%</span><span><svg class="metric-icon" aria-hidden="true"><use href="#icon-speed"></use></svg> 64.9 t/s</span><span class="metric--green"><svg class="metric-icon" aria-hidden="true"><use href="#icon-forecast"></use></svg> +2.2%</span></div>
+          </section>
+        </article>
+      </section>
+
+      <aside class="notes" aria-label="设计说明">
+        <div class="note"><strong>固定信息层</strong>服务商、更新时间和额度进度始终保留。</div>
+        <div class="note"><strong>动态摘要层</strong>输出速度、近7天用量和预测按密度切换。</div>
+        <div class="note"><strong>颜色语义</strong>蓝色代表使用进度，绿色代表节奏领先或足够使用。</div>
+        <div class="note"><strong>按条件展示</strong>「额外重置次数」仅 Codex 提供该数据时展示，且只出现在详细密度的额度面板内；紧凑、极简两档均省略。</div>
+      </aside>
+    </main>
+
+    <script>
+      const buttons = [...document.querySelectorAll("[data-density]")];
+      const specimens = [...document.querySelectorAll("[data-specimen]")];
+      buttons.forEach((button) => {
+        button.addEventListener("click", () => {
+          const density = button.dataset.density;
+          buttons.forEach((item) => item.setAttribute("aria-selected", String(item === button)));
+          specimens.forEach((item) => item.classList.toggle("is-active", item.dataset.specimen === density));
+        });
+      });
+    </script>
+  </body>
+</html>

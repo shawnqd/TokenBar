@@ -12,29 +12,14 @@ use super::transition::{
     monitor_for_preserved_visible_position, reclamp_preserved_visible_position,
     recovery_snapshot_for_failed_transition, resolve_transition_position,
     resolve_transition_request, restore_recovery_surface, restore_surface_snapshot,
-    should_force_tray_panel_reveal, should_synthesize_default_position,
+    should_synthesize_default_position,
 };
-use super::window::{
-    hide_to_tray_state, logical_size_from_geometry, prepare_hide_to_tray_if_current,
-};
+use super::window::{logical_size_from_geometry, prepare_hide_to_tray_if_current};
 
 use crate::state::AppState;
 use crate::surface::{SurfaceMode, SurfaceTransition};
 use crate::surface_target::SurfaceTarget;
 use crate::window_positioner::{self, Rect};
-
-#[test]
-fn hide_to_tray_resets_hidden_target_to_summary() {
-    let mut state = AppState::new();
-    state.current_target = SurfaceTarget::Settings {
-        tab: "about".into(),
-    };
-
-    hide_to_tray_state(&mut state);
-
-    assert_eq!(state.surface_machine.current(), SurfaceMode::Hidden);
-    assert_eq!(state.current_target, SurfaceTarget::Summary);
-}
 
 #[test]
 fn conditional_hide_to_tray_updates_matching_surface() {
@@ -68,34 +53,6 @@ fn conditional_hide_to_tray_leaves_non_matching_surface_alone() {
 // `main` window's TrayPanel state no longer exists — the flyout is its own
 // dedicated window now (see `shell::flyout_window::toggle_with_blur_consume`
 // and its own test module in flyout_window.rs).
-
-#[test]
-fn tray_reveal_fallback_only_for_hidden_tray_panel() {
-    assert!(should_force_tray_panel_reveal(
-        SurfaceMode::TrayPanel,
-        false,
-        Some((328, 776)),
-    ));
-    assert!(!should_force_tray_panel_reveal(
-        SurfaceMode::TrayPanel,
-        true,
-        Some((328, 776)),
-    ));
-    assert!(!should_force_tray_panel_reveal(
-        SurfaceMode::Hidden,
-        false,
-        Some((16, 16)),
-    ));
-}
-
-#[test]
-fn tray_reveal_fallback_recovers_tiny_shell_window() {
-    assert!(should_force_tray_panel_reveal(
-        SurfaceMode::TrayPanel,
-        true,
-        Some((16, 16)),
-    ));
-}
 
 #[test]
 fn tray_show_grace_is_based_on_actual_show_time() {
@@ -435,7 +392,7 @@ fn visible_surface_position_without_anchor_prefers_primary_over_offview_current_
     // negative coordinates (real machine: DISPLAY5 at x -2048..0). With no tray
     // anchor (right-click menu / proof launch), the surface must open on the
     // primary (tray/taskbar) monitor — not the off-view secondary, which is the
-    // "Pop Out Dashboard does nothing" bug.
+    // "Open Tray Panel does nothing" bug.
     let offview_current = MonitorPlacement {
         bounds: Rect {
             x: -2048,
@@ -941,10 +898,9 @@ fn popout_layout_size_uses_remembered_logical_geometry() {
 }
 
 #[test]
-fn tray_panel_layout_uses_remembered_size() {
-    // The "Pop Out Dashboard" flyout now honors the user's remembered SIZE.
-    // (Position is still re-anchored above the tray via default_surface_position,
-    // which ignores the stored x/y — only the size is taken from geometry.)
+fn tray_panel_layout_uses_fixed_size() {
+    // The tray panel is intentionally fixed to the reference layout. Stored
+    // geometry must not change its size or reintroduce the old resize path.
     let props = SurfaceMode::TrayPanel.window_properties();
     let stored = crate::geometry_store::StoredGeometry {
         x: 0,
@@ -955,5 +911,5 @@ fn tray_panel_layout_uses_remembered_size() {
 
     let size = logical_size_from_geometry(SurfaceMode::TrayPanel, &props, Some(stored));
 
-    assert_eq!(size, (640.0, 720.0));
+    assert_eq!(size, (328.0, 776.0));
 }

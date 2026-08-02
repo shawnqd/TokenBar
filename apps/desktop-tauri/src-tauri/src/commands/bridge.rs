@@ -2,11 +2,51 @@ use super::*;
 
 // ── Bridge snapshot types ────────────────────────────────────────────
 
+/// A taskbar entry as the WebView sees it.
+///
+/// `codexbar::settings::TaskbarEntry` is the ON-DISK shape and stays snake_case
+/// like the rest of the settings file. `#[serde(rename_all = "camelCase")]` on
+/// the snapshot struct renames only that struct's own fields, never a nested
+/// type's, so sending the settings type straight through shipped
+/// `{"provider_id": ...}` to a frontend reading `providerId` — which is why the
+/// provider dropdown rendered blank. Every other nested bridge type carries its
+/// own rename for exactly this reason; this one was missing it.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TaskbarEntryBridge {
+    pub provider_id: String,
+    pub window: String,
+}
+
+impl From<&codexbar::settings::TaskbarEntry> for TaskbarEntryBridge {
+    fn from(entry: &codexbar::settings::TaskbarEntry) -> Self {
+        Self {
+            provider_id: entry.provider_id.clone(),
+            window: entry.window.clone(),
+        }
+    }
+}
+
+impl From<&TaskbarEntryBridge> for codexbar::settings::TaskbarEntry {
+    fn from(entry: &TaskbarEntryBridge) -> Self {
+        Self {
+            provider_id: entry.provider_id.clone(),
+            window: entry.window.clone(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RateWindowSnapshot {
     pub used_percent: f64,
     pub remaining_percent: f64,
+    /// Which cycle this window is, decided once here so no surface has to work
+    /// it out from `window_minutes` for itself. See [`crate::quota_cycle`] for
+    /// why that matters — three surfaces used to derive it independently and
+    /// disagreed. `None` for a window that is not a dated cycle, or whose cycle
+    /// fits no named band; callers then render it without a cycle word.
+    pub kind: Option<&'static str>,
     pub window_minutes: Option<u32>,
     pub resets_at: Option<String>,
     pub reset_description: Option<String>,
@@ -19,10 +59,23 @@ pub struct RateWindowSnapshot {
 }
 
 impl RateWindowSnapshot {
+    /// Build a snapshot for a window whose slot the provider does not name.
     pub(super) fn from_rate_window(rw: &RateWindow) -> Self {
+        Self::from_rate_window_labelled(rw, None)
+    }
+
+    /// Build a snapshot, classifying it with the provider's own name for the
+    /// slot it sits in.
+    ///
+    /// The label is the second identification source and for some providers the
+    /// only one: a percentage published without a declared length is nameless
+    /// without it. Passing it here rather than at the call sites is what lets
+    /// every consumer read `kind` instead of re-deriving it.
+    pub(super) fn from_rate_window_labelled(rw: &RateWindow, label: Option<&str>) -> Self {
         Self {
             used_percent: rw.used_percent,
             remaining_percent: rw.remaining_percent(),
+            kind: crate::quota_cycle::classify(rw.window_minutes, label),
             window_minutes: rw.window_minutes,
             resets_at: rw.resets_at.map(|dt| dt.to_rfc3339()),
             reset_description: rw.reset_description.clone(),
@@ -81,6 +134,10 @@ pub struct PaceSnapshot {
     pub eta_seconds: Option<f64>,
     pub expected_used_percent: f64,
     pub actual_used_percent: f64,
+    /// How many times the current burn rate could grow and still reach reset.
+    /// `None` when the ratio is meaningless, so the UI can never show a
+    /// fabricated headroom figure.
+    pub speed_multiplier_to_reset: Option<f64>,
 }
 
 /// A frontend-friendly snapshot of one provider's usage data.
@@ -130,15 +187,33 @@ impl ProviderUsageSnapshot {
     ) -> Self {
         let usage = &result.usage;
 
-        let primary_pace = codexbar::core::UsagePace::weekly(&usage.primary, None, 10080);
+        // The pace block answers "how far through the WEEKLY budget am I,
+        // versus how far through the week?", so it must read the weekly
+        // window. Providers disagree on which slot carries it: Codex reports
+        // the weekly quota as `primary`, while Claude's `primary` is its
+        // 5-hour session window and the weekly one lands in `secondary`.
+        // Selecting by window LENGTH rather than by slot keeps this on the
+        // weekly window for every provider — reading `primary` unconditionally
+        // made Claude report its 5-hour usage as the weekly pace. A window
+        // that declares no length is still treated as weekly, preserving the
+        // previous `default_window_minutes` behaviour.
+        const WEEKLY_WINDOW_MINUTES: u32 = 7 * 24 * 60;
+        let weekly_window = [Some(&usage.primary), usage.secondary.as_ref()]
+            .into_iter()
+            .flatten()
+            .find(|w| w.window_minutes.is_none_or(|m| m >= WEEKLY_WINDOW_MINUTES));
 
-        let pace = primary_pace.as_ref().map(|p| PaceSnapshot {
+        let weekly_pace = weekly_window
+            .and_then(|w| codexbar::core::UsagePace::weekly(w, None, WEEKLY_WINDOW_MINUTES));
+
+        let pace = weekly_pace.as_ref().map(|p| PaceSnapshot {
             stage: pace_stage_str(p.stage),
             delta_percent: p.delta_percent,
             will_last_to_reset: p.will_last_to_reset,
             eta_seconds: p.eta_seconds,
             expected_used_percent: p.expected_used_percent,
             actual_used_percent: p.actual_used_percent,
+            speed_multiplier_to_reset: p.speed_multiplier_to_reset,
         });
 
         // Compute pace for secondary window (weekly) to derive reserve info
@@ -147,10 +222,17 @@ impl ProviderUsageSnapshot {
             .as_ref()
             .and_then(|sw| codexbar::core::UsagePace::weekly(sw, None, 10080));
 
-        let primary_snap = RateWindowSnapshot::from_rate_window(&usage.primary);
+        // The slot labels are the provider's own names for these two windows,
+        // and they are the only identification a provider that publishes no
+        // length has. They are already sent as `primary_label`/`secondary_label`
+        // below; classifying with them here is what lets every surface read the
+        // answer instead of recomputing it.
+        let primary_snap =
+            RateWindowSnapshot::from_rate_window_labelled(&usage.primary, Some(metadata.session_label));
 
         let secondary_snap = usage.secondary.as_ref().map(|sw| {
-            let mut s = RateWindowSnapshot::from_rate_window(sw);
+            let mut s =
+                RateWindowSnapshot::from_rate_window_labelled(sw, Some(metadata.weekly_label));
             if let Some(ref p) = secondary_pace {
                 s = s.with_pace_reserve(p);
             }
@@ -181,7 +263,10 @@ impl ProviderUsageSnapshot {
                 .map(|extra| NamedRateWindowSnapshot {
                     id: extra.id.clone(),
                     title: extra.title.clone(),
-                    window: RateWindowSnapshot::from_rate_window(&extra.window),
+                    window: RateWindowSnapshot::from_rate_window_labelled(
+                        &extra.window,
+                        Some(extra.title.as_str()),
+                    ),
                 })
                 .collect(),
             cost: result.cost.as_ref().map(|c| CostSnapshotBridge {
@@ -215,6 +300,9 @@ impl ProviderUsageSnapshot {
             primary: RateWindowSnapshot {
                 used_percent: 0.0,
                 remaining_percent: 100.0,
+                // A failed fetch published no window, so there is no cycle to
+                // name. The error is what this snapshot carries.
+                kind: None,
                 window_minutes: None,
                 resets_at: None,
                 reset_description: None,
@@ -408,7 +496,6 @@ pub struct SettingsSnapshot {
     tray_icon_mode: &'static str,
     switcher_shows_icons: bool,
     menu_bar_shows_highest_usage: bool,
-    menu_bar_shows_percent: bool,
     show_as_used: bool,
     show_all_token_accounts_in_menu: bool,
     enable_animations: bool,
@@ -438,7 +525,24 @@ pub struct SettingsSnapshot {
     float_bar_provider_ids: Vec<String>,
     float_bar_dark_text: bool,
     float_bar_show_reset_inline: bool,
+    float_bar_reset_windows: Vec<String>,
     float_bar_show_cost: bool,
+    taskbar_widget_enabled: bool,
+    taskbar_widget_position: String,
+    taskbar_widget_font_weight: u16,
+    taskbar_widget_content: String,
+    taskbar_widget_entries: Vec<TaskbarEntryBridge>,
+    taskbar_widget_font_family: String,
+    taskbar_widget_font_size: u8,
+    taskbar_widget_width: u16,
+    taskbar_widget_text_align: String,
+    // Per-component quota presentation. `show_as_used` / `reset_time_relative`
+    // above are legacy migration sources and are no longer read by any surface.
+    float_bar_show_as_used: bool,
+    float_bar_reset_time_relative: bool,
+    dashboard_show_as_used: bool,
+    dashboard_reset_time_relative: bool,
+    taskbar_show_as_used: bool,
 }
 
 #[tauri::command]
@@ -493,7 +597,6 @@ impl From<Settings> for SettingsSnapshot {
             tray_icon_mode: tray_icon_mode_label(settings.tray_icon_mode),
             switcher_shows_icons: settings.switcher_shows_icons,
             menu_bar_shows_highest_usage: settings.menu_bar_shows_highest_usage,
-            menu_bar_shows_percent: settings.menu_bar_shows_percent,
             show_as_used: settings.show_as_used,
             show_all_token_accounts_in_menu: settings.show_all_token_accounts_in_menu,
             enable_animations: settings.enable_animations,
@@ -523,7 +626,26 @@ impl From<Settings> for SettingsSnapshot {
             float_bar_provider_ids: settings.float_bar_provider_ids,
             float_bar_dark_text: settings.float_bar_dark_text,
             float_bar_show_reset_inline: settings.float_bar_show_reset_inline,
+            float_bar_reset_windows: settings.float_bar_reset_windows.clone(),
             float_bar_show_cost: settings.float_bar_show_cost,
+            taskbar_widget_enabled: settings.taskbar_widget_enabled,
+            taskbar_widget_position: settings.taskbar_widget_position,
+            taskbar_widget_font_weight: settings.taskbar_widget_font_weight,
+            taskbar_widget_content: settings.taskbar_widget_content,
+            taskbar_widget_entries: settings
+                .taskbar_widget_entries
+                .iter()
+                .map(TaskbarEntryBridge::from)
+                .collect(),
+            taskbar_widget_font_family: settings.taskbar_widget_font_family.clone(),
+            taskbar_widget_font_size: settings.taskbar_widget_font_size,
+            taskbar_widget_width: settings.taskbar_widget_width,
+            taskbar_widget_text_align: settings.taskbar_widget_text_align,
+            float_bar_show_as_used: settings.float_bar_show_as_used,
+            float_bar_reset_time_relative: settings.float_bar_reset_time_relative,
+            dashboard_show_as_used: settings.dashboard_show_as_used,
+            dashboard_reset_time_relative: settings.dashboard_reset_time_relative,
+            taskbar_show_as_used: settings.taskbar_show_as_used,
         }
     }
 }
@@ -619,6 +741,7 @@ mod tests {
         RateWindowSnapshot {
             used_percent,
             remaining_percent: 100.0 - used_percent,
+            kind: crate::quota_cycle::classify(window_minutes, None),
             window_minutes,
             resets_at: resets_at.map(|dt| dt.to_rfc3339()),
             reset_description,

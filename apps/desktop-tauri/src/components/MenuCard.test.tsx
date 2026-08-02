@@ -19,7 +19,12 @@ vi.mock("@tauri-apps/api/event", () => eventMocks);
 
 import { LocaleProvider } from "../i18n/LocaleProvider";
 import { buildBundle } from "../test/localeHarness";
-import type { LocalUsagePeriod, ProviderUsageSnapshot } from "../types/bridge";
+import type {
+  QuotaCycleKind,
+  LocalUsagePeriod,
+  MenuBarDisplayMode,
+  ProviderUsageSnapshot,
+} from "../types/bridge";
 import MenuCard from "./MenuCard";
 
 function rateWindow(
@@ -32,12 +37,17 @@ function rateWindow(
     reserveWillLastToReset?: boolean;
     reserveEtaSeconds?: number | null;
     windowMinutes?: number | null;
+    kind?: QuotaCycleKind | null;
     resetsAt?: string | null;
   } = {},
 ) {
   return {
     usedPercent,
     remainingPercent: 100 - usedPercent,
+    // Stated, not derived: the backend decides the cycle (`quota_cycle.rs`) and
+    // ships it. A fixture that re-derived it from `windowMinutes` here would be
+    // the fourth copy of the rule this field exists to delete.
+    kind: opts.kind ?? null,
     windowMinutes: opts.windowMinutes ?? null,
     resetsAt: opts.resetsAt ?? null,
     resetDescription: opts.resetDescription ?? null,
@@ -80,18 +90,22 @@ function renderCard(
   snapshot: ProviderUsageSnapshot,
   opts: {
     showAsUsed?: boolean;
-    onLayoutChange?: () => void;
     localUsagePeriod?: LocalUsagePeriod;
+    densityMode?: MenuBarDisplayMode;
   } = {},
 ) {
   return render(
     <LocaleProvider>
       <MenuCard
         provider={snapshot}
-        resetTimeRelative={true}
-        showAsUsed={opts.showAsUsed}
-        onLayoutChange={opts.onLayoutChange}
+        display={{
+          showAsUsed: opts.showAsUsed ?? false,
+          resetTimeRelative: true,
+          highUsageThreshold: 70,
+          criticalUsageThreshold: 90,
+        }}
         localUsagePeriod={opts.localUsagePeriod}
+        densityMode={opts.densityMode}
       />
     </LocaleProvider>,
   );
@@ -129,6 +143,15 @@ describe("MenuCard", () => {
         PanelThirtyDayTokens: "30d tokens",
         PanelTodayBudget: "today",
         PanelUsedSuffix: "used",
+        PanelPaceWeekElapsed: "Week elapsed",
+        QuotaPaceOnPace: "On pace",
+        QuotaPaceInReserve: "in reserve",
+        QuotaPaceInDeficit: "in deficit",
+        PanelPaceOverBy: ", over by",
+        PanelPaceUnderBy: ", under by",
+        DetailPaceWillLastToReset: "Enough to last until the next reset",
+        DetailPaceRunsOutIn: "Runs out in",
+        QuotaForecastUnavailable: "Not enough data to project this week",
       }),
     );
     tauriMocks.getProviderChartData.mockResolvedValue({
@@ -184,6 +207,49 @@ describe("MenuCard", () => {
     expect(fill?.style.width).toBe("35%");
   });
 
+  it("keeps the compact quota block aligned with the reference layout", async () => {
+    const snapshot = provider(null, 78);
+    snapshot.planName = "ChatGPT Plus";
+    snapshot.primary = rateWindow(78, {
+      windowMinutes: 5 * 60,
+      resetDescription: "3h 57m",
+    });
+    snapshot.secondaryLabel = "Weekly";
+    snapshot.secondary = rateWindow(48, {
+      windowMinutes: 7 * 24 * 60, kind: "weekly",
+      resetDescription: "3d 2h",
+    });
+
+    const { container } = renderCard(snapshot, { densityMode: "compact" });
+
+    expect(await screen.findByText("ProviderWeeklyLabel")).toBeInTheDocument();
+    expect(container.querySelector(".menu-card--compact")).toBeInTheDocument();
+    expect(container.querySelector(".menu-card__compact-secondary-track")).toBeInTheDocument();
+    expect(container.querySelector(".provider-quota__fill-label")).toBeNull();
+    expect(screen.queryByText("ChatGPT Plus")).not.toBeInTheDocument();
+  });
+
+  it("scales the detailed provider mark to the reference proportion", async () => {
+    const { container } = renderCard(provider(null, 35), {
+      densityMode: "detailed",
+    });
+
+    expect(await screen.findByText("65%")).toBeInTheDocument();
+    const icon = container.querySelector<HTMLElement>(".menu-card__provider-icon");
+    expect(icon?.style.width).toBe("22px");
+    expect(icon?.style.height).toBe("22px");
+  });
+
+  it("removes the plan badge from the minimal reference tier", async () => {
+    const snapshot = provider(null, 22);
+    snapshot.planName = "ChatGPT Plus";
+    renderCard(snapshot, { densityMode: "minimal", showAsUsed: true });
+
+    expect(await screen.findByText("22%")).toBeInTheDocument();
+    expect(document.querySelector(".menu-card--minimal")).toBeInTheDocument();
+    expect(screen.queryByText("ChatGPT Plus")).not.toBeInTheDocument();
+  });
+
   it("displays over-quota usage without overflowing the bar", async () => {
     renderCard(provider(null, 115, { exhausted: true, resetDescription: "115% used" }), {
       showAsUsed: true,
@@ -230,7 +296,10 @@ describe("MenuCard", () => {
     const snapshot = provider(null, 85);
     snapshot.providerId = "codex";
     snapshot.primaryLabel = "Session";
-    snapshot.primary = rateWindow(85, { windowMinutes: 7 * 24 * 60 });
+    snapshot.primary = rateWindow(85, {
+      kind: "weekly",
+      windowMinutes: 7 * 24 * 60,
+    });
     snapshot.secondaryLabel = "Weekly";
     snapshot.secondary = rateWindow(0);
 
@@ -257,16 +326,6 @@ describe("MenuCard", () => {
     expect(screen.queryByText("Balance")).not.toBeInTheDocument();
     expect(screen.queryByText("0% used")).not.toBeInTheDocument();
     expect(screen.queryByText("CNY balance: ¥38.81")).not.toBeInTheDocument();
-  });
-
-  it("notifies the tray panel after async local usage data loads", async () => {
-    const onLayoutChange = vi.fn();
-
-    renderCard(provider(null), { onLayoutChange });
-
-    await waitFor(() => {
-      expect(onLayoutChange).toHaveBeenCalled();
-    });
   });
 
   it("keeps a local-usage placeholder in place while chart data loads", async () => {
@@ -300,7 +359,7 @@ describe("MenuCard", () => {
     ).not.toBeInTheDocument();
   });
 
-  it("shows the current-pace forecast as remaining hours", async () => {
+  it("states the quota lasts to reset without printing a countdown", async () => {
     const resetAt = new Date(
       Date.now() + 0.6 * 7 * 24 * 60 * 60 * 1000,
     );
@@ -308,15 +367,62 @@ describe("MenuCard", () => {
     snapshot.primary = rateWindow(20, {
       reservePercent: 20,
       reserveWillLastToReset: true,
-      windowMinutes: 7 * 24 * 60,
+      windowMinutes: 7 * 24 * 60, kind: "weekly",
       resetsAt: resetAt.toISOString(),
     });
 
     renderCard(snapshot);
 
-    expect(await screen.findByText("Usage forecast")).toBeInTheDocument();
-    expect(screen.getByText(/≈ .* hours remaining/)).toBeInTheDocument();
-    expect(screen.getByText("Enough to last until the next reset")).toBeInTheDocument();
+    // Item A: the forecast lives INSIDE the weekly quota block, and the bar
+    // itself carries the pace position. The verdict is the macOS-style
+    // reserve/deficit label, not a repeated "week elapsed" yardstick — that
+    // number is now the punched stripe on the bar.
+    //
+    // This window lasts to reset, so per macOS `detailRightLabel` it says so and
+    // shows NO duration. Printing hours here made a healthy quota read like a
+    // countdown to exhaustion.
+    expect(
+      await screen.findByText(/Enough to last until the next reset/),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/hours remaining/)).not.toBeInTheDocument();
+    const state = document.querySelector(".menu-metric__forecast-state");
+    expect(state).not.toBeNull();
+    expect(state?.getAttribute("data-pace-state")).toMatch(/reserve|deficit|on-pace/);
+
+    // The pace position interrupts the fill and carries the same state.
+    const bar = document.querySelector<HTMLElement>(".provider-quota__bar");
+    expect(bar).not.toBeNull();
+    expect(bar?.style.getPropertyValue("--pace-x")).toMatch(/%$/);
+    const track = bar?.querySelector(".provider-quota__track[data-pace]");
+    expect(track).not.toBeNull();
+    const stripe = bar?.querySelector<HTMLElement>(".provider-quota__pace");
+    expect(stripe).not.toBeNull();
+    expect(stripe?.getAttribute("data-pace-state")).toBe(
+      state?.getAttribute("data-pace-state"),
+    );
+
+    // A CSS mask applies to its whole subtree, so the stripe must never live
+    // inside the masked element — that bug erased the stripe and left a bare
+    // gap. The mask is on the fill; the stripe is a sibling of it.
+    const fill = bar?.querySelector<HTMLElement>(".provider-quota__fill");
+    expect(fill).not.toBeNull();
+    expect(fill?.contains(stripe!)).toBe(false);
+
+    // The notch is expressed against the fill's own box, so its position must
+    // convert back to the same place on the track as the stripe.
+    const fillPercent = parseFloat(fill!.style.width);
+    const paceOnTrack = parseFloat(bar!.style.getPropertyValue("--pace-x"));
+    if (fill!.hasAttribute("data-notch")) {
+      const fillX = parseFloat(fill!.style.getPropertyValue("--pace-fill-x"));
+      expect((fillX / 100) * fillPercent).toBeCloseTo(paceOnTrack, 1);
+    } else {
+      // No notch only when the pace sits beyond the fill — the rail is already
+      // bare there, so there is nothing to interrupt.
+      expect(paceOnTrack).toBeGreaterThan(fillPercent);
+    }
+
+    // The duplicate weekly pace bar is gone.
+    expect(document.querySelectorAll(".menu-card__pace-track")).toHaveLength(0);
     expect(screen.queryByText("On-pace budget")).not.toBeInTheDocument();
   });
 
@@ -324,15 +430,22 @@ describe("MenuCard", () => {
     const resetAt = new Date(Date.now() + 6 * 24 * 60 * 60 * 1000);
     const snapshot = provider(null, 31);
     snapshot.primary = rateWindow(31, {
-      windowMinutes: 7 * 24 * 60,
+      windowMinutes: 7 * 24 * 60, kind: "weekly",
       resetsAt: resetAt.toISOString(),
     });
 
     renderCard(snapshot);
 
-    expect(await screen.findByText("Usage forecast")).toBeInTheDocument();
-    expect(screen.getByText(/hours remaining/)).toBeInTheDocument();
-    expect(screen.queryByText(/in reserve/)).not.toBeInTheDocument();
+    // No provider pace block here: the forecast is derived from the window's own
+    // length and reset time, which is real data, so the merged block must still
+    // render rather than claiming there is not enough data.
+    expect(await screen.findByText(/hours remaining/)).toBeInTheDocument();
+    expect(
+      document.querySelector(".provider-quota__bar .provider-quota__track[data-pace]"),
+    ).not.toBeNull();
+    expect(
+      screen.queryByText("Not enough data to project this week"),
+    ).not.toBeInTheDocument();
   });
 
   it("does not show pace budgets for a five-hour session window", async () => {

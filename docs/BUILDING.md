@@ -35,17 +35,39 @@ cargo build -p codexbar --release
 
 ## Dev Mode (Hot Reload)
 
+Use the Windows entry point from the repository root:
+
 ```powershell
-.\scripts\dev.ps1           # default debug build + launch
-.\scripts\dev.ps1 -Release  # optimised build
-.\scripts\dev.ps1 -Verbose  # debug logging
-.\scripts\dev.ps1 -SkipBuild # run last build without rebuilding
+.\scripts\dev-windows.ps1
 ```
 
-Or directly:
+For a no-console double-click launch, open `scripts\dev-windows.vbs`; it
+forwards any arguments to the same PowerShell entry point with a hidden window.
+
+It first removes only TokenBar processes associated with this checkout (the
+debug Tauri executable, its Vite server, and their child processes), then
+starts the complete `tauri dev` chain through pnpm. The child command runs with
+a hidden window; stdout/stderr are captured in `%TEMP%\tokenbar-dev\` so a
+second console or duplicate tray process is not created. Re-running the entry
+point is therefore safe and deterministic.
+
+The normal entry clears any inherited `CODEXBAR_PROOF_MODE`, so the flyout's
+outside-click dismissal and tray-toggle close actions work normally. For an
+automation screenshot run that must keep the flyout visible, opt in explicitly:
+
 ```powershell
-cd apps/desktop-tauri && pnpm run tauri:dev
+.\scripts\dev-windows.ps1 -ProofMode trayPanel
 ```
+
+Inspect the cleanup selection without stopping or starting anything:
+
+```powershell
+.\scripts\dev-windows.ps1 -DryRun
+```
+
+The equivalent package command is `pnpm --dir apps/desktop-tauri run
+dev:windows`. Keep `scripts/dev.ps1` for the existing build-and-run workflow
+when a standalone debug or release binary is required.
 
 ## Fast Windows Release Build
 

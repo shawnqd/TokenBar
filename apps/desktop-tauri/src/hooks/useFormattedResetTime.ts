@@ -1,68 +1,59 @@
 import { useEffect, useState } from "react";
+import { formatResetDisplay, type ResetDisplay } from "../lib/quotaDisplay";
 import { useLocale } from "./useLocale";
+
+/** How often a live reset row re-renders. Item C requires at least per-minute. */
+const TICK_MS = 30_000;
 
 /**
  * Format a provider's reset timestamp for display.
  *
- * When `relative` is true, returns a live "Resets in 3h 42m" style string
- * and includes the reset label because the locale strings include it.
+ * All rules live in `formatResetDisplay`; this hook only supplies the clock and
+ * keeps it ticking while the row needs it. Notably it does not refetch anything
+ * — the countdown advances purely from local time, so a stale provider snapshot
+ * still shows a correct remaining duration.
  *
- * When `relative` is false, returns the absolute reset time converted to
- * the user's local timezone via `Intl.DateTimeFormat`, fixing the issue
- * where the backend-supplied `reset_description` was pre-formatted as UTC
- * wall time (e.g., `Mar 5 at 3:00PM`).
- *
- * Falls back to `fallback` (typically the backend's `resetDescription`) when
- * `resetsAt` is absent or unparseable. Some providers use that fallback for
- * non-time details, so callers should not assume it is safe to prefix.
+ * Returns `null` only when there is genuinely nothing to render.
+ */
+export function useResetDisplay(
+  resetsAt: string | null,
+  resetDescription: string | null,
+  relative: boolean,
+): ResetDisplay {
+  const { t } = useLocale();
+  const [nowMs, setNowMs] = useState(() => Date.now());
+
+  const display = formatResetDisplay({
+    resetsAt,
+    resetDescription,
+    relative,
+    t,
+    nowMs,
+  });
+
+  // Only run a timer for rows whose text can change on its own: a countdown, an
+  // absolute time that can cross midnight or expire. Provider-description and
+  // unknown rows are static, so they cost nothing.
+  const ticking = display.ticking;
+  useEffect(() => {
+    if (!ticking) return;
+    const id = window.setInterval(() => setNowMs(Date.now()), TICK_MS);
+    return () => window.clearInterval(id);
+  }, [ticking]);
+
+  return display;
+}
+
+/**
+ * Text-only wrapper kept for the existing call sites that render a plain
+ * string. Prefer `useResetDisplay` when the caller wants to style or branch on
+ * the reset state (for example to mark an expired window).
  */
 export function useFormattedResetTime(
   resetsAt: string | null,
   fallback: string | null,
   relative: boolean,
 ): string | null {
-  const { t } = useLocale();
-  const [now, setNow] = useState(() => Date.now());
-
-  useEffect(() => {
-    if (!resetsAt || !relative) return;
-    const id = window.setInterval(() => setNow(Date.now()), 30_000);
-    return () => window.clearInterval(id);
-  }, [resetsAt, relative]);
-
-  if (!resetsAt) {
-    return fallback;
-  }
-  const target = Date.parse(resetsAt);
-  if (Number.isNaN(target)) {
-    return fallback;
-  }
-
-  if (relative) {
-    const diffMs = target - now;
-    if (diffMs <= 0) return t("TrayResetsDueNow");
-    const totalMinutes = Math.floor(diffMs / 60_000);
-    const days = Math.floor(totalMinutes / 1440);
-    const hours = Math.floor((totalMinutes % 1440) / 60);
-    const minutes = totalMinutes % 60;
-    if (days > 0) {
-      return t("ResetsInDaysHours")
-        .replace("{}", String(days))
-        .replace("{}", String(hours));
-    }
-    return t("ResetsInHoursMinutes")
-      .replace("{}", String(hours))
-      .replace("{}", String(minutes));
-  }
-
-  try {
-    return new Intl.DateTimeFormat(undefined, {
-      month: "short",
-      day: "numeric",
-      hour: "numeric",
-      minute: "2-digit",
-    }).format(new Date(target));
-  } catch {
-    return fallback;
-  }
+  const display = useResetDisplay(resetsAt, fallback, relative);
+  return display.text || null;
 }

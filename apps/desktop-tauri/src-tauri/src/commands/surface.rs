@@ -59,7 +59,7 @@ pub async fn open_settings_window(app: tauri::AppHandle, tab: String) -> Result<
     crate::shell::settings_window::open_or_focus(&app, &tab)
 }
 
-/// Open (or focus) the detached flyout ("Pop Out Dashboard") window.
+/// Open (or focus) the detached "Open Tray Panel" window.
 ///
 /// Used by `PopOutPanel`'s "back to tray" action, which previously called
 /// `set_surface_mode("trayPanel", ...)` on the shared window — now that the
@@ -71,10 +71,9 @@ pub async fn open_flyout_window(app: tauri::AppHandle) -> Result<(), String> {
     crate::shell::flyout_window::open_or_focus(&app, None)
 }
 
-/// Reveal the flyout window after the frontend's first layout pass. Called by
-/// `useTrayPanelLayout` once content has been measured/auto-fit (or the
-/// remembered fixed size re-applied), so Windows never shows a pre-measure
-/// blank/backing frame.
+/// Reveal the flyout window after the frontend's fixed shell is ready. Called
+/// by `useTrayPanelLayout` after the native size and tray anchor have been
+/// applied, so Windows never shows a blank/backing frame during first paint.
 ///
 /// No-ops when the flyout window doesn't exist or no one-shot reveal is pending.
 #[tauri::command]
@@ -88,6 +87,7 @@ pub fn reveal_tray_panel_window(
         return Ok(());
     };
     let mut guard = state.lock().map_err(|e| e.to_string())?;
+    guard.mark_flyout_frontend_ready();
     if !guard.take_pending_flyout_reveal() {
         return Ok(());
     }
@@ -101,36 +101,50 @@ pub fn reveal_tray_panel_window(
     Ok(())
 }
 
+/// Mark the prewarmed Settings frontend ready and reveal it only when an open
+/// request arrived before the lazy Settings surface finished its first render.
+#[tauri::command]
+pub fn reveal_settings_window(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, Mutex<AppState>>,
+) -> Result<(), String> {
+    use tauri::{Emitter, Manager};
+
+    let Some(window) = app.get_webview_window(crate::shell::settings_window::SETTINGS_LABEL) else {
+        return Ok(());
+    };
+    let mut guard = state.lock().map_err(|e| e.to_string())?;
+    guard.mark_settings_frontend_ready();
+    let Some(tab) = guard.take_pending_settings_reveal() else {
+        return Ok(());
+    };
+    drop(guard);
+
+    app.emit_to(
+        crate::shell::settings_window::SETTINGS_LABEL,
+        "settings-change-tab",
+        tab,
+    )
+    .map_err(|e| e.to_string())?;
+    window.show().map_err(|e| e.to_string())?;
+    window.set_focus().map_err(|e| e.to_string())?;
+    // This path only runs for a reveal that was armed while the window was
+    // still hidden, so it is always a genuine hidden -> visible transition.
+    app.emit_to(
+        crate::shell::settings_window::SETTINGS_LABEL,
+        crate::shell::settings_window::SETTINGS_REVEALED_EVENT,
+        (),
+    )
+    .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
 #[tauri::command]
 pub fn close_settings_window(
     app: tauri::AppHandle,
     window: tauri::WebviewWindow,
 ) -> Result<(), String> {
     crate::shell::settings_window::dismiss(&app, &window)
-}
-
-/// Persist a user-chosen size for the "Pop Out Dashboard" flyout window.
-/// Only the size is stored (via a size-only `StoredSize` entry — no
-/// fabricated `x`/`y`); the flyout is always re-anchored above the tray on
-/// open. The frontend calls this on genuine user drag-resizes, not on its own
-/// auto-fit resizes, so auto-fit sizes never freeze the panel.
-#[tauri::command]
-pub fn set_flyout_size(width: f64, height: f64) -> Result<(), String> {
-    let width = (width.round() as i64).clamp(1, i64::from(u32::MAX)) as u32;
-    let height = (height.round() as i64).clamp(1, i64::from(u32::MAX)) as u32;
-    crate::shell::flyout_window::save_stored_size(width, height);
-    Ok(())
-}
-
-/// Return the remembered flyout size, if the user has manually resized it.
-/// The frontend uses this to decide whether to auto-fit (no stored size) or
-/// honor the user's size (stored) on open. Transparently migrates a
-/// pre-existing size stored under the legacy `SurfaceMode::TrayPanel`
-/// shared-window geometry key (from before the flyout became its own
-/// window), so upgrading users don't lose their remembered size.
-#[tauri::command]
-pub fn flyout_stored_size() -> Result<Option<(u32, u32)>, String> {
-    Ok(crate::shell::flyout_window::stored_size())
 }
 
 #[tauri::command]
@@ -163,8 +177,14 @@ pub fn get_proof_state(app: tauri::AppHandle) -> Result<ProofStatePayload, Strin
     proof_harness::capture_state(&app)
 }
 
+// `async` so `open-tray-panel` can safely reach `flyout_window::open_or_focus`
+// on its first-ever call (before the flyout window exists yet): that path's
+// `WebviewWindowBuilder::build()` deadlocks on Windows if driven from a sync
+// Tauri command's own thread. `proof_harness::run_command` itself stays sync
+// — moving just this outer command onto the async dispatch path is enough,
+// matching the existing `open_flyout_window` async command.
 #[tauri::command]
-pub fn run_proof_command(
+pub async fn run_proof_command(
     app: tauri::AppHandle,
     command: String,
 ) -> Result<ProofStatePayload, String> {
@@ -187,6 +207,22 @@ pub(crate) fn validate_surface_target(
             target_label(&target),
             mode.as_str()
         ));
+    }
+
+    // `trayPanel` is no longer a state the shared `main` window may enter —
+    // the tray panel is its own dedicated `flyout` window now (see
+    // `shell::flyout_window`). This check runs AFTER the mismatch check above
+    // so a mismatched trayPanel request (e.g. `target: settings`) still
+    // reports the ordinary "not valid for mode" error — only a well-formed
+    // `trayPanel` + `summary` request (the only target that maps to
+    // `SurfaceMode::TrayPanel` — see `SurfaceTarget::mode`) reaches this
+    // branch and is rejected here.
+    if mode == SurfaceMode::TrayPanel {
+        return Err(
+            "set_surface_mode does not support 'trayPanel': the tray panel is a dedicated window \
+             now — call open_flyout_window instead"
+                .into(),
+        );
     }
 
     Ok(target)

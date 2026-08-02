@@ -1,8 +1,8 @@
-//! Detached "Pop Out Dashboard" flyout window: a resizable, always-on-top,
+//! Detached "Open Tray Panel" window: a fixed-size, always-on-top,
 //! tray-anchored panel that auto-hides on click-outside (blur-dismiss).
 //!
 //! Runs as an auxiliary Tauri window labeled `flyout`, independent of the
-//! `main` window's surface state machine — it coexists with "Show Window"
+//! `main` window's surface state machine — it coexists with "Open Dashboard"
 //! (`SurfaceMode::PopOut`, which stays on `main`) instead of being a
 //! mutually-exclusive state of the same window.
 //!
@@ -17,19 +17,10 @@ use std::time::{Duration, Instant};
 
 use tauri::{AppHandle, Manager, PhysicalPosition, WebviewUrl};
 
-use crate::geometry_store::{self, StoredSize};
 use crate::state::AppState;
 use crate::surface::SurfaceMode;
 
 pub const FLYOUT_LABEL: &str = "flyout";
-
-/// Geometry-store key for the flyout's remembered SIZE (position is never
-/// stored — the flyout always re-anchors above the tray on open). Kept as
-/// its own key (distinct from the legacy `SurfaceMode::TrayPanel::as_str()`
-/// `"trayPanel"` key) — `geometry_store::load_size` migrates a pre-existing
-/// `"trayPanel"` entry into this key on first read, so upgrading users keep
-/// their remembered flyout size.
-const FLYOUT_SIZE_KEY: &str = "flyout";
 
 /// Same window used to close a same-click blur-dismiss/reopen race as the
 /// pre-split tray panel handling (formerly `shell::transition::handle_tray_panel_click`,
@@ -40,17 +31,6 @@ const BLUR_DISMISS_CLICK_WINDOW: Duration = Duration::from_millis(250);
 /// blur (tray click focus race) is ignored — mirrors `main.rs`'s 500ms
 /// `was_tray_panel_recently_shown` guard for the old shared window.
 const RECENTLY_SHOWN_GRACE: Duration = Duration::from_millis(500);
-
-/// Read the remembered flyout size, if any (migrating a legacy
-/// `"trayPanel"`-keyed size on first read — see `geometry_store::load_size`).
-pub fn stored_size() -> Option<(u32, u32)> {
-    geometry_store::load_size(FLYOUT_SIZE_KEY).map(|size| (size.width, size.height))
-}
-
-/// Persist a user-chosen flyout size. Size-only — no fabricated position.
-pub fn save_stored_size(width: u32, height: u32) {
-    geometry_store::save_size(FLYOUT_SIZE_KEY, StoredSize { width, height });
-}
 
 /// Whether the flyout window currently exists and is visible. Canonical
 /// replacement for the pre-split `surface_machine.current() == TrayPanel`
@@ -68,11 +48,34 @@ pub fn is_open(app: &AppHandle) -> bool {
 /// precedent) — callers must invoke this from an async context (an `async`
 /// command, or `tauri::async_runtime::spawn`), never a sync command handler.
 pub fn open_or_focus(app: &AppHandle, position: Option<(i32, i32)>) -> Result<(), String> {
+    open_or_focus_inner(app, position, true)
+}
+
+fn open_or_focus_inner(
+    app: &AppHandle,
+    position: Option<(i32, i32)>,
+    reveal_when_ready: bool,
+) -> Result<(), String> {
     if let Some(window) = app.get_webview_window(FLYOUT_LABEL) {
         if let Some((x, y)) = position {
             let _ = window.set_position(PhysicalPosition::new(x, y));
         } else {
             reanchor(app)?;
+        }
+        let frontend_ready = app
+            .try_state::<Mutex<AppState>>()
+            .and_then(|state| {
+                state
+                    .lock()
+                    .ok()
+                    .map(|guard| guard.is_flyout_frontend_ready())
+            })
+            .unwrap_or(false);
+        if !frontend_ready {
+            if reveal_when_ready {
+                arm_reveal(app)?;
+            }
+            return Ok(());
         }
         window.show().map_err(|e| e.to_string())?;
         window.set_focus().map_err(|e| e.to_string())?;
@@ -90,9 +93,9 @@ pub fn open_or_focus(app: &AppHandle, position: Option<(i32, i32)>) -> Result<()
     // from, rather than duplicating these values as independent constants
     // that could silently drift from `surface.rs`.
     let props = SurfaceMode::TrayPanel.window_properties();
-    let (width, height) = stored_size()
-        .map(|(w, h)| (w as f64, h as f64))
-        .unwrap_or((props.width, props.height));
+    // The tray flyout is deliberately fixed. There is no legacy size restore
+    // path, so a previous native resize cannot change its geometry.
+    let (width, height) = (props.width, props.height);
 
     let url = WebviewUrl::App("index.html?window=flyout".into());
 
@@ -114,6 +117,9 @@ pub fn open_or_focus(app: &AppHandle, position: Option<(i32, i32)>) -> Result<()
     if let (Some(min_w), Some(min_h)) = (props.min_width, props.min_height) {
         builder = builder.min_inner_size(min_w, min_h);
     }
+    if let (Some(max_w), Some(max_h)) = (props.max_width, props.max_height) {
+        builder = builder.max_inner_size(max_w, max_h);
+    }
 
     // WebView2 only honors an alpha (transparent) background when the native
     // window is itself created transparent (see floatbar/window.rs for the
@@ -127,11 +133,9 @@ pub fn open_or_focus(app: &AppHandle, position: Option<(i32, i32)>) -> Result<()
         .build()
         .map_err(|e| e.to_string())?;
 
-    // Strip the caption but keep WS_THICKFRAME (resizable). The flyout is a
-    // transparent window, so use the variant that skips the DWM frame
-    // extension and opaque background brush — those paint an opaque square
-    // behind the page's rounded corners.
-    super::dwm::force_borderless_transparent_resizable(&win);
+    // Strip the caption and WS_THICKFRAME. The fixed transparent flyout then
+    // has no native square frame/shadow behind the page's rounded corners.
+    super::dwm::force_borderless_transparent_fixed(&win);
 
     let target_position =
         position.or_else(|| super::position::default_surface_position(app, SurfaceMode::TrayPanel));
@@ -145,8 +149,17 @@ pub fn open_or_focus(app: &AppHandle, position: Option<(i32, i32)>) -> Result<()
     if show_grace_starts_now(true) {
         mark_shown(app);
     }
-    arm_reveal(app)?;
+    if reveal_when_ready {
+        arm_reveal(app)?;
+    }
     Ok(())
+}
+
+/// Create and load the flyout WebView during application startup while
+/// keeping it hidden. The first tray click can then show an already-rendered
+/// surface instead of spending that click creating WebView2.
+pub fn prewarm(app: &AppHandle) -> Result<(), String> {
+    open_or_focus_inner(app, None, false)
 }
 
 fn show_grace_starts_now(first_build_hidden: bool) -> bool {
@@ -180,6 +193,17 @@ pub fn toggle_with_blur_consume(app: &AppHandle, position: Option<(i32, i32)>) {
     }
 
     if is_open(app) {
+        // Proof captures may still click the tray icon while the panel is
+        // being brought back to the foreground. Treat that click as a
+        // refocus, not as an explicit close; the proof harness has a separate
+        // `hide-surface` command for intentional teardown.
+        if crate::proof_harness::is_proof_mode(app) {
+            tracing::debug!("flyout: proof mode kept panel visible on tray toggle");
+            if let Some(window) = app.get_webview_window(FLYOUT_LABEL) {
+                let _ = window.set_focus();
+            }
+            return;
+        }
         let _ = hide(app);
     } else {
         let _ = open_or_focus(app, position);
@@ -217,10 +241,8 @@ fn mark_shown(app: &AppHandle) {
 /// caller (`main.rs`'s single `on_window_event` dispatcher) can fall through
 /// to its own `main`-window-only handling.
 ///
-/// Ports the same four-guard chain `main.rs` applies to the old shared
-/// window's `Focused(false)` (proof-mode suppression / startup grace /
-/// recently-shown 500ms grace / gesture blur guard) so every previously
-/// shipped anti-flicker behavior survives the window split.
+/// Applies the flyout's blur guards (proof-mode suppression / recently-shown
+/// 500ms grace / gesture blur guard) before hiding on click-outside.
 pub fn handle_window_event(window: &tauri::Window, event: &tauri::WindowEvent) -> bool {
     if window.label() != FLYOUT_LABEL {
         return false;
@@ -231,6 +253,7 @@ pub fn handle_window_event(window: &tauri::Window, event: &tauri::WindowEvent) -
     match event {
         tauri::WindowEvent::Focused(false) => {
             if crate::proof_harness::is_proof_mode(app) {
+                tracing::debug!("flyout: proof mode suppressed blur-dismiss");
                 return true;
             }
             // Settings is a companion window, not an outside click: keep the
@@ -242,10 +265,7 @@ pub fn handle_window_event(window: &tauri::Window, event: &tauri::WindowEvent) -
                 return true;
             };
             {
-                let mut guard = st.lock().unwrap();
-                if guard.take_startup_tray_blur_grace(Instant::now()) {
-                    return true;
-                }
+                let guard = st.lock().unwrap();
                 if guard.was_tray_panel_recently_shown(Instant::now(), RECENTLY_SHOWN_GRACE) {
                     return true;
                 }
@@ -266,13 +286,15 @@ pub fn handle_window_event(window: &tauri::Window, event: &tauri::WindowEvent) -
             }
             true
         }
-        // Size persistence is entirely frontend-driven (genuine user
-        // drag-resizes call `set_flyout_size`, auto-fit resizes never do) —
-        // mirrors `shell::position::remember_current_geometry_if_eligible`
-        // skipping TrayPanel for the same reason on the old shared window.
-        // Position is never persisted (always re-anchored above the tray).
+        // The fixed flyout has no user geometry to persist. Position is
+        // always recomputed from the tray anchor when it opens.
         tauri::WindowEvent::Moved(_) | tauri::WindowEvent::Resized(_) => true,
         tauri::WindowEvent::CloseRequested { api, .. } => {
+            if crate::proof_harness::is_proof_mode(app) {
+                tracing::debug!("flyout: proof mode suppressed close request");
+                api.prevent_close();
+                return true;
+            }
             // Hide-not-close, matching Settings/FloatBar lifecycle handling —
             // the flyout must survive a native close (Alt+F4-equivalent from
             // a screen reader, etc.) so it can be reopened without rebuilding
@@ -285,9 +307,8 @@ pub fn handle_window_event(window: &tauri::Window, event: &tauri::WindowEvent) -
     }
 }
 
-/// Reposition the flyout so its bottom-right corner stays anchored to the
-/// system-tray area, using the window's CURRENT logical size (after a
-/// frontend-driven resize). Canonical anchor-math implementation for the
+/// Reposition the fixed flyout so its bottom-right corner stays anchored to
+/// the system-tray area. Canonical anchor-math implementation for the
 /// flyout window; the `reanchor_tray_panel` Tauri command
 /// (`commands/system.rs`) is a thin retarget onto this function.
 pub fn reanchor(app: &AppHandle) -> Result<(), String> {
@@ -368,17 +389,9 @@ mod tests {
     }
 
     #[test]
-    fn flyout_size_key_is_distinct_from_legacy_tray_panel_key() {
-        // The whole point of the migration in geometry_store::load_size is
-        // that this key differs from the legacy SurfaceMode::TrayPanel key
-        // ("trayPanel") — otherwise there'd be nothing to migrate FROM.
-        assert_ne!(FLYOUT_SIZE_KEY, SurfaceMode::TrayPanel.as_str());
-    }
-
-    #[test]
     fn tray_panel_window_properties_still_the_single_source_for_flyout_shape() {
         // `open_or_focus`'s builder reads size/decorations/resizable/
-        // always_on_top/skip_taskbar/min-size from
+        // always_on_top/skip_taskbar from
         // `SurfaceMode::TrayPanel.window_properties()` directly (not
         // independent duplicated constants) — this pins down the values that
         // relationship depends on, so a change to `surface.rs` shows up here
@@ -386,9 +399,11 @@ mod tests {
         let props = SurfaceMode::TrayPanel.window_properties();
         assert_eq!(props.width, 328.0);
         assert_eq!(props.height, 776.0);
-        assert_eq!(props.min_width, Some(300.0));
-        assert_eq!(props.min_height, Some(360.0));
-        assert!(props.resizable);
+        assert_eq!(props.min_width, None);
+        assert_eq!(props.min_height, None);
+        assert_eq!(props.max_width, None);
+        assert_eq!(props.max_height, None);
+        assert!(!props.resizable);
         assert!(props.always_on_top);
         assert!(props.skip_taskbar);
         assert!(!props.decorations);

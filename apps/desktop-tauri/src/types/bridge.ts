@@ -5,6 +5,8 @@ export type SettingsTabId =
   | "providers"
   | "notifications"
   | "menuBar"
+  | "dashboard"
+  | "floatBar"
   | "menu"
   | "advanced"
   | "about";
@@ -47,6 +49,105 @@ export type MenuBarDisplayMode = "minimal" | "compact" | "detailed";
 /** Which period the panel's local-usage stats lead with. */
 export type LocalUsagePeriod = "today" | "7d" | "30d";
 export type FloatBarOrientation = "horizontal" | "vertical";
+export type TaskbarWidgetPosition = "notification" | "left";
+/** Numeric Win32/OpenType weight class (100 thin through 900 black). */
+/**
+ * OpenType `wght` axis value, 100..=1000.
+ *
+ * Continuous on a variable font: the native strip renders through DirectWrite's
+ * `SetFontAxisValues`, which produces distinct strokes for values between the
+ * named stops. On a static family DirectWrite still resolves to the nearest
+ * installed face — `TaskbarFontFamily.variableWeight` says which is which.
+ */
+export type TaskbarWidgetFontWeight = number;
+
+/**
+ * Which quota window a taskbar entry refers to.
+ *
+ * The four named cycles are identified from the window's declared length when
+ * it has one, and otherwise from the provider's own name for the slot, so a
+ * provider that reports a percentage without a length is still identified.
+ *
+ * `primary` means "this provider's main quota, whatever cycle that is". It is
+ * the fallback for a window neither source can name, and the backend offers it
+ * only in that case — when a cycle can be named, the named kind is offered
+ * instead so the menu never lists two options for one reading.
+ */
+export type TaskbarWindowKind =
+  | "primary"
+  | "session"
+  | "weekly"
+  | "daily"
+  | "monthly"
+  | "balance"
+  | "speed";
+
+/** `auto` follows whichever provider the tray icon is currently showing. */
+export const TASKBAR_PROVIDER_AUTO = "auto";
+
+/** One line of the taskbar strip: a provider plus one of its quota windows. */
+export interface TaskbarEntry {
+  providerId: string;
+  window: TaskbarWindowKind;
+}
+
+/**
+ * One cell of the taskbar strip, exactly as the renderer is painting it.
+ *
+ * Produced by the native renderer's own line buffer, not rebuilt here — the
+ * settings preview shows these verbatim so it cannot drift from the strip.
+ */
+/**
+ * Which cycle a quota window is.
+ *
+ * Decided once in Rust when the snapshot is built (`src-tauri/src/quota_cycle.rs`)
+ * from the declared length and, when there is none, the provider's own name for
+ * the slot. Read it — do not re-derive it from `windowMinutes`. Three surfaces
+ * used to do exactly that and disagreed with each other.
+ *
+ * `null` for a window that is not a dated cycle ("Credits", "Balance") or whose
+ * cycle fits no named band (a fortnight). Render those without a cycle word
+ * rather than rounding to the nearest one.
+ */
+export type QuotaCycleKind = "session" | "daily" | "weekly" | "monthly";
+
+export interface TaskbarPreviewLine {
+  /** The provider's brand mark, or `null` when `text` carries its name. */
+  glyph: string | null;
+  /** The mark's colour as `#rrggbb`. Colour is what identifies the provider. */
+  color: string | null;
+  text: string;
+}
+
+/** An installed font family the taskbar strip can use. */
+export interface TaskbarFontFamily {
+  name: string;
+  /** True when the family exposes a real `wght` axis. */
+  variableWeight: boolean;
+  /** True when the family draws Chinese itself instead of falling back. */
+  hasCjk: boolean;
+  /** True for the short curated list the picker shows before "show all". */
+  recommended: boolean;
+}
+/**
+ * Which quota window the floating bar prints a reset for.
+ *
+ * `primary` is "whatever this provider leads with" and is what the bar showed
+ * before the setting existed; the named windows are matched by the window's
+ * declared length, so "weekly" means the same thing for every provider.
+ */
+export type FloatBarResetWindow =
+  | "primary"
+  | "session"
+  | "weekly"
+  | "daily"
+  | "monthly";
+
+/** Mirrors `FLOAT_BAR_MAX_RESET_WINDOWS` in shared Rust. */
+export const FLOAT_BAR_MAX_RESET_WINDOWS = 3;
+
+export type TaskbarWidgetContent = "usage" | "speed" | "usage_speed";
+export type TaskbarWidgetTextAlign = "left" | "center" | "right";
 export type FloatBarStyle = "floating" | "taskbar";
 export type ProofProviderId =
   | "codex"
@@ -188,7 +289,6 @@ export interface SettingsSnapshot {
   trayIconMode: TrayIconMode;
   switcherShowsIcons: boolean;
   menuBarShowsHighestUsage: boolean;
-  menuBarShowsPercent: boolean;
   showAsUsed: boolean;
   showAllTokenAccountsInMenu: boolean;
   enableAnimations: boolean;
@@ -226,8 +326,45 @@ export interface SettingsSnapshot {
   floatBarDarkText: boolean;
   /** When true, render the next primary reset inline in each provider pill. */
   floatBarShowResetInline: boolean;
+  /** Which windows' resets the bar prints, in order. Empty means none. */
+  floatBarResetWindows: FloatBarResetWindow[];
   /** When true, show local cost summaries in the floating bar. */
   floatBarShowCost?: boolean;
+  /** Windows only: embed a usage readout strip in the taskbar. */
+  taskbarWidgetEnabled: boolean;
+  /** Windows only: placement of the taskbar usage overlay. */
+  taskbarWidgetPosition: TaskbarWidgetPosition;
+  taskbarWidgetFontWeight: TaskbarWidgetFontWeight;
+  taskbarWidgetContent: TaskbarWidgetContent;
+  /**
+   * Ordered strip entries. Order is itself a setting: the strip has room for
+   * only the first couple of lines, so position decides what survives.
+   */
+  taskbarWidgetEntries: TaskbarEntry[];
+  taskbarWidgetFontFamily: string;
+  taskbarWidgetFontSize: number;
+  taskbarWidgetWidth: number;
+  taskbarWidgetTextAlign: TaskbarWidgetTextAlign;
+
+  // ── Per-component quota presentation ───────────────────────────────
+  //
+  // Each surface owns its own used-vs-remaining and relative-vs-absolute
+  // reset choice. `showAsUsed` / `resetTimeRelative` above are legacy
+  // migration sources only — do not read them in new code.
+  /** Floating bar: `true` shows used, `false` shows remaining. */
+  floatBarShowAsUsed: boolean;
+  /** Floating bar: `true` shows a countdown, `false` an absolute time. */
+  floatBarResetTimeRelative: boolean;
+  /** Tray flyout + PopOut panel: `true` shows used, `false` shows remaining. */
+  dashboardShowAsUsed: boolean;
+  /** Tray flyout + PopOut panel: countdown (`true`) or absolute time. */
+  dashboardResetTimeRelative: boolean;
+  /**
+   * Windows taskbar strip and notification-area icon: `true` shows used,
+   * `false` shows remaining. There is no `taskbarResetTimeRelative` companion —
+   * the native strip renders no reset text, so such a setting would be inert.
+   */
+  taskbarShowAsUsed: boolean;
 }
 
 /** Partial settings object — only include fields you want to change. */
@@ -245,7 +382,6 @@ export interface SettingsUpdate {
   trayIconMode?: TrayIconMode;
   switcherShowsIcons?: boolean;
   menuBarShowsHighestUsage?: boolean;
-  menuBarShowsPercent?: boolean;
   showAsUsed?: boolean;
   showAllTokenAccountsInMenu?: boolean;
   enableAnimations?: boolean;
@@ -276,7 +412,22 @@ export interface SettingsUpdate {
   floatBarProviderIds?: string[];
   floatBarDarkText?: boolean;
   floatBarShowResetInline?: boolean;
+  floatBarResetWindows?: FloatBarResetWindow[];
   floatBarShowCost?: boolean;
+  taskbarWidgetEnabled?: boolean;
+  taskbarWidgetPosition?: TaskbarWidgetPosition;
+  taskbarWidgetFontWeight?: TaskbarWidgetFontWeight;
+  taskbarWidgetContent?: TaskbarWidgetContent;
+  taskbarWidgetEntries?: TaskbarEntry[];
+  taskbarWidgetFontFamily?: string;
+  taskbarWidgetFontSize?: number;
+  taskbarWidgetWidth?: number;
+  taskbarWidgetTextAlign?: TaskbarWidgetTextAlign;
+  floatBarShowAsUsed?: boolean;
+  floatBarResetTimeRelative?: boolean;
+  dashboardShowAsUsed?: boolean;
+  dashboardResetTimeRelative?: boolean;
+  taskbarShowAsUsed?: boolean;
 }
 
 export interface BootstrapState {
@@ -290,6 +441,8 @@ export interface BootstrapState {
 export interface RateWindowSnapshot {
   usedPercent: number;
   remainingPercent: number;
+  /** Which cycle this is. See {@link QuotaCycleKind} — read it, never re-derive. */
+  kind: QuotaCycleKind | null;
   windowMinutes: number | null;
   resetsAt: string | null;
   resetDescription: string | null;
@@ -319,6 +472,12 @@ export interface PaceSnapshot {
   etaSeconds: number | null;
   expectedUsedPercent: number;
   actualUsedPercent: number;
+  /**
+   * How many times the current burn rate could grow and still reach the reset.
+   * `null` when the ratio is meaningless (nothing left, or nothing projected to
+   * be spent) — never render a fabricated headroom figure.
+   */
+  speedMultiplierToReset: number | null;
 }
 
 export interface ProviderUsageSnapshot {
@@ -446,6 +605,13 @@ export interface CookieInfoBridge {
   savedAt: string;
 }
 
+/** Where the in-app login window was sent for a provider. */
+export interface ProviderLoginTargetBridge {
+  providerId: string;
+  provider: string;
+  url: string;
+}
+
 export interface ProviderOutputSpeed {
   providerId: "codex" | "claude";
   status: "generating" | "recent" | "unavailable";
@@ -467,6 +633,7 @@ export interface OutputSpeedSample {
 export interface OutputSpeedSnapshot {
   codex: ProviderOutputSpeed;
   claude: ProviderOutputSpeed;
+  grok: ProviderOutputSpeed;
 }
 
 export interface CookieFileProviderBridge {

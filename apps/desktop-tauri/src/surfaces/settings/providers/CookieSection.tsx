@@ -1,6 +1,9 @@
 import { useCallback, useEffect, useState } from "react";
 import {
+  captureProviderLogin,
+  closeProviderLogin,
   getManualCookies,
+  openProviderLogin,
   removeManualCookie,
   setManualCookie,
 } from "../../../lib/tauri";
@@ -37,6 +40,12 @@ export function CookieSection({ providerId, cookieDomain }: Props) {
   const [error, setError] = useState<string | null>(null);
 
   const [pasteValue, setPasteValue] = useState("");
+  // Whether a sign-in window is open for this provider. The capture step is a
+  // deliberate button rather than a poll: only the user knows when the
+  // provider's own flow — SSO, a second factor, an org picker — is finished,
+  // and guessing would store a half-authenticated session.
+  const [loginOpen, setLoginOpen] = useState(false);
+  const [notice, setNotice] = useState<string | null>(null);
 
   const reload = useCallback(async (signal: { stale: boolean }) => {
     try {
@@ -56,11 +65,16 @@ export function CookieSection({ providerId, cookieDomain }: Props) {
     const signal = { stale: false };
     setLoaded(false);
     setError(null);
+    setNotice(null);
     setPasteValue("");
     setSaved(null);
+    // Switching providers must not leave a window open that is signed in to
+    // the provider the user just navigated away from.
+    setLoginOpen(false);
+    void closeProviderLogin().catch(() => {});
     void reload(signal);
     return () => { signal.stale = true; };
-  }, [reload, cookieDomain]);
+  }, [reload, cookieDomain, providerId]);
 
   if (cookieDomain === null) return null;
   if (!loaded) return null;
@@ -82,10 +96,55 @@ export function CookieSection({ providerId, cookieDomain }: Props) {
     if (!pasteValue.trim()) return;
     setBusy(true);
     setError(null);
+    setNotice(null);
     try {
       const next = await setManualCookie(providerId, pasteValue.trim());
       setSaved(next.find((c) => c.providerId === providerId) ?? null);
       setPasteValue("");
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleOpenLogin = async () => {
+    setBusy(true);
+    setError(null);
+    setNotice(null);
+    try {
+      await openProviderLogin(providerId);
+      setLoginOpen(true);
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleCaptureLogin = async () => {
+    setBusy(true);
+    setError(null);
+    setNotice(null);
+    try {
+      const next = await captureProviderLogin(providerId);
+      setSaved(next.find((c) => c.providerId === providerId) ?? null);
+      setLoginOpen(false);
+      setNotice(t("ProviderLoginCaptured"));
+    } catch (err: unknown) {
+      // The window stays open on failure — the usual cause is that sign-in
+      // has not finished yet, and closing it would throw away the progress.
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleCloseLogin = async () => {
+    setBusy(true);
+    try {
+      await closeProviderLogin();
+      setLoginOpen(false);
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -100,6 +159,39 @@ export function CookieSection({ providerId, cookieDomain }: Props) {
       {error && (
         <div className="settings-status settings-status--error">{error}</div>
       )}
+      {notice && <div className="settings-status">{notice}</div>}
+
+      <div className="provider-login">
+        <h5 className="provider-login__title">{t("ProviderLoginSectionTitle")}</h5>
+        <p className="provider-login__hint">{t("ProviderLoginHint")}</p>
+        <div className="provider-login__actions">
+          <button
+            className="credential-btn credential-btn--primary"
+            disabled={busy}
+            onClick={() => void handleOpenLogin()}
+          >
+            {t("ProviderLoginOpen")}
+          </button>
+          {loginOpen && (
+            <>
+              <button
+                className="credential-btn credential-btn--primary"
+                disabled={busy}
+                onClick={() => void handleCaptureLogin()}
+              >
+                {t("ProviderLoginCapture")}
+              </button>
+              <button
+                className="credential-btn"
+                disabled={busy}
+                onClick={() => void handleCloseLogin()}
+              >
+                {t("ProviderLoginClose")}
+              </button>
+            </>
+          )}
+        </div>
+      </div>
 
       {saved ? (
         <ul className="credential-list">

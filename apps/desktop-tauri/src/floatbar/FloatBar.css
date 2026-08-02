@@ -102,10 +102,36 @@ body.floatbar-window #root {
 .floatbar__empty * {
   pointer-events: none;
 }
+/* The pill's brand icon.
+   `line-height: 0` matters: an inline-flex box is still inline-level, so it
+   inherits the pill's line box and picks up half-leading below the artwork —
+   which pushed the icon a fraction of a pixel above centre and read as a tilt
+   at the 11px size the bar actually uses. The element is also given an explicit
+   square by the component so the SVG has an exact, even box to fill. */
 .floatbar__provider-icon {
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  flex-shrink: 0;
+  line-height: 0;
+}
+
+/* At pill scale the shared `.provider-icon` badge works against us: its rounded
+   background and 1px inset ring are drawn for a 22px avatar, and around an 11px
+   glyph the ring alone eats a quarter of the box. Strip the badge here and let
+   the SVG fill its square exactly — 84% of an 11px box is 9.24px, and that
+   fractional size is what made the artwork land off the pixel grid. */
+.floatbar__provider-icon .provider-icon {
+  width: 100%;
+  height: 100%;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.floatbar__provider-icon .provider-icon--svg svg {
+  width: 100%;
+  height: 100%;
 }
 .floatbar__cost-pill {
   display: inline-flex;
@@ -190,6 +216,17 @@ body.floatbar-window #root {
   font-size: 0.86em;
   font-weight: 500;
   font-variant-numeric: tabular-nums;
+  line-height: 1;
+}
+
+/* Which cycle a reset belongs to. Only rendered when the pill shows more than
+   one, so it is quieter than the time itself but must stay readable — two
+   unlabelled countdowns side by side would be worse than showing neither. */
+.floatbar__reset-window {
+  font-size: 0.76em;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  opacity: 0.78;
   line-height: 1;
 }
 .floatbar--vertical .floatbar__text {

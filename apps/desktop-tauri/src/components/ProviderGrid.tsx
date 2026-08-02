@@ -1,4 +1,9 @@
 import { useMemo, useState, type CSSProperties } from "react";
+import {
+  primaryQuotaState,
+  quotaPercentDisplay,
+  type QuotaPercentContext,
+} from "../lib/quotaDisplay";
 import type { ProviderUsageSnapshot } from "../types/bridge";
 import { ProviderIcon } from "./providers/ProviderIcon";
 import { getProviderIcon } from "./providers/providerIcons";
@@ -8,9 +13,8 @@ import { TokenBarIcon } from "./TokenBarIcon";
 export default function ProviderGrid({
   providers,
   selectedProviderId,
-  showAsUsed,
+  display,
   showProviderIcons = true,
-  showPercent = false,
   expanded,
   onExpandedChange,
   onSelect,
@@ -20,9 +24,9 @@ export default function ProviderGrid({
 }: {
   providers: ProviderUsageSnapshot[];
   selectedProviderId: string | null;
-  showAsUsed: boolean;
+  /** The owning surface's quota presentation choice. */
+  display: QuotaPercentContext;
   showProviderIcons?: boolean;
-  showPercent?: boolean;
   expanded?: boolean;
   onExpandedChange?: (expanded: boolean) => void;
   onSelect: (providerId: string | null) => void;
@@ -59,12 +63,10 @@ export default function ProviderGrid({
     if (expanded === undefined) setUncontrolledExpanded(next);
     onExpandedChange?.(next);
   };
-  const gridPercent = (provider: ProviderUsageSnapshot) => {
-    const pct = showAsUsed
-      ? provider.primary.usedPercent
-      : provider.primary.remainingPercent;
-    return Math.max(0, Math.min(100, pct));
-  };
+  const gridPercent = (provider: ProviderUsageSnapshot) =>
+    quotaPercentDisplay(provider.primary, display).percent;
+  const quotaStateOf = (provider: ProviderUsageSnapshot) =>
+    primaryQuotaState(provider);
   const totalItems = providers.length + 1;
   const shouldCollapse = totalItems > 32;
   const collapsedProviders = useMemo(
@@ -153,7 +155,14 @@ export default function ProviderGrid({
         >
           {showProviderIcons && <ProviderIcon providerId={p.providerId} size={16} />}
           <span className="provider-grid__label">{labelFor(p.displayName)}</span>
-          {!p.error && (
+          {/* Only a real percentage quota gets a track and a number. A provider
+              whose primary window is informational (a "Subscription active"
+              marker, or the synthetic 0% window a balance provider uses to carry
+              a prepaid amount) would otherwise render an honest-looking "0%",
+              which TASK-018 forbids. Those rows show a non-quota marker and
+              explain themselves on hover; the provider's card still shows the
+              real balance or status. */}
+          {quotaStateOf(p) === "quota" && (
             <span
               className="provider-grid__weekly-track"
               style={{
@@ -161,11 +170,6 @@ export default function ProviderGrid({
                 "--weekly-color": getProviderIcon(p.providerId).brandColor,
               } as CSSProperties}
             />
-          )}
-          {showPercent && !p.error && (
-            <span className="provider-grid__percentage">
-              {Math.round(gridPercent(p))}%
-            </span>
           )}
         </button>
       ))}

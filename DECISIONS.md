@@ -1,5 +1,18 @@
 # DECISIONS
 
+## 2026-07-30 — 额度展示任务采用三阶段闸门；DirectWrite 属于阶段三
+
+用户确认 `TASK-QUOTA-PRESENTATION-TASKBAR-018` 分三阶段执行：每个阶段
+完成后由 Codex 审查并交用户验收，确认后才能进入下一阶段。阶段一先完成
+共享额度数据/格式化层和浮窗、仪表盘、任务栏的独立设置边界；阶段二完成
+设置页面分组、周额度预测合并和设置窗口外框复核；阶段三直接完成任务栏
+DirectWrite/Direct2D 可变字重以及多服务商/多额度窗口组合，不能用当前 GDI
+三档权重冒充完成，并在最后进行视觉回归。
+
+统一的是数据模型、术语和格式化规则，不是强制三个组件联动。浮窗、仪表盘
+和任务栏必须有各自的持久化显示设置，组件级设置不能互相覆盖；全局值若保留
+只能作为新建组件时的默认值。
+
 ## 2026-07-26 — Unified workflow document contract
 
 TokenBar now uses the current `cross-tool-dev-workflow` contract. The active

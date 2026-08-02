@@ -133,9 +133,29 @@ unsafe extern "system" fn borderless_subclass_proc(
             1
         }
         WM_GETMINMAXINFO => {
+            // MUST delegate to `DefSubclassProc` FIRST here. tao (the windowing
+            // layer under Tauri) fills in `min_track_size`/`max_track_size` from
+            // whatever `set_min_size`/`set_max_size` the app configured by
+            // handling this same message in the window's original proc — which
+            // this subclass only reaches via `DefSubclassProc`. Every other
+            // branch above either delegates or doesn't need to (paint/activate
+            // messages have no default work to preserve), but this one used to
+            // return early without delegating, which silently discarded the
+            // window's configured min/max drag-resize bounds for every
+            // borderless resizable window using this subclass (flyout, PopOut,
+            // Settings): `min_track_size`/`max_track_size` were left at
+            // whatever Windows' undocumented pre-fill happened to be, not the
+            // app's actual `set_min_size`/`set_max_size` values. Confirmed via
+            // the flyout: dragging past its configured min/max width did
+            // nothing to stop it before this fix.
+            let result = unsafe { DefSubclassProc(hwnd, msg, wparam, lparam) };
             // A borderless window whose non-client area is zeroed maximizes to
             // cover the entire monitor, including the taskbar. Constrain the
-            // maximized position/size to the monitor work area instead.
+            // maximized position/size to the monitor work area instead. This
+            // also intersects (not replaces) `max_track_size` with the work
+            // area — a window with its own smaller configured max (the flyout)
+            // keeps that max; one with no configured max (PopOut/Settings)
+            // still gets capped to the work area as before.
             const MONITOR_DEFAULTTONEAREST: u32 = 2;
             unsafe {
                 let hmon = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
@@ -148,19 +168,22 @@ unsafe extern "system" fn borderless_subclass_proc(
                     };
                     if GetMonitorInfoW(hmon, &mut mi) != 0 {
                         let mmi = lparam as *mut MinMaxInfo;
+                        let work_w = mi.rc_work.right - mi.rc_work.left;
+                        let work_h = mi.rc_work.bottom - mi.rc_work.top;
                         (*mmi).max_position = WinPoint {
                             x: mi.rc_work.left - mi.rc_monitor.left,
                             y: mi.rc_work.top - mi.rc_monitor.top,
                         };
                         (*mmi).max_size = WinPoint {
-                            x: mi.rc_work.right - mi.rc_work.left,
-                            y: mi.rc_work.bottom - mi.rc_work.top,
+                            x: work_w,
+                            y: work_h,
                         };
-                        (*mmi).max_track_size = (*mmi).max_size;
+                        (*mmi).max_track_size.x = (*mmi).max_track_size.x.min(work_w);
+                        (*mmi).max_track_size.y = (*mmi).max_track_size.y.min(work_h);
                     }
                 }
             }
-            0
+            result
         }
         _ => unsafe { DefSubclassProc(hwnd, msg, wparam, lparam) },
     }
@@ -183,12 +206,19 @@ pub fn force_dark_caption_resizable(win: &tauri::WebviewWindow) {
     force_dark_caption_inner(win, true, false);
 }
 
-/// Borderless treatment for windows created with `.transparent(true)`
-/// (the tray flyout): strips the caption and keeps the resize frame like
-/// [`force_dark_caption_resizable`], but skips `DwmExtendFrameIntoClientArea`
-/// and the opaque background brush — both composite an opaque backdrop
-/// behind the webview, which repaints the window rectangle behind the
-/// page's rounded corners and defeats the transparency.
+/// Borderless treatment for the fixed-size transparent tray flyout. Unlike
+/// the resizable variant, this strips `WS_THICKFRAME` so DWM cannot paint a
+/// square native frame/shadow underneath the rounded CSS shell.
+#[cfg(windows)]
+pub fn force_borderless_transparent_fixed(win: &tauri::WebviewWindow) {
+    force_dark_caption_inner(win, false, true);
+}
+
+/// Transparent treatment for a resizable frontend-owned window shell.
+///
+/// Settings keeps `WS_THICKFRAME` for edge resizing, but disables native
+/// non-client painting so the frontend's 24px rounded frame, hairline and
+/// shadow are not covered by a square Win32 border.
 #[cfg(windows)]
 pub fn force_borderless_transparent_resizable(win: &tauri::WebviewWindow) {
     force_dark_caption_inner(win, true, true);
@@ -234,12 +264,23 @@ fn force_dark_caption_inner(win: &tauri::WebviewWindow, keep_resize: bool, trans
         tracing::info!("dwm: dark_mode={r1:#x} caption_color={r2:#x}");
 
         if transparent {
-            // Windows 11 draws a one-pixel non-client border around any
-            // WS_THICKFRAME window, even when the client area and WebView are
-            // fully transparent. It shows through as a square underneath the
-            // flyout's rounded CSS shell. DWMWA_COLOR_NONE removes only that
-            // DWM border while retaining the resize style used by our custom
-            // left/top resize grips.
+            // The fixed transparent flyout owns its shape in the WebView. Turn
+            // off DWM non-client rendering entirely; otherwise Windows can
+            // composite a rectangular frame/shadow underneath the rounded
+            // CSS shell even after WS_THICKFRAME has been removed.
+            const DWMWA_NCRENDERING_POLICY: u32 = 2;
+            const DWMNCRP_DISABLED: u32 = 1;
+            let nc_policy = DWMNCRP_DISABLED;
+            let policy_result = DwmSetWindowAttribute(
+                hwnd,
+                DWMWA_NCRENDERING_POLICY,
+                &raw const nc_policy as *const c_void,
+                4,
+            );
+            tracing::info!("dwm: transparent nc_rendering={policy_result:#x}");
+
+            // Also remove the border color as a fallback for Windows builds
+            // that keep a one-pixel border despite disabled NC rendering.
             const DWMWA_BORDER_COLOR: u32 = 34;
             const DWMWA_COLOR_NONE: u32 = 0xFFFF_FFFE;
             let border_color = DWMWA_COLOR_NONE;
@@ -318,6 +359,9 @@ pub fn force_dark_caption(_win: &tauri::WebviewWindow) {}
 
 #[cfg(not(windows))]
 pub fn force_dark_caption_resizable(_win: &tauri::WebviewWindow) {}
+
+#[cfg(not(windows))]
+pub fn force_borderless_transparent_fixed(_win: &tauri::WebviewWindow) {}
 
 #[cfg(not(windows))]
 pub fn force_borderless_transparent_resizable(_win: &tauri::WebviewWindow) {}

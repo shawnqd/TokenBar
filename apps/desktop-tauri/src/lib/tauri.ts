@@ -15,6 +15,7 @@ import type {
   ProviderChartData,
   ProviderDetail,
   ProviderLocalUsageSummary,
+  ProviderLoginTargetBridge,
   ProviderSummary,
   ProviderUsageSnapshot,
   ProviderTokenAccountsBridge,
@@ -31,6 +32,9 @@ import type {
   CredentialStorageStatus,
   WorkAreaRect,
   OutputSpeedSnapshot,
+  TaskbarFontFamily,
+  TaskbarPreviewLine,
+  TaskbarWindowKind,
 } from "../types/bridge";
 
 export function getBootstrapState(): Promise<BootstrapState> {
@@ -53,6 +57,43 @@ export function updateSettings(
   patch: SettingsUpdate,
 ): Promise<SettingsSnapshot> {
   return invoke<SettingsSnapshot>("update_settings", { patch });
+}
+
+/**
+ * Font families installed on this machine, with whether each supports a
+ * continuous weight axis. Enumerated natively from DirectWrite, so the settings
+ * UI never offers a family the renderer cannot use. Empty off Windows.
+ */
+export function getTaskbarFontFamilies(): Promise<TaskbarFontFamily[]> {
+  return invoke<TaskbarFontFamily[]>("get_taskbar_font_families");
+}
+
+/**
+ * Window kinds each provider can actually answer for, keyed by provider id.
+ *
+ * The composer filters its window dropdown with this so it never offers a
+ * choice that renders "unsupported" — a provider may publish only one cycle,
+ * and a prepaid-balance account has no percentage quota at all.
+ */
+export function getTaskbarWindowAvailability(): Promise<
+  Record<string, TaskbarWindowKind[]>
+> {
+  return invoke<Record<string, TaskbarWindowKind[]>>(
+    "get_taskbar_window_availability",
+  );
+}
+
+/**
+ * The lines the native taskbar strip is painting right now.
+ *
+ * The settings preview renders these verbatim instead of composing its own
+ * imitation from sample numbers. The imitation drifted — it showed a fixed 18%
+ * where the strip showed 47%, and "unsupported" for balances the strip was
+ * rendering correctly — because it had to restate rules that live in Rust.
+ * Empty off Windows, and empty until the strip has been painted once.
+ */
+export function getTaskbarPreviewLines(): Promise<TaskbarPreviewLine[]> {
+  return invoke<TaskbarPreviewLine[]>("get_taskbar_preview_lines");
 }
 
 export function setSurfaceMode<M extends VisibleSurfaceMode>(
@@ -78,7 +119,11 @@ export function openSettingsWindow(tab: string): Promise<void> {
   return invoke<void>("open_settings_window", { tab });
 }
 
-/** Open (or focus) the detached flyout ("Pop Out Dashboard") window. */
+export function revealSettingsWindow(): Promise<void> {
+  return invoke<void>("reveal_settings_window");
+}
+
+/** Open (or focus) the detached "Open Tray Panel" window. */
 export function openFlyoutWindow(): Promise<void> {
   return invoke<void>("open_flyout_window");
 }
@@ -214,6 +259,22 @@ export function importCookieFile(
   providerIds: string[],
 ): Promise<CookieInfoBridge[]> {
   return invoke<CookieInfoBridge[]>("import_cookie_file", { contents, providerIds });
+}
+
+export function openProviderLogin(
+  providerId: string,
+): Promise<ProviderLoginTargetBridge> {
+  return invoke<ProviderLoginTargetBridge>("open_provider_login", { providerId });
+}
+
+export function captureProviderLogin(
+  providerId: string,
+): Promise<CookieInfoBridge[]> {
+  return invoke<CookieInfoBridge[]>("capture_provider_login", { providerId });
+}
+
+export function closeProviderLogin(): Promise<void> {
+  return invoke<void>("close_provider_login");
 }
 
 export function getAppInfo(): Promise<AppInfoBridge> {
@@ -411,16 +472,6 @@ export function reanchorTrayPanel(): Promise<void> {
 
 export function revealTrayPanelWindow(): Promise<void> {
   return invoke<void>("reveal_tray_panel_window");
-}
-
-/** Persist the user's manually-chosen flyout (Pop Out Dashboard) size. */
-export function setFlyoutSize(width: number, height: number): Promise<void> {
-  return invoke<void>("set_flyout_size", { width, height });
-}
-
-/** The remembered flyout size ([w, h]) if the user has resized it, else null. */
-export function flyoutStoredSize(): Promise<[number, number] | null> {
-  return invoke<[number, number] | null>("flyout_stored_size");
 }
 
 export function quitApp(): Promise<void> {

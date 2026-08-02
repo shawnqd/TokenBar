@@ -26,85 +26,12 @@ fn os_position(_window: &WebviewWindow, x: i32, y: i32) -> tauri::PhysicalPositi
     tauri::PhysicalPosition::new(x, y)
 }
 
-// `should_force_tray_panel_reveal` is retained below purely because the
-// already-dead (pre-existing, `#[allow(dead_code)]`-marked)
-// `schedule_startup_tray_panel_reveal_fallback` still references it — see
-// that function's own doc comment. The ACTIVE reveal-fallback path
-// (`schedule_tray_panel_reveal_fallback`, formerly called from
-// `apply_transition` below) was removed here: `main` can no longer transition
-// into `SurfaceMode::TrayPanel` (that mode now only opens as the dedicated
-// `flyout` window — see `shell::flyout_window`), so `apply_transition`'s
-// `transition.to != SurfaceMode::TrayPanel` branch always took the `if`
-// side in practice; the check itself was removed as unreachable dead weight
-// once `main`'s transitions were audited for TrayPanel producers (none
-// remain — see `tray_bridge.rs`'s `MenuAction::OpenFlyout` and
-// `flyout_window::toggle_with_blur_consume`).
-pub(super) fn should_force_tray_panel_reveal(
-    current: SurfaceMode,
-    main_window_visible: bool,
-    main_window_size: Option<(u32, u32)>,
-) -> bool {
-    current == SurfaceMode::TrayPanel
-        && (!main_window_visible
-            || main_window_size.is_some_and(|(width, height)| width < 100 || height < 100))
-}
-
 fn mark_tray_panel_shown(app: &AppHandle) {
     if let Some(state) = app.try_state::<Mutex<AppState>>()
         && let Ok(mut guard) = state.lock()
     {
         guard.mark_tray_panel_shown(std::time::Instant::now());
     }
-}
-
-#[allow(dead_code)]
-// Retained for the legacy TrayPanel surface mode; current default launches PopOut.
-pub fn schedule_startup_tray_panel_reveal_fallback(app: &AppHandle) {
-    const DELAY: std::time::Duration = std::time::Duration::from_millis(750);
-    let app = app.clone();
-    let _ = std::thread::spawn(move || {
-        std::thread::sleep(DELAY);
-        let app_on_main = app.clone();
-        if let Err(error) = app.run_on_main_thread(move || {
-            let Some(state) = app_on_main.try_state::<Mutex<AppState>>() else {
-                return;
-            };
-            let should_reveal = state
-                .lock()
-                .map(|mut guard| guard.take_startup_tray_reveal_fallback())
-                .unwrap_or(false);
-            if !should_reveal {
-                return;
-            }
-            let Some(window) = app_on_main.get_webview_window("main") else {
-                return;
-            };
-            let current = state
-                .lock()
-                .map(|guard| guard.surface_machine.current())
-                .unwrap_or(SurfaceMode::Hidden);
-            let visible = window.is_visible().unwrap_or(false);
-            let size = window
-                .outer_size()
-                .ok()
-                .map(|size| (size.width, size.height));
-            if should_force_tray_panel_reveal(current, visible, size) {
-                let layout_result = apply_window_layout(
-                    &window,
-                    SurfaceMode::TrayPanel,
-                    &SurfaceMode::TrayPanel.window_properties(),
-                );
-                match layout_result.and_then(|_| show_window(&window)) {
-                    Ok(()) => mark_tray_panel_shown(&app_on_main),
-                    Err(error) => {
-                        tracing::debug!("shell: startup tray reveal fallback show failed: {error}")
-                    }
-                }
-            }
-        }) {
-            tracing::debug!("shell: startup tray reveal fallback could not run: {error}");
-        }
-    });
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -1,0 +1,327 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>TokenBar 节奏行文案候选</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        --page: #0d0d0f;
+        --page-ink: #e6e6ea;
+        --page-muted: #85858b;
+        --page-line: #26262a;
+
+        /* 以下为浮窗浅色主题的真实取值 */
+        --card-bg: #f7f7f8;
+        --panel: #ebebed;
+        --ink: #1c1c1e;
+        --muted: #6d6d74;
+        --line: rgba(0, 0, 0, 0.1);
+        --bar-track: rgba(0, 0, 0, 0.08);
+        --yellow: #ffcc00; /* --usage-bar-high  浅色主题 */
+        --blue: #007aff;   /* --usage-bar-normal 浅色主题 */
+      }
+
+      * { box-sizing: border-box; }
+
+      body {
+        margin: 0;
+        background: var(--page);
+        color: var(--page-ink);
+        font-family: "Segoe UI Variable", "Microsoft YaHei UI", "PingFang SC", sans-serif;
+        letter-spacing: -0.015em;
+      }
+
+      .page { width: min(100%, 1100px); margin: 0 auto; padding: 36px 24px 72px; }
+
+      h1 { margin: 0 0 10px; font-size: 26px; font-weight: 720; letter-spacing: -0.04em; }
+      .lede { max-width: 640px; margin: 0 0 8px; color: var(--page-muted); font-size: 14px; line-height: 1.6; }
+      .lede strong { color: #c8c8cf; font-weight: 600; }
+
+      .toolbar {
+        display: flex; align-items: center; gap: 10px;
+        margin: 22px 0 30px; padding: 12px 14px;
+        border: 1px solid var(--page-line); border-radius: 12px; background: #141416;
+      }
+      .toolbar span { color: var(--page-muted); font-size: 13px; }
+      .toolbar button {
+        border: 1px solid #34343a; border-radius: 8px; padding: 6px 12px;
+        color: var(--page-ink); background: #1e1e21; font: inherit; font-size: 13px; cursor: pointer;
+      }
+      .toolbar button[aria-pressed="true"] { background: #2f2f35; border-color: #4a4a52; }
+
+      h2 {
+        margin: 40px 0 6px; font-size: 17px; font-weight: 680; letter-spacing: -0.01em;
+        padding-bottom: 9px; border-bottom: 1px solid var(--page-line);
+      }
+      .h2note { margin: 0 0 22px; color: var(--page-muted); font-size: 13px; line-height: 1.55; }
+
+      .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); gap: 22px; }
+
+      .option { border: 1px solid var(--page-line); border-radius: 14px; padding: 16px; background: #131315; }
+      .option-head { display: flex; align-items: baseline; gap: 9px; margin-bottom: 4px; }
+      .tag {
+        flex: none; border-radius: 6px; padding: 2px 7px;
+        background: #2c2c31; color: #d6d6dc; font-size: 12px; font-weight: 700; letter-spacing: 0;
+      }
+      .option-name { font-size: 15px; font-weight: 640; }
+      .option-note { margin: 0 0 14px; color: var(--page-muted); font-size: 12.5px; line-height: 1.5; }
+
+      /* ── 浮窗真实尺寸：328px 逻辑宽，卡片内边距 14px ── */
+      .stage { display: flex; flex-direction: column; gap: 12px; align-items: flex-start; }
+      .shot { transform-origin: top left; }
+      .caselabel { margin: 0 0 5px; color: #6f6f76; font-size: 11.5px; }
+
+      .card {
+        width: 328px; padding: 0 14px;
+        border-radius: 14px; background: var(--card-bg); color: var(--ink);
+        font-size: 13px;
+      }
+      .zone { border-radius: 10px; padding: 12px 12px 11px; background: var(--panel); }
+      .divider { height: 1px; margin: 11px 0; background: var(--line); }
+
+      .row { display: flex; align-items: center; justify-content: space-between; gap: 6px; }
+      .label { display: inline-flex; align-items: center; gap: 5px; min-width: 0; color: var(--muted); font-size: 11px; font-weight: 400; white-space: nowrap; }
+      .label svg { flex: none; width: 13px; height: 13px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+      .value { flex: none; color: var(--ink); font-size: 15px; font-weight: 720; font-variant-numeric: tabular-nums; white-space: nowrap; }
+      .value small { color: var(--muted); font-size: 11px; font-weight: 500; }
+      .sub { margin-top: 3px; color: var(--muted); font-size: 10px; line-height: 1.3; }
+      .sub + .sub { margin-top: -2px; }
+
+      /* 节奏行 */
+      .pace { display: flex; align-items: center; justify-content: flex-start; gap: 6px; }
+      .pace .label { overflow: visible; }
+      .pace-text { flex: 1 1 auto; text-align: left; font-size: 11px; font-variant-numeric: tabular-nums; }
+      .pace-text b { font-weight: 600; }
+      .ahead, .ahead .label { color: var(--yellow); }
+      .behind, .behind .label { color: var(--blue); }
+
+      .track { position: relative; height: 6px; margin-top: 4px; border-radius: 999px; background: var(--bar-track); overflow: hidden; }
+      .track i { position: absolute; inset: 0 auto 0 0; display: block; border-radius: inherit; background: var(--blue); }
+      .marker { position: absolute; top: -2px; width: 2px; height: 10px; border-radius: 1px; background: #7c7c83; }
+
+      /* 续航行 */
+      .runway { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 4px; }
+      .runway .label { font-weight: 400; }
+      .runway .label svg { color: var(--blue); }
+      .runway.warn .label svg { color: #b45309; }
+      .runway-value { flex: none; color: var(--ink); font-size: 11px; font-weight: 700; font-variant-numeric: tabular-nums; }
+
+      .pick {
+        margin: 46px 0 0; padding: 18px 20px;
+        border: 1px solid #2f2f35; border-radius: 14px; background: #16161a;
+        color: #c8c8cf; font-size: 13.5px; line-height: 1.65;
+      }
+      .pick code { padding: 2px 6px; border-radius: 5px; background: #2a2a30; color: #ffd48a; font-size: 12.5px; }
+    </style>
+  </head>
+  <body>
+    <main class="page">
+      <h1>节奏行文案候选</h1>
+      <p class="lede">
+        这行要表达的是：周额度每 7 天重置，系统把<strong>「这周已经过了多少时间」</strong>和<strong>「你已经用掉多少额度」</strong>做对比。
+        用得比时间快 = 需要留意（黄色，和额度条转黄同色）；比时间慢 = 有余量（蓝色，和额度条健康色同色）。
+      </p>
+      <p class="lede">
+        下面每个方案都用浮窗的<strong>真实尺寸和真实配色</strong>渲染（328px 宽、浅色主题），两种状态各看一遍。
+      </p>
+
+      <div class="toolbar">
+        <span>你的屏幕是 125% 缩放，实际显示会比 1:1 更大一些：</span>
+        <button type="button" data-zoom="1" aria-pressed="true">1:1（328px）</button>
+        <button type="button" data-zoom="1.25" aria-pressed="false">125%（实际观感）</button>
+        <button type="button" data-zoom="1.6" aria-pressed="false">放大看细节</button>
+      </div>
+
+      <h2>A · 节奏行</h2>
+      <p class="h2note">
+        每张卡都带上了它上面的「近 7 天使用」区块，方便你判断整体是否拥挤、会不会折行。
+      </p>
+
+      <div class="grid" id="pace-grid"></div>
+
+      <h2>B · 续航行</h2>
+      <p class="h2note">图标已按你的要求改成蓝色、文字取消加粗。这里只比文案。</p>
+
+      <div class="grid" id="runway-grid"></div>
+
+      <p class="pick">
+        看好之后直接回我编号就行，例如 <code>A2 + B2</code>。<br />
+        也可以只说「A 用第 2 个，B 保持现状」，或者你自己写一版文案发我。
+      </p>
+    </main>
+
+    <script>
+      const ICON_SPEED = '<svg viewBox="0 0 24 24"><path d="M3 12h3l2-5 4 10 2-5h7"/></svg>';
+      const ICON_TOKENS = '<svg viewBox="0 0 24 24"><path d="M5 20V11M12 20V5M19 20v-8M3 20h18"/></svg>';
+      const ICON_FORECAST = '<svg viewBox="0 0 24 24"><path d="M4 16l5-5 4 3 7-7M15 7h5v5"/></svg>';
+      const ICON_SUPPORT = '<svg viewBox="0 0 24 24"><path d="M5 12a7 7 0 0 1 14 0v5M5 14H3v4h4v-4M19 14h2v4h-4v-4"/></svg>';
+      const ICON_WARN = '<svg viewBox="0 0 24 24"><path d="M12 3l9 16H3z"/><path d="M12 10v4"/></svg>';
+
+      // 真实数据：本周已过 81%。超前档用了 88.7%，落后档用了 79.5%。
+      const AHEAD = { expected: 81, actual: 89, delta: 7.7 };
+      const BEHIND = { expected: 81, actual: 80, delta: 1.5 };
+
+      const paceOptions = [
+        {
+          tag: "A1",
+          name: "两数并列对照",
+          note: "不用理解任何术语，两个数自己比大小。差值不显示，靠颜色区分快慢。",
+          render: (d, dir) =>
+            `时间 ${d.expected}% · <b>已用 ${d.actual}%</b>`,
+        },
+        {
+          tag: "A2",
+          name: "结论式：比时间快 / 慢",
+          note: "一句话给结论，并且明确说出是在和「时间」比，不用自己算。",
+          render: (d, dir) =>
+            `<b>比时间${dir === "ahead" ? "快" : "慢"} ${d.delta}%</b>`,
+        },
+        {
+          tag: "A3",
+          name: "预算隐喻：超支 / 结余",
+          note: "最短，用花钱的比喻，一眼知道好坏；但没明说基准是时间。",
+          render: (d, dir) =>
+            `<b>${dir === "ahead" ? "超支" : "结余"} ${d.delta}%</b>`,
+        },
+        {
+          tag: "A4",
+          name: "完整版：时间 + 结论",
+          note: "信息最全，基准和结论都有；字数最多，注意是否偏挤。",
+          render: (d, dir) =>
+            `本周已过 ${d.expected}%，<b>${dir === "ahead" ? "用超" : "还省"} ${d.delta}%</b>`,
+        },
+      ];
+
+      const runwayOptions = [
+        {
+          tag: "B1",
+          name: "保持现状",
+          note: "现在就是这个说法。",
+          ok: ["够用到重置", "≈ 31 小时"],
+          warn: ["预计还能用", "≈ 53 小时"],
+        },
+        {
+          tag: "B2",
+          name: "点明「按当前速度」",
+          note: "说清楚这是基于当前消耗速度的推算，不是保证。",
+          ok: ["按当前速度够用到重置", ""],
+          warn: ["按当前速度约可用", "≈ 53 小时"],
+        },
+      ];
+
+      function usageBlock() {
+        return `
+          <div class="row">
+            <span class="label">${ICON_SPEED}最近输出速度</span>
+            <span class="value">23.0 <small>t/s</small></span>
+          </div>
+          <div class="divider"></div>
+          <div class="row">
+            <span class="label">${ICON_TOKENS}近 7 天使用</span>
+            <span class="value">1,810,672 <small>≈ 181万</small></span>
+          </div>
+          <div class="sub">等额 API 价值 ≈ $274.93 · ¥1979.46</div>
+          <div class="sub">热门模型: claude-sonnet-5</div>
+          <div class="divider"></div>`;
+      }
+
+      function paceCard(opt, dir) {
+        const d = dir === "ahead" ? AHEAD : BEHIND;
+        return `
+          <div class="card">
+            <div class="zone">
+              ${usageBlock()}
+              <div class="row pace ${dir}">
+                <span class="label">${ICON_FORECAST}</span>
+                <span class="pace-text">${opt.render(d, dir)}</span>
+              </div>
+              <div class="track">
+                <i style="width:${d.actual}%"></i>
+                <span class="marker" style="left:${d.expected}%"></span>
+              </div>
+              <div class="runway">
+                <span class="label">${ICON_SUPPORT}够用到重置</span>
+                <span class="runway-value">≈ 31 小时</span>
+              </div>
+            </div>
+          </div>`;
+      }
+
+      function runwayCard(opt, state) {
+        const [text, value] = state === "ok" ? opt.ok : opt.warn;
+        const icon = state === "ok" ? ICON_SUPPORT : ICON_WARN;
+        return `
+          <div class="card">
+            <div class="zone">
+              <div class="row pace ${state === "ok" ? "behind" : "ahead"}">
+                <span class="label">${ICON_FORECAST}</span>
+                <span class="pace-text">时间 81% · <b>已用 ${state === "ok" ? 80 : 89}%</b></span>
+              </div>
+              <div class="track">
+                <i style="width:${state === "ok" ? 80 : 89}%"></i>
+                <span class="marker" style="left:81%"></span>
+              </div>
+              <div class="runway ${state === "ok" ? "" : "warn"}">
+                <span class="label">${icon}${text}</span>
+                ${value ? `<span class="runway-value">${value}</span>` : ""}
+              </div>
+            </div>
+          </div>`;
+      }
+
+      document.getElementById("pace-grid").innerHTML = paceOptions
+        .map(
+          (opt) => `
+        <section class="option">
+          <div class="option-head"><span class="tag">${opt.tag}</span><span class="option-name">${opt.name}</span></div>
+          <p class="option-note">${opt.note}</p>
+          <div class="stage">
+            <div>
+              <p class="caselabel">用得比时间快（黄）</p>
+              <div class="shot">${paceCard(opt, "ahead")}</div>
+            </div>
+            <div>
+              <p class="caselabel">用得比时间慢（蓝）</p>
+              <div class="shot">${paceCard(opt, "behind")}</div>
+            </div>
+          </div>
+        </section>`
+        )
+        .join("");
+
+      document.getElementById("runway-grid").innerHTML = runwayOptions
+        .map(
+          (opt) => `
+        <section class="option">
+          <div class="option-head"><span class="tag">${opt.tag}</span><span class="option-name">${opt.name}</span></div>
+          <p class="option-note">${opt.note}</p>
+          <div class="stage">
+            <div>
+              <p class="caselabel">额度够用</p>
+              <div class="shot">${runwayCard(opt, "ok")}</div>
+            </div>
+            <div>
+              <p class="caselabel">额度偏紧</p>
+              <div class="shot">${runwayCard(opt, "warn")}</div>
+            </div>
+          </div>
+        </section>`
+        )
+        .join("");
+
+      const buttons = [...document.querySelectorAll("[data-zoom]")];
+      buttons.forEach((button) => {
+        button.addEventListener("click", () => {
+          const scale = button.dataset.zoom;
+          buttons.forEach((b) => b.setAttribute("aria-pressed", String(b === button)));
+          document.querySelectorAll(".shot").forEach((shot) => {
+            shot.style.transform = `scale(${scale})`;
+            shot.style.height = scale === "1" ? "" : `${shot.firstElementChild.offsetHeight * scale}px`;
+          });
+        });
+      });
+    </script>
+  </body>
+</html>

@@ -3,10 +3,29 @@ import { Field, Select, Toggle } from "../components/FormControls";
 import { useLocale } from "../hooks/useLocale";
 import type {
   FloatBarOrientation,
+  FloatBarResetWindow,
   FloatBarStyle,
   SettingsSnapshot,
   SettingsUpdate,
 } from "../types/bridge";
+import { FLOAT_BAR_MAX_RESET_WINDOWS } from "../types/bridge";
+
+/** Offered in cycle-length order, shortest first, so the list reads sensibly. */
+const RESET_WINDOW_CHOICES: FloatBarResetWindow[] = [
+  "primary",
+  "session",
+  "daily",
+  "weekly",
+  "monthly",
+];
+
+const RESET_WINDOW_LABEL_KEYS = {
+  primary: "FloatBarResetWindowPrimary",
+  session: "TaskbarWindowSession",
+  weekly: "TaskbarWindowWeekly",
+  daily: "TaskbarWindowDaily",
+  monthly: "TaskbarWindowMonthly",
+} as const;
 
 interface Props {
   settings: SettingsSnapshot;
@@ -52,6 +71,9 @@ export default function FloatBarSettingsSection({ settings, saving, set }: Props
   const commitScale = () => {
     scale.commit(scale.draft, (value) => set({ floatBarScale: value }));
   };
+  // The pre-setting behaviour when the key is absent: the provider's own
+  // leading window, which is what the bar has always printed.
+  const resetWindows = settings.floatBarResetWindows ?? ["primary"];
 
   return (
     <section className="settings-section">
@@ -152,6 +174,43 @@ export default function FloatBarSettingsSection({ settings, saving, set }: Props
             disabled={saving || !settings.floatBarEnabled}
             onChange={(v) => set({ floatBarShowResetInline: v })}
           />
+        </Field>
+        <Field
+          label={t("FloatBarResetWindowsLabel")}
+          description={t("FloatBarResetWindowsHelper")}
+        >
+          <div className="option-chips" role="group">
+            {RESET_WINDOW_CHOICES.map((kind) => {
+              const active = resetWindows.includes(kind);
+              // At the cap, the unselected chips are the ones that would push
+              // past it — disable those rather than silently dropping a pick.
+              const atCap =
+                !active && resetWindows.length >= FLOAT_BAR_MAX_RESET_WINDOWS;
+              return (
+                <button
+                  key={kind}
+                  type="button"
+                  className="option-chips__chip"
+                  aria-pressed={active}
+                  disabled={
+                    saving ||
+                    !settings.floatBarEnabled ||
+                    !settings.floatBarShowResetInline ||
+                    atCap
+                  }
+                  onClick={() =>
+                    set({
+                      floatBarResetWindows: active
+                        ? resetWindows.filter((value) => value !== kind)
+                        : [...resetWindows, kind],
+                    })
+                  }
+                >
+                  {t(RESET_WINDOW_LABEL_KEYS[kind])}
+                </button>
+              );
+            })}
+          </div>
         </Field>
         <Field
           label={t("FloatBarInvertColorsLabel")}

@@ -1,4 +1,4 @@
-import { Suspense, lazy, useCallback, useEffect, useState } from "react";
+import { Suspense, lazy, useCallback, useEffect, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import {
@@ -6,6 +6,7 @@ import {
   downloadUpdate,
   getBootstrapState,
   getSettingsSnapshot,
+  revealSettingsWindow,
   setSurfaceMode,
 } from "./lib/tauri";
 import { useSurfaceSnapshot } from "./hooks/useSurfaceSnapshot";
@@ -15,6 +16,11 @@ import { FLOATBAR_WINDOW_LABEL } from "./floatbar/api";
 import { LocaleProvider } from "./i18n/LocaleProvider";
 import type { BootstrapState, ThemePreference } from "./types/bridge";
 import type { SurfaceSnapshot } from "./hooks/useSurfaceSnapshot";
+
+/** Matches `shell::settings_window::SETTINGS_REVEALED_EVENT`. */
+const SETTINGS_REVEALED_EVENT = "settings-window-revealed";
+/** Matches `shell::settings_window::SETTINGS_HIDDEN_EVENT`. */
+const SETTINGS_HIDDEN_EVENT = "settings-window-hidden";
 
 const Settings = lazy(() => import("./surfaces/Settings"));
 const PopOutPanel = lazy(() => import("./surfaces/PopOutPanel"));
@@ -34,7 +40,7 @@ function isFloatBarWindow(): boolean {
   return getCurrentWebviewWindow().label === FLOATBAR_WINDOW_LABEL;
 }
 
-/** True when running inside the detached flyout ("Pop Out Dashboard") window. */
+/** True when running inside the detached "Open Tray Panel" window. */
 function isFlyoutWindow(): boolean {
   return getCurrentWebviewWindow().label === "flyout";
 }
@@ -190,7 +196,7 @@ function AppInner() {
     );
   }
 
-  // Detached flyout ("Pop Out Dashboard") window — render TrayPanel directly.
+  // Detached "Open Tray Panel" window — render TrayPanel directly.
   // TrayPanel is statically imported (not lazy), so no Suspense boundary is
   // needed here, unlike the other detached-window branches above.
   if (isFlyoutWindow()) {
@@ -210,8 +216,12 @@ function SurfaceRouter({
   switch (surface.mode) {
     case "hidden":
       return null;
-    case "trayPanel":
-      return <TrayPanel state={state} />;
+    // "trayPanel" was removed from this switch: `main`'s surface-mode
+    // machine can no longer enter `SurfaceMode::TrayPanel` at all — the tray
+    // panel is its own dedicated `flyout` window now (see
+    // `isFlyoutWindow()` above), `commands::set_surface_mode` rejects a
+    // `trayPanel` request outright, and proof mode routes it to the flyout
+    // window too. This case was therefore unreachable dead code.
     case "popOut": {
       const providerId =
         surface.target.kind === "provider"
@@ -230,7 +240,9 @@ function SurfaceRouter({
         </Suspense>
       );
     default:
-      return <TrayPanel state={state} />;
+      // Unknown or future modes must fail closed. Falling back to TrayPanel
+      // here would silently recreate a second tray UI inside the main window.
+      return null;
   }
 }
 
@@ -258,9 +270,109 @@ function DetachedSettingsApp({ state }: { state: BootstrapState }) {
 
   return (
     <Suspense fallback={<SurfaceFallback />}>
-      <main className="settings-surface settings-surface--full">
-        <Settings state={state} initialTab={tab} />
-      </main>
+      <DetachedSettingsReadyContent state={state} tab={tab} />
     </Suspense>
+  );
+}
+
+function DetachedSettingsReadyContent({
+  state,
+  tab,
+}: {
+  state: BootstrapState;
+  tab: string;
+}) {
+  const frameRef = useRef<HTMLElement>(null);
+
+  useEffect(() => {
+    // The frame's opacity tracks the window's visibility, driven by two events
+    // from Rust. Parked at 0 while hidden so `show()` can only ever reveal
+    // something already transparent — otherwise the window paints opaque for
+    // the frame or two the reveal event spends crossing IPC, then blinks out
+    // when the fade starts from 0. That is the flash, and no easing fixes it.
+    //
+    // Safe to park at 0 on mount because this component commits while the
+    // window is still hidden: it is prewarmed, and it is what then asks to be
+    // revealed.
+    const frame = frameRef.current;
+    if (frame) frame.style.opacity = "0";
+
+    let disposed = false;
+    const unlistens: Array<() => void> = [];
+
+    const settle = () => {
+      const el = frameRef.current;
+      if (el) el.style.opacity = "1";
+      return el;
+    };
+
+    void (async () => {
+      // The window is prewarmed and re-shown rather than recreated, so the
+      // React tree never remounts and a CSS mount animation would play once per
+      // app launch. The Web Animations API restarts it on every open with no
+      // remount underneath.
+      //
+      // Only the frontend-drawn frame is animated: this window is borderless
+      // (`force_borderless_transparent_resizable`), so the card below IS the
+      // whole window as far as the user can see.
+      unlistens.push(
+        await listen(SETTINGS_REVEALED_EVENT, () => {
+          // Resting state first, so a cancelled or unsupported animation still
+          // leaves a visible window rather than an invisible one.
+          const el = settle();
+          if (!el) return;
+          // Someone who asked the OS to stop animating gets no animation, not a
+          // shorter one.
+          if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+            return;
+          }
+          el.animate(
+            [
+              { opacity: 0, transform: "scale(0.972) translateY(-8px)" },
+              { opacity: 1, transform: "scale(1) translateY(0)" },
+            ],
+            {
+              duration: 170,
+              // Windows' own decelerating curve: the motion is over before it
+              // registers as motion, so the window stops feeling abrupt without
+              // feeling slow to open.
+              easing: "cubic-bezier(0, 0, 0, 1)",
+            },
+          );
+        }),
+      );
+      unlistens.push(
+        await listen(SETTINGS_HIDDEN_EVENT, () => {
+          const el = frameRef.current;
+          if (el) el.style.opacity = "0";
+        }),
+      );
+
+      if (disposed) return;
+
+      // Strictly after both listeners are live. Reversed, Rust could show the
+      // window and emit the reveal before anything is listening — and a lost
+      // reveal leaves a visible window whose frame is still parked at 0, i.e. a
+      // Settings window that opens blank.
+      //
+      // This component cannot commit until the lazy Settings chunk has loaded,
+      // so the DOM is ready now. Do not wait for requestAnimationFrame:
+      // Chromium may pause animation frames for a hidden prewarmed window.
+      await revealSettingsWindow().catch(() => {});
+    })();
+
+    return () => {
+      disposed = true;
+      for (const unlisten of unlistens) unlisten();
+    };
+  }, []);
+
+  return (
+    <main
+      ref={frameRef}
+      className="settings-surface settings-surface--full settings-window-frame"
+    >
+      <Settings state={state} initialTab={tab} />
+    </main>
   );
 }

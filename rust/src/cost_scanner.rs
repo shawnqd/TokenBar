@@ -1,4 +1,4 @@
-//! Local cost-usage scanner for Codex and Claude
+//! Local cost-usage scanner for Codex, Claude and Grok
 //!
 //! Scans local JSONL log files to aggregate token usage and calculate costs.
 //!
@@ -217,6 +217,77 @@ struct ClaudeUsageRecord {
     cost: f64,
 }
 
+/// `costUsdTicks` is USD scaled by 1e9.
+///
+/// The field states no unit beyond its name, so the scale is pinned by
+/// magnitude against real logs: one observed turn reports 12_971_000_000 ticks
+/// for 2.7M tokens on `grok-4.5-build`. At 1e9 that is $12.97, the right order
+/// for that many tokens; at 1e6 it would be $12,971 for a single turn, which no
+/// pricing makes sense of. Isolated here so a correction is one constant, not a
+/// hunt through the scanner.
+const GROK_COST_TICKS_PER_USD: f64 = 1e9;
+
+/// One `session/update` line of a Grok `updates.jsonl`.
+#[derive(Debug, Deserialize)]
+struct GrokUpdateLine {
+    /// Unix seconds. The turn is bucketed by this, not by the file's mtime.
+    timestamp: Option<i64>,
+    params: Option<GrokUpdateParams>,
+}
+
+#[derive(Debug, Deserialize)]
+struct GrokUpdateParams {
+    update: Option<GrokUpdate>,
+    #[serde(rename = "_meta")]
+    meta: Option<GrokUpdateMeta>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct GrokUpdate {
+    session_update: Option<String>,
+    usage: Option<GrokUsage>,
+}
+
+#[derive(Debug, Deserialize)]
+struct GrokUpdateMeta {
+    #[serde(rename = "eventId")]
+    event_id: Option<String>,
+}
+
+/// Token and cost totals for a turn, or for one model within a turn.
+///
+/// `cached_read_tokens` is a SUBSET of `input_tokens`, unlike Claude's cache
+/// fields which sit alongside its input count: the logs satisfy
+/// `inputTokens + outputTokens == totalTokens` exactly while
+/// `cachedReadTokens < inputTokens`. Adding it to the input total would
+/// double-count every cached read, which on these logs is the majority of all
+/// input.
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct GrokUsage {
+    input_tokens: Option<u64>,
+    output_tokens: Option<u64>,
+    cached_read_tokens: Option<u64>,
+    cost_usd_ticks: Option<f64>,
+    model_usage: Option<HashMap<String, GrokUsage>>,
+}
+
+impl GrokUsage {
+    fn input(&self) -> u64 {
+        self.input_tokens.unwrap_or(0)
+    }
+    fn output(&self) -> u64 {
+        self.output_tokens.unwrap_or(0)
+    }
+    fn cached(&self) -> u64 {
+        self.cached_read_tokens.unwrap_or(0)
+    }
+    fn cost_usd(&self) -> f64 {
+        self.cost_usd_ticks.unwrap_or(0.0) / GROK_COST_TICKS_PER_USD
+    }
+}
+
 /// Cost usage scanner
 pub struct CostScanner {
     days: u32,
@@ -290,6 +361,106 @@ impl CostScanner {
         self.walk_claude_files(&projects_dir, &cutoff, cancel, &mut handle_file);
 
         summary
+    }
+
+    /// Scan Grok local logs
+    pub fn scan_grok(&self) -> CostSummary {
+        self.scan_grok_with_cancel(None)
+    }
+
+    /// Scan Grok local logs, stopping early when the caller cancels the scan.
+    ///
+    /// The Grok CLI records one `turn_completed` event per assistant turn in
+    /// each session's `updates.jsonl`, carrying token counts, a per-model
+    /// breakdown and a cost. Those turn totals are **not** cumulative — that was
+    /// checked against real logs before this was written, because summing
+    /// cumulative snapshots would have inflated every figure. In three
+    /// multi-turn sessions, zero had non-decreasing totals.
+    pub fn scan_grok_with_cancel(&self, cancel: Option<&AtomicBool>) -> CostSummary {
+        let sessions_dir = self.get_grok_sessions_dir();
+        if !sessions_dir.exists() {
+            return CostSummary::default();
+        }
+
+        let mut summary = CostSummary::default();
+        let today = Utc::now().date_naive();
+        summary.period_start = Some(today - Duration::days(self.days as i64));
+        summary.period_end = Some(today);
+        let cutoff = Utc::now() - Duration::days(self.days as i64);
+
+        // One event can be replayed into a resumed session's log, so the same
+        // turn must not be counted twice.
+        let mut seen = HashSet::new();
+        let mut handle_file = |path: &Path| {
+            let counted = for_each_grok_turn(path, &cutoff, &mut seen, cancel, |turn| {
+                add_grok_turn_to_summary(&mut summary, turn);
+            });
+            if counted > 0 {
+                summary.sessions_count += 1;
+            }
+        };
+        self.walk_grok_files(&sessions_dir, &cutoff, cancel, &mut handle_file);
+
+        summary
+    }
+
+    /// Root of the Grok CLI's per-session logs.
+    ///
+    /// `GROK_HOME` is honoured the same way [`crate::providers::GrokProvider`]
+    /// honours it for `auth.json`, so a relocated CLI stays readable by both.
+    fn get_grok_sessions_dir(&self) -> PathBuf {
+        if let Ok(grok_home) = std::env::var("GROK_HOME") {
+            let trimmed = grok_home.trim();
+            if !trimmed.is_empty() {
+                return PathBuf::from(trimmed).join("sessions");
+            }
+        }
+        dirs::home_dir()
+            .unwrap_or_else(|| PathBuf::from("."))
+            .join(".grok")
+            .join("sessions")
+    }
+
+    /// Walk the session tree for the one file per session that carries usage.
+    ///
+    /// A session directory holds a dozen files — chat history, prompts, rewind
+    /// points, a summary — and only `updates.jsonl` has the turn events. Reading
+    /// the rest would be pure I/O for nothing; `chat_history.jsonl` alone is
+    /// often the largest file in the directory.
+    fn walk_grok_files<F>(
+        &self,
+        dir: &Path,
+        cutoff: &DateTime<Utc>,
+        cancel: Option<&AtomicBool>,
+        on_file: &mut F,
+    ) where
+        F: FnMut(&Path),
+    {
+        if is_cancelled(cancel) {
+            return;
+        }
+        let entries = match fs::read_dir(dir) {
+            Ok(entries) => entries,
+            Err(_) => return,
+        };
+
+        for entry in entries.flatten() {
+            if is_cancelled(cancel) {
+                break;
+            }
+            let path = entry.path();
+            if path.is_dir() {
+                self.walk_grok_files(&path, cutoff, cancel, on_file);
+            } else if path.file_name().is_some_and(|name| name == "updates.jsonl")
+                && let Ok(metadata) = fs::metadata(&path)
+                && let Ok(modified) = metadata.modified()
+            {
+                let modified_dt: DateTime<Utc> = modified.into();
+                if modified_dt >= *cutoff {
+                    on_file(&path);
+                }
+            }
+        }
     }
 
     fn get_codex_sessions_dirs(&self) -> Vec<PathBuf> {
@@ -594,6 +765,82 @@ fn add_claude_record_to_daily_costs(
     }
 }
 
+/// Stream the de-duplicated, in-window `turn_completed` events of one Grok
+/// `updates.jsonl` into `on_turn`, returning how many were counted.
+fn for_each_grok_turn<F>(
+    path: &Path,
+    cutoff: &DateTime<Utc>,
+    seen: &mut HashSet<String>,
+    cancel: Option<&AtomicBool>,
+    mut on_turn: F,
+) -> u32
+where
+    F: FnMut(&GrokUsage),
+{
+    let Ok(file) = File::open(path) else {
+        return 0;
+    };
+
+    let mut counted = 0;
+    for line in BufReader::new(file).lines().map_while(Result::ok) {
+        if is_cancelled(cancel) {
+            break;
+        }
+        // Every other line in this file is a tool call, a diff or a screenshot
+        // payload — some of them very large. Rejecting on the raw bytes avoids
+        // paying serde for lines that cannot match.
+        if !line.contains("turn_completed") {
+            continue;
+        }
+        let Ok(parsed) = serde_json::from_str::<GrokUpdateLine>(&line) else {
+            continue;
+        };
+        let Some(params) = parsed.params else { continue };
+        let Some(update) = params.update else { continue };
+        if update.session_update.as_deref() != Some("turn_completed") {
+            continue;
+        }
+        let Some(usage) = update.usage else { continue };
+
+        if let Some(timestamp) = parsed.timestamp
+            && let Some(recorded) = DateTime::from_timestamp(timestamp, 0)
+            && recorded < *cutoff
+        {
+            continue;
+        }
+
+        if let Some(event_id) = params.meta.and_then(|meta| meta.event_id)
+            && !seen.insert(event_id)
+        {
+            continue;
+        }
+
+        on_turn(&usage);
+        counted += 1;
+    }
+
+    counted
+}
+
+fn add_grok_turn_to_summary(summary: &mut CostSummary, turn: &GrokUsage) {
+    summary.input_tokens += turn.input();
+    summary.output_tokens += turn.output();
+    summary.cached_tokens += turn.cached();
+    summary.total_cost_usd += turn.cost_usd();
+
+    // The turn names its own models, so no model table has to be kept in step
+    // with whatever x.ai ships next. A turn with no breakdown still contributes
+    // its totals above; it simply cannot say which model earned them, and
+    // inventing a name for it would be worse than leaving it unattributed.
+    for (model, model_usage) in turn.model_usage.iter().flatten() {
+        *summary.by_model.entry(model.clone()).or_insert(0.0) += model_usage.cost_usd();
+        let tokens = summary.by_model_tokens.entry(model.clone()).or_default();
+        tokens.input_tokens += model_usage.input();
+        tokens.output_tokens += model_usage.output();
+        tokens.cached_tokens += model_usage.cached();
+    }
+}
+
 /// Check if any cost usage sources are available
 #[allow(dead_code)]
 pub fn has_cost_usage_sources() -> bool {
@@ -826,6 +1073,115 @@ mod tests {
         );
         assert!(scan_codex_file_cost(&path) > 0.0);
         let _ = std::fs::remove_file(&path);
+    }
+
+    /// A verbatim `turn_completed` line, trimmed only of a long tool payload.
+    /// Shape and field names come from a real `~/.grok/sessions/**/updates.jsonl`.
+    const GROK_TURN: &str = r#"{"timestamp":1785573295,"method":"_x.ai/session/update","params":{"sessionId":"019fbc54","update":{"sessionUpdate":"turn_completed","stop_reason":"end_turn","usage":{"inputTokens":2672891,"outputTokens":51097,"totalTokens":2723988,"cachedReadTokens":2561920,"modelCalls":35,"costUsdTicks":12971000000,"modelUsage":{"grok-4.5-build":{"inputTokens":2672891,"outputTokens":51097,"cachedReadTokens":2561920,"costUsdTicks":12971000000}}}},"_meta":{"eventId":"019fbc54-2176"}}}"#;
+
+    fn grok_turn_usage(line: &str) -> GrokUsage {
+        serde_json::from_str::<GrokUpdateLine>(line)
+            .expect("parses")
+            .params
+            .and_then(|params| params.update)
+            .and_then(|update| update.usage)
+            .expect("carries usage")
+    }
+
+    #[test]
+    fn reads_grok_turn_totals_and_per_model_breakdown() {
+        let mut summary = CostSummary::default();
+        add_grok_turn_to_summary(&mut summary, &grok_turn_usage(GROK_TURN));
+
+        assert_eq!(summary.input_tokens, 2_672_891);
+        assert_eq!(summary.output_tokens, 51_097);
+        // A subset of the input count, not an addition to it: the log's own
+        // `totalTokens` is exactly input + output.
+        assert_eq!(summary.cached_tokens, 2_561_920);
+        assert_eq!(
+            summary.input_tokens + summary.output_tokens,
+            2_723_988,
+            "must match the totalTokens the log itself reports"
+        );
+        // 12_971_000_000 ticks at 1e9 ticks per USD.
+        assert!((summary.total_cost_usd - 12.971).abs() < 1e-9);
+        assert_eq!(
+            summary.by_model_tokens.get("grok-4.5-build").map(ModelTokenCounts::total),
+            Some(2_723_988)
+        );
+    }
+
+    /// The turn totals are per-turn, not a running session total. Verified
+    /// against real logs before the scanner was written: summing cumulative
+    /// snapshots would have multiplied every reported figure.
+    #[test]
+    fn sums_grok_turns_rather_than_taking_the_last() {
+        let mut summary = CostSummary::default();
+        let usage = grok_turn_usage(GROK_TURN);
+        add_grok_turn_to_summary(&mut summary, &usage);
+        add_grok_turn_to_summary(&mut summary, &usage);
+        assert_eq!(summary.output_tokens, 51_097 * 2);
+    }
+
+    #[test]
+    fn counts_a_grok_turn_once_across_replayed_logs() {
+        let dir = std::env::temp_dir().join(format!("grok-scan-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let path = dir.join("updates.jsonl");
+        // The same event id twice, as a resumed session's log replays it.
+        std::fs::write(&path, format!("{GROK_TURN}\n{GROK_TURN}\n")).expect("write");
+
+        let cutoff = DateTime::from_timestamp(0, 0).expect("epoch");
+        let mut seen = HashSet::new();
+        let mut summary = CostSummary::default();
+        let counted = for_each_grok_turn(&path, &cutoff, &mut seen, None, |turn| {
+            add_grok_turn_to_summary(&mut summary, turn);
+        });
+
+        assert_eq!(counted, 1, "the replayed copy must not be counted again");
+        assert_eq!(summary.output_tokens, 51_097);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn ignores_grok_turns_older_than_the_window() {
+        let dir = std::env::temp_dir().join(format!("grok-window-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let path = dir.join("updates.jsonl");
+        std::fs::write(&path, format!("{GROK_TURN}\n")).expect("write");
+
+        // The record's timestamp is fixed, so a cutoff after it must exclude it.
+        let cutoff = DateTime::from_timestamp(1_785_573_296, 0).expect("valid");
+        let mut seen = HashSet::new();
+        let counted = for_each_grok_turn(&path, &cutoff, &mut seen, None, |_| {});
+
+        assert_eq!(counted, 0);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Non-usage lines share the file and must be skipped without being parsed
+    /// as turns — `chat_history` payloads in particular can be megabytes.
+    #[test]
+    fn skips_grok_lines_that_are_not_completed_turns() {
+        let dir = std::env::temp_dir().join(format!("grok-other-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let path = dir.join("updates.jsonl");
+        std::fs::write(
+            &path,
+            concat!(
+                r#"{"timestamp":1785573109,"params":{"update":{"sessionUpdate":"tool_call_update","status":"completed"}}}"#,
+                "\n",
+                "not json at all\n",
+            ),
+        )
+        .expect("write");
+
+        let cutoff = DateTime::from_timestamp(0, 0).expect("epoch");
+        let mut seen = HashSet::new();
+        let counted = for_each_grok_turn(&path, &cutoff, &mut seen, None, |_| {});
+
+        assert_eq!(counted, 0);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

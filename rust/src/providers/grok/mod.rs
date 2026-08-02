@@ -30,7 +30,7 @@ impl GrokProvider {
             metadata: ProviderMetadata {
                 id: ProviderId::Grok,
                 display_name: "Grok",
-                session_label: "Monthly",
+                session_label: "Weekly",
                 weekly_label: "On-demand",
                 supports_opus: false,
                 supports_credits: false,
@@ -298,6 +298,31 @@ struct GrokBillingSnapshot {
     resets_at: Option<DateTime<Utc>>,
 }
 
+/// Length of Grok's usage cycle.
+///
+/// This is a **declaration, not a measurement**, and it has to be: the billing
+/// response yields one percentage and one reset timestamp, and a single instant
+/// cannot state how long the period that ends at it was. Nothing in the payload
+/// carries the cycle, so somebody has to assert it.
+///
+/// It used to assert a calendar month, computed by subtracting one month from
+/// the reset date. That looked like a derivation but was not one — it justified
+/// itself by citing `session_label: "Monthly"`, a constant a few lines up in
+/// this same file, so the two agreed only because they were the same guess.
+/// Observed account behaviour is a weekly cycle, and an observation beats a
+/// circular citation, so the declaration follows the observation.
+///
+/// Declared unconditionally rather than only when a reset date arrives. The
+/// cycle length is a property of the plan, not of whether one response happened
+/// to include a timestamp — and gating it on that timestamp is what left Grok
+/// with no identifiable window at all whenever the date was missing.
+///
+/// The length is load-bearing beyond the label: `UsagePace` falls back to its
+/// caller's default when it is absent, decides the reset is further away than
+/// one window, and returns no forecast at all. The frontend independently
+/// refuses to forecast a window with no `windowMinutes`, so it was gated twice.
+const CYCLE_WINDOW_MINUTES: u32 = 7 * 24 * 60;
+
 fn result_from_billing(
     billing: GrokBillingSnapshot,
     source_label: &str,
@@ -307,7 +332,7 @@ fn result_from_billing(
 ) -> ProviderFetchResult {
     let mut usage = UsageSnapshot::new(RateWindow::with_details(
         billing.used_percent,
-        None,
+        Some(CYCLE_WINDOW_MINUTES),
         billing.resets_at,
         None,
     ));
@@ -535,5 +560,44 @@ mod tests {
     fn splits_grpc_web_data_frames() {
         let data = [0, 0, 0, 0, 2, 1, 2, 0x80, 0, 0, 0, 1, b'x'];
         assert_eq!(grpc_web_data_frames(&data), vec![vec![1, 2]]);
+    }
+
+    /// The cycle length must not depend on whether a reset date came back.
+    ///
+    /// It used to: the length was computed *from* the reset timestamp, so a
+    /// billing response without one published a percentage with no window at
+    /// all. Downstream that window is unidentifiable — the taskbar strip could
+    /// not name it as any cycle, and the forecast refused to run.
+    #[test]
+    fn declares_its_cycle_with_or_without_a_reset_date() {
+        for resets_at in [Some(Utc::now() + chrono::Duration::days(3)), None] {
+            let result = result_from_billing(
+                GrokBillingSnapshot {
+                    used_percent: 42.0,
+                    resets_at,
+                },
+                "grok-web",
+                None,
+                None,
+                None,
+            );
+            assert_eq!(
+                result.usage.primary.window_minutes,
+                Some(CYCLE_WINDOW_MINUTES),
+                "resets_at={resets_at:?}"
+            );
+            assert_eq!(result.usage.primary.resets_at, resets_at);
+        }
+    }
+
+    /// The slot name and the declared length have to state the same cycle.
+    ///
+    /// They are read by two different consumers — the dashboard card prints the
+    /// name, the taskbar strip identifies by the length — and when they
+    /// disagreed the two surfaces described the same quota differently.
+    #[test]
+    fn the_slot_name_agrees_with_the_declared_length() {
+        assert_eq!(GrokProvider::new().metadata.session_label, "Weekly");
+        assert_eq!(CYCLE_WINDOW_MINUTES, 7 * 24 * 60);
     }
 }

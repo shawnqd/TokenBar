@@ -7,6 +7,9 @@ describe("providerSupportsChartData", () => {
     expect(providerSupportsChartData("claude")).toBe(true);
     expect(providerSupportsChartData("openai")).toBe(true);
     expect(providerSupportsChartData("OpenAI")).toBe(true);
+    // Grok has a local session-log scanner in Rust. It was absent here for a
+    // release: the backend produced the data and the card never asked for it.
+    expect(providerSupportsChartData("grok")).toBe(true);
 
     expect(providerSupportsChartData("copilot")).toBe(false);
     expect(providerSupportsChartData("cursor")).toBe(false);

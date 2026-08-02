@@ -194,6 +194,21 @@ impl ProofCommand {
 /// Immediately transition to the proof-mode target surface.
 ///
 /// Called from the Tauri `setup` closure when proof mode is active.
+///
+/// `SurfaceMode::TrayPanel` is special-cased to open the real dedicated
+/// `flyout` window (`shell::flyout_window::open_or_focus`) instead of going
+/// through `shell::transition_to_target`, which only ever operates on the
+/// shared `main` window. `main` cannot show the tray panel at all anymore —
+/// `commands::set_surface_mode` rejects a `trayPanel` request outright, and
+/// every real tray-icon click opens the flyout window directly
+/// (`flyout_window::toggle_with_blur_consume`) — so routing proof mode's
+/// `trayPanel` target through `main` would either fail outright or exercise a
+/// dead code path, producing a visibly different window (size/position/
+/// resize behavior all come from `flyout_window.rs`'s own independent logic,
+/// not `main`'s). Safe to call `open_or_focus` synchronously here because
+/// `activate` is always invoked from inside `tauri::async_runtime::spawn` in
+/// `main.rs` — `open_or_focus`'s `WebviewWindowBuilder::build()` deadlocks if
+/// ever called synchronously from a Tauri command's own thread.
 pub fn activate(app: &AppHandle) {
     let config = {
         let st = app.state::<Mutex<AppState>>();
@@ -214,6 +229,14 @@ pub fn activate(app: &AppHandle) {
         config.settings_tab,
         position,
     );
+
+    if target == SurfaceMode::TrayPanel {
+        match shell::flyout_window::open_or_focus(app, position) {
+            Ok(()) => tracing::info!("proof-harness: flyout open succeeded"),
+            Err(err) => tracing::error!("proof-harness: flyout open FAILED: {err}"),
+        }
+        return;
+    }
 
     match shell::transition_to_target(app, target, config.surface_target(), position) {
         Ok(mode) => tracing::info!("proof-harness: transition succeeded → {mode:?}"),
@@ -346,14 +369,14 @@ fn execute_proof_command(
     }
 }
 
+// Opens the real dedicated `flyout` window (same as an actual tray-icon
+// click) instead of `shell::reopen_to_target`'s `main`-window path — see
+// `activate`'s doc comment above for why. Must run from an async command
+// (see `commands::run_proof_command`) — `open_or_focus` deadlocks on Windows
+// if its first-ever `WebviewWindowBuilder::build()` runs synchronously.
 fn open_proof_tray_panel(app: &AppHandle) -> Result<ProofCommandOutcome, String> {
     let position = shell::tray_panel_position(app).or_else(|| shell::shortcut_panel_position(app));
-    shell::reopen_to_target(
-        app,
-        SurfaceMode::TrayPanel,
-        SurfaceTarget::Summary,
-        position,
-    )?;
+    shell::flyout_window::open_or_focus(app, position)?;
     Ok(ProofCommandOutcome::SILENT)
 }
 
@@ -393,6 +416,13 @@ fn open_proof_about_path(app: &AppHandle) -> Result<ProofCommandOutcome, String>
 }
 
 fn hide_proof_surface(app: &AppHandle) -> Result<ProofCommandOutcome, String> {
+    // The flyout is a separate window from `main` (see `open_proof_tray_panel`
+    // above) — `shell::hide_to_tray` only ever knows about `main`, so it must
+    // be dismissed here explicitly or a hide-surface proof command issued
+    // while the flyout is open would silently no-op on it.
+    if shell::flyout_window::is_open(app) {
+        shell::flyout_window::hide(app)?;
+    }
     shell::hide_to_tray(app)?;
     Ok(ProofCommandOutcome::SILENT)
 }
@@ -695,15 +725,15 @@ mod tests {
 
     #[test]
     fn parse_settings_with_tab() {
-        with_proof_mode_env(Some("settings:apiKeys"), || {
+        with_proof_mode_env(Some("settings:menuBar"), || {
             let cfg = ProofConfig::from_env().unwrap();
             assert_eq!(cfg.target_surface, "settings");
-            assert_eq!(cfg.settings_tab.as_deref(), Some("apiKeys"));
+            assert_eq!(cfg.settings_tab.as_deref(), Some("menuBar"));
             assert_eq!(cfg.surface_mode(), SurfaceMode::Settings);
             assert_eq!(
                 cfg.surface_target(),
                 SurfaceTarget::Settings {
-                    tab: "apiKeys".into()
+                    tab: "menuBar".into()
                 }
             );
         });
@@ -827,7 +857,7 @@ mod tests {
         let (_, items) = native_menu_snapshot_for_settings(&providers, &settings, "tray");
 
         assert!(items.iter().any(|item| item == "すべて更新"));
-        assert!(items.iter().any(|item| item == "ウィンドウを表示"));
+        assert!(items.iter().any(|item| item == "ダッシュボードを開く"));
         assert!(!items.iter().any(|item| item == "Refresh All"));
     }
 

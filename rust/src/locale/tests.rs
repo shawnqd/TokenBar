@@ -69,12 +69,15 @@ fn test_japanese_menu_card_locale_values_are_translated() {
         (LocaleKey::DetailWindowModelSpecific, "モデル別"),
         (LocaleKey::DetailWindowTertiary, "第3枠"),
         (LocaleKey::DetailWindowExhausted, "使い切りました"),
-        (LocaleKey::DetailPaceTitle, "ペース"),
+        (LocaleKey::DetailPaceTitle, "今週のペース"),
         (LocaleKey::DetailPaceOnTrack, "順調"),
-        (LocaleKey::DetailPaceAhead, "先行"),
-        (LocaleKey::DetailPaceBehind, "遅れ"),
-        (LocaleKey::DetailPaceRunsOutIn, "残り"),
-        (LocaleKey::DetailPaceWillLastToReset, "リセットまで持ちます"),
+        (LocaleKey::DetailPaceAhead, "超過"),
+        (LocaleKey::DetailPaceBehind, "余裕"),
+        (LocaleKey::DetailPaceRunsOutIn, "この速度で約"),
+        (
+            LocaleKey::DetailPaceWillLastToReset,
+            "この速度ならリセットまで足ります",
+        ),
         (LocaleKey::DetailCostTitle, "コスト"),
         (LocaleKey::DetailCostUsed, "使用済み"),
         (LocaleKey::DetailCostLimit, "上限"),
@@ -166,8 +169,8 @@ fn test_japanese_tray_panel_locale_values_are_translated() {
             "すべてのプロバイダーを表示",
         ),
         (LocaleKey::PanelShowFewerProviders, "表示を減らす"),
-        (LocaleKey::PanelExpected, "予測"),
-        (LocaleKey::PanelActual, "実績"),
+        (LocaleKey::PanelExpected, "目安"),
+        (LocaleKey::PanelActual, "使用済み"),
     ];
 
     for (key, expected) in cases {
@@ -202,8 +205,8 @@ fn test_chinese_tray_panel_locale_values_are_translated() {
         ),
         (LocaleKey::PanelShowAllProviders, "显示所有提供者"),
         (LocaleKey::PanelShowFewerProviders, "显示较少提供者"),
-        (LocaleKey::PanelExpected, "预期"),
-        (LocaleKey::PanelActual, "实际"),
+        (LocaleKey::PanelExpected, "预计"),
+        (LocaleKey::PanelActual, "已用"),
     ];
 
     for (key, expected) in cases {
@@ -238,8 +241,8 @@ fn test_korean_tray_panel_locale_values_are_translated() {
         ),
         (LocaleKey::PanelShowAllProviders, "모든 제공자 표시"),
         (LocaleKey::PanelShowFewerProviders, "적은 제공자 표시"),
-        (LocaleKey::PanelExpected, "예상"),
-        (LocaleKey::PanelActual, "실제"),
+        (LocaleKey::PanelExpected, "기준"),
+        (LocaleKey::PanelActual, "사용"),
     ];
 
     for (key, expected) in cases {
@@ -284,7 +287,7 @@ fn test_spanish_tray_panel_locale_values_are_translated() {
             "Mostrar menos proveedores",
         ),
         (LocaleKey::PanelExpected, "Esperado"),
-        (LocaleKey::PanelActual, "Real"),
+        (LocaleKey::PanelActual, "Usado"),
     ];
 
     for (key, expected) in cases {

@@ -468,6 +468,10 @@ fn scan_local_cost(
     match provider_id {
         "codex" => Some(scanner.scan_codex_with_cancel(cancel)),
         "claude" => Some(scanner.scan_claude_with_cancel(cancel)),
+        "grok" => Some(scanner.scan_grok_with_cancel(cancel)),
+        // Everything else has no local log this app knows how to read, so the
+        // recent-usage block stays absent rather than showing a zero it did not
+        // measure.
         _ => None,
     }
 }

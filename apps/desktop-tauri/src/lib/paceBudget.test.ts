@@ -8,6 +8,9 @@ function snapshot(
   return {
     usedPercent: 20,
     remainingPercent: 80,
+    // 10 hours falls in no named band, which is fine — pace maths reads the
+    // length, not the cycle name.
+    kind: null,
     windowMinutes: 10 * 60,
     resetsAt: "2026-06-12T10:00:00.000Z",
     resetDescription: null,

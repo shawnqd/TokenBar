@@ -27,6 +27,30 @@ choices return to the user instead of being guessed.
 - The executor stays inside the task package and does not opportunistically
   refactor nearby code.
 
+### Windows development runtime
+
+- The single supported interactive entry is `.\scripts\dev-windows.ps1`
+  from the repository root; it owns cleanup, Vite, Tauri and Rust watch
+  startup.
+- Normal launches clear inherited `CODEXBAR_PROOF_MODE`; use the explicit
+  `-ProofMode <surface>` switch only for screenshot automation. Proof mode
+  intentionally suppresses flyout blur-dismiss and tray-toggle hiding.
+- The Windows taskbar usage strip uses the TrafficMonitor native-child path
+  documented in `AGENT_HANDOFF.md`: create a native popup, attach it to
+  `Shell_TrayWnd`, convert it to `WS_CHILD`, and reassert client geometry.
+  Do not silently replace it with a floating overlay; record evidence before
+  changing the path on another Windows build.
+- Do not run `pnpm dev`, `tauri dev` or a stale `target\debug` executable as a
+  separate development session. The first is frontend-only and the latter two
+  can create a second runtime that hides whether the current worktree is being
+  tested.
+- Before handing work to another model, verify one checkout-scoped
+  `codexbar-desktop-tauri.exe`, one Vite listener on port 1420 and one launcher
+  chain. Record deviations in `AGENT_HANDOFF.md`.
+- To hand off a clean runtime, run `.\scripts\dev-windows.ps1 -StopOnly`
+  and verify that no checkout-scoped TokenBar process or port 1420 listener
+  remains.
+
 ## 4. Checkpoints and activity
 
 Every complete, partial or blocked task updates `AGENT_HANDOFF.md` and adds one

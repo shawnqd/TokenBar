@@ -1,0 +1,132 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Forecast runway icon alignment</title>
+<!--
+  Why this page exists
+  ────────────────────
+  The warning icon on the weekly forecast line ("5.0% 超支 · 按当前速度约可用
+  45 小时") was reported as 歪 — crooked — twice. It is not rotated: the glyph
+  is an exact circle plus an exactly vertical bar. It was hanging above the
+  text.
+
+  An inline <svg> defaults to `vertical-align: baseline`, which rests its BOTTOM
+  edge on the baseline. A 13px icon on an 11px line therefore sits 2.1px above
+  the text's optical centre.
+
+  The obvious fix — `display:inline-flex; align-items:center` on the wrapper,
+  which is what `.menu-card__pace-runway-status` uses — does NOT work here,
+  because `.menu-metric__forecast` aligns its two children on `baseline`. Making
+  the wrapper a flex container takes its baseline from the icon instead of the
+  text and drops the whole clause 2.1px, moving the misalignment rather than
+  removing it. That row is measured below so the trap stays visible.
+
+  The shipped fix sizes the icon in `em` (so it tracks the flyout's --flyout-u
+  text scaling like every other icon in the card) and corrects it with
+  `vertical-align: -0.2em`.
+
+  Open this file in the app's WebView or any Chromium and read the table.
+  "icon off-centre" and "clause baseline drift" must both be ~0.
+-->
+<style>
+  body { font: 13px/1.5 "Microsoft YaHei UI", sans-serif; padding: 24px; color: #222; background: #fff; }
+  h1 { font-size: 15px; margin: 0 0 4px; }
+  p.sub { color: #666; margin: 0 0 20px; }
+  /* The real layout, copied from styles.css `.menu-metric__forecast`. */
+  .forecast { display: flex; align-items: baseline; justify-content: space-between;
+              gap: 10px; font-size: 11px; color: #555; width: 300px;
+              padding: 8px 12px; border: 1px solid #e5e5e5; border-radius: 8px; background: #fafafa; }
+  .state { font-weight: 600; color: #b91c1c; }
+  .runway { white-space: nowrap; font-variant-numeric: tabular-nums; }
+  .runway svg { color: #b91c1c; }
+
+  /* variant A — what shipped originally */
+  .v-baseline .runway svg { width: 13px; height: 13px; vertical-align: baseline; }
+  /* variant B — the flex "fix" that breaks the shared baseline */
+  .v-flex .runway { display: inline-flex; align-items: center; gap: 4px; }
+  .v-flex .runway svg { width: 13px; height: 13px; flex: none; }
+  /* variant C — shipped */
+  .v-fixed .runway svg { width: 1.2em; height: 1.2em; vertical-align: -0.2em; }
+
+  table { border-collapse: collapse; margin-top: 22px; font-size: 12px; }
+  th, td { border: 1px solid #ddd; padding: 5px 10px; text-align: left; }
+  th { background: #f3f3f3; font-weight: 600; }
+  td.num { text-align: right; font-variant-numeric: tabular-nums; }
+  .bad { color: #b91c1c; font-weight: 600; }
+  .good { color: #15803d; font-weight: 600; }
+  .case { margin: 14px 0 6px; font-size: 12px; font-weight: 600; }
+</style>
+
+<h1>Forecast runway icon alignment</h1>
+<p class="sub">Both numbers must be ~0. Measured live in this browser.</p>
+
+<div id="cases"></div>
+<table id="report"></table>
+
+<script>
+  const VARIANTS = [
+    ["v-baseline", "A — inline svg, vertical-align: baseline (the reported bug)"],
+    ["v-flex", "B — wrapper as inline-flex + align-items:center (moves the problem)"],
+    ["v-fixed", "C — 1.2em icon, vertical-align: -0.2em (shipped)"],
+  ];
+  // Font sizes the forecast line actually renders at: --font-caption is 11px,
+  // and the tray scales it by --flyout-u.
+  const SIZES = [10, 11, 12, 13];
+
+  const icon = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"
+      stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"
+    ><circle cx="12" cy="12" r="9"/><path d="M12 7.8v5"/><circle cx="12" cy="16.3" r="0.55" fill="currentColor" stroke="none"/></svg>`;
+
+  const host = document.getElementById("cases");
+  for (const [cls, label] of VARIANTS) {
+    const wrap = document.createElement("div");
+    wrap.innerHTML = `<div class="case">${label}</div>` + SIZES.map((fs) => `
+      <div class="forecast ${cls}" style="font-size:${fs}px">
+        <span class="state">5.0% 超支</span>
+        <span class="runway">${icon} <span>按当前速度约可用 45 小时</span></span>
+      </div>`).join("");
+    host.appendChild(wrap);
+  }
+  // A zero-sized inline-block sits exactly ON the baseline of the line box it
+  // joins, so its `bottom` reads that baseline back. Element bounding boxes
+  // cannot: an inline box is inflated by `line-height`, so its midpoint moves
+  // with leading and its bottom is not the baseline. Both spans get one.
+  document.querySelectorAll(".forecast").forEach((row) => {
+    const fs = row.style.fontSize, cls = [...row.classList].find((c) => c.startsWith("v-"));
+    const marker = () => {
+      const m = document.createElement("i");
+      m.style.cssText = "display:inline-block;width:0;height:0;overflow:hidden";
+      return m;
+    };
+    row.querySelector("svg").dataset.m = `${cls}|${fs}|icon`;
+    row.querySelector(".runway").appendChild(marker()).dataset.m = `${cls}|${fs}|runwayBase`;
+    row.querySelector(".state").appendChild(marker()).dataset.m = `${cls}|${fs}|stateBase`;
+  });
+
+  // Where the ink of a glyph run actually sits, relative to its baseline.
+  // `actualBoundingBox*` is the inked extent, which is what the eye centres on
+  // — unlike the em box, it ignores the font's unused ascent and leading.
+  const ctx = document.createElement("canvas").getContext("2d");
+  function inkCentreAboveBaseline(fontSize) {
+    ctx.font = `${fontSize}px "Microsoft YaHei UI", sans-serif`;
+    const m = ctx.measureText("按当前速度约可用 45 小时");
+    return (m.actualBoundingBoxAscent - m.actualBoundingBoxDescent) / 2;
+  }
+
+  const pick = (k) => document.querySelector(`[data-m="${k}"]`);
+  const bottom = (el) => el.getBoundingClientRect().bottom;
+
+  const rows = [`<tr><th>variant</th><th>font-size</th><th>icon off-centre (px)</th><th>clause baseline drift (px)</th></tr>`];
+  for (const [cls, label] of VARIANTS) {
+    for (const fs of SIZES) {
+      const baseline = bottom(pick(`${cls}|${fs}px|runwayBase`));
+      const iconBox = pick(`${cls}|${fs}px|icon`).getBoundingClientRect();
+      // Positive = icon rides above the text's optical centre.
+      const off = (baseline - (iconBox.top + iconBox.bottom) / 2) - inkCentreAboveBaseline(fs);
+      // The two halves of the forecast line must share one baseline.
+      const drift = baseline - bottom(pick(`${cls}|${fs}px|stateBase`));
+      const cell = (v) => `<td class="num ${Math.abs(v) < 0.5 ? "good" : "bad"}">${v.toFixed(2)}</td>`;
+      rows.push(`<tr><td>${label.split(" — ")[0]}</td><td class="num">${fs}</td>${cell(off)}${cell(drift)}</tr>`);
+    }
+  }
+  document.getElementById("report").innerHTML = rows.join("");
+</script>

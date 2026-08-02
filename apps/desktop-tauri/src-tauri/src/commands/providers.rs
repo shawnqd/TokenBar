@@ -77,11 +77,18 @@ pub(crate) fn build_fetch_context(
                 let source_mode = if has_kimi_code_api_key && usage_source == SourceMode::Auto {
                     SourceMode::Auto
                 } else if cookie_header.is_some() {
+                    // A cookie the user supplied on purpose — pasted, imported
+                    // from a file, or captured by the in-app login window — is
+                    // an instruction to read that web session, so honour it.
                     SourceMode::Web
-                } else if id == ProviderId::Claude && usage_source != SourceMode::Cli {
-                    SourceMode::OAuth
                 } else {
-                    SourceMode::Cli
+                    // No cookie. Pinning the provider to one source here is
+                    // what made a cookie feel mandatory: a provider holding a
+                    // perfectly good local CLI token or OAuth credential was
+                    // never allowed to try it. Hand control back to the
+                    // provider's own ladder, which reads what is already on
+                    // disk before it reaches for any browser session.
+                    usage_source
                 };
                 (source_mode, cookie_header)
             }
@@ -334,7 +341,11 @@ async fn refresh_provider(
     let state = app.state::<Mutex<AppState>>();
     if let Ok(mut guard) = state.lock() {
         if !is_current_provider_refresh_generation(&guard, generation) {
-            tracing::debug!(provider = id.cli_name(), generation, "dropping superseded provider refresh result");
+            tracing::debug!(
+                provider = id.cli_name(),
+                generation,
+                "dropping superseded provider refresh result"
+            );
             return;
         }
         let snapshot = preserve_last_good_transient_failure(&mut guard, id, snapshot);

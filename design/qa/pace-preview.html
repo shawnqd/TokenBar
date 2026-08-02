@@ -1,0 +1,43 @@
+<!doctype html><html data-theme="light"><meta charset="utf-8"><title>pace bar preview</title>
+<link rel="stylesheet" href="../../apps/desktop-tauri/src/styles.css">
+<style>
+body{margin:0;padding:28px;background:#eef1f4;font-family:"Microsoft YaHei UI",system-ui,sans-serif}
+.card{background:#fff;border-radius:16px;padding:16px 18px;margin-bottom:14px;max-width:360px;box-shadow:0 1px 3px rgba(0,0,0,.08)}
+.hdr{display:flex;justify-content:space-between;font-size:13px;margin-bottom:2px;color:#111}
+.hdr .r{color:#6b7280;font-size:12px}
+.big{font-size:30px;font-weight:800;margin:2px 0 8px;color:#111}
+</style>
+<div class="card"><div class="hdr"><b>周额度</b><span class="r">重置</span></div>
+<div class="big">17%</div>
+<div class="provider-quota__bar" style="--pace-x:18.1%">
+<div class="provider-quota__track" data-pace="reserve">
+<div class="provider-quota__fill" style="width:17%"></div>
+<span class="provider-quota__pace" data-pace-state="reserve"></span>
+</div></div>
+<div class="menu-metric__forecast"><span class="menu-metric__forecast-state" data-pace-state="reserve">1.1% 结余</span><span class="menu-metric__forecast-runway">✓ 够用到重置</span></div></div>
+<div class="card"><div class="hdr"><b>周额度</b><span class="r">重置</span></div>
+<div class="big">62%</div>
+<div class="provider-quota__bar" style="--pace-x:48.0%">
+<div class="provider-quota__track" data-pace="deficit">
+<div class="provider-quota__fill" data-notch style="width:62%;--pace-fill-x:77.42%"></div>
+<span class="provider-quota__pace" data-pace-state="deficit"></span>
+</div></div>
+<div class="menu-metric__forecast"><span class="menu-metric__forecast-state" data-pace-state="deficit">14.0% 超支</span><span class="menu-metric__forecast-runway">⚠ 约 31 小时后耗尽</span></div></div>
+<div class="card"><div class="hdr"><b>周额度</b><span class="r">重置</span></div>
+<div class="big">9%</div>
+<div class="provider-quota__bar" style="--pace-x:9.0%">
+<div class="provider-quota__track" data-pace="on-pace">
+<div class="provider-quota__fill" data-notch style="width:9%;--pace-fill-x:100.00%"></div>
+<span class="provider-quota__pace" data-pace-state="on-pace"></span>
+</div></div>
+<div class="menu-metric__forecast"><span class="menu-metric__forecast-state" data-pace-state="on-pace">按节奏</span><span class="menu-metric__forecast-runway">✓ 够用到重置</span></div></div>
+<div class="card"><div class="hdr"><b>周额度</b><span class="r">重置</span></div>
+<div class="big">88%</div>
+<div class="provider-quota__bar" style="--pace-x:62.0%">
+<div class="provider-quota__track" data-pace="deficit">
+<div class="provider-quota__fill" data-notch style="width:88%;--pace-fill-x:70.45%"></div>
+<span class="provider-quota__pace" data-pace-state="deficit"></span>
+</div></div>
+<div class="menu-metric__forecast"><span class="menu-metric__forecast-state" data-pace-state="deficit">26.0% 超支</span><span class="menu-metric__forecast-runway">⚠ 约 9 小时后耗尽</span></div></div>
+
+</html>

@@ -190,9 +190,7 @@ impl OpenCodeProvider {
         let rolling = self.extract_usage_regex(text, "rollingUsage").ok();
         let weekly = self.extract_usage_regex(text, "weeklyUsage").ok();
         self.snapshot_from_windows(rolling, weekly, now, self.extract_renewal_regex(text))
-            .ok_or_else(|| {
-                ProviderError::Parse("Missing usage percent (rolling or weekly)".into())
-            })
+            .ok_or_else(|| ProviderError::Parse("Missing usage percent (rolling or weekly)".into()))
     }
 
     /// Build a snapshot from optional rolling/weekly windows.
@@ -245,10 +243,8 @@ impl OpenCodeProvider {
     fn parse_usage_json(&self, json: &Value, now: DateTime<Utc>) -> Option<UsageSnapshot> {
         let renews_at = self.find_datetime(json, &["renewAt", "renew_at"]);
 
-        let rolling =
-            self.find_usage_window(json, &["rollingUsage", "rolling", "rolling_usage"]);
-        let weekly =
-            self.find_usage_window(json, &["weeklyUsage", "weekly", "weekly_usage"]);
+        let rolling = self.find_usage_window(json, &["rollingUsage", "rolling", "rolling_usage"]);
+        let weekly = self.find_usage_window(json, &["weeklyUsage", "weekly", "weekly_usage"]);
 
         self.snapshot_from_windows(rolling, weekly, now, renews_at)
     }

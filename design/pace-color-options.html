@@ -1,0 +1,246 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>TokenBar「用超」配色候选</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        --page: #0d0d0f;
+        --page-ink: #e6e6ea;
+        --page-muted: #85858b;
+        --page-line: #26262a;
+      }
+
+      * { box-sizing: border-box; }
+
+      body {
+        margin: 0;
+        background: var(--page);
+        color: var(--page-ink);
+        font-family: "Segoe UI Variable", "Microsoft YaHei UI", "PingFang SC", sans-serif;
+        letter-spacing: -0.015em;
+      }
+
+      .page { width: min(100%, 1180px); margin: 0 auto; padding: 36px 24px 72px; }
+
+      h1 { margin: 0 0 10px; font-size: 26px; font-weight: 720; letter-spacing: -0.04em; }
+      .lede { max-width: 680px; margin: 0 0 8px; color: var(--page-muted); font-size: 14px; line-height: 1.6; }
+      .lede strong { color: #c8c8cf; font-weight: 600; }
+      .lede code { padding: 1px 5px; border-radius: 4px; background: #232328; color: #ffc98a; font-size: 12.5px; }
+
+      .toolbar {
+        display: flex; align-items: center; flex-wrap: wrap; gap: 10px;
+        margin: 22px 0 30px; padding: 12px 14px;
+        border: 1px solid var(--page-line); border-radius: 12px; background: #141416;
+      }
+      .toolbar span { color: var(--page-muted); font-size: 13px; }
+      .toolbar button {
+        border: 1px solid #34343a; border-radius: 8px; padding: 6px 12px;
+        color: var(--page-ink); background: #1e1e21; font: inherit; font-size: 13px; cursor: pointer;
+      }
+      .toolbar button[aria-pressed="true"] { background: #2f2f35; border-color: #4a4a52; }
+
+      .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(500px, 1fr)); gap: 20px; }
+
+      .option { border: 1px solid var(--page-line); border-radius: 14px; padding: 16px; background: #131315; }
+      .option-head { display: flex; align-items: center; gap: 10px; margin-bottom: 5px; }
+      .tag {
+        flex: none; border-radius: 6px; padding: 2px 7px;
+        background: #2c2c31; color: #d6d6dc; font-size: 12px; font-weight: 700; letter-spacing: 0;
+      }
+      .option-name { font-size: 15px; font-weight: 640; }
+      .swatches { display: flex; gap: 6px; margin-left: auto; }
+      .sw { width: 22px; height: 22px; border-radius: 6px; border: 1px solid rgba(255,255,255,.14); }
+      .option-note { margin: 0 0 6px; color: var(--page-muted); font-size: 12.5px; line-height: 1.5; }
+      .meta { margin: 0 0 14px; font-size: 12px; color: #6f6f76; font-variant-numeric: tabular-nums; }
+      .ok { color: #4ade80; }
+      .mid { color: #fbbf24; }
+
+      .pair { display: flex; flex-wrap: wrap; gap: 14px; }
+      .shotwrap { transform-origin: top left; }
+      .caselabel { margin: 0 0 5px; color: #6f6f76; font-size: 11.5px; }
+
+      /* ── 浮窗真实尺寸 328px ── */
+      .card { width: 328px; padding: 0 14px; border-radius: 14px; font-size: 13px; }
+      .card.light { background: #f5f5f7; color: #1d1d1f; }
+      .card.dark  { background: #1c1c1e; color: #f5f5f7; }
+
+      .zone { border-radius: 10px; padding: 12px; }
+      .light .zone { background: #e9e9eb; }
+      .dark  .zone { background: #272729; }
+
+      .divider { height: 1px; margin: 11px 0; }
+      .light .divider { background: rgba(0,0,0,.1); }
+      .dark  .divider { background: rgba(255,255,255,.1); }
+
+      .row { display: flex; align-items: center; justify-content: space-between; gap: 6px; }
+      .label { display: inline-flex; align-items: center; gap: 5px; font-size: 11px; font-weight: 400; white-space: nowrap; }
+      .light .label { color: #5b5b60; }
+      .dark  .label { color: #8e8e93; }
+      .label svg { flex: none; width: 13px; height: 13px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+      .value { font-size: 15px; font-weight: 720; font-variant-numeric: tabular-nums; white-space: nowrap; }
+      .sub { margin-top: 7px; font-size: 10px; line-height: 1.3; }
+      .sub + .sub { margin-top: 3px; }
+      .light .sub { color: #5b5b60; }
+      .dark  .sub { color: #8e8e93; }
+
+      .pace { display: flex; align-items: center; justify-content: flex-start; gap: 6px; }
+      .pace-text { flex: 1 1 auto; text-align: left; font-size: 11px; font-variant-numeric: tabular-nums; }
+      .pace-text b { font-weight: 600; }
+
+      .track { position: relative; height: 6px; margin-top: 7px; border-radius: 999px; overflow: hidden; }
+      .light .track { background: rgba(0,0,0,.08); }
+      .dark  .track { background: rgba(255,255,255,.15); }
+      .track i { position: absolute; inset: 0 auto 0 0; display: block; border-radius: inherit; }
+      .light .track i { background: #007aff; }
+      .dark  .track i { background: #0a84ff; }
+      .marker { position: absolute; top: -2px; width: 2px; height: 10px; border-radius: 1px; background: #7c7c83; }
+
+      .runway { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 7px; }
+      .light .runway .label svg { color: #007aff; }
+      .dark  .runway .label svg { color: #0a84ff; }
+      .runway-value { font-size: 11px; font-weight: 700; font-variant-numeric: tabular-nums; }
+
+      .pick {
+        margin: 46px 0 0; padding: 18px 20px;
+        border: 1px solid #2f2f35; border-radius: 14px; background: #16161a;
+        color: #c8c8cf; font-size: 13.5px; line-height: 1.65;
+      }
+      .pick code { padding: 2px 6px; border-radius: 5px; background: #2a2a30; color: #ffd48a; font-size: 12.5px; }
+    </style>
+  </head>
+  <body>
+    <main class="page">
+      <h1>「用超」配色候选</h1>
+      <p class="lede">
+        目前是琥珀金 <code>#9a6a00</code>，你想换成橙色系。下面 5 组都用浮窗<strong>真实尺寸和真实底色</strong>渲染
+        （面板浅色 <code>#e9e9eb</code>、深色 <code>#272729</code>，均为 <code>--app-bg</code> 叠 5% 后的实际值）。
+      </p>
+      <p class="lede">
+        每组下方标了<strong>对比度</strong>。11px 小字建议 ≥4.5:1；
+        <span class="mid">4.0–4.5 偏低但可用</span>，低于 4.0 在浅色主题下会重现「看不清」的问题。
+        「还省」的蓝色未改，一并渲染出来方便你看两色是否协调。
+      </p>
+
+      <div class="toolbar">
+        <span>缩放：</span>
+        <button type="button" data-zoom="1" aria-pressed="true">1:1（328px）</button>
+        <button type="button" data-zoom="1.25" aria-pressed="false">125%（实际观感）</button>
+        <button type="button" data-zoom="1.7" aria-pressed="false">放大看细节</button>
+      </div>
+
+      <div class="grid" id="grid"></div>
+
+      <p class="pick">
+        回我编号即可，例如 <code>O3</code>。<br />
+        也可以直接给我一个色值，我照用。
+      </p>
+    </main>
+
+    <script>
+      const ICON_FORECAST = '<svg viewBox="0 0 24 24"><path d="M4 16l5-5 4 3 7-7M15 7h5v5"/></svg>';
+      const ICON_TOKENS = '<svg viewBox="0 0 24 24"><path d="M5 20V11M12 20V5M19 20v-8M3 20h18"/></svg>';
+      const ICON_SUPPORT = '<svg viewBox="0 0 24 24"><path d="M5 12a7 7 0 0 1 14 0v5M5 14H3v4h4v-4M19 14h2v4h-4v-4"/></svg>';
+
+      const options = [
+        {
+          tag: "O1", name: "琥珀橙", light: "#b45309", dark: "#fb923c",
+          note: "app 里已有的「节奏偏快」色（--pace-racing-fg），选它整个应用的语义色最统一。偏棕调。",
+          cl: 4.14, cd: 6.59,
+        },
+        {
+          tag: "O2", name: "标准橙", light: "#c2410c", dark: "#fb923c",
+          note: "典型的警示橙，比 O1 更红一些，橙味最正。",
+          cl: 4.27, cd: 6.59,
+        },
+        {
+          tag: "O3", name: "深橙", light: "#9a3412", dark: "#fdba74",
+          note: "浅色主题下最清晰的一档，颜色偏深偏稳；深色主题给浅橙保持醒目。",
+          cl: 6.03, cd: 9.24,
+        },
+        {
+          tag: "O4", name: "焦糖橙", light: "#a04000", dark: "#ffa552",
+          note: "介于 O2 和 O3 之间，暖而不刺眼，兼顾清晰度和橙味。",
+          cl: 5.36, cd: 7.79,
+        },
+        {
+          tag: "O5", name: "亮橙", light: "#d2691e", dark: "#ff9f0a",
+          note: "最鲜亮、最像「橙色」，但浅色主题对比度只有 3.0，小字会偏淡——列出来供你对照。",
+          cl: 3.00, cd: 7.25,
+        },
+      ];
+
+      function card(theme, color) {
+        return `
+          <div class="card ${theme}">
+            <div class="zone">
+              <div class="row">
+                <span class="label">${ICON_TOKENS}近 7 天使用</span>
+                <span class="value">1,811,896</span>
+              </div>
+              <div class="sub">等额 API 价值 ≈ $269.46 · ¥1940.11</div>
+              <div class="sub">热门模型: claude-sonnet-5</div>
+              <div class="divider"></div>
+              <div class="row pace" style="color:${color}">
+                <span class="label" style="color:${color}">${ICON_FORECAST}</span>
+                <span class="pace-text">本周已过 82%<b>，用超 7.7%</b></span>
+              </div>
+              <div class="track"><i style="width:89%"></i><span class="marker" style="left:82%"></span></div>
+              <div class="runway">
+                <span class="label">${ICON_SUPPORT}按当前速度约可用</span>
+                <span class="runway-value">≈ 30 小时</span>
+              </div>
+              <div class="divider"></div>
+              <div class="row pace" style="color:${theme === 'light' ? '#007aff' : '#0a84ff'}">
+                <span class="label" style="color:inherit">${ICON_FORECAST}</span>
+                <span class="pace-text">本周已过 82%<b>，还省 1.0%</b></span>
+              </div>
+            </div>
+          </div>`;
+      }
+
+      function rate(v) {
+        const cls = v >= 4.5 ? "ok" : v >= 4.0 ? "mid" : "";
+        return `<span class="${cls}">${v.toFixed(2)}:1</span>`;
+      }
+
+      document.getElementById("grid").innerHTML = options.map((o) => `
+        <section class="option">
+          <div class="option-head">
+            <span class="tag">${o.tag}</span><span class="option-name">${o.name}</span>
+            <span class="swatches">
+              <i class="sw" style="background:${o.light}" title="浅色 ${o.light}"></i>
+              <i class="sw" style="background:${o.dark}" title="深色 ${o.dark}"></i>
+            </span>
+          </div>
+          <p class="option-note">${o.note}</p>
+          <p class="meta">浅色 ${o.light} · 对比度 ${rate(o.cl)}　｜　深色 ${o.dark} · 对比度 ${rate(o.cd)}</p>
+          <div class="pair">
+            <div>
+              <p class="caselabel">浅色主题（你在用的）</p>
+              <div class="shotwrap">${card("light", o.light)}</div>
+            </div>
+            <div>
+              <p class="caselabel">深色主题</p>
+              <div class="shotwrap">${card("dark", o.dark)}</div>
+            </div>
+          </div>
+        </section>`).join("");
+
+      const buttons = [...document.querySelectorAll("[data-zoom]")];
+      buttons.forEach((button) => {
+        button.addEventListener("click", () => {
+          const scale = button.dataset.zoom;
+          buttons.forEach((b) => b.setAttribute("aria-pressed", String(b === button)));
+          document.querySelectorAll(".shotwrap").forEach((el) => {
+            el.style.transform = `scale(${scale})`;
+            el.style.height = scale === "1" ? "" : `${el.firstElementChild.offsetHeight * scale}px`;
+            el.style.width = scale === "1" ? "" : `${328 * scale}px`;
+          });
+        });
+      });
+    </script>
+  </body>
+</html>
