@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useState, type ReactNode } from "react";
 import type {
   CookieSourceOption,
   CredentialStorageStatus,
@@ -45,6 +45,12 @@ import MenuCard from "../../../components/MenuCard";
 import { useOutputSpeedSnapshot } from "../../../hooks/useOutputSpeedSnapshot";
 import { outputSpeedProviderId } from "../../../lib/outputSpeed";
 import type { QuotaDisplayContext } from "../../../lib/quotaDisplay";
+import {
+  ProviderHeaderSkeleton,
+  ProviderSection,
+  ProviderSectionSkeleton,
+  ProviderStatusLine,
+} from "./shell/ProviderWorkspace";
 
 interface Props {
   providerId: string | null;
@@ -65,12 +71,13 @@ interface Props {
 /**
  * Orchestrates the Settings → Providers right-hand detail pane.
  *
- * Top-level port of
- * `rust/src/native_ui/preferences.rs::render_provider_detail_panel`
- * (lines 4301–6698). Only the header, usage bars, pace, cost and the
- * quick-action bar are implemented here. Cookie-source picker (6c),
- * credential detection UIs (6d), inline token accounts (6e) and charts
- * (6f) are wired in as sub-sections below.
+ * Workspace order (empty blocks omit themselves):
+ *   1. Provider header (fixed shell)
+ *   2. Status / quota overview (subscription or balance variant)
+ *   3. Recent data (stats / charts)
+ *   4. Auth & credentials (primary expanded, secondary collapsed)
+ *   5. Display settings
+ *   6. Quick actions
  */
 export function ProviderDetailPane({
   providerId,
@@ -147,16 +154,23 @@ export function ProviderDetailPane({
       setDetail(null);
       setCookieOptions([]);
       setRegionOptions([]);
+      setCredentialStatus(null);
+      setError(null);
+      setLoading(false);
       return;
     }
-    // Clear stale detail immediately so we don't render the old provider
+    // Keep the workspace skeleton; clear provider-specific payloads so the
+    // previous provider never flashes under the new selection.
     setDetail(null);
     setCookieOptions([]);
     setRegionOptions([]);
     setCredentialStatus(null);
+    setError(null);
     const signal = { stale: false };
     void load(providerId, signal);
-    return () => { signal.stale = true; };
+    return () => {
+      signal.stale = true;
+    };
   }, [providerId, load]);
 
   // Live-refresh when a new snapshot lands for this provider.
@@ -188,37 +202,19 @@ export function ProviderDetailPane({
     );
   }
 
-  if (loading && !detail) {
-    return (
-      <div className="provider-detail">
-        <div className="provider-detail-empty">
-          {t("StateLoadingProviders")}
-        </div>
-      </div>
-    );
-  }
-
-  if (error && !detail) {
-    return (
-      <div className="provider-detail">
-        <div className="provider-detail-empty provider-detail-empty--error">
-          {t("StateError")}: {error}
-        </div>
-      </div>
-    );
-  }
-
-  if (!detail) return null;
-
-  const subtitle = buildSubtitle(detail, t);
-  const speedProviderId = outputSpeedProviderId(detail.id);
-  const providerOutputSpeed = speedProviderId ? outputSpeed?.[speedProviderId] ?? null : null;
+  const showSkeleton = loading && !detail;
+  const subtitle = detail ? buildSubtitle(detail, t) : "";
+  const speedProviderId = detail ? outputSpeedProviderId(detail.id) : null;
+  const providerOutputSpeed = speedProviderId
+    ? outputSpeed?.[speedProviderId] ?? null
+    : null;
   // The Settings → Providers preview shows a single, explicitly-selected
   // provider, so it always renders the full quota content regardless of the
   // menu-bar display mode (which only governs the "all providers" overview).
   const compactMetrics = false;
 
   const handleRefresh = async () => {
+    if (!detail) return;
     setBusy(true);
     try {
       await refreshProviders();
@@ -230,6 +226,7 @@ export function ProviderDetailPane({
   };
 
   const handleSwitchAccount = async () => {
+    if (!detail) return;
     setBusy(true);
     try {
       await triggerProviderLogin(detail.id);
@@ -244,6 +241,7 @@ export function ProviderDetailPane({
   };
 
   const handleRevokeCredentials = async () => {
+    if (!detail) return;
     setBusy(true);
     setError(null);
     try {
@@ -258,45 +256,51 @@ export function ProviderDetailPane({
   };
 
   const handleOpenDashboard = () => {
+    if (!detail) return;
     void openProviderDashboard(detail.id).catch((e) => setError(String(e)));
   };
 
   const handleOpenStatusPage = () => {
+    if (!detail) return;
     void openProviderStatusPage(detail.id).catch((e) => setError(String(e)));
   };
 
   const handleCopyError = () => {
-    if (detail.lastError && navigator.clipboard) {
+    if (detail?.lastError && navigator.clipboard) {
       void navigator.clipboard.writeText(detail.lastError);
     }
   };
 
   const handleBuyCredits = () => {
-    if (detail.buyCreditsUrl) {
+    if (detail?.buyCreditsUrl) {
       void openProviderDashboard(detail.id).catch((e) => setError(String(e)));
     }
   };
 
-  return (
-    <div className="provider-detail">
-      {providerSnapshot ? (
-        <div className="provider-detail-live-card">
-          {/* In the detail pane the card stays a pure quota summary — token
-              stats, output speed and cost live in the tabbed StatsSection
-              below so the page never stacks three different stat UIs. */}
-          <MenuCard
-            provider={providerSnapshot}
-            display={display}
-            compactMetrics={compactMetrics}
-            localUsagePeriod={localUsagePeriod}
-            hideLocalUsage
-          />
-        </div>
-      ) : (
-        <IdentitySection provider={detail} subtitle={subtitle} t={t} />
-      )}
+  const hasTokenAccounts = detail
+    ? tokenProviderIds.has(detail.id)
+    : false;
 
-      {detail.lastError && (
+  return (
+    <div
+      className="provider-detail"
+      data-loading={showSkeleton ? "true" : "false"}
+      data-provider-id={providerId}
+    >
+      {/* 1. Provider header — same shell whether or not a live snapshot exists */}
+      {detail ? (
+        <IdentitySection provider={detail} subtitle={subtitle} t={t} />
+      ) : showSkeleton ? (
+        <ProviderHeaderSkeleton />
+      ) : error ? (
+        <ProviderSection title={providerId}>
+          <ProviderStatusLine tone="error">
+            {t("StateError")}: {error}
+          </ProviderStatusLine>
+        </ProviderSection>
+      ) : null}
+
+      {detail?.lastError && (
         <ProviderIssueNotice
           detail={detail}
           message={detail.lastError}
@@ -305,79 +309,215 @@ export function ProviderDetailPane({
         />
       )}
 
-      {!providerSnapshot && (
-        <UsageSection provider={detail} display={display} t={t} />
-      )}
-      <StatsSection
-        providerId={detail.id}
-        accountEmail={detail.email}
-        speed={providerOutputSpeed}
-        cost={detail.cost}
-        localUsagePeriod={localUsagePeriod}
-      />
-      <MenuBarMetricSection
-        provider={detail}
-        providerMetrics={providerMetrics}
-        disabled={settingsDisabled}
-        t={t}
-        onChange={onSettingsChange}
-      />
-      {!providerSnapshot && <PaceSection pace={detail.pace} t={t} />}
+      {/* 2. Status & quota overview */}
+      {providerSnapshot ? (
+        <div className="provider-detail-live-card provider-detail-overview">
+          {/* Live card keeps MenuCard metrics; its own header is hidden so the
+              workspace IdentitySection is the single identity shell. */}
+          <MenuCard
+            provider={providerSnapshot}
+            display={display}
+            compactMetrics={compactMetrics}
+            localUsagePeriod={localUsagePeriod}
+            hideLocalUsage
+          />
+        </div>
+      ) : detail ? (
+        <>
+          <UsageSection provider={detail} display={display} t={t} />
+          <PaceSection pace={detail.pace} t={t} />
+        </>
+      ) : showSkeleton ? (
+        <ProviderSectionSkeleton title={t("ProviderUsage")} />
+      ) : null}
 
-      {/* Per-provider sub-sections ported in Phases 6c–6f. */}
-      {detail.id !== "codex" && (
-        <CookieSourceSection
+      {/* 3. Recent data */}
+      {detail && (
+        <StatsSection
           providerId={detail.id}
-          currentValue={detail.cookieSource}
-          options={cookieOptions}
-          t={t}
-          onChanged={() => void load(detail.id)}
+          accountEmail={detail.email}
+          speed={providerOutputSpeed}
+          cost={detail.cost}
+          localUsagePeriod={localUsagePeriod}
         />
       )}
-      <RegionSection
-        providerId={detail.id}
-        currentValue={detail.region}
-        options={regionOptions}
-        t={t}
-        onChanged={() => void load(detail.id)}
-      />
-      <CredentialsDispatcher providerId={detail.id} t={t} />
-      <CredentialStorageSection
-        status={credentialStatus}
-        busy={busy}
-        onRevoke={handleRevokeCredentials}
-        t={t}
-      />
-      {tokenProviderIds.has(detail.id) && (
-        <TokenAccountsPanel
-          key={`token-${detail.id}-${credentialRevision}`}
-          providerId={detail.id}
-          compact
-        />
-      )}
-      <ApiKeySection
-        key={`api-${detail.id}-${credentialRevision}`}
-        providerId={detail.id}
-      />
-      {detail.id !== "codex" && (
-        <CookieSection
-          key={`cookie-${detail.id}-${credentialRevision}`}
+
+      {/* 4. Auth & credentials */}
+      {detail && (
+        <AuthWorkspace
           providerId={detail.id}
           cookieDomain={cookieDomain}
+          credentialRevision={credentialRevision}
+          hasTokenAccounts={hasTokenAccounts}
+          credentialStatus={credentialStatus}
+          busy={busy}
+          primary={resolvePrimaryAuth(detail.id, cookieDomain)}
+          onRevoke={handleRevokeCredentials}
+          t={t}
         />
       )}
 
-      <QuickActionsSection
-        provider={detail}
-        busy={busy}
-        onRefresh={handleRefresh}
-        onSwitchAccount={handleSwitchAccount}
-        onOpenDashboard={handleOpenDashboard}
-        onOpenStatusPage={handleOpenStatusPage}
-        onCopyError={handleCopyError}
-        onBuyCredits={handleBuyCredits}
-        t={t}
-      />
+      {/* 5. Display settings */}
+      {detail && (
+        <div className="provider-detail-display-zone">
+          <MenuBarMetricSection
+            provider={detail}
+            providerMetrics={providerMetrics}
+            disabled={settingsDisabled}
+            t={t}
+            onChange={onSettingsChange}
+          />
+          {detail.id !== "codex" && (
+            <CookieSourceSection
+              providerId={detail.id}
+              currentValue={detail.cookieSource}
+              options={cookieOptions}
+              t={t}
+              onChanged={() => void load(detail.id)}
+            />
+          )}
+          <RegionSection
+            providerId={detail.id}
+            currentValue={detail.region}
+            options={regionOptions}
+            t={t}
+            onChanged={() => void load(detail.id)}
+          />
+        </div>
+      )}
+
+      {/* 6. Quick actions */}
+      {detail && (
+        <QuickActionsSection
+          provider={detail}
+          busy={busy}
+          onRefresh={handleRefresh}
+          onSwitchAccount={handleSwitchAccount}
+          onOpenDashboard={handleOpenDashboard}
+          onOpenStatusPage={handleOpenStatusPage}
+          onCopyError={handleCopyError}
+          onBuyCredits={handleBuyCredits}
+          t={t}
+        />
+      )}
+    </div>
+  );
+}
+
+type PrimaryAuthKind = "bespoke" | "cookie" | "apiKey";
+
+/**
+ * Pick the auth surface that should stay expanded for this provider family.
+ * Remaining methods collapse under "Other authentication methods".
+ */
+function resolvePrimaryAuth(
+  providerId: string,
+  cookieDomain: string | null,
+): PrimaryAuthKind {
+  if (hasBespokeCredentials(providerId)) return "bespoke";
+  if (cookieDomain) return "cookie";
+  return "apiKey";
+}
+
+function hasBespokeCredentials(providerId: string): boolean {
+  switch (providerId) {
+    case "gemini":
+    case "vertexai":
+    case "jetbrains":
+    case "kiro":
+    case "claude":
+    case "codex":
+    case "openaiapi":
+    case "litellm":
+    case "devin":
+    case "opencodego":
+    case "zed":
+    case "sub2api":
+    case "wayfinder":
+      return true;
+    default:
+      return false;
+  }
+}
+
+function AuthWorkspace({
+  providerId,
+  cookieDomain,
+  credentialRevision,
+  hasTokenAccounts,
+  credentialStatus,
+  busy,
+  primary,
+  onRevoke,
+  t,
+}: {
+  providerId: string;
+  cookieDomain: string | null;
+  credentialRevision: number;
+  hasTokenAccounts: boolean;
+  credentialStatus: CredentialStorageStatus | null;
+  busy: boolean;
+  primary: PrimaryAuthKind;
+  onRevoke: () => void;
+  t: ReturnType<typeof useLocale>["t"];
+}) {
+  const showCookie = cookieDomain !== null && providerId !== "codex";
+  const bespoke = (
+    <CredentialsDispatcher key={`creds-${providerId}`} providerId={providerId} t={t} />
+  );
+  const cookie = showCookie ? (
+    <CookieSection
+      key={`cookie-${providerId}-${credentialRevision}`}
+      providerId={providerId}
+      cookieDomain={cookieDomain}
+    />
+  ) : null;
+  const apiKey = (
+    <ApiKeySection
+      key={`api-${providerId}-${credentialRevision}`}
+      providerId={providerId}
+    />
+  );
+
+  const primaryNode: ReactNode =
+    primary === "bespoke"
+      ? bespoke
+      : primary === "cookie"
+        ? cookie
+        : apiKey;
+
+  const secondaryNodes: ReactNode[] = [];
+  if (primary !== "bespoke") secondaryNodes.push(bespoke);
+  if (primary !== "cookie" && cookie) secondaryNodes.push(cookie);
+  if (primary !== "apiKey") secondaryNodes.push(apiKey);
+  if (hasTokenAccounts) {
+    secondaryNodes.push(
+      <TokenAccountsPanel
+        key={`token-${providerId}-${credentialRevision}`}
+        providerId={providerId}
+        compact
+      />,
+    );
+  }
+  secondaryNodes.push(
+    <CredentialStorageSection
+      key={`storage-${providerId}`}
+      status={credentialStatus}
+      busy={busy}
+      onRevoke={onRevoke}
+      t={t}
+    />,
+  );
+
+  return (
+    <div className="provider-detail-auth-zone">
+      <div className="provider-detail-auth-primary">{primaryNode}</div>
+      <details className="provider-detail-section provider-detail-auth-more">
+        <summary className="provider-detail-auth-more__summary">
+          {t("ProviderAuthOtherMethods")}
+        </summary>
+        <div className="provider-detail-auth-more__body">{secondaryNodes}</div>
+      </details>
     </div>
   );
 }
@@ -449,7 +589,9 @@ function localizeProviderIssue(
   ) {
     return t("ProviderIssueSignInRequired");
   }
-  const unsupported = message.match(/^Source mode `?([^`']+)`? not supported for this provider$/i);
+  const unsupported = message.match(
+    /^Source mode `?([^`']+)`? not supported for this provider$/i,
+  );
   if (unsupported) {
     return `${t("ProviderIssueUnsupportedSourceModePrefix")} (${unsupported[1]})`;
   }
@@ -470,7 +612,7 @@ function CredentialStorageSection({
   if (!status) return null;
 
   return (
-    <section className="provider-detail-section provider-detail-credential-storage">
+    <section className="provider-detail-section provider-detail-credential-storage provider-detail-section--nested">
       <div className="provider-detail-section__header">
         <h4>{t("CredentialStorageTitle")}</h4>
         <button
@@ -493,7 +635,10 @@ function CredentialStorageSection({
   );
 }
 
-function storageLabel(value: string, t: ReturnType<typeof useLocale>["t"]): string {
+function storageLabel(
+  value: string,
+  t: ReturnType<typeof useLocale>["t"],
+): string {
   if (value.startsWith("protected:")) {
     return `${t("CredentialProtectedPrefix")} (${value.slice("protected:".length)})`;
   }

@@ -896,6 +896,7 @@ locale_keys! {
 
     // Tauri desktop shell — Phase 6d credential detection UIs
     CredentialsSectionTitle,
+    ProviderAuthOtherMethods,
     CredsStatusAuthenticated,
     CredsStatusNotSignedIn,
     CredsStatusDetected,

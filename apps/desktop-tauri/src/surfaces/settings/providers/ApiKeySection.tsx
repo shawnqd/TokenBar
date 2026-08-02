@@ -10,6 +10,11 @@ import type {
   ApiKeyInfoBridge,
   ApiKeyProviderInfoBridge,
 } from "../../../types/bridge";
+import {
+  ProviderAuthMethod,
+  ProviderSection,
+  ProviderStatusLine,
+} from "./shell/ProviderWorkspace";
 
 interface Props {
   providerId: string;
@@ -59,7 +64,9 @@ export function ApiKeySection({ providerId }: Props) {
     setInfo(null);
     setSaved(null);
     void reload(signal);
-    return () => { signal.stale = true; };
+    return () => {
+      signal.stale = true;
+    };
   }, [reload]);
 
   if (!loaded) return null;
@@ -68,10 +75,9 @@ export function ApiKeySection({ providerId }: Props) {
   if (!info && !error) return null;
   if (!info && error) {
     return (
-      <section className="provider-detail-section">
-        <h4>{t("ApiKeysTitle")}</h4>
-        <div className="settings-status settings-status--error">{error}</div>
-      </section>
+      <ProviderSection title={t("ApiKeysTitle")}>
+        <ProviderStatusLine tone="error">{error}</ProviderStatusLine>
+      </ProviderSection>
     );
   }
   // After the guards above, info is guaranteed non-null.
@@ -112,126 +118,116 @@ export function ApiKeySection({ providerId }: Props) {
   };
 
   return (
-    <section className="provider-detail-section">
-      <h4>{t("ApiKeysTitle")}</h4>
+    <ProviderSection title={t("ApiKeysTitle")}>
+      {error && <ProviderStatusLine tone="error">{error}</ProviderStatusLine>}
 
-      {error && (
-        <div className="settings-status settings-status--error">{error}</div>
-      )}
-
-      <ul className="credential-list">
-        <li className="credential-card">
-          <div className="credential-card__header">
-            <div className="credential-card__info">
-              <span className="credential-card__meta">
-                {saved ? (
-                  <>
-                    <span className="credential-card__badge credential-card__badge--set">
-                      {t("CredentialConfigured")}
-                    </span>
-                    <span className="credential-card__masked">
-                      {saved.maskedKey}
-                    </span>
-                    {saved.label && (
-                      <span className="credential-card__label">
-                        {saved.label}
-                      </span>
-                    )}
-                    <span className="credential-card__date">
-                      {t("CredentialSavedOnDate").replace("{}", saved.savedAt)}
-                    </span>
-                  </>
-                ) : (
-                  <span className="credential-card__badge credential-card__badge--unset">
-                    {t("CredentialNotSet")}
-                  </span>
-                )}
+      <ProviderAuthMethod
+        title={info.displayName || t("ApiKeysTitle")}
+        badge={
+          saved ? t("CredentialConfigured") : t("CredentialNotSet")
+        }
+        badgeTone={saved ? "ok" : "unset"}
+        meta={
+          saved ? (
+            <>
+              <span className="provider-auth-method__masked">
+                {saved.maskedKey}
               </span>
-            </div>
-            <div className="credential-card__actions">
-              {!editing && (
-                <button
-                  className="credential-btn"
-                  disabled={busy}
-                  onClick={() => {
-                    setEditing(true);
-                    setEditValue("");
-                    setEditLabel(saved?.label ?? "");
-                  }}
-                >
-                  {saved ? t("CredentialUpdateButton") : t("CredentialAddKeyButton")}
-                </button>
+              {saved.label && (
+                <span className="provider-auth-method__label">
+                  {saved.label}
+                </span>
               )}
-              {saved && !editing && (
-                <button
-                  className="credential-btn credential-btn--danger"
-                  disabled={busy}
-                  onClick={() => void handleRemove()}
-                >
-                  {t("Remove")}
-                </button>
-              )}
+              <span>
+                {t("CredentialSavedOnDate").replace("{}", saved.savedAt)}
+              </span>
+            </>
+          ) : null
+        }
+        actions={
+          <>
+            {!editing && (
+              <button
+                className="credential-btn"
+                disabled={busy}
+                onClick={() => {
+                  setEditing(true);
+                  setEditValue("");
+                  setEditLabel(saved?.label ?? "");
+                }}
+              >
+                {saved ? t("CredentialUpdateButton") : t("CredentialAddKeyButton")}
+              </button>
+            )}
+            {saved && !editing && (
+              <button
+                className="credential-btn credential-btn--danger"
+                disabled={busy}
+                onClick={() => void handleRemove()}
+              >
+                {t("Remove")}
+              </button>
+            )}
+          </>
+        }
+      >
+        {info.help && !editing && (
+          <p className="provider-detail-helper">{info.help}</p>
+        )}
+
+        {info.dashboardUrl && !editing && (
+          <a
+            className="credential-card__link"
+            href={info.dashboardUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+          >
+            {t("CredentialOpenDashboard")}
+          </a>
+        )}
+
+        {editing && (
+          <div className="credential-card__edit">
+            <input
+              type="password"
+              className="text-input credential-card__input"
+              placeholder={t("PasteApiKeyHere")}
+              autoComplete="off"
+              value={editValue}
+              onChange={(e) => setEditValue(e.target.value)}
+              disabled={busy}
+            />
+            <input
+              type="text"
+              className="text-input credential-card__input credential-card__input--label"
+              placeholder={t("CredentialLabelOptionalPlaceholder")}
+              value={editLabel}
+              onChange={(e) => setEditLabel(e.target.value)}
+              disabled={busy}
+            />
+            <div className="credential-card__edit-actions">
+              <button
+                className="credential-btn credential-btn--primary"
+                disabled={busy || !editValue.trim()}
+                onClick={() => void handleSave()}
+              >
+                {t("Save")}
+              </button>
+              <button
+                className="credential-btn"
+                disabled={busy}
+                onClick={() => {
+                  setEditing(false);
+                  setEditValue("");
+                  setEditLabel("");
+                }}
+              >
+                {t("Cancel")}
+              </button>
             </div>
           </div>
-
-          {info.help && !editing && (
-            <p className="credential-card__help">{info.help}</p>
-          )}
-
-          {info.dashboardUrl && !editing && (
-            <a
-              className="credential-card__link"
-              href={info.dashboardUrl}
-              target="_blank"
-              rel="noopener noreferrer"
-            >
-              {t("CredentialOpenDashboard")}
-            </a>
-          )}
-
-          {editing && (
-            <div className="credential-card__edit">
-              <input
-                type="password"
-                className="text-input credential-card__input"
-                placeholder={t("PasteApiKeyHere")}
-                autoComplete="off"
-                value={editValue}
-                onChange={(e) => setEditValue(e.target.value)}
-                disabled={busy}
-              />
-              <input
-                type="text"
-                className="text-input credential-card__input credential-card__input--label"
-                placeholder={t("CredentialLabelOptionalPlaceholder")}
-                value={editLabel}
-                onChange={(e) => setEditLabel(e.target.value)}
-                disabled={busy}
-              />
-              <div className="credential-card__edit-actions">
-                <button
-                  className="credential-btn credential-btn--primary"
-                  disabled={busy || !editValue.trim()}
-                  onClick={() => void handleSave()}
-                >
-                  {t("Save")}
-                </button>
-                <button
-                  className="credential-btn"
-                  disabled={busy}
-                  onClick={() => {
-                    setEditing(false);
-                    setEditValue("");
-                    setEditLabel("");
-                  }}
-                >
-                  {t("Cancel")}
-                </button>
-              </div>
-            </div>
-          )}
-        </li>
-      </ul>
-    </section>
+        )}
+      </ProviderAuthMethod>
+    </ProviderSection>
   );
 }

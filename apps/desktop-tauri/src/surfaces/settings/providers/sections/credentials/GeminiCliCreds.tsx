@@ -6,6 +6,10 @@ import {
   openPath,
   openProviderDashboard,
 } from "../../../../../lib/tauri";
+import {
+  ProviderAuthMethod,
+  ProviderSection,
+} from "../../shell/ProviderWorkspace";
 
 interface Props {
   providerId: string;
@@ -52,44 +56,48 @@ export function GeminiCliCreds({ providerId, t }: Props) {
   };
 
   return (
-    <section className="provider-detail-section">
-      <h4>{t("CredentialsSectionTitle")}</h4>
-      <dl className="provider-detail-grid">
-        <div style={{ display: "contents" }}>
-          <dt>{t("CredsGeminiCliLabel")}</dt>
-          <dd>{statusLabel}</dd>
-        </div>
-        {status.credentialsPath && (
-          <div style={{ display: "contents" }}>
-            <dt>{t("CredsGeminiCliHelperPrefix")}</dt>
-            <dd className="provider-detail-grid__mono">
+    <ProviderSection title={t("CredentialsSectionTitle")}>
+      <ProviderAuthMethod
+        title={t("CredsGeminiCliLabel")}
+        badge={statusLabel}
+        badgeTone={status.signedIn ? "ok" : "unset"}
+        meta={
+          status.credentialsPath ? (
+            <span className="provider-detail-grid__mono">
               {status.credentialsPath}
-            </dd>
+            </span>
+          ) : null
+        }
+        actions={
+          <>
+            {status.signedIn && status.credentialsPath && (
+              <button
+                type="button"
+                className="btn btn--ghost"
+                onClick={handleOpenFolder}
+              >
+                {t("CredsOpenFolderAction")}
+              </button>
+            )}
+            {!status.signedIn && (
+              <button
+                type="button"
+                className="btn btn--ghost"
+                onClick={handleSetup}
+              >
+                {t("CredsGeminiCliSetupAction")}
+              </button>
+            )}
+          </>
+        }
+      >
+        {!status.signedIn && (
+          <div className="provider-detail-helper">
+            {t("CredsGeminiCliSetupHelp")}
           </div>
         )}
-      </dl>
-      {!status.signedIn && (
-        <div className="provider-detail-helper">
-          {t("CredsGeminiCliSetupHelp")}
-        </div>
-      )}
-      <div className="provider-detail-actions">
-        {status.signedIn && status.credentialsPath && (
-          <button
-            type="button"
-            className="btn btn--ghost"
-            onClick={handleOpenFolder}
-          >
-            {t("CredsOpenFolderAction")}
-          </button>
-        )}
-        {!status.signedIn && (
-          <button type="button" className="btn btn--ghost" onClick={handleSetup}>
-            {t("CredsGeminiCliSetupAction")}
-          </button>
-        )}
-      </div>
-      {error && <div className="provider-detail-error">{error}</div>}
-    </section>
+        {error && <div className="provider-detail-error">{error}</div>}
+      </ProviderAuthMethod>
+    </ProviderSection>
   );
 }

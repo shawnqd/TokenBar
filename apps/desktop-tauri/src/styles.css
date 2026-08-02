@@ -2424,16 +2424,30 @@ html {
   flex-shrink: 0;
 }
 
+/* ── Provider detail workspace (single authority layer) ─────────────
+   Tokens:
+     outer card radius  = 14px  (--provider-workspace-radius)
+     nested card radius = 11px  (--provider-workspace-radius-nested)
+     section gap        = 12px  (--provider-workspace-gap)
+     section padding    = 14px 16px
+   Do not re-declare these later in the file for the same selectors. */
 .provider-detail {
+  --provider-workspace-radius: 14px;
+  --provider-workspace-radius-nested: 11px;
+  --provider-workspace-gap: 12px;
+  --provider-workspace-padding: 14px 16px;
   flex: 1;
   min-width: 0;
   min-height: 0;
+  height: 100%;
   overflow-y: auto;
   overscroll-behavior-y: contain;
-  background: var(--surface-elevated);
-  border-radius: 8px;
-  padding: 12px;
-  padding-bottom: 28px;
+  box-sizing: border-box;
+  background: transparent;
+  border-radius: var(--provider-workspace-radius);
+  padding: 4px 8px 24px;
+  color: var(--text-primary);
+  font-size: var(--font-body);
 }
 
 .provider-detail-empty {
@@ -2443,14 +2457,15 @@ html {
   height: 100%;
   min-height: 100px;
   color: var(--text-muted);
-  font-size: 0.78rem;
+  font-size: var(--font-caption);
 }
 
 .provider-detail-header {
   display: flex;
   align-items: center;
   gap: 10px;
-  margin-bottom: 12px;
+  min-height: 40px;
+  margin-bottom: 0;
 }
 
 .provider-detail-icon {
@@ -2460,22 +2475,25 @@ html {
 
 .provider-detail-title {
   flex: 1;
-  font-size: 0.95rem;
-  font-weight: 700;
+  font-size: var(--font-title3);
+  font-weight: 600;
   color: var(--text-primary);
+  line-height: 1.25;
 }
 
 .provider-detail-grid {
   display: grid;
   grid-template-columns: auto 1fr;
-  gap: 4px 12px;
-  margin: 0 0 12px;
-  font-size: 0.78rem;
+  gap: 6px 14px;
+  margin: 10px 0 0;
+  font-size: var(--font-caption);
+  line-height: 1.4;
+  color: var(--text-secondary);
 }
 
 .provider-detail-grid dt {
   color: var(--text-secondary);
-  font-weight: 600;
+  font-weight: 550;
   white-space: nowrap;
 }
 
@@ -2483,30 +2501,36 @@ html {
   margin: 0;
   color: var(--text-primary);
   word-break: break-all;
+  font-variant-numeric: tabular-nums;
 }
 
 .provider-detail-grid dd.error {
   color: var(--provider-status-error);
 }
 
-.provider-detail-section {
-  margin-bottom: 10px;
-  padding: 12px 14px;
-  border-radius: 10px;
+.provider-detail-section,
+.provider-detail-header-block,
+.provider-detail-live-card {
+  margin: 0 0 var(--provider-workspace-gap);
+  padding: var(--provider-workspace-padding);
+  border-radius: var(--provider-workspace-radius);
   background: var(--panel-bg);
   border: 1px solid var(--panel-border);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
 }
+
 .provider-detail-section:last-child {
   margin-bottom: 0;
 }
 
 .provider-detail-section h4 {
-  margin: 0 0 8px;
-  font-size: 0.7rem;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  color: var(--text-secondary);
+  margin: 0 0 10px;
+  font-size: var(--font-body);
+  font-weight: 650;
+  line-height: 1.25;
+  letter-spacing: 0;
+  text-transform: none;
+  color: var(--text-primary);
 }
 
 .provider-detail-section__header {
@@ -2515,7 +2539,7 @@ html {
   justify-content: space-between;
   gap: 8px;
   flex-wrap: wrap;
-  margin-bottom: 6px;
+  margin-bottom: 10px;
 }
 
 .provider-detail-section__header h4 {
@@ -2530,6 +2554,12 @@ html {
 
 .provider-detail-grid--storage {
   margin-top: 4px;
+}
+
+[data-theme="light"] .provider-detail-section,
+[data-theme="light"] .provider-detail-header-block,
+[data-theme="light"] .provider-detail-live-card {
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06);
 }
 
 @media (max-width: 560px) {
@@ -3232,21 +3262,7 @@ html {
   cursor: pointer;
 }
 
-/* ── Provider detail pane (Phase 6b) ──────────────────────────────── */
-
-/* Card chrome mirrors `.settings-section__group` elsewhere in Settings:
-   `--panel-bg` is a near-opaque elevated surface, distinct from the softer
-   `--surface-elevated` tint the outer `.provider-detail` panel already
-   uses — without that distinction every section here rendered on the same
-   flat tint with only a small caption-style heading between them, so nothing
-   read as a separate block once more than one section had real content. */
-.provider-detail-header-block {
-  margin-bottom: 10px;
-  padding: 12px 14px;
-  border-radius: 10px;
-  background: var(--panel-bg);
-  border: 1px solid var(--panel-border);
-}
+/* ── Provider detail pane (Phase 6b structure helpers) ────────────── */
 
 .provider-detail-title-group {
   display: flex;
@@ -3256,8 +3272,9 @@ html {
 }
 
 .provider-detail-subtitle {
-  font-size: 0.78rem;
-  color: var(--provider-row-text-secondary);
+  font-size: var(--font-caption);
+  color: var(--text-secondary);
+  line-height: 1.4;
 }
 
 .provider-detail-empty--error {
@@ -3268,10 +3285,10 @@ html {
   background: rgba(239, 68, 68, 0.08);
   border: 1px solid rgba(239, 68, 68, 0.3);
   color: var(--provider-status-error);
-  border-radius: 8px;
-  padding: 8px 10px;
-  margin-bottom: 12px;
-  font-size: 0.82rem;
+  border-radius: var(--provider-workspace-radius, 14px);
+  padding: 10px 12px;
+  margin-bottom: var(--provider-workspace-gap, 12px);
+  font-size: var(--font-caption);
 }
 
 .provider-detail-pace__stage {
@@ -3519,43 +3536,17 @@ html {
   line-height: 1.45;
 }
 
-/* Provider pages use the same compact card language as the tray flyout.
-   The live overview is the actual MenuCard component, so quota, forecast,
-   balance and local-usage visuals cannot drift between the two surfaces. */
-.provider-detail-live-card {
-  margin-bottom: 12px;
-  overflow: hidden;
-  border: 1px solid color-mix(in srgb, var(--accent) 42%, var(--panel-border));
-  border-radius: 14px;
-  background: var(--panel-bg);
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
-}
-
+/* Live overview keeps MenuCard metrics only (header is IdentitySection).
+   Charts/cost stay in StatsSection so the detail page never stacks three UIs. */
 .provider-detail-live-card .menu-card {
-  --menu-card-x: 16px;
   width: 100%;
   box-sizing: border-box;
-  padding: 14px var(--menu-card-x);
-}
-
-.provider-detail-live-card .menu-card__content {
-  gap: 12px;
 }
 
 .provider-detail-live-card .menu-card__charts,
 .provider-detail-live-card .menu-card__cost,
 .provider-detail-live-card .menu-card__content > .menu-card__divider:has(+ .menu-card__cost) {
   display: none;
-}
-
-.provider-detail-live-card .menu-card__name {
-  font-size: var(--font-title3);
-}
-
-.provider-detail-section--output-speed {
-  border-radius: 14px;
-  border-color: color-mix(in srgb, var(--accent) 36%, var(--panel-border));
-  background: color-mix(in srgb, var(--accent) 6%, var(--panel-bg));
 }
 
 .provider-output-speed__header,
@@ -6204,28 +6195,6 @@ body:has(.settings-window-frame) {
   font-size: var(--font-caption);
 }
 
-/* ── Provider detail pane ─────────────────────────────────────────── */
-.provider-detail {
-  background: transparent;
-  border-radius: 14px;
-  padding: 4px 8px 24px;
-  overflow-y: auto;
-  overscroll-behavior: contain;
-  height: 100%;
-  min-height: 0;
-  box-sizing: border-box;
-  flex: 1;
-}
-.provider-detail-title {
-  font-size: var(--font-title3);
-  font-weight: 600;
-}
-
-.provider-detail-section,
-.provider-detail-header-block {
-  border-radius: 14px;
-}
-
 /* ── About pane parity ────────────────────────────────────────────── */
 .about-section {
   display: flex;
@@ -6590,101 +6559,314 @@ body:has(.settings-window-frame) {
   }
 }
 
-/* ── Unified provider workspace ─────────────────────────────────────
-   Settings provider pages and the tray share MenuCard for live data.
-   The remaining configuration blocks follow that same restrained utility
-   card system: one radius, one border, one type scale and one chart palette. */
-.provider-detail {
-  --provider-workspace-radius: 14px;
-  --provider-workspace-padding: 14px 16px;
-  color: var(--text-primary);
-  font-size: var(--font-body);
-}
+/* ── Unified provider workspace (controls, auth, overview) ──────────
+   Continues the single authority layer started at `.provider-detail`.
+   Nested cards use --provider-workspace-radius-nested (11px). */
 
-.provider-detail .provider-detail-live-card,
-.provider-detail .provider-detail-header-block,
-.provider-detail .provider-detail-section {
-  margin: 0 0 12px;
-  padding: var(--provider-workspace-padding);
-  border: 1px solid var(--panel-border);
-  border-radius: var(--provider-workspace-radius);
-  background: var(--panel-bg);
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
-}
-
-.provider-detail .provider-detail-live-card {
+.provider-detail-live-card {
   padding: 0;
   border-color: color-mix(in srgb, var(--accent) 42%, var(--panel-border));
+  overflow: hidden;
 }
 
-.provider-detail .provider-detail-section--output-speed {
+/* IdentitySection is the only header; hide MenuCard's own identity chrome. */
+.provider-detail-live-card .menu-card__header {
+  display: none;
+}
+.provider-detail-live-card .menu-card > .menu-card__divider:first-of-type {
+  display: none;
+}
+
+.provider-detail-section--output-speed {
   border-color: color-mix(in srgb, var(--accent) 34%, var(--panel-border));
   background: color-mix(in srgb, var(--accent) 6%, var(--panel-bg));
 }
 
-.provider-detail .provider-detail-section h4,
-.provider-detail .provider-detail-chart__title,
-.provider-detail .provider-detail-section__header h4 {
+.provider-detail-chart__title {
   margin: 0 0 10px;
   color: var(--text-primary);
   font-size: var(--font-body);
   font-weight: 650;
   line-height: 1.25;
-  letter-spacing: 0;
-  text-transform: none;
 }
 
-.provider-detail .provider-detail-section__header h4,
-.provider-detail .provider-output-speed__header h4 {
-  margin-bottom: 0;
-}
-
-.provider-detail .provider-detail-subtitle,
-.provider-detail .provider-detail-helper,
+.provider-detail-helper,
 .provider-detail .credential-empty,
 .provider-detail .credential-card__date,
-.provider-detail .provider-detail-grid,
 .provider-detail .provider-detail-list__meta {
   color: var(--text-secondary);
   font-size: var(--font-caption);
   line-height: 1.4;
 }
 
-.provider-detail .provider-detail-grid {
-  gap: 6px 14px;
-  margin: 10px 0 0;
-}
-
-.provider-detail .provider-detail-grid dt {
-  color: var(--text-secondary);
-  font-weight: 550;
-}
-
-.provider-detail .provider-detail-grid dd {
-  color: var(--text-primary);
-}
-
 .provider-detail .credential-list {
+  display: flex;
+  flex-direction: column;
   gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
 }
 
 .provider-detail .credential-card,
+.provider-detail .provider-auth-method,
 .provider-detail .provider-detail-list__row,
 .provider-detail .provider-detail-charts,
 .provider-detail .token-accounts-inline__body {
   border: 1px solid var(--panel-border);
-  border-radius: 11px;
+  border-radius: var(--provider-workspace-radius-nested);
   background: var(--surface-elevated);
   box-shadow: none;
 }
 
-.provider-detail .credential-card {
+.provider-detail .credential-card,
+.provider-detail .provider-auth-method {
   padding: 10px 12px;
 }
 
-.provider-detail .credential-card:hover {
+.provider-detail .credential-card:hover,
+.provider-detail .provider-auth-method:hover {
   border-color: color-mix(in srgb, var(--accent) 28%, var(--panel-border));
   background: color-mix(in srgb, var(--accent) 4%, var(--surface-elevated));
+}
+
+/* Shared auth method card */
+.provider-auth-method__header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.provider-auth-method__info {
+  min-width: 0;
+  flex: 1;
+}
+.provider-auth-method__title-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.provider-auth-method__title {
+  font-size: var(--font-body);
+  font-weight: 600;
+  color: var(--text-primary);
+}
+.provider-auth-method__meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 10px;
+  margin-top: 4px;
+  color: var(--text-secondary);
+  font-size: var(--font-caption);
+  line-height: 1.4;
+}
+.provider-auth-method__masked {
+  font-variant-numeric: tabular-nums;
+  font-family: ui-monospace, "Cascadia Mono", Consolas, monospace;
+}
+.provider-auth-method__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
+.provider-auth-method__body {
+  margin-top: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+/* Status badges / status lines */
+.provider-status-badge {
+  display: inline-flex;
+  align-items: center;
+  min-height: 20px;
+  padding: 1px 8px;
+  border-radius: 999px;
+  font-size: var(--font-caption2);
+  font-weight: 600;
+  line-height: 1.2;
+  border: 1px solid transparent;
+}
+.provider-status-badge--ok {
+  color: var(--provider-status-ok);
+  background: color-mix(in srgb, var(--provider-status-ok) 14%, transparent);
+  border-color: color-mix(in srgb, var(--provider-status-ok) 28%, transparent);
+}
+.provider-status-badge--warn {
+  color: var(--provider-status-stale);
+  background: color-mix(in srgb, var(--provider-status-stale) 14%, transparent);
+  border-color: color-mix(in srgb, var(--provider-status-stale) 28%, transparent);
+}
+.provider-status-badge--error {
+  color: var(--provider-status-error);
+  background: color-mix(in srgb, var(--provider-status-error) 12%, transparent);
+  border-color: color-mix(in srgb, var(--provider-status-error) 28%, transparent);
+}
+.provider-status-badge--info,
+.provider-status-badge--neutral {
+  color: var(--text-secondary);
+  background: var(--surface-elevated);
+  border-color: var(--panel-border);
+}
+.provider-status-badge--unset {
+  color: var(--text-muted);
+  background: var(--surface-elevated);
+  border-color: var(--panel-border);
+}
+
+.provider-status-line {
+  margin: 0 0 8px;
+  padding: 8px 10px;
+  border-radius: var(--provider-workspace-radius-nested);
+  font-size: var(--font-caption);
+  line-height: 1.4;
+  border: 1px solid var(--panel-border);
+  background: var(--surface-elevated);
+  color: var(--text-secondary);
+}
+.provider-status-line--error {
+  color: var(--provider-status-error);
+  border-color: color-mix(in srgb, var(--provider-status-error) 35%, transparent);
+  background: color-mix(in srgb, var(--provider-status-error) 10%, transparent);
+}
+.provider-status-line--ok {
+  color: var(--provider-status-ok);
+  border-color: color-mix(in srgb, var(--provider-status-ok) 30%, transparent);
+  background: color-mix(in srgb, var(--provider-status-ok) 10%, transparent);
+}
+.provider-status-line--warn {
+  color: var(--provider-status-stale);
+  border-color: color-mix(in srgb, var(--provider-status-stale) 30%, transparent);
+  background: color-mix(in srgb, var(--provider-status-stale) 10%, transparent);
+}
+.provider-status-line--loading,
+.provider-status-line--info {
+  color: var(--text-secondary);
+}
+
+/* Auth zone: primary expanded, secondary collapsed */
+.provider-detail-auth-zone {
+  display: flex;
+  flex-direction: column;
+  gap: var(--provider-workspace-gap);
+  margin-bottom: var(--provider-workspace-gap);
+}
+.provider-detail-auth-primary > .provider-detail-section {
+  margin-bottom: 0;
+}
+.provider-detail-auth-more {
+  padding: 0;
+  overflow: hidden;
+}
+.provider-detail-auth-more__summary {
+  list-style: none;
+  cursor: pointer;
+  padding: var(--provider-workspace-padding);
+  font-size: var(--font-body);
+  font-weight: 650;
+  color: var(--text-primary);
+  user-select: none;
+}
+.provider-detail-auth-more__summary::-webkit-details-marker {
+  display: none;
+}
+.provider-detail-auth-more__summary::before {
+  content: "▸";
+  display: inline-block;
+  width: 1em;
+  margin-right: 6px;
+  color: var(--text-secondary);
+  transition: transform 0.15s ease;
+}
+.provider-detail-auth-more[open] > .provider-detail-auth-more__summary::before {
+  transform: rotate(90deg);
+}
+.provider-detail-auth-more__body {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 0 12px 14px;
+}
+.provider-detail-auth-more__body > .provider-detail-section,
+.provider-detail-auth-more__body > .token-accounts-inline {
+  margin: 0;
+  padding: 12px;
+  border-radius: var(--provider-workspace-radius-nested);
+  box-shadow: none;
+  background: var(--surface-elevated);
+}
+.provider-detail-display-zone {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+
+/* Loading skeletons — keep workspace rhythm while detail loads */
+.provider-detail-skeleton {
+  display: block;
+  border-radius: 6px;
+  background: linear-gradient(
+    90deg,
+    color-mix(in srgb, var(--text-primary) 6%, transparent) 0%,
+    color-mix(in srgb, var(--text-primary) 12%, transparent) 50%,
+    color-mix(in srgb, var(--text-primary) 6%, transparent) 100%
+  );
+  background-size: 200% 100%;
+  animation: provider-detail-shimmer 1.2s ease-in-out infinite;
+}
+.provider-detail-skeleton--icon {
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  flex-shrink: 0;
+}
+.provider-detail-skeleton--title {
+  width: 140px;
+  height: 16px;
+}
+.provider-detail-skeleton--subtitle {
+  width: 180px;
+  height: 12px;
+  margin-top: 4px;
+}
+.provider-detail-skeleton--label {
+  width: 64px;
+  height: 12px;
+}
+.provider-detail-skeleton--value {
+  width: 120px;
+  height: 12px;
+}
+.provider-detail-skeleton--bar {
+  width: 100%;
+  height: 18px;
+  border-radius: 999px;
+}
+.provider-detail-skeleton--bar-short {
+  width: 72%;
+}
+.provider-detail-skeleton--line {
+  width: 48%;
+  height: 12px;
+}
+.provider-detail-skeleton-grid {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 8px 14px;
+  margin-top: 12px;
+}
+.provider-detail-skeleton-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+@keyframes provider-detail-shimmer {
+  0% { background-position: 100% 0; }
+  100% { background-position: -100% 0; }
 }
 
 .provider-detail .provider-detail-segmented,
@@ -6776,7 +6958,7 @@ body:has(.settings-window-frame) {
 .provider-detail .provider-detail-charts__body {
   min-height: 116px;
   padding: 12px;
-  border-radius: 11px;
+  border-radius: var(--provider-workspace-radius-nested);
   background: var(--surface-elevated);
 }
 
@@ -6805,12 +6987,6 @@ body:has(.settings-window-frame) {
   font-size: 11px;
 }
 
-[data-theme="light"] .provider-detail .provider-detail-live-card,
-[data-theme="light"] .provider-detail .provider-detail-header-block,
-[data-theme="light"] .provider-detail .provider-detail-section {
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06);
-}
-
 /* Keep the chart controls compact and show one fixed-height canvas below. */
 .provider-detail .provider-detail-charts__tabs--range {
   align-self: stretch;
@@ -6818,50 +6994,29 @@ body:has(.settings-window-frame) {
   box-sizing: border-box;
 }
 
-/* The overview card, selected-provider card and Settings preview are one
-   component. Their internal type scale and vertical rhythm must not change
-   when the surrounding surface changes. */
+/* Live overview card metrics — identity chrome is hidden above. */
 .provider-detail-live-card .menu-card {
   --menu-card-x: 12px;
   --menu-card-header-only-y: 7px;
   --menu-card-section-y: 6px;
   --menu-card-header-line-gap: 4px;
   gap: 6px;
-  padding-left: var(--menu-card-x);
-  padding-right: var(--menu-card-x);
-}
-
-.provider-detail-live-card .menu-card__name-group {
-  flex-direction: row;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 6px;
-}
-
-.provider-detail-live-card .menu-card__name {
-  font-size: 13px;
-  font-weight: 600;
-  line-height: normal;
-}
-
-.provider-detail-live-card .menu-card__subtitle,
-.provider-detail-live-card .menu-card__error-text {
-  font-size: 10px;
-  line-height: normal;
-}
-
-.provider-detail-live-card .menu-card__divider {
-  margin: 2px 0;
+  padding: 12px var(--menu-card-x);
 }
 
 .provider-detail-live-card .menu-card__content {
-  gap: 8px;
+  gap: 10px;
+}
+
+.provider-detail-live-card .menu-card__divider {
+  margin: 0;
 }
 
 .provider-detail-live-card .provider-quota__hero-pct {
   margin-bottom: 0;
   font-size: 28px;
   line-height: 1;
+  font-variant-numeric: tabular-nums;
 }
 
 .provider-detail-live-card .provider-quota--hero .provider-quota__track {
@@ -6886,39 +7041,10 @@ body:has(.settings-window-frame) {
   padding: 8px 12px;
 }
 
-.provider-detail-live-card .menu-card__local-usage {
-  padding: 10px 12px;
-}
-
-.provider-detail-live-card .menu-card__local-token-value strong {
-  font-size: 20px;
-}
-
-.provider-detail-live-card .menu-card__local-empty {
-  font-size: 14px;
-}
-
-.provider-detail-live-card .menu-card__local-note {
-  margin-top: 6px;
-  font-size: 10px;
-  line-height: 1.25;
-}
-
-/* Settings → Providers preview card: give every in-card separator the SAME
-   symmetric breathing room so the blocks read as an even stack rather than a
-   jumble of 8/10px gaps. The tray flyout deliberately stays tighter (8px)
-   above — its height is fixed, so it can't afford the extra air. Both the
-   session↔weekly hairline (a border-top on the second quota) and the
-   metrics↔pace divider now sit centered in a uniform 10px gutter. */
-.provider-detail-live-card .menu-card__content {
-  gap: 10px;
-}
-.provider-detail-live-card .menu-card__divider {
-  margin: 0;
-}
 .provider-detail-live-card .menu-card__metrics .provider-quota {
   margin-bottom: 0;
 }
+
 .provider-detail-live-card .menu-card__metrics .provider-quota + .provider-quota {
   margin-top: 10px;
   padding-top: 10px;

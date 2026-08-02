@@ -7,6 +7,10 @@ import {
   refreshProviders,
   setJetbrainsIdePath,
 } from "../../../../../lib/tauri";
+import {
+  ProviderAuthMethod,
+  ProviderSection,
+} from "../../shell/ProviderWorkspace";
 
 interface Props {
   t: (key: LocaleKey) => string;
@@ -82,81 +86,80 @@ export function JetBrainsCreds({ t }: Props) {
   };
 
   return (
-    <section className="provider-detail-section">
-      <h4>{t("CredentialsSectionTitle")}</h4>
-      <dl className="provider-detail-grid">
-        <div style={{ display: "contents" }}>
-          <dt>{t("CredsJetBrainsLabel")}</dt>
-          <dd>{statusLabel}</dd>
+    <ProviderSection title={t("CredentialsSectionTitle")}>
+      <ProviderAuthMethod
+        title={t("CredsJetBrainsLabel")}
+        badge={statusLabel}
+        badgeTone={anyDetected || customPath.trim().length > 0 ? "ok" : "unset"}
+        actions={
+          <>
+            <button
+              type="button"
+              className="btn btn--ghost"
+              onClick={handleSavePath}
+              disabled={busy}
+            >
+              {t("CredsSavePathAction")}
+            </button>
+            <button
+              type="button"
+              className="btn btn--ghost"
+              onClick={handleRefresh}
+              disabled={busy}
+            >
+              {t("CredsRefreshDetectionAction")}
+            </button>
+          </>
+        }
+      >
+        {ides.length > 0 && (
+          <ul className="provider-detail-list">
+            {ides.map((ide) => (
+              <li key={ide.id} className="provider-detail-list__row">
+                <div className="provider-detail-list__main">
+                  <div>{ide.displayName}</div>
+                  <div className="provider-detail-grid__mono">{ide.path}</div>
+                </div>
+                <div className="provider-detail-list__meta">
+                  {ide.detected
+                    ? t("CredsStatusDetected")
+                    : t("CredsStatusNotDetected")}
+                </div>
+                <button
+                  type="button"
+                  className="btn btn--ghost"
+                  onClick={() => handleOpenFolder(ide.path)}
+                >
+                  {t("CredsOpenFolderAction")}
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
+
+        <div className="provider-detail-helper">
+          {primaryDetected
+            ? `${t("CredsJetBrainsHelperDetectedPrefix")} ${primaryDetected.path}.`
+            : customPath.trim().length > 0
+              ? `${t("CredsJetBrainsHelperCustomPrefix")} ${customPath}.`
+              : t("CredsJetBrainsHelperMissing")}
         </div>
-      </dl>
 
-      {ides.length > 0 && (
-        <ul className="provider-detail-list">
-          {ides.map((ide) => (
-            <li key={ide.id} className="provider-detail-list__row">
-              <div className="provider-detail-list__main">
-                <div>{ide.displayName}</div>
-                <div className="provider-detail-grid__mono">{ide.path}</div>
-              </div>
-              <div className="provider-detail-list__meta">
-                {ide.detected
-                  ? t("CredsStatusDetected")
-                  : t("CredsStatusNotDetected")}
-              </div>
-              <button
-                type="button"
-                className="btn btn--ghost"
-                onClick={() => handleOpenFolder(ide.path)}
-              >
-                {t("CredsOpenFolderAction")}
-              </button>
-            </li>
-          ))}
-        </ul>
-      )}
+        <label className="provider-detail-field">
+          <span className="provider-detail-field__label">
+            {t("CredsJetBrainsCustomPathLabel")}
+          </span>
+          <input
+            type="text"
+            className="provider-detail-field__input"
+            value={customPath}
+            placeholder={t("CredsJetBrainsCustomPathPlaceholder")}
+            onChange={(e) => setCustomPath(e.target.value)}
+          />
+        </label>
 
-      <div className="provider-detail-helper">
-        {primaryDetected
-          ? `${t("CredsJetBrainsHelperDetectedPrefix")} ${primaryDetected.path}.`
-          : customPath.trim().length > 0
-            ? `${t("CredsJetBrainsHelperCustomPrefix")} ${customPath}.`
-            : t("CredsJetBrainsHelperMissing")}
-      </div>
-
-      <label className="provider-detail-field">
-        <span className="provider-detail-field__label">
-          {t("CredsJetBrainsCustomPathLabel")}
-        </span>
-        <input
-          type="text"
-          className="provider-detail-field__input"
-          value={customPath}
-          placeholder={t("CredsJetBrainsCustomPathPlaceholder")}
-          onChange={(e) => setCustomPath(e.target.value)}
-        />
-      </label>
-
-      <div className="provider-detail-actions">
-        <button
-          type="button"
-          className="btn btn--ghost"
-          onClick={handleSavePath}
-          disabled={busy}
-        >
-          {t("CredsSavePathAction")}
-        </button>
-        <button
-          type="button"
-          className="btn btn--ghost"
-          onClick={handleRefresh}
-          disabled={busy}
-        >
-          {t("CredsRefreshDetectionAction")}
-        </button>
-      </div>
-
-      {error && <div className="provider-detail-error">{error}</div>}
-    </section>
+        {error && <div className="provider-detail-error">{error}</div>}
+      </ProviderAuthMethod>
+    </ProviderSection>
   );
 }

@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import type { LocaleKey } from "../../../../../i18n/keys";
 import { getSettingsSnapshot, updateSettings } from "../../../../../lib/tauri";
+import { ProviderSection } from "../../shell/ProviderWorkspace";
 
 interface Props {
   t: (key: LocaleKey) => string;
@@ -47,8 +48,7 @@ export function ClaudeCreds({ t }: Props) {
   if (value === null) return null;
 
   return (
-    <section className="provider-detail-section">
-      <h4>{t("CredentialsSectionTitle")}</h4>
+    <ProviderSection title={t("CredentialsSectionTitle")}>
       <label className="provider-detail-toggle">
         <input
           type="checkbox"
@@ -67,6 +67,6 @@ export function ClaudeCreds({ t }: Props) {
         </span>
       </label>
       {error && <div className="provider-detail-error">{error}</div>}
-    </section>
+    </ProviderSection>
   );
 }

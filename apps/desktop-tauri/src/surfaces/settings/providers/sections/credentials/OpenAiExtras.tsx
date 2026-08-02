@@ -6,6 +6,7 @@ import {
   setProviderWorkspaceId,
   setProviderGatewayUrl,
 } from "../../../../../lib/tauri";
+import { ProviderSection } from "../../shell/ProviderWorkspace";
 
 interface Props {
   providerId?: string;
@@ -30,7 +31,8 @@ export function OpenAiExtras({ providerId = "codex", t }: Props) {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    if (!extraConfig(providerId)) return;
+    // Config presence is keyed only by provider id (titles come later).
+    if (!extraConfig(providerId, t)) return;
     let cancelled = false;
     const readValue = providerId === "wayfinder"
       ? getProviderGatewayUrl(providerId)
@@ -68,11 +70,10 @@ export function OpenAiExtras({ providerId = "codex", t }: Props) {
     }
   };
 
-  const config = extraConfig(providerId);
+  const config = extraConfig(providerId, t);
   if (config) {
     return (
-      <section className="provider-detail-section">
-        <h4>{config.title}</h4>
+      <ProviderSection title={config.title}>
         <label className="provider-detail-field">
           <span className="provider-detail-field__label">
             {config.label}
@@ -99,75 +100,77 @@ export function OpenAiExtras({ providerId = "codex", t }: Props) {
           </button>
         </div>
         {error && <div className="provider-detail-error">{error}</div>}
-      </section>
+      </ProviderSection>
     );
   }
 
-  function extraConfig(providerId: string) {
-    switch (providerId) {
-      case "openaiapi":
-        return {
-          title: t("ExtrasOpenAiApiTitle"),
-          label: t("ExtrasProjectIdLabel"),
-          placeholder: "proj_...",
-          help: t("ExtrasOpenAiApiHelp"),
-        };
-      case "litellm":
-        return {
-          title: t("ExtrasLiteLlmTitle"),
-          label: t("ExtrasBaseUrlLabel"),
-          placeholder: "https://litellm.example.com",
-          help: t("ExtrasLiteLlmHelp"),
-        };
-      case "devin":
-        return {
-          title: t("ExtrasDevinTitle"),
-          label: t("ExtrasOrganizationLabel"),
-          placeholder: "org/acme",
-          help: t("ExtrasDevinHelp"),
-        };
-      case "opencodego":
-        return {
-          title: t("OpenCodeGoWorkspaceTitle"),
-          label: t("OpenCodeGoWorkspaceLabel"),
-          placeholder: "wrk_...",
-          help: t("OpenCodeGoWorkspaceHelp"),
-        };
-      case "zed":
-        return {
-          title: t("ExtrasZedTitle"),
-          label: t("ExtrasApiUrlLabel"),
-          placeholder: "https://cloud.zed.dev/client/users/me",
-          help: t("ExtrasZedHelp"),
-        };
-      case "sub2api":
-        return {
-          title: "sub2api 连接",
-          label: "基础地址",
-          placeholder: "https://sub2api.example.com",
-          help: "填写分组 API Key 所属的 sub2api 服务地址。远程地址必须使用 HTTPS。",
-        };
-      case "wayfinder":
-        return {
-          title: "Wayfinder 网关",
-          label: "本地网关地址",
-          placeholder: "http://127.0.0.1:8088",
-          help: "只允许 localhost 或回环地址，TokenBar 不会把网关数据发送到外部。",
-        };
-      default:
-        return null;
-    }
-  }
-
   return (
-    <section className="provider-detail-section">
-      <h4>{t("CredentialsSectionTitle")}</h4>
+    <ProviderSection title={t("CredentialsSectionTitle")}>
       <div className="provider-detail-helper">
         {t("ProviderCodexHistoryHelp")}
       </div>
       <div className="provider-detail-helper">
         {t("CredsOpenAiHistoryHelp")}
       </div>
-    </section>
+    </ProviderSection>
   );
+}
+
+function extraConfig(
+  providerId: string,
+  t: (key: LocaleKey) => string,
+) {
+  switch (providerId) {
+    case "openaiapi":
+      return {
+        title: t("ExtrasOpenAiApiTitle"),
+        label: t("ExtrasProjectIdLabel"),
+        placeholder: "proj_...",
+        help: t("ExtrasOpenAiApiHelp"),
+      };
+    case "litellm":
+      return {
+        title: t("ExtrasLiteLlmTitle"),
+        label: t("ExtrasBaseUrlLabel"),
+        placeholder: "https://litellm.example.com",
+        help: t("ExtrasLiteLlmHelp"),
+      };
+    case "devin":
+      return {
+        title: t("ExtrasDevinTitle"),
+        label: t("ExtrasOrganizationLabel"),
+        placeholder: "org/acme",
+        help: t("ExtrasDevinHelp"),
+      };
+    case "opencodego":
+      return {
+        title: t("OpenCodeGoWorkspaceTitle"),
+        label: t("OpenCodeGoWorkspaceLabel"),
+        placeholder: "wrk_...",
+        help: t("OpenCodeGoWorkspaceHelp"),
+      };
+    case "zed":
+      return {
+        title: t("ExtrasZedTitle"),
+        label: t("ExtrasApiUrlLabel"),
+        placeholder: "https://cloud.zed.dev/client/users/me",
+        help: t("ExtrasZedHelp"),
+      };
+    case "sub2api":
+      return {
+        title: "sub2api 连接",
+        label: "基础地址",
+        placeholder: "https://sub2api.example.com",
+        help: "填写分组 API Key 所属的 sub2api 服务地址。远程地址必须使用 HTTPS。",
+      };
+    case "wayfinder":
+      return {
+        title: "Wayfinder 网关",
+        label: "本地网关地址",
+        placeholder: "http://127.0.0.1:8088",
+        help: "只允许 localhost 或回环地址，TokenBar 不会把网关数据发送到外部。",
+      };
+    default:
+      return null;
+  }
 }

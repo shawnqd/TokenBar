@@ -6,6 +6,10 @@ import {
   openPath,
   openProviderDashboard,
 } from "../../../../../lib/tauri";
+import {
+  ProviderAuthMethod,
+  ProviderSection,
+} from "../../shell/ProviderWorkspace";
 
 interface Props {
   providerId: string;
@@ -48,44 +52,48 @@ export function VertexAiCreds({ providerId, t }: Props) {
   };
 
   return (
-    <section className="provider-detail-section">
-      <h4>{t("CredentialsSectionTitle")}</h4>
-      <dl className="provider-detail-grid">
-        <div style={{ display: "contents" }}>
-          <dt>{t("CredsVertexAiLabel")}</dt>
-          <dd>{statusLabel}</dd>
-        </div>
-        {status.credentialsPath && (
-          <div style={{ display: "contents" }}>
-            <dt>{t("CredsVertexAiHelperPrefix")}</dt>
-            <dd className="provider-detail-grid__mono">
+    <ProviderSection title={t("CredentialsSectionTitle")}>
+      <ProviderAuthMethod
+        title={t("CredsVertexAiLabel")}
+        badge={statusLabel}
+        badgeTone={status.hasCredentials ? "ok" : "unset"}
+        meta={
+          status.credentialsPath ? (
+            <span className="provider-detail-grid__mono">
               {status.credentialsPath}
-            </dd>
+            </span>
+          ) : null
+        }
+        actions={
+          <>
+            {status.hasCredentials && status.credentialsPath && (
+              <button
+                type="button"
+                className="btn btn--ghost"
+                onClick={handleOpenFolder}
+              >
+                {t("CredsOpenFolderAction")}
+              </button>
+            )}
+            {!status.hasCredentials && (
+              <button
+                type="button"
+                className="btn btn--ghost"
+                onClick={handleSetup}
+              >
+                {t("CredsVertexAiSetupAction")}
+              </button>
+            )}
+          </>
+        }
+      >
+        {!status.hasCredentials && (
+          <div className="provider-detail-helper">
+            {t("CredsVertexAiSetupHelp")}
           </div>
         )}
-      </dl>
-      {!status.hasCredentials && (
-        <div className="provider-detail-helper">
-          {t("CredsVertexAiSetupHelp")}
-        </div>
-      )}
-      <div className="provider-detail-actions">
-        {status.hasCredentials && status.credentialsPath && (
-          <button
-            type="button"
-            className="btn btn--ghost"
-            onClick={handleOpenFolder}
-          >
-            {t("CredsOpenFolderAction")}
-          </button>
-        )}
-        {!status.hasCredentials && (
-          <button type="button" className="btn btn--ghost" onClick={handleSetup}>
-            {t("CredsVertexAiSetupAction")}
-          </button>
-        )}
-      </div>
-      {error && <div className="provider-detail-error">{error}</div>}
-    </section>
+        {error && <div className="provider-detail-error">{error}</div>}
+      </ProviderAuthMethod>
+    </ProviderSection>
   );
 }

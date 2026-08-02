@@ -9,6 +9,11 @@ import {
 } from "../../../lib/tauri";
 import { useLocale } from "../../../hooks/useLocale";
 import type { CookieInfoBridge } from "../../../types/bridge";
+import {
+  ProviderAuthMethod,
+  ProviderSection,
+  ProviderStatusLine,
+} from "./shell/ProviderWorkspace";
 
 interface Props {
   providerId: string;
@@ -73,7 +78,9 @@ export function CookieSection({ providerId, cookieDomain }: Props) {
     setLoginOpen(false);
     void closeProviderLogin().catch(() => {});
     void reload(signal);
-    return () => { signal.stale = true; };
+    return () => {
+      signal.stale = true;
+    };
   }, [reload, cookieDomain, providerId]);
 
   if (cookieDomain === null) return null;
@@ -153,17 +160,30 @@ export function CookieSection({ providerId, cookieDomain }: Props) {
   };
 
   return (
-    <section className="provider-detail-section">
-      <h4>{t("BrowserCookiesSectionTitle")}</h4>
+    <ProviderSection title={t("BrowserCookiesSectionTitle")}>
+      {error && <ProviderStatusLine tone="error">{error}</ProviderStatusLine>}
+      {notice && <ProviderStatusLine tone="ok">{notice}</ProviderStatusLine>}
 
-      {error && (
-        <div className="settings-status settings-status--error">{error}</div>
-      )}
-      {notice && <div className="settings-status">{notice}</div>}
-
-      <div className="provider-login">
-        <h5 className="provider-login__title">{t("ProviderLoginSectionTitle")}</h5>
-        <p className="provider-login__hint">{t("ProviderLoginHint")}</p>
+      <ProviderAuthMethod
+        title={t("ProviderLoginSectionTitle")}
+        badge={
+          saved ? t("BrowserCookieSavedBadge") : t("BrowserCookieNoneSaved")
+        }
+        badgeTone={saved ? "ok" : "unset"}
+        meta={saved ? <span>{saved.savedAt}</span> : null}
+        actions={
+          saved ? (
+            <button
+              className="credential-btn credential-btn--danger"
+              disabled={busy}
+              onClick={() => void handleRemove()}
+            >
+              {t("BrowserCookieRemove")}
+            </button>
+          ) : null
+        }
+      >
+        <p className="provider-detail-helper">{t("ProviderLoginHint")}</p>
         <div className="provider-login__actions">
           <button
             className="credential-btn credential-btn--primary"
@@ -191,53 +211,25 @@ export function CookieSection({ providerId, cookieDomain }: Props) {
             </>
           )}
         </div>
-      </div>
 
-      {saved ? (
-        <ul className="credential-list">
-          <li className="credential-card">
-            <div className="credential-card__header">
-              <div className="credential-card__info">
-                <span className="credential-card__meta">
-                  <span className="credential-card__badge credential-card__badge--set">
-                    {t("BrowserCookieSavedBadge")}
-                  </span>
-                  <span className="credential-card__date">{saved.savedAt}</span>
-                </span>
-              </div>
-              <div className="credential-card__actions">
-                <button
-                  className="credential-btn credential-btn--danger"
-                  disabled={busy}
-                  onClick={() => void handleRemove()}
-                >
-                  {t("BrowserCookieRemove")}
-                </button>
-              </div>
-            </div>
-          </li>
-        </ul>
-      ) : (
-        <p className="credential-empty">{t("BrowserCookieNoneSaved")}</p>
-      )}
-
-      <div className="credential-add-form">
-        <textarea
-          className="text-input credential-textarea"
-          placeholder={cookiePlaceholder(providerId, t)}
-          rows={3}
-          value={pasteValue}
-          onChange={(e) => setPasteValue(e.target.value)}
-          disabled={busy}
-        />
-        <button
-          className="credential-btn credential-btn--primary"
-          disabled={busy || !pasteValue.trim()}
-          onClick={() => void handlePaste()}
-        >
-          {t("BrowserCookieSave")}
-        </button>
-      </div>
-    </section>
+        <div className="credential-add-form">
+          <textarea
+            className="text-input credential-textarea"
+            placeholder={cookiePlaceholder(providerId, t)}
+            rows={3}
+            value={pasteValue}
+            onChange={(e) => setPasteValue(e.target.value)}
+            disabled={busy}
+          />
+          <button
+            className="credential-btn credential-btn--primary"
+            disabled={busy || !pasteValue.trim()}
+            onClick={() => void handlePaste()}
+          >
+            {t("BrowserCookieSave")}
+          </button>
+        </div>
+      </ProviderAuthMethod>
+    </ProviderSection>
   );
 }

@@ -2,6 +2,10 @@ import { useEffect, useState } from "react";
 import type { LocaleKey } from "../../../../../i18n/keys";
 import type { KiroStatus } from "../../../../../types/bridge";
 import { getKiroStatus, openPath } from "../../../../../lib/tauri";
+import {
+  ProviderAuthMethod,
+  ProviderSection,
+} from "../../shell/ProviderWorkspace";
 
 interface Props {
   t: (key: LocaleKey) => string;
@@ -39,37 +43,35 @@ export function KiroCreds({ t }: Props) {
   };
 
   return (
-    <section className="provider-detail-section">
-      <h4>{t("CredentialsSectionTitle")}</h4>
-      <dl className="provider-detail-grid">
-        <div style={{ display: "contents" }}>
-          <dt>{t("CredsKiroLabel")}</dt>
-          <dd>{statusLabel}</dd>
-        </div>
-        {status.available && status.hint && (
-          <div style={{ display: "contents" }}>
-            <dt>{t("CredsKiroHelperAvailablePrefix")}</dt>
-            <dd className="provider-detail-grid__mono">{status.hint}</dd>
+    <ProviderSection title={t("CredentialsSectionTitle")}>
+      <ProviderAuthMethod
+        title={t("CredsKiroLabel")}
+        badge={statusLabel}
+        badgeTone={status.available ? "ok" : "unset"}
+        meta={
+          status.available && status.hint ? (
+            <span className="provider-detail-grid__mono">{status.hint}</span>
+          ) : null
+        }
+        actions={
+          status.available && status.hint ? (
+            <button
+              type="button"
+              className="btn btn--ghost"
+              onClick={handleOpenFolder}
+            >
+              {t("CredsOpenFolderAction")}
+            </button>
+          ) : null
+        }
+      >
+        {!status.available && (
+          <div className="provider-detail-helper">
+            {t("CredsKiroHelperMissing")}
           </div>
         )}
-      </dl>
-      {!status.available && (
-        <div className="provider-detail-helper">
-          {t("CredsKiroHelperMissing")}
-        </div>
-      )}
-      {status.available && status.hint && (
-        <div className="provider-detail-actions">
-          <button
-            type="button"
-            className="btn btn--ghost"
-            onClick={handleOpenFolder}
-          >
-            {t("CredsOpenFolderAction")}
-          </button>
-        </div>
-      )}
-      {error && <div className="provider-detail-error">{error}</div>}
-    </section>
+        {error && <div className="provider-detail-error">{error}</div>}
+      </ProviderAuthMethod>
+    </ProviderSection>
   );
 }
