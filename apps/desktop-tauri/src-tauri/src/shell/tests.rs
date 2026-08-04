@@ -898,9 +898,10 @@ fn popout_layout_size_uses_remembered_logical_geometry() {
 }
 
 #[test]
-fn tray_panel_layout_uses_fixed_size() {
-    // The tray panel is intentionally fixed to the reference layout. Stored
-    // geometry must not change its size or reintroduce the old resize path.
+fn main_surface_layout_does_not_restore_tray_panel_geometry() {
+    // The detached flyout owns its size in `flyout_window.rs`; this helper is
+    // only used for the shared `main` surface state machine and must not let a
+    // stray tray entry alter that window's layout.
     let props = SurfaceMode::TrayPanel.window_properties();
     let stored = crate::geometry_store::StoredGeometry {
         x: 0,

@@ -1,4 +1,5 @@
-//! Detached "Open Tray Panel" window: a fixed-size, always-on-top,
+//! Detached "Open Tray Panel" window: a default-sized, resizable,
+//! always-on-top,
 //! tray-anchored panel that auto-hides on click-outside (blur-dismiss).
 //!
 //! Runs as an auxiliary Tauri window labeled `flyout`, independent of the
@@ -22,6 +23,48 @@ use crate::surface::SurfaceMode;
 
 pub const FLYOUT_LABEL: &str = "flyout";
 
+fn remembered_size(props: &crate::surface::WindowProperties) -> (f64, f64) {
+    let stored = crate::geometry_store::load_entry(FLYOUT_LABEL);
+    let width = stored
+        .and_then(|geometry| geometry.width)
+        .map(|value| value as f64)
+        .unwrap_or(props.width);
+    let height = stored
+        .and_then(|geometry| geometry.height)
+        .map(|value| value as f64)
+        .unwrap_or(props.height);
+    let width = props.min_width.map_or(width, |min| width.max(min));
+    let height = props.min_height.map_or(height, |min| height.max(min));
+    let width = props.max_width.map_or(width, |max| width.min(max));
+    let height = props.max_height.map_or(height, |max| height.min(max));
+    (width, height)
+}
+
+fn remember_geometry(window: &tauri::WebviewWindow) {
+    if window.is_maximized().unwrap_or(false) || window.is_minimized().unwrap_or(false) {
+        return;
+    }
+    let Ok(position) = window.outer_position() else {
+        return;
+    };
+    let Ok(size) = window.outer_size() else {
+        return;
+    };
+    let scale = window.scale_factor().unwrap_or(1.0).max(1.0);
+    crate::geometry_store::save_entry(
+        FLYOUT_LABEL,
+        crate::geometry_store::StoredGeometry {
+            // The flyout is re-anchored on every open, so only its last size
+            // is restored. Keeping the position is still useful for future
+            // diagnostics and matches the shared geometry schema.
+            x: position.x,
+            y: position.y,
+            width: Some((size.width as f64 / scale).round().max(1.0) as u32),
+            height: Some((size.height as f64 / scale).round().max(1.0) as u32),
+        },
+    );
+}
+
 /// Same window used to close a same-click blur-dismiss/reopen race as the
 /// pre-split tray panel handling (formerly `shell::transition::handle_tray_panel_click`,
 /// removed once its only caller — the tray-icon left-click handler — was
@@ -31,6 +74,54 @@ const BLUR_DISMISS_CLICK_WINDOW: Duration = Duration::from_millis(250);
 /// blur (tray click focus race) is ignored — mirrors `main.rs`'s 500ms
 /// `was_tray_panel_recently_shown` guard for the old shared window.
 const RECENTLY_SHOWN_GRACE: Duration = Duration::from_millis(500);
+
+#[cfg(windows)]
+#[link(name = "user32")]
+unsafe extern "system" {
+    fn GetAsyncKeyState(vkey: i32) -> i16;
+}
+
+/// Native edge-resizing starts in Windows before the WebView can report a
+/// pointer gesture. The resize modal loop may briefly send `Focused(false)`
+/// to the flyout; identify that specific case so blur-dismiss does not hide
+/// the panel underneath the user's drag.
+#[cfg(windows)]
+fn native_resize_gesture(window: &tauri::Window) -> bool {
+    const VK_LBUTTON: i32 = 0x01;
+    if unsafe { GetAsyncKeyState(VK_LBUTTON) } >= 0 {
+        return false;
+    }
+
+    let Ok(cursor) = window.cursor_position() else {
+        return false;
+    };
+    let Ok(position) = window.outer_position() else {
+        return false;
+    };
+    let Ok(size) = window.outer_size() else {
+        return false;
+    };
+
+    let scale = window.scale_factor().unwrap_or(1.0).max(1.0);
+    let edge = (8.0 * scale).round().max(6.0);
+    let left = position.x as f64;
+    let top = position.y as f64;
+    let right = left + size.width as f64;
+    let bottom = top + size.height as f64;
+    let inside_x = cursor.x >= left && cursor.x <= right;
+    let inside_y = cursor.y >= top && cursor.y <= bottom;
+    let near_left = cursor.x >= left && cursor.x <= left + edge;
+    let near_right = cursor.x >= right - edge && cursor.x <= right;
+    let near_top = cursor.y >= top && cursor.y <= top + edge;
+    let near_bottom = cursor.y >= bottom - edge && cursor.y <= bottom;
+
+    (inside_y && (near_left || near_right)) || (inside_x && (near_top || near_bottom))
+}
+
+#[cfg(not(windows))]
+fn native_resize_gesture(_window: &tauri::Window) -> bool {
+    false
+}
 
 /// Whether the flyout window currently exists and is visible. Canonical
 /// replacement for the pre-split `surface_machine.current() == TrayPanel`
@@ -77,7 +168,12 @@ fn open_or_focus_inner(
             }
             return Ok(());
         }
+        // WebView2 can recreate the root HWND style while a prewarmed window
+        // is being revealed. Reapply the borderless subclass at this boundary
+        // so edge hit-testing and transparent corners remain native-owned.
+        super::dwm::force_borderless_transparent_resizable(&window);
         window.show().map_err(|e| e.to_string())?;
+        super::dwm::force_borderless_transparent_resizable(&window);
         window.set_focus().map_err(|e| e.to_string())?;
         if show_grace_starts_now(false) {
             mark_shown(app);
@@ -93,9 +189,10 @@ fn open_or_focus_inner(
     // from, rather than duplicating these values as independent constants
     // that could silently drift from `surface.rs`.
     let props = SurfaceMode::TrayPanel.window_properties();
-    // The tray flyout is deliberately fixed. There is no legacy size restore
-    // path, so a previous native resize cannot change its geometry.
-    let (width, height) = (props.width, props.height);
+    // Keep the reference size for the first open, then restore only a size the
+    // user chose. The native window remains the sole owner of drag-resizing;
+    // React must not fight it with a later setSize call.
+    let (width, height) = remembered_size(&props);
 
     let url = WebviewUrl::App("index.html?window=flyout".into());
 
@@ -133,9 +230,10 @@ fn open_or_focus_inner(
         .build()
         .map_err(|e| e.to_string())?;
 
-    // Strip the caption and WS_THICKFRAME. The fixed transparent flyout then
-    // has no native square frame/shadow behind the page's rounded corners.
-    super::dwm::force_borderless_transparent_fixed(&win);
+    // Strip the caption while retaining WS_THICKFRAME. This keeps the native
+    // edge hit-tests for drag-resizing without painting a square frame over
+    // the frontend's rounded transparent shell.
+    super::dwm::force_borderless_transparent_resizable(&win);
 
     let target_position =
         position.or_else(|| super::position::default_surface_position(app, SurfaceMode::TrayPanel));
@@ -216,6 +314,7 @@ pub fn toggle_with_blur_consume(app: &AppHandle, position: Option<(i32, i32)>) {
 /// process/window lifecycle treating it as an app-relevant close.
 pub fn hide(app: &AppHandle) -> Result<(), String> {
     if let Some(window) = app.get_webview_window(FLYOUT_LABEL) {
+        remember_geometry(&window);
         let state = app
             .try_state::<Mutex<AppState>>()
             .ok_or_else(|| "app state unavailable".to_string())?;
@@ -256,6 +355,15 @@ pub fn handle_window_event(window: &tauri::Window, event: &tauri::WindowEvent) -
                 tracing::debug!("flyout: proof mode suppressed blur-dismiss");
                 return true;
             }
+            if native_resize_gesture(window) {
+                if let Some(st) = app.try_state::<Mutex<AppState>>() {
+                    if let Ok(mut guard) = st.lock() {
+                        guard.begin_gesture_blur_guard(Instant::now());
+                    }
+                }
+                tracing::debug!("flyout: native resize kept blur-dismiss armed");
+                return true;
+            }
             // Settings is a companion window, not an outside click: keep the
             // flyout visible so changes can be reviewed live side by side.
             if crate::shell::settings_window::is_visible(app) {
@@ -286,8 +394,8 @@ pub fn handle_window_event(window: &tauri::Window, event: &tauri::WindowEvent) -
             }
             true
         }
-        // The fixed flyout has no user geometry to persist. Position is
-        // always recomputed from the tray anchor when it opens.
+        // Position is always recomputed from the tray anchor when it opens;
+        // the last user-chosen size is persisted when the panel hides.
         tauri::WindowEvent::Moved(_) | tauri::WindowEvent::Resized(_) => true,
         tauri::WindowEvent::CloseRequested { api, .. } => {
             if crate::proof_harness::is_proof_mode(app) {
@@ -307,7 +415,7 @@ pub fn handle_window_event(window: &tauri::Window, event: &tauri::WindowEvent) -
     }
 }
 
-/// Reposition the fixed flyout so its bottom-right corner stays anchored to
+/// Reposition the flyout so its bottom-right corner stays anchored to
 /// the system-tray area. Canonical anchor-math implementation for the
 /// flyout window; the `reanchor_tray_panel` Tauri command
 /// (`commands/system.rs`) is a thin retarget onto this function.
@@ -399,11 +507,11 @@ mod tests {
         let props = SurfaceMode::TrayPanel.window_properties();
         assert_eq!(props.width, 328.0);
         assert_eq!(props.height, 776.0);
-        assert_eq!(props.min_width, None);
-        assert_eq!(props.min_height, None);
+        assert_eq!(props.min_width, Some(300.0));
+        assert_eq!(props.min_height, Some(360.0));
         assert_eq!(props.max_width, None);
         assert_eq!(props.max_height, None);
-        assert!(!props.resizable);
+        assert!(props.resizable);
         assert!(props.always_on_top);
         assert!(props.skip_taskbar);
         assert!(!props.decorations);

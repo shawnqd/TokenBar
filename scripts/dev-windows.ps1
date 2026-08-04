@@ -114,7 +114,7 @@ if (-not (Test-Path -LiteralPath $FrontendDir)) {
     throw "Missing desktop app directory: $FrontendDir"
 }
 
-if (-not $DryRun) {
+if (-not $DryRun -and -not $StopOnly) {
     $lockPath = Join-Path $env:TEMP "tokenbar-dev.lock"
     try {
         # An exclusive handle closes automatically if the launcher is

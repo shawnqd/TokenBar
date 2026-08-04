@@ -48,19 +48,18 @@ impl SurfaceMode {
                 blur_dismiss: false,
                 skip_taskbar: true,
             },
-            // TrayPanel is the fixed-size "Open Tray Panel" surface: anchored
-            // above the tray icon, always-on-top, auto-hides on click-outside
-            // (blur), and never shows in the taskbar. Keeping it non-resizable
-            // removes Windows' WS_THICKFRAME square border behind the rounded
-            // transparent shell. A custom resize interaction can be added later.
+            // TrayPanel is the anchored "Open Tray Panel" surface: it keeps
+            // the design size on first open, but remains natively resizable so
+            // the user can make the scroll area taller/wider. It auto-hides on
+            // click-outside (blur) and never shows in the taskbar.
             Self::TrayPanel => WindowProperties {
                 visible: true,
                 decorations: false,
-                resizable: false,
+                resizable: true,
                 width: 328.0,
                 height: 776.0,
-                min_width: None,
-                min_height: None,
+                min_width: Some(300.0),
+                min_height: Some(360.0),
                 max_width: None,
                 max_height: None,
                 always_on_top: true,
@@ -281,25 +280,26 @@ mod tests {
     }
 
     #[test]
-    fn tray_panel_has_no_resize_bounds() {
+    fn tray_panel_has_resize_bounds() {
         let props = SurfaceMode::TrayPanel.window_properties();
-        assert_eq!(props.min_width, None);
-        assert_eq!(props.min_height, None);
+        assert_eq!(props.min_width, Some(300.0));
+        assert_eq!(props.min_height, Some(360.0));
         assert_eq!(props.max_width, None);
         assert_eq!(props.max_height, None);
     }
 
     #[test]
-    fn tray_panel_is_fixed_blur_dismiss_flyout() {
+    fn tray_panel_is_resizable_blur_dismiss_flyout() {
         let props = SurfaceMode::TrayPanel.window_properties();
-        // "Open Tray Panel" surface: fixed, anchored, auto-hide, no taskbar.
-        assert!(!props.resizable);
+        // "Open Tray Panel" surface: default-sized, anchored, user-resizable,
+        // auto-hide, no taskbar.
+        assert!(props.resizable);
         assert!(props.blur_dismiss);
         assert!(props.always_on_top);
         assert!(props.skip_taskbar);
         assert!(!props.decorations);
-        assert_eq!(props.min_width, None);
-        assert_eq!(props.min_height, None);
+        assert_eq!(props.min_width, Some(300.0));
+        assert_eq!(props.min_height, Some(360.0));
     }
 
     #[test]

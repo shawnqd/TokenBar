@@ -70,6 +70,8 @@ unsafe extern "system" {
     fn SetWindowLongPtrW(hwnd: isize, index: i32, new: isize) -> isize;
     fn GetWindowLongPtrW(hwnd: isize, index: i32) -> isize;
     fn SetWindowPos(hwnd: isize, after: isize, x: i32, y: i32, w: i32, h: i32, flags: u32) -> i32;
+    fn GetWindowRect(hwnd: isize, rect: *mut WinRect) -> i32;
+    fn GetDpiForWindow(hwnd: isize) -> u32;
     fn DefSubclassProc(hwnd: isize, msg: u32, wparam: usize, lparam: isize) -> isize;
     fn MonitorFromWindow(hwnd: isize, flags: u32) -> isize;
     fn GetMonitorInfoW(hmonitor: isize, info: *mut MonitorInfo) -> i32;
@@ -98,6 +100,8 @@ static DARK_BRUSH: std::sync::OnceLock<isize> = std::sync::OnceLock::new();
 #[cfg(windows)]
 const WM_NCCALCSIZE: u32 = 0x0083;
 #[cfg(windows)]
+const WM_NCHITTEST: u32 = 0x0084;
+#[cfg(windows)]
 const WM_NCPAINT: u32 = 0x0085;
 #[cfg(windows)]
 const WM_NCACTIVATE: u32 = 0x0086;
@@ -105,6 +109,58 @@ const WM_NCACTIVATE: u32 = 0x0086;
 const WM_GETMINMAXINFO: u32 = 0x0024;
 #[cfg(windows)]
 const BORDERLESS_SUBCLASS_ID: usize = 0xC0DE_BA12;
+
+#[cfg(windows)]
+const HTLEFT: isize = 10;
+#[cfg(windows)]
+const HTRIGHT: isize = 11;
+#[cfg(windows)]
+const HTTOP: isize = 12;
+#[cfg(windows)]
+const HTTOPLEFT: isize = 13;
+#[cfg(windows)]
+const HTTOPRIGHT: isize = 14;
+#[cfg(windows)]
+const HTBOTTOM: isize = 15;
+#[cfg(windows)]
+const HTBOTTOMLEFT: isize = 16;
+#[cfg(windows)]
+const HTBOTTOMRIGHT: isize = 17;
+
+/// Return the Win32 resize hit-test code for a point in screen coordinates.
+///
+/// Clearing the non-client area removes the default frame hit testing. Keep
+/// this helper independent from the window procedure so the edge policy is
+/// explicit and testable: only the outer 8-DIP band is native-resizable; the
+/// rest of the transparent canvas is left to WebView2.
+#[cfg(windows)]
+fn resize_hit_test(rect: WinRect, x: i32, y: i32, border: i32) -> Option<isize> {
+    let border = border.max(1);
+    let left = x >= rect.left && x < rect.left + border;
+    let right = x >= rect.right - border && x < rect.right;
+    let top = y >= rect.top && y < rect.top + border;
+    let bottom = y >= rect.bottom - border && y < rect.bottom;
+
+    Some(match (left, right, top, bottom) {
+        (true, false, true, false) => HTTOPLEFT,
+        (false, true, true, false) => HTTOPRIGHT,
+        (true, false, false, true) => HTBOTTOMLEFT,
+        (false, true, false, true) => HTBOTTOMRIGHT,
+        (true, false, false, false) => HTLEFT,
+        (false, true, false, false) => HTRIGHT,
+        (false, false, true, false) => HTTOP,
+        (false, false, false, true) => HTBOTTOM,
+        _ => return None,
+    })
+}
+
+#[cfg(windows)]
+fn screen_point_from_lparam(lparam: isize) -> (i32, i32) {
+    let packed = lparam as u32;
+    let x = (packed as u16) as i16 as i32;
+    let y = ((packed >> 16) as u16) as i16 as i32;
+    (x, y)
+}
 
 #[cfg(windows)]
 unsafe extern "system" fn borderless_subclass_proc(
@@ -121,6 +177,24 @@ unsafe extern "system" fn borderless_subclass_proc(
                 // Returning 0 when wparam is TRUE tells Windows the
                 // client area == the window area (no non-client area).
                 return 0;
+            }
+            unsafe { DefSubclassProc(hwnd, msg, wparam, lparam) }
+        }
+        WM_NCHITTEST => {
+            // WS_THICKFRAME is retained so Windows knows the window is
+            // resizable, but WM_NCCALCSIZE above removes the non-client area
+            // where the default edge hit testing normally happens. Recreate
+            // only that small edge band and let WebView2 handle all interior
+            // points normally.
+            let mut rect = WinRect::default();
+            let rect_ok = unsafe { GetWindowRect(hwnd, &mut rect) } != 0;
+            if rect_ok {
+                let dpi = unsafe { GetDpiForWindow(hwnd) }.max(96);
+                let border = ((dpi.saturating_mul(8) / 96) as i32).clamp(6, 14);
+                let (x, y) = screen_point_from_lparam(lparam);
+                if let Some(hit) = resize_hit_test(rect, x, y, border) {
+                    return hit;
+                }
             }
             unsafe { DefSubclassProc(hwnd, msg, wparam, lparam) }
         }
@@ -206,14 +280,6 @@ pub fn force_dark_caption_resizable(win: &tauri::WebviewWindow) {
     force_dark_caption_inner(win, true, false);
 }
 
-/// Borderless treatment for the fixed-size transparent tray flyout. Unlike
-/// the resizable variant, this strips `WS_THICKFRAME` so DWM cannot paint a
-/// square native frame/shadow underneath the rounded CSS shell.
-#[cfg(windows)]
-pub fn force_borderless_transparent_fixed(win: &tauri::WebviewWindow) {
-    force_dark_caption_inner(win, false, true);
-}
-
 /// Transparent treatment for a resizable frontend-owned window shell.
 ///
 /// Settings keeps `WS_THICKFRAME` for edge resizing, but disables native
@@ -222,6 +288,28 @@ pub fn force_borderless_transparent_fixed(win: &tauri::WebviewWindow) {
 #[cfg(windows)]
 pub fn force_borderless_transparent_resizable(win: &tauri::WebviewWindow) {
     force_dark_caption_inner(win, true, true);
+}
+
+#[cfg(all(test, windows))]
+mod tests {
+    use super::*;
+
+    fn rect() -> WinRect {
+        WinRect {
+            left: 100,
+            top: 100,
+            right: 500,
+            bottom: 400,
+        }
+    }
+
+    #[test]
+    fn resize_hit_test_returns_corner_and_edge_codes() {
+        assert_eq!(resize_hit_test(rect(), 101, 101, 8), Some(HTTOPLEFT));
+        assert_eq!(resize_hit_test(rect(), 499, 250, 8), Some(HTRIGHT));
+        assert_eq!(resize_hit_test(rect(), 250, 399, 8), Some(HTBOTTOM));
+        assert_eq!(resize_hit_test(rect(), 250, 250, 8), None);
+    }
 }
 
 #[cfg(windows)]
@@ -359,9 +447,6 @@ pub fn force_dark_caption(_win: &tauri::WebviewWindow) {}
 
 #[cfg(not(windows))]
 pub fn force_dark_caption_resizable(_win: &tauri::WebviewWindow) {}
-
-#[cfg(not(windows))]
-pub fn force_borderless_transparent_fixed(_win: &tauri::WebviewWindow) {}
 
 #[cfg(not(windows))]
 pub fn force_borderless_transparent_resizable(_win: &tauri::WebviewWindow) {}

@@ -63,7 +63,7 @@ pub fn apply_window_layout(
     }
 
     if props.visible {
-        // The "Open Tray Panel" surface is a separate fixed-size window;
+        // The "Open Tray Panel" surface is a separate anchored window;
         // this function only lays out the main window's surfaces.
         // it is its own dedicated window now, never `main`, so this function
         // (which only ever runs against `main`'s window; see callers in

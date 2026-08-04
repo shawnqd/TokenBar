@@ -122,17 +122,21 @@ export default function ProvidersTab({
     });
   };
 
+  // During bootstrap the catalog can arrive one render before the selection
+  // effect runs. Use the first visible row as the transient detail target so
+  // the right workspace never flashes an empty pane on first open.
+  const detailProviderId = selectedId ?? visibleRows[0]?.id ?? null;
   const selectedEntry =
-    orderedProviders.find((p) => p.id === selectedId) ?? null;
+    orderedProviders.find((p) => p.id === detailProviderId) ?? null;
   const selectedSnapshot =
-    snapshots.find((snapshot) => snapshot.providerId === selectedId) ?? null;
+    snapshots.find((snapshot) => snapshot.providerId === detailProviderId) ?? null;
 
   return (
     <div className="providers-tab-content">
       <div className="provider-split">
         <ProvidersSidebar
           providers={visibleRows}
-          selectedId={selectedId}
+          selectedId={selectedId ?? detailProviderId}
           searchText={searchText}
           onSearchTextChange={setSearchText}
           onSelect={setSelectedId}
@@ -144,7 +148,8 @@ export default function ProvidersTab({
           <CookieFileImport />
         ) : (
           <ProviderDetailPane
-            providerId={selectedId}
+            key={detailProviderId ?? "no-provider"}
+            providerId={detailProviderId}
             providerSnapshot={selectedSnapshot}
             cookieDomain={selectedEntry?.cookieDomain ?? null}
             display={quotaDisplayContext(settings, "dashboard")}

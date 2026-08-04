@@ -34,6 +34,70 @@ pub const SETTINGS_HIDDEN_EVENT: &str = "settings-window-hidden";
 const SETTINGS_GUTTER: f64 = 24.0;
 const SETTINGS_WIDTH: f64 = 912.0 + SETTINGS_GUTTER * 2.0;
 const SETTINGS_HEIGHT: f64 = 580.0 + SETTINGS_GUTTER * 2.0;
+// Keep the window usable when the user makes it smaller than the reference
+// design. The native frame owns this constraint; the React surface must be
+// allowed to reflow inside it instead of resetting the size on every tab.
+const SETTINGS_MIN_WIDTH: f64 = 640.0 + SETTINGS_GUTTER * 2.0;
+const SETTINGS_MIN_HEIGHT: f64 = 420.0 + SETTINGS_GUTTER * 2.0;
+
+fn remembered_size() -> (f64, f64) {
+    let stored = crate::geometry_store::load_entry(SETTINGS_LABEL);
+    let width = stored
+        .and_then(|geometry| geometry.width)
+        .map(|value| value as f64)
+        .unwrap_or(SETTINGS_WIDTH)
+        .max(SETTINGS_MIN_WIDTH);
+    let height = stored
+        .and_then(|geometry| geometry.height)
+        .map(|value| value as f64)
+        .unwrap_or(SETTINGS_HEIGHT)
+        .max(SETTINGS_MIN_HEIGHT);
+    (width, height)
+}
+
+/// A stale geometry entry can outlive a monitor, DPI, or taskbar change. Keep
+/// the first hidden build inside the current monitor before restoring it; the
+/// user can still resize freely within that monitor afterwards. Without this
+/// guard a too-tall Settings window is clipped and makes the Providers tab
+/// look like it is stretching the whole application.
+fn clamp_size_to_monitor(window: &tauri::WebviewWindow, width: f64, height: f64) -> (f64, f64) {
+    let Ok(Some(monitor)) = window.primary_monitor() else {
+        return (width, height);
+    };
+    let scale = window.scale_factor().unwrap_or(1.0).max(1.0);
+    let monitor_width = monitor.size().width as f64 / scale;
+    let monitor_height = monitor.size().height as f64 / scale;
+    let max_width = (monitor_width - SETTINGS_GUTTER * 2.0).max(SETTINGS_MIN_WIDTH);
+    // Leave a small taskbar/titlebar reserve so a restored window is never
+    // reopened underneath the taskbar or beyond the bottom edge.
+    let max_height = (monitor_height - SETTINGS_GUTTER * 2.0 - 48.0).max(SETTINGS_MIN_HEIGHT);
+    (width.min(max_width), height.min(max_height))
+}
+
+fn remember_geometry(window: &tauri::WebviewWindow) {
+    if window.is_maximized().unwrap_or(false) || window.is_minimized().unwrap_or(false) {
+        return;
+    }
+    let Ok(position) = window.outer_position() else {
+        return;
+    };
+    let Ok(size) = window.outer_size() else {
+        return;
+    };
+    let scale = window.scale_factor().unwrap_or(1.0).max(1.0);
+    crate::geometry_store::save_entry(
+        SETTINGS_LABEL,
+        crate::geometry_store::StoredGeometry {
+            // Positions are kept in physical pixels, matching the existing
+            // detached-window geometry entries. Width/height are logical so
+            // a HiDPI monitor does not reopen the window at 125%/150% size.
+            x: position.x,
+            y: position.y,
+            width: Some((size.width as f64 / scale).round().max(1.0) as u32),
+            height: Some((size.height as f64 / scale).round().max(1.0) as u32),
+        },
+    );
+}
 
 /// Whether the detached Settings window is visibly open. The tray flyout uses
 /// this to stay on screen as a live settings preview while focus moves between
@@ -50,9 +114,11 @@ fn build_hidden(app: &tauri::AppHandle, tab: &str) -> Result<(), String> {
 
     let url = WebviewUrl::App(format!("index.html?window=settings&tab={tab}").into());
 
+    let (width, height) = remembered_size();
     let builder = tauri::WebviewWindowBuilder::new(app, SETTINGS_LABEL, url)
         .title("CodexBar Settings")
-        .inner_size(SETTINGS_WIDTH, SETTINGS_HEIGHT)
+        .inner_size(width, height)
+        .min_inner_size(SETTINGS_MIN_WIDTH, SETTINGS_MIN_HEIGHT)
         .decorations(false)
         .shadow(false)
         .resizable(true)
@@ -77,18 +143,26 @@ fn build_hidden(app: &tauri::AppHandle, tab: &str) -> Result<(), String> {
         .build()
         .map_err(|e| e.to_string())?;
 
+    let (safe_width, safe_height) = clamp_size_to_monitor(&win, width, height);
+    if (safe_width - width).abs() > f64::EPSILON || (safe_height - height).abs() > f64::EPSILON {
+        let _ = win.set_size(tauri::LogicalSize::new(safe_width, safe_height));
+    }
+
     // Keep WS_THICKFRAME for resizing while removing its square paint. The
     // frontend frame owns the radius, hairline and shadow.
     super::dwm::force_borderless_transparent_resizable(&win);
 
-    // Tauri's `.center()` is unreliable for dynamically-built windows on
-    // Windows, so center against the primary monitor explicitly.
-    if let Ok(Some(monitor)) = win.primary_monitor() {
+    // Restore a previously chosen position; otherwise center against the
+    // primary monitor. Tauri's `.center()` is unreliable for dynamically-built
+    // windows on Windows, so both paths use explicit native coordinates.
+    if let Some(stored) = crate::geometry_store::load_entry(SETTINGS_LABEL) {
+        let _ = win.set_position(PhysicalPosition::new(stored.x, stored.y));
+    } else if let Ok(Some(monitor)) = win.primary_monitor() {
         let pos = monitor.position();
         let size = monitor.size();
         let scale = win.scale_factor().unwrap_or(1.0);
-        let win_w = (SETTINGS_WIDTH * scale) as i32;
-        let win_h = (SETTINGS_HEIGHT * scale) as i32;
+        let win_w = (width * scale) as i32;
+        let win_h = (height * scale) as i32;
         let x = pos.x + (size.width as i32 - win_w) / 2;
         let y = pos.y + (size.height as i32 - win_h) / 2;
         let _ = win.set_position(PhysicalPosition::new(x, y));
@@ -131,7 +205,19 @@ pub fn open_or_focus(app: &tauri::AppHandle, tab: &str) -> Result<(), String> {
         // replaying a fade over a window the user is reading is noise, not
         // polish — so the visibility is sampled BEFORE `show()` makes it true.
         let was_hidden = !window.is_visible().unwrap_or(false);
+        // Keep only the usable minimum on reveal. Never call set_size here:
+        // doing so animates a Win32 resize and fights the user's chosen size.
+        let _ = window.set_min_size(Some(tauri::LogicalSize::new(
+            SETTINGS_MIN_WIDTH,
+            SETTINGS_MIN_HEIGHT,
+        )));
+        // Reapply after the prewarmed WebView is about to become visible. The
+        // WebView2 root can replace the HWND style during initialization;
+        // without this pass the window looks borderless but loses native edge
+        // hit-testing and cannot be resized reliably.
+        super::dwm::force_borderless_transparent_resizable(&window);
         window.show().map_err(|e| e.to_string())?;
+        super::dwm::force_borderless_transparent_resizable(&window);
         window.set_focus().map_err(|e| e.to_string())?;
         if was_hidden {
             app.emit_to(SETTINGS_LABEL, SETTINGS_REVEALED_EVENT, ())
@@ -153,6 +239,7 @@ pub fn open_or_focus(app: &tauri::AppHandle, tab: &str) -> Result<(), String> {
 /// WebView remains ready for the next open.
 pub fn dismiss(app: &tauri::AppHandle, window: &tauri::WebviewWindow) -> Result<(), String> {
     if window.label() == SETTINGS_LABEL {
+        remember_geometry(window);
         window.hide().map_err(|e| e.to_string())?;
         // Emitted after the hide: the frame drops to zero opacity behind an
         // already-invisible window, so the reset itself is never seen.

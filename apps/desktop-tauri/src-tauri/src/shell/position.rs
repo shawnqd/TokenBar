@@ -232,8 +232,8 @@ pub fn remember_current_geometry_if_eligible(window: &tauri::Window) {
         let guard = st.lock().unwrap();
         guard.surface_machine.current()
     };
-    // The fixed tray flyout is not eligible for geometry persistence; the
-    // shared store owns only user-movable PopOut and Settings windows.
+    // The tray flyout is not eligible for position persistence; it is always
+    // re-anchored. The flyout module separately persists its last size.
     if !crate::geometry_store::should_remember(current_mode) {
         return;
     }

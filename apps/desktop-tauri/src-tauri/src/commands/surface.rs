@@ -92,7 +92,9 @@ pub fn reveal_tray_panel_window(
         return Ok(());
     }
     drop(guard);
+    crate::shell::dwm::force_borderless_transparent_resizable(&window);
     window.show().map_err(|e| e.to_string())?;
+    crate::shell::dwm::force_borderless_transparent_resizable(&window);
     state
         .lock()
         .map_err(|e| e.to_string())?
@@ -126,7 +128,9 @@ pub fn reveal_settings_window(
         tab,
     )
     .map_err(|e| e.to_string())?;
+    crate::shell::dwm::force_borderless_transparent_resizable(&window);
     window.show().map_err(|e| e.to_string())?;
+    crate::shell::dwm::force_borderless_transparent_resizable(&window);
     window.set_focus().map_err(|e| e.to_string())?;
     // This path only runs for a reveal that was armed while the window was
     // still hidden, so it is always a genuine hidden -> visible transition.

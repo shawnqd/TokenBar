@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useRef, useState, type CSSProperties, type ReactElement, type ReactNode } from "react";
-import { getCurrentWindow, LogicalPosition, LogicalSize } from "@tauri-apps/api/window";
+import { useCallback, useEffect, useRef, useState, type ReactElement, type ReactNode } from "react";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import type {
   BootstrapState,
@@ -10,7 +10,7 @@ import { useSettings } from "../hooks/useSettings";
 import { useSurfaceTarget } from "../hooks/useSurfaceMode";
 import { useLocale } from "../hooks/useLocale";
 import type { LocaleKey } from "../i18n/keys";
-import { closeSettingsWindow, getWorkAreaRect, setSurfaceMode } from "../lib/tauri";
+import { closeSettingsWindow, setSurfaceMode } from "../lib/tauri";
 import GeneralTab from "./settings/tabs/GeneralTab";
 import DashboardTab from "./settings/tabs/DashboardTab";
 import DisplayTab from "./settings/tabs/DisplayTab";
@@ -130,50 +130,11 @@ function isSettingsTab(value: string): value is SettingsTab {
   return TAB_META.some((t) => t.id === value);
 }
 
-// Tall enough that General — the default landing tab — renders in full
-// with no scrollbar on a typical display; still clamped to the work area
-// below for smaller screens.
-const SETTINGS_WINDOW_HEIGHT = 720;
-// One fixed width for every tab so the window never resizes/jumps when
-// switching tabs (previously General/Display/Advanced/About used 496px
-// while Providers used 600px).
-// The reference layout is 1140 physical pixels on the primary 125%-scaled
-// display, which is 912 logical pixels. Keep this in logical units because
-// Tauri's LogicalSize applies the monitor scale factor for us.
-const SETTINGS_WINDOW_WIDTH = 912;
-
-async function applySettingsWindowSize(_tab: SettingsTab) {
-  const requestedWidth = SETTINGS_WINDOW_WIDTH;
-  const workArea = await getWorkAreaRect().catch(() => null);
-  const screenWidth = window.screen.availWidth || window.innerWidth || requestedWidth;
-  const screenHeight = window.screen.availHeight || window.innerHeight || SETTINGS_WINDOW_HEIGHT;
-  const maxWidth = Math.min(workArea?.width ?? screenWidth, screenWidth);
-  const maxHeight = Math.min(workArea?.height ?? screenHeight, screenHeight);
-  const width = Math.max(
-    360,
-    Math.min(requestedWidth, maxWidth - 16),
-  );
-  const height = Math.max(
-    360,
-    Math.min(SETTINGS_WINDOW_HEIGHT, maxHeight - 16),
-  );
-  const win = getCurrentWindow();
-  await win.setSize(new LogicalSize(width, height)).catch(() => {});
-  const screenOrigin = window.screen as Screen & {
-    availLeft?: number;
-    availTop?: number;
-  };
-  const left = screenOrigin.availLeft ?? workArea?.x ?? 0;
-  const top = screenOrigin.availTop ?? workArea?.y ?? 0;
-  await win
-    .setPosition(
-      new LogicalPosition(
-        left + Math.max(8, Math.round((screenWidth - width) / 2)),
-        top + Math.max(8, Math.round((screenHeight - height) / 2)),
-      ),
-    )
-    .catch(() => {});
-}
+// Window geometry for the detached Settings surface is owned exclusively by
+// `shell/settings_window.rs` (create size + optional user drag-resize). The
+// frontend must never call setSize/setPosition here: even "matching" values
+// animate a Win32 resize, and tab-dependent layout used to amplify that into
+// a whole-window stretch when entering Providers.
 
 export default function Settings({ state, initialTab: propTab }: { state: BootstrapState; initialTab?: string }) {
   const { settings, saving, error, update } = useSettings(state.settings);
@@ -202,16 +163,6 @@ export default function Settings({ state, initialTab: propTab }: { state: Bootst
     setActiveTab(next);
   }, []);
 
-  useEffect(() => {
-    // Every tab now shares one fixed size, so this only needs to run once
-    // per window lifetime — re-issuing setSize/setPosition on every tab
-    // switch (even to the same values) was still enough to trigger a
-    // native resize animation (a visible "expand from center" flash),
-    // most noticeable when switching into the wider Providers layout.
-    void applySettingsWindowSize(initialTab);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
   // Respond to prop-driven tab changes (detached window re-focus events).
   useEffect(() => {
     if (propTab && isSettingsTab(propTab)) {
@@ -236,9 +187,7 @@ export default function Settings({ state, initialTab: propTab }: { state: Bootst
   }, [changeTab]);
 
   return (
-    <div
-      className={`settings${activeTab === "providers" ? " settings--providers-active" : ""}`}
-    >
+    <div className="settings">
       {/* custom title bar (decorations disabled for guaranteed dark theme) */}
       <div className="settings-titlebar" data-tauri-drag-region>
         <span className="settings-titlebar__title" data-tauri-drag-region>
@@ -280,8 +229,10 @@ export default function Settings({ state, initialTab: propTab }: { state: Bootst
         ))}
       </nav>
 
-      {/* tab panels */}
-      <div className={`settings-body${activeTab === "providers" ? " settings-body--providers" : ""}`}>
+      {/* tab panels — body chrome is identical for every tab so switching
+          into Providers cannot reflow the outer window (no display/overflow
+          class toggles, no setSize, no transform animations). */}
+      <div className="settings-body">
         {/* status toast — absolutely positioned within settings-body so a
             save notice never pushes the panel content down/up. */}
         {(saving || error) && (
@@ -291,52 +242,63 @@ export default function Settings({ state, initialTab: propTab }: { state: Bootst
             {saving ? t("SettingsStatusSaving") : error}
           </div>
         )}
-        {/* `key={activeTab}` forces a remount on every tab switch so the
-            slide-in animation (see .settings-tab-panel) replays each time.
-            `--tab-slide-x` carries the entry direction — positive slides
-            the new panel in from the right (moving to a tab further right
-            in the bar), negative from the left. Single-column tabs get a
-            narrower, centered content width so fields don't stretch across
-            the full (wider) window with a large label/control gap —
-            Providers keeps the full width for its sidebar + detail pane
-            layout. */}
         <div
           key={activeTab}
-          className={`settings-tab-panel${activeTab === "providers" ? "" : " settings-tab-panel--narrow"}`}
-          style={{ "--tab-slide-x": `${tabSlideDirection * 10}px` } as CSSProperties}
+          className={`settings-tab-panel${
+            activeTab === "providers" ? " settings-tab-panel--providers" : ""
+          }`}
+          data-slide={tabSlideDirection > 0 ? "right" : "left"}
         >
-        {activeTab === "general" && (
-          <GeneralTab mode="general" settings={settings} set={set} saving={saving} />
-          )}
-          {activeTab === "providers" && (
-            <ProvidersTab
-              settings={settings}
-              providers={state.providers}
-              set={set}
-              saving={saving}
-            />
-          )}
-        {activeTab === "notifications" && (
-          <GeneralTab mode="notifications" settings={settings} set={set} saving={saving} />
-        )}
-        {activeTab === "menuBar" && (
-          <TaskbarTab settings={settings} set={set} saving={saving} />
-        )}
-        {activeTab === "dashboard" && (
-          <DashboardTab settings={settings} set={set} saving={saving} />
-        )}
-        {activeTab === "floatBar" && (
-          <FloatBarTab settings={settings} set={set} saving={saving} />
-        )}
-        {activeTab === "menu" && (
-          <DisplayTab settings={settings} set={set} saving={saving} />
-          )}
-          {activeTab === "advanced" && (
-            <AdvancedTab settings={settings} set={set} saving={saving} />
-          )}
-          {activeTab === "about" && (
-            <AboutTab settings={settings} set={set} saving={saving} />
-          )}
+          <div
+            className={`settings-page${
+              activeTab === "providers" ? " settings-page--providers" : ""
+            }`}
+            data-settings-page={activeTab}
+            data-settings-tab-content={activeTab}
+          >
+            {activeTab === "general" && (
+              <GeneralTab
+                mode="general"
+                settings={settings}
+                set={set}
+                saving={saving}
+              />
+            )}
+            {activeTab === "providers" && (
+              <ProvidersTab
+                settings={settings}
+                providers={state.providers}
+                set={set}
+                saving={saving}
+              />
+            )}
+            {activeTab === "notifications" && (
+              <GeneralTab
+                mode="notifications"
+                settings={settings}
+                set={set}
+                saving={saving}
+              />
+            )}
+            {activeTab === "menuBar" && (
+              <TaskbarTab settings={settings} set={set} saving={saving} />
+            )}
+            {activeTab === "dashboard" && (
+              <DashboardTab settings={settings} set={set} saving={saving} />
+            )}
+            {activeTab === "floatBar" && (
+              <FloatBarTab settings={settings} set={set} saving={saving} />
+            )}
+            {activeTab === "menu" && (
+              <DisplayTab settings={settings} set={set} saving={saving} />
+            )}
+            {activeTab === "advanced" && (
+              <AdvancedTab settings={settings} set={set} saving={saving} />
+            )}
+            {activeTab === "about" && (
+              <AboutTab settings={settings} set={set} saving={saving} />
+            )}
+          </div>
         </div>
       </div>
     </div>
