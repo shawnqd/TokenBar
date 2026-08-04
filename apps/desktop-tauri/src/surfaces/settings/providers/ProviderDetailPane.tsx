@@ -31,6 +31,10 @@ import { StatsSection } from "./sections/StatsSection";
 import { QuickActionsSection } from "./sections/QuickActionsSection";
 import { CookieSourceSection } from "./sections/CookieSourceSection";
 import { RegionSection } from "./sections/RegionSection";
+import {
+  classifyProviderFetchIssue,
+  providerFetchIssueLocaleKey,
+} from "../../../lib/providerFetchIssue";
 import { GeminiCliCreds } from "./sections/credentials/GeminiCliCreds";
 import { VertexAiCreds } from "./sections/credentials/VertexAiCreds";
 import { JetBrainsCreds } from "./sections/credentials/JetBrainsCreds";
@@ -100,7 +104,10 @@ export function ProviderDetailPane({
   const [tokenProviderIds, setTokenProviderIds] = useState<Set<string>>(
     () => new Set(),
   );
-  const [loading, setLoading] = useState(false);
+  // A selected provider always needs an async detail request on mount. Start
+  // in the loading state so the first paint contains the fixed workspace
+  // skeleton instead of an empty right pane that grows one frame later.
+  const [loading, setLoading] = useState(() => Boolean(providerId));
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const outputSpeed = useOutputSpeedSnapshot(outputSpeedEnabled);
@@ -202,7 +209,12 @@ export function ProviderDetailPane({
     );
   }
 
-  const showSkeleton = loading && !detail;
+  // A selected provider must never render an empty workspace while its first
+  // detail request is in flight. The provider key remounts this pane on
+  // selection changes, and this guard keeps the skeleton visible even if an
+  // async callback briefly leaves `loading` false between state updates.
+  const showSkeleton = Boolean(providerId) && !detail && !error;
+  const dataLoading = loading || showSkeleton;
   const subtitle = detail ? buildSubtitle(detail, t) : "";
   const speedProviderId = detail ? outputSpeedProviderId(detail.id) : null;
   const providerOutputSpeed = speedProviderId
@@ -284,7 +296,7 @@ export function ProviderDetailPane({
   return (
     <div
       className="provider-detail"
-      data-loading={showSkeleton ? "true" : "false"}
+      data-loading={dataLoading ? "true" : "false"}
       data-provider-id={providerId}
     >
       {/* 1. Provider header — same shell whether or not a live snapshot exists */}
@@ -357,7 +369,7 @@ export function ProviderDetailPane({
         />
       )}
 
-      {/* 4. Auth & credentials */}
+      {/* 4. Auth sources — Cookie / browser login / CLI / API / token plan in one zone */}
       {detail && (
         <AuthWorkspace
           providerId={detail.id}
@@ -367,12 +379,15 @@ export function ProviderDetailPane({
           credentialStatus={credentialStatus}
           busy={busy}
           primary={resolvePrimaryAuth(detail.id, cookieDomain)}
+          cookieSource={detail.cookieSource}
+          cookieOptions={cookieOptions}
+          onCookieSourceChanged={() => void load(detail.id)}
           onRevoke={handleRevokeCredentials}
           t={t}
         />
       )}
 
-      {/* 5. Display settings */}
+      {/* 5. Display settings (tray metric + region only; auth sources live above) */}
       {detail && (
         <div className="provider-detail-display-zone">
           <MenuBarMetricSection
@@ -382,15 +397,6 @@ export function ProviderDetailPane({
             t={t}
             onChange={onSettingsChange}
           />
-          {detail.id !== "codex" && (
-            <CookieSourceSection
-              providerId={detail.id}
-              currentValue={detail.cookieSource}
-              options={cookieOptions}
-              t={t}
-              onChanged={() => void load(detail.id)}
-            />
-          )}
           <RegionSection
             providerId={detail.id}
             currentValue={detail.region}
@@ -449,6 +455,9 @@ function AuthWorkspace({
   credentialStatus,
   busy,
   primary,
+  cookieSource,
+  cookieOptions,
+  onCookieSourceChanged,
   onRevoke,
   t,
 }: {
@@ -459,10 +468,14 @@ function AuthWorkspace({
   credentialStatus: CredentialStorageStatus | null;
   busy: boolean;
   primary: PrimaryAuthKind;
+  cookieSource: string | null | undefined;
+  cookieOptions: CookieSourceOption[];
+  onCookieSourceChanged: () => void;
   onRevoke: () => void;
   t: ReturnType<typeof useLocale>["t"];
 }) {
   const showCookie = cookieDomain !== null && providerId !== "codex";
+  const showCookieSource = providerId !== "codex" && cookieOptions.length > 0;
   const bespoke = (
     <CredentialsDispatcher key={`creds-${providerId}`} providerId={providerId} t={t} />
   );
@@ -511,7 +524,26 @@ function AuthWorkspace({
   );
 
   return (
-    <div className="provider-detail-auth-zone">
+    <div className="provider-detail-auth-zone" data-auth-sources="true">
+      <div className="provider-detail-section__header provider-detail-auth-zone__header">
+        <h3 className="provider-detail-auth-zone__title">
+          {t("ProviderAuthSourcesTitle")}
+        </h3>
+        <p className="provider-detail-auth-zone__helper">
+          {t("ProviderAuthSourcesHelper")}
+        </p>
+      </div>
+      {/* Preferred source mode (auto / web / cli / …) stays with credentials,
+          not under Display — TASK-021 item 2. */}
+      {showCookieSource && (
+        <CookieSourceSection
+          providerId={providerId}
+          currentValue={cookieSource ?? null}
+          options={cookieOptions}
+          t={t}
+          onChanged={onCookieSourceChanged}
+        />
+      )}
       <div className="provider-detail-auth-primary">{primaryNode}</div>
       <details className="provider-detail-section provider-detail-auth-more">
         <summary className="provider-detail-auth-more__summary">
@@ -535,22 +567,21 @@ function ProviderIssueNotice({
   t: ReturnType<typeof useLocale>["t"];
 }) {
   const cleaned = message.replace(/^last fetch failed:\s*/i, "").trim();
-  const lower = cleaned.toLowerCase();
-  const needsLogin =
-    lower.includes("auth.json not found") ||
-    lower.includes("not signed in") ||
-    lower.includes("credentials not found") ||
-    lower.includes("oauth credentials not found") ||
-    lower.includes("run `") ||
-    lower.includes("run codex") ||
-    lower.includes("run claude");
+  const issue = classifyProviderFetchIssue(cleaned);
+  const needsLogin = issue.category === "auth";
   const title = needsLogin
     ? `${detail.displayName} ${t("ProviderIssueNeedsSignIn")}`
     : t("ProviderIssueFetchNeedsAttention");
   const displayMessage = localizeProviderIssue(cleaned, t);
+  const categoryLabel = t(providerFetchIssueLocaleKey(issue.category));
 
   return (
-    <div className="provider-detail-error" role="status">
+    <div
+      className="provider-detail-error"
+      role="status"
+      data-issue-category={issue.category}
+      data-issue-transient={issue.mayBeTransient ? "true" : "false"}
+    >
       <div className="provider-detail-error__header">
         <strong>{title}</strong>
         <button
@@ -561,6 +592,7 @@ function ProviderIssueNotice({
           {t("ProviderIssueCopy")}
         </button>
       </div>
+      <p className="provider-detail-error__category">{categoryLabel}</p>
       <p>{displayMessage}</p>
     </div>
   );

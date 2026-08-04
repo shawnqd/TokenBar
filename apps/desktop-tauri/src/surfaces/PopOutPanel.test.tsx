@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+﻿import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const tauriMocks = vi.hoisted(() => ({
@@ -16,6 +16,11 @@ const tauriMocks = vi.hoisted(() => ({
   openSettingsWindow: vi.fn(),
   quitApp: vi.fn(),
   getProviderChartData: vi.fn(),
+  getOutputSpeedSnapshot: vi.fn().mockResolvedValue({
+    codex: null,
+    claude: null,
+    grok: null,
+  }),
   getLocaleStrings: vi.fn(),
   setUiLanguage: vi.fn(),
 }));
@@ -175,6 +180,8 @@ function settings(): SettingsSnapshot {
     dashboardShowAsUsed: true,
     dashboardResetTimeRelative: true,
     taskbarShowAsUsed: true,
+    taskbarContextMenuActions: ["open_panel", "refresh", "settings", "quit"],
+    taskbarTooltipEntries: [],
   };
 }
 

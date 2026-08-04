@@ -203,6 +203,10 @@ pub(super) struct RawSettings {
     dashboard_reset_time_relative: Option<bool>,
     #[serde(default)]
     taskbar_show_as_used: Option<bool>,
+    #[serde(default)]
+    taskbar_context_menu_actions: Option<Vec<String>>,
+    #[serde(default)]
+    taskbar_tooltip_entries: Option<Vec<TaskbarEntry>>,
 }
 
 fn default_taskbar_widget_position() -> String {
@@ -327,6 +331,8 @@ impl Default for RawSettings {
             dashboard_show_as_used: Some(s.dashboard_show_as_used),
             dashboard_reset_time_relative: Some(s.dashboard_reset_time_relative),
             taskbar_show_as_used: Some(s.taskbar_show_as_used),
+            taskbar_context_menu_actions: Some(s.taskbar_context_menu_actions.clone()),
+            taskbar_tooltip_entries: Some(s.taskbar_tooltip_entries.clone()),
         }
     }
 }
@@ -629,6 +635,17 @@ impl From<RawSettings> for Settings {
                 .dashboard_reset_time_relative
                 .unwrap_or(raw.reset_time_relative),
             taskbar_show_as_used: raw.taskbar_show_as_used.unwrap_or(raw.show_as_used),
+            taskbar_context_menu_actions: crate::settings::normalize_taskbar_context_menu_actions(
+                raw.taskbar_context_menu_actions
+                    .as_deref()
+                    .unwrap_or(&[]),
+            ),
+            // Empty / absent → empty list; the tooltip builder falls back to
+            // strip entries at read time so upgrading does not invent a second
+            // configuration the user never set.
+            taskbar_tooltip_entries: normalize_taskbar_entries(
+                raw.taskbar_tooltip_entries.as_deref().unwrap_or(&[]),
+            ),
         }
     }
 }

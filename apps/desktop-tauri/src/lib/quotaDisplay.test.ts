@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+﻿import { describe, expect, it } from "vitest";
 
 import {
   FORECAST_UNAVAILABLE,
@@ -63,6 +63,8 @@ describe("quotaDisplayContext", () => {
     dashboardShowAsUsed: true,
     dashboardResetTimeRelative: false,
     taskbarShowAsUsed: false,
+    taskbarContextMenuActions: ["open_panel", "refresh", "settings", "quit"],
+    taskbarTooltipEntries: [],
     highUsageThreshold: 75,
     criticalUsageThreshold: 95,
   } as unknown as SettingsSnapshot;

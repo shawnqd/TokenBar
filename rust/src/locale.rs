@@ -673,6 +673,19 @@ locale_keys! {
     TaskbarWidgetTextAlignCenter,
     TaskbarWidgetTextAlignRight,
     TaskbarWidgetSystemStyleHint,
+    TaskbarContextMenuSection,
+    TaskbarContextMenuHelper,
+    TaskbarTooltipSection,
+    TaskbarTooltipHelper,
+    TaskbarTooltipUseStripHint,
+    ProviderAuthSourcesTitle,
+    ProviderAuthSourcesHelper,
+    ProviderIssueCategoryAuth,
+    ProviderIssueCategoryRateLimit,
+    ProviderIssueCategoryTransient,
+    ProviderIssueCategoryUpstream,
+    ProviderIssueCategoryStale,
+    ProviderIssueCategoryUnknown,
     TrayIconSection,
     DisplayModeLabel,
     DisplayModeHelper,
@@ -897,6 +910,8 @@ locale_keys! {
     // Tauri desktop shell — Phase 6d credential detection UIs
     CredentialsSectionTitle,
     ProviderAuthOtherMethods,
+    // TASK-021 surface naming / auth / taskbar interaction keys live near
+    // Taskbar* and Provider* sections above.
     CredsStatusAuthenticated,
     CredsStatusNotSignedIn,
     CredsStatusDetected,

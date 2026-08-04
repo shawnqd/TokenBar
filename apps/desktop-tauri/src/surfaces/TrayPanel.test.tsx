@@ -1,4 +1,4 @@
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+﻿import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const tauriMocks = vi.hoisted(() => ({
@@ -177,6 +177,8 @@ function settings(overrides: Partial<SettingsSnapshot> = {}): SettingsSnapshot {
     dashboardShowAsUsed: true,
     dashboardResetTimeRelative: true,
     taskbarShowAsUsed: true,
+    taskbarContextMenuActions: ["open_panel", "refresh", "settings", "quit"],
+    taskbarTooltipEntries: [],
     ...overrides,
   };
 }
@@ -310,7 +312,7 @@ describe("TrayPanel provider grid", () => {
     // on `main`'s surface-mode machine to know it's "open" — that machine
     // can never report "trayPanel" anymore (main only holds
     // Hidden/PopOut/Settings post-refactor). Overriding the snapshot mock to
-    // something else confirms the fixed-size restore + reveal gate
+    // something else confirms the native-size restore + reveal gate
     // is no longer wired to useSurfaceMode() at all.
     tauriMocks.getCurrentSurfaceState.mockResolvedValue({
       mode: "popOut",
@@ -605,7 +607,7 @@ describe("TrayPanel provider grid", () => {
     ).toEqual(["Codex", "Claude", "Cursor", "Factory", "Gemini"]);
   });
 
-  it("uses a fixed 328px tray width with vertically stacked cards", async () => {
+  it("keeps vertically stacked cards while native sizing owns the panel width", async () => {
     const providers = [
       provider("codex", "Codex"),
       provider("claude", "Claude"),
@@ -618,10 +620,12 @@ describe("TrayPanel provider grid", () => {
     });
 
     await waitFor(() => {
-      expect(container.querySelector(".tray-panel-reveal--fixed-height")).not.toBeNull();
+      expect(container.querySelector(".tray-panel-reveal--native-size")).not.toBeNull();
     });
 
-    expect(windowMocks.PhysicalSize).toHaveBeenCalledWith(328, 776);
+    // The frontend must not resize the native flyout. Its default/remembered
+    // dimensions come from the Rust window builder so a user drag persists.
+    expect(windowMocks.PhysicalSize).not.toHaveBeenCalled();
     expect(
       Array.from(container.querySelectorAll(".menu-stack__item")).map((item) => item.id),
     ).toEqual([
@@ -758,6 +762,8 @@ describe("TrayPanel provider grid", () => {
       dashboardShowAsUsed: true,
       floatBarShowAsUsed: false,
       taskbarShowAsUsed: false,
+    taskbarContextMenuActions: ["open_panel", "refresh", "settings", "quit"],
+    taskbarTooltipEntries: [],
     });
 
     await waitFor(() => {
@@ -816,7 +822,7 @@ describe("TrayPanel provider grid", () => {
     expect(container.querySelector(".provider-grid__icon-overview")).toBeNull();
   });
 
-  it("keeps fixed-size tray content unscaled until native resizing is implemented", async () => {
+  it("keeps tray content unscaled while native resizing owns the window", async () => {
     const { container } = renderTrayPanel(
       [provider("claude", "Claude", 35)],
       { trayScalePercent: 150 },
@@ -844,7 +850,7 @@ describe("TrayPanel provider grid", () => {
     });
   });
 
-  it("reveals the fixed tray panel if native sizing fails", async () => {
+  it("reveals the tray panel without a frontend native resize", async () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     windowMocks.getCurrentWindow.mockReturnValue({
       setSize: vi.fn().mockRejectedValue(new Error("resize failed")),
@@ -902,7 +908,7 @@ describe("TrayPanel provider grid", () => {
     });
 
     await waitFor(() => {
-      expect(container.querySelector(".tray-panel-reveal--fixed-height")).not.toBeNull();
+      expect(container.querySelector(".tray-panel-reveal--native-size")).not.toBeNull();
     });
     const body = container.querySelector(".menu-surface__body");
     expect(body?.querySelectorAll(".menu-stack__item").length).toBeGreaterThan(1);

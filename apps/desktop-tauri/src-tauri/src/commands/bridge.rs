@@ -543,6 +543,8 @@ pub struct SettingsSnapshot {
     dashboard_show_as_used: bool,
     dashboard_reset_time_relative: bool,
     taskbar_show_as_used: bool,
+    taskbar_context_menu_actions: Vec<String>,
+    taskbar_tooltip_entries: Vec<TaskbarEntryBridge>,
 }
 
 #[tauri::command]
@@ -646,6 +648,12 @@ impl From<Settings> for SettingsSnapshot {
             dashboard_show_as_used: settings.dashboard_show_as_used,
             dashboard_reset_time_relative: settings.dashboard_reset_time_relative,
             taskbar_show_as_used: settings.taskbar_show_as_used,
+            taskbar_context_menu_actions: settings.taskbar_context_menu_actions.clone(),
+            taskbar_tooltip_entries: settings
+                .taskbar_tooltip_entries
+                .iter()
+                .map(TaskbarEntryBridge::from)
+                .collect(),
         }
     }
 }

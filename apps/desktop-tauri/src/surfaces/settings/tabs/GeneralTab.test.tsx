@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+﻿import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
 vi.mock("../../../hooks/useLocale", () => ({
@@ -79,6 +79,8 @@ const settings: SettingsSnapshot = {
   dashboardShowAsUsed: true,
   dashboardResetTimeRelative: true,
   taskbarShowAsUsed: true,
+    taskbarContextMenuActions: ["open_panel", "refresh", "settings", "quit"],
+    taskbarTooltipEntries: [],
 };
 
 describe("GeneralTab language picker", () => {

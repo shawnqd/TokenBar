@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+﻿import { render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import type { SettingsSnapshot } from "../types/bridge";
 import FloatBarSettingsSection from "./SettingsSection";
@@ -32,6 +32,8 @@ const settings = {
   dashboardShowAsUsed: true,
   dashboardResetTimeRelative: true,
   taskbarShowAsUsed: true,
+    taskbarContextMenuActions: ["open_panel", "refresh", "settings", "quit"],
+    taskbarTooltipEntries: [],
   floatBarDarkText: false,
   floatBarClickThrough: false,
 } as unknown as SettingsSnapshot;

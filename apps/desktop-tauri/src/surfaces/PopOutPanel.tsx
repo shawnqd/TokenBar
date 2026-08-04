@@ -1,10 +1,15 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
-import type { BootstrapState, ProviderUsageSnapshot } from "../types/bridge";
+import type {
+  BootstrapState,
+  MenuBarDisplayMode,
+  ProviderUsageSnapshot,
+} from "../types/bridge";
 import { openFlyoutWindow, openSettingsWindow, quitApp as quitApplication, reorderProviders } from "../lib/tauri";
 import { useProviders } from "../hooks/useProviders";
 import { useSettings } from "../hooks/useSettings";
 import { useLocale } from "../hooks/useLocale";
+import { useOutputSpeedSnapshot } from "../hooks/useOutputSpeedSnapshot";
 import MenuCard from "../components/MenuCard";
 import PopOutTitleBar from "../components/PopOutTitleBar";
 import MenuSurface, {
@@ -14,6 +19,7 @@ import MenuSurface, {
 import ProviderGrid, { prioritizeProviders } from "../components/ProviderGrid";
 import { orderProviderSnapshots } from "../lib/providerOrder";
 import { quotaDisplayContext } from "../lib/quotaDisplay";
+import { outputSpeedProviderId } from "../lib/outputSpeed";
 
 /**
  * Pop-out window — dashboard and provider deep-links both keep the full card
@@ -41,6 +47,9 @@ export default function PopOutPanel({
     () => quotaDisplayContext(settings, "dashboard"),
     [settings],
   );
+  const outputSpeed = useOutputSpeedSnapshot(
+    settings.outputSpeedEnabled !== false,
+  );
 
   const sorted = useMemo(() => {
     return orderProviderSnapshots(
@@ -53,6 +62,10 @@ export default function PopOutPanel({
   const [selectedProviderId, setSelectedProviderId] = useState<string | null>(
     providerId ?? null,
   );
+  // TASK-021 item 1: same density path as the tray panel. Overview follows
+  // menuBarDisplayMode; a single-provider selection always shows full detail.
+  const densityMode: MenuBarDisplayMode =
+    selectedProviderId !== null ? "detailed" : settings.menuBarDisplayMode;
   const [gridExpanded, setGridExpanded] = useState(false);
   const cardRefs = useRef(new Map<string, HTMLDivElement>());
   const windowScale = useMemo(() => {
@@ -242,8 +255,15 @@ export default function PopOutPanel({
               <MenuCard
                 provider={p}
                 display={display}
-                compactMetrics={selectedProviderId === null}
                 localUsagePeriod={settings.localUsagePeriod}
+                showProviderIcon={settings.switcherShowsIcons}
+                densityMode={densityMode}
+                outputSpeed={
+                  (() => {
+                    const speedId = outputSpeedProviderId(p.providerId);
+                    return speedId ? outputSpeed?.[speedId] : null;
+                  })()
+                }
               />
             </div>
           </Fragment>

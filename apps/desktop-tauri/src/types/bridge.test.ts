@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+﻿import { describe, it, expect } from "vitest";
 import type { Language, LocaleStrings, SettingsSnapshot } from "./bridge";
 
 describe("Language type", () => {
@@ -97,6 +97,8 @@ describe("Language type", () => {
       dashboardShowAsUsed: true,
       dashboardResetTimeRelative: true,
       taskbarShowAsUsed: true,
+    taskbarContextMenuActions: ["open_panel", "refresh", "settings", "quit"],
+    taskbarTooltipEntries: [],
     };
     expect(snap.uiLanguage).toBe("spanish");
 

@@ -365,6 +365,16 @@ export interface SettingsSnapshot {
    * the native strip renders no reset text, so such a setting would be inert.
    */
   taskbarShowAsUsed: boolean;
+  /**
+   * Ordered right-click actions for the mini status bar.
+   * Known ids: open_panel | refresh | settings | quit.
+   */
+  taskbarContextMenuActions: string[];
+  /**
+   * Hover/tooltip entries for the mini status bar (and tray tooltip when set),
+   * independent of the painted strip entries. Empty reuses strip entries.
+   */
+  taskbarTooltipEntries: TaskbarEntry[];
 }
 
 /** Partial settings object — only include fields you want to change. */
@@ -428,6 +438,8 @@ export interface SettingsUpdate {
   dashboardShowAsUsed?: boolean;
   dashboardResetTimeRelative?: boolean;
   taskbarShowAsUsed?: boolean;
+  taskbarContextMenuActions?: string[];
+  taskbarTooltipEntries?: TaskbarEntry[];
 }
 
 export interface BootstrapState {

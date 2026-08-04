@@ -549,7 +549,11 @@ pub fn update_tray_icon_and_tooltip(
         crate::taskbar_widget::set_entries(lines);
     }
 
-    let tooltip = build_tooltip(snapshots, settings.ui_language);
+    let tooltip = build_tooltip(
+        snapshots,
+        settings.ui_language,
+        &settings.taskbar_tooltip_entries,
+    );
     let _ = tray.set_tooltip(Some(tooltip));
 }
 
@@ -760,9 +764,15 @@ fn max_metric_percent<const N: usize>(values: [Option<f64>; N]) -> Option<f64> {
 }
 
 /// Build a compact multi-line tooltip string from provider snapshots.
+///
+/// TASK-021 item 9: when the user configured `taskbar_tooltip_entries`, those
+/// (provider + window) rows drive the hover text. Otherwise the historical
+/// per-enabled-provider primary line is used. Raw secrets/long errors are
+/// truncated; auth/network categories are not dumped as full payloads.
 fn build_tooltip(
     snapshots: &[crate::commands::ProviderUsageSnapshot],
     lang: codexbar::settings::Language,
+    tooltip_entries: &[codexbar::settings::TaskbarEntry],
 ) -> String {
     use codexbar::locale::{LocaleKey, get_text};
 
@@ -771,16 +781,67 @@ fn build_tooltip(
     }
 
     let error_label = get_text(lang, LocaleKey::TrayStatusRowError);
-    let mut lines = Vec::with_capacity(snapshots.len() + 1);
-    for s in snapshots {
-        let status = if let Some(ref err) = s.error {
-            let short = truncate_tooltip_text(err, 36);
-            format!("{}: {} ({})", s.display_name, error_label, short)
-        } else {
-            let label = crate::commands::compact_tray_status_label(&s.primary, lang);
-            format!("{}: {}", s.display_name, truncate_tooltip_text(&label, 42))
-        };
-        lines.push(status);
+    let mut lines: Vec<String> = Vec::new();
+
+    if !tooltip_entries.is_empty() {
+        for entry in tooltip_entries.iter().take(6) {
+            let provider = if entry.provider_id == codexbar::settings::TASKBAR_PROVIDER_AUTO
+                || entry.provider_id.is_empty()
+            {
+                snapshots.first()
+            } else {
+                snapshots
+                    .iter()
+                    .find(|s| s.provider_id == entry.provider_id)
+            };
+            let Some(s) = provider else {
+                lines.push(format!("{}: —", entry.provider_id));
+                continue;
+            };
+            if let Some(ref err) = s.error {
+                let short = truncate_tooltip_text(err, 28);
+                lines.push(format!(
+                    "{}: {} ({})",
+                    s.display_name, error_label, short
+                ));
+                continue;
+            }
+            let window = match entry.window.as_str() {
+                "primary" => Some(&s.primary),
+                kind => s
+                    .extra_rate_windows
+                    .iter()
+                    .find(|w| {
+                        w.window
+                            .kind
+                            .as_deref()
+                            .map(|k| k.eq_ignore_ascii_case(kind))
+                            .unwrap_or(false)
+                            || w.id.eq_ignore_ascii_case(kind)
+                    })
+                    .map(|w| &w.window)
+                    .or(Some(&s.primary)),
+            };
+            let label = window
+                .map(|w| crate::commands::compact_tray_status_label(w, lang))
+                .unwrap_or_else(|| "—".to_string());
+            lines.push(format!(
+                "{}: {}",
+                s.display_name,
+                truncate_tooltip_text(&label, 42)
+            ));
+        }
+    } else {
+        for s in snapshots {
+            let status = if let Some(ref err) = s.error {
+                let short = truncate_tooltip_text(err, 36);
+                format!("{}: {} ({})", s.display_name, error_label, short)
+            } else {
+                let label = crate::commands::compact_tray_status_label(&s.primary, lang);
+                format!("{}: {}", s.display_name, truncate_tooltip_text(&label, 42))
+            };
+            lines.push(status);
+        }
     }
 
     format!("CodexBar\n{}", lines.join("\n"))
@@ -953,11 +1014,10 @@ mod tests {
         let show_window = resolve_menu_target("show_panel").expect("show_panel target");
         assert_eq!(show_window.mode, SurfaceMode::PopOut);
 
-        // SurfaceMode::TrayPanel is retained purely as a data key (geometry
-        // key / window_properties source / panel-size reference) for the
-        // fixed flyout window's builder.
+        // SurfaceMode::TrayPanel remains the single source for the anchored
+        // flyout's default size, minimum bounds, and window behavior.
         let props = SurfaceMode::TrayPanel.window_properties();
-        assert!(!props.resizable && props.blur_dismiss && props.skip_taskbar);
+        assert!(props.resizable && props.blur_dismiss && props.skip_taskbar);
     }
 
     #[test]
@@ -1284,7 +1344,7 @@ mod tests {
         let mut codex = fake_snapshot("codex", "Codex", 8.0);
         codex.primary.reset_description = Some("4h 10m".to_string());
 
-        let tooltip = build_tooltip(&[claude, codex], codexbar::settings::Language::English);
+        let tooltip = build_tooltip(&[claude, codex], codexbar::settings::Language::English, &[]);
 
         assert_eq!(
             tooltip,
@@ -1298,7 +1358,7 @@ mod tests {
         claude.primary.reset_description =
             Some("resets in Jun 10 at 3:00PM with extra noisy suffix".to_string());
 
-        let tooltip = build_tooltip(&[claude], codexbar::settings::Language::English);
+        let tooltip = build_tooltip(&[claude], codexbar::settings::Language::English, &[]);
 
         let line = tooltip.lines().nth(1).expect("provider tooltip line");
         assert!(line.starts_with("Claude: 13% • Resets in Jun 10 at 3:00PM"));
@@ -1311,7 +1371,7 @@ mod tests {
         let mut claude = fake_snapshot("claude", "Claude", 13.0);
         claude.error = Some("network timeout".to_string());
 
-        let tooltip = build_tooltip(&[claude], codexbar::settings::Language::Japanese);
+        let tooltip = build_tooltip(&[claude], codexbar::settings::Language::Japanese, &[]);
 
         assert!(tooltip.contains("エラー"), "{tooltip}");
         assert!(!tooltip.contains(": error ("), "{tooltip}");
@@ -1324,9 +1384,9 @@ mod tests {
             Some((chrono::Utc::now() + chrono::Duration::hours(2)).to_rfc3339());
 
         let english_tooltip =
-            build_tooltip(&[claude.clone()], codexbar::settings::Language::English);
+            build_tooltip(&[claude.clone()], codexbar::settings::Language::English, &[]);
         let japanese_tooltip =
-            build_tooltip(&[claude.clone()], codexbar::settings::Language::Japanese);
+            build_tooltip(&[claude.clone()], codexbar::settings::Language::Japanese, &[]);
 
         assert!(english_tooltip.contains("Resets in"), "{english_tooltip}");
         assert!(

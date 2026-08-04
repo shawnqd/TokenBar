@@ -326,16 +326,13 @@ function DetachedSettingsReadyContent({
           if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
             return;
           }
+          // Opacity only — scale/translate on the outer frame painted as a
+          // whole-window stretch (especially when the first open lands on or
+          // immediately switches to Providers).
           el.animate(
-            [
-              { opacity: 0, transform: "scale(0.972) translateY(-8px)" },
-              { opacity: 1, transform: "scale(1) translateY(0)" },
-            ],
+            [{ opacity: 0 }, { opacity: 1 }],
             {
-              duration: 170,
-              // Windows' own decelerating curve: the motion is over before it
-              // registers as motion, so the window stops feeling abrupt without
-              // feeling slow to open.
+              duration: 140,
               easing: "cubic-bezier(0, 0, 0, 1)",
             },
           );

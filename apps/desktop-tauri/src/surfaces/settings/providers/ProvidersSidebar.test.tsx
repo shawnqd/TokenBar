@@ -68,6 +68,31 @@ describe("ProvidersSidebar", () => {
     expect(names).toEqual(TEST_PROVIDER_CATALOG.map(([, displayName]) => displayName));
   });
 
+  it("reserves the secondary metadata line before a metric arrives", async () => {
+    const { container } = render(
+      <LocaleProvider>
+        <ProvidersSidebar
+          providers={rows()}
+          selectedId="codex"
+          searchText=""
+          onSearchTextChange={vi.fn()}
+          onSelect={vi.fn()}
+          onReorder={vi.fn()}
+          onToggleEnabled={vi.fn()}
+        />
+      </LocaleProvider>,
+    );
+
+    await screen.findByRole("listbox", { name: "Providers" });
+    const secondaryLines = Array.from(
+      container.querySelectorAll(".providers-sidebar__subtitle-secondary"),
+    );
+    expect(secondaryLines).toHaveLength(TEST_PROVIDER_CATALOG.length);
+    expect(secondaryLines[0]).toHaveTextContent("1%");
+    expect(secondaryLines[2].textContent).toBe("\u00a0");
+    expect(secondaryLines[2]).toHaveAttribute("aria-hidden", "true");
+  });
+
   it("renders provider search and empty matches state", async () => {
     render(
       <LocaleProvider>

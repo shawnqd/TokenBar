@@ -674,14 +674,22 @@ fn show_context_menu(hwnd: isize) {
     if menu == 0 {
         return;
     }
-    let labels = [
-        (ID_OPEN_PANEL, "打开托盘面板"),
-        (ID_REFRESH, "刷新"),
-        (ID_SETTINGS, "设置"),
-        (ID_QUIT, "退出"),
-    ];
-    for (id, label) in labels {
-        let text = wide(label);
+    // TASK-021 item 8: actions and order come from settings; labels are localized.
+    let settings = codexbar::settings::Settings::load();
+    let lang = settings.ui_language;
+    let actions =
+        codexbar::settings::normalize_taskbar_context_menu_actions(&settings.taskbar_context_menu_actions);
+    use codexbar::locale::{LocaleKey, get_text};
+    for action in actions {
+        let (id, key) = match action.as_str() {
+            "open_panel" => (ID_OPEN_PANEL, LocaleKey::TrayOpenPanel),
+            "refresh" => (ID_REFRESH, LocaleKey::ActionRefresh),
+            "settings" => (ID_SETTINGS, LocaleKey::MenuSettings),
+            "quit" => (ID_QUIT, LocaleKey::MenuQuit),
+            _ => continue,
+        };
+        let label = get_text(lang, key);
+        let text = wide(&label);
         unsafe { AppendMenuW(menu, MF_STRING, id, text.as_ptr()) };
     }
 

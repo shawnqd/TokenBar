@@ -376,6 +376,147 @@ export default function TaskbarTab({ settings, set, saving }: TabProps) {
         </div>
       </section>
 
+      {/* TASK-021 item 8 — configurable right-click menu (app-owned only). */}
+      <section className="settings-section">
+        <h3 className="settings-section__title">{t("TaskbarContextMenuSection")}</h3>
+        <p className="settings-section__hint">{t("TaskbarContextMenuHelper")}</p>
+        <div className="settings-section__group">
+          {(
+            [
+              { id: "open_panel", label: t("TrayOpenPanel") },
+              { id: "refresh", label: t("ActionRefresh") },
+              { id: "settings", label: t("MenuSettings") },
+              { id: "quit", label: t("MenuQuit") },
+            ] as const
+          ).map((action) => {
+            const selected = (
+              settings.taskbarContextMenuActions ?? [
+                "open_panel",
+                "refresh",
+                "settings",
+                "quit",
+              ]
+            ).includes(action.id);
+            return (
+              <Field key={action.id} label={action.label}>
+                <Toggle
+                  checked={selected}
+                  disabled={saving || !enabled}
+                  onChange={(value) => {
+                    const current = settings.taskbarContextMenuActions ?? [
+                      "open_panel",
+                      "refresh",
+                      "settings",
+                      "quit",
+                    ];
+                    const next = value
+                      ? [...current.filter((id) => id !== action.id), action.id]
+                      : current.filter((id) => id !== action.id);
+                    set({
+                      taskbarContextMenuActions:
+                        next.length > 0
+                          ? next
+                          : ["open_panel", "refresh", "settings", "quit"],
+                    });
+                  }}
+                />
+              </Field>
+            );
+          })}
+        </div>
+      </section>
+
+      {/* TASK-021 item 9 — hover fields independent of strip painting. */}
+      <section className="settings-section">
+        <div className="settings-section-heading">
+          <h3 className="settings-section__title">{t("TaskbarTooltipSection")}</h3>
+          <button
+            type="button"
+            className="settings-section-heading__action"
+            disabled={saving}
+            onClick={() => set({ taskbarTooltipEntries: [] })}
+          >
+            {t("TaskbarEntriesReset")}
+          </button>
+        </div>
+        <p className="settings-section__hint">{t("TaskbarTooltipHelper")}</p>
+        <p className="settings-section__hint">{t("TaskbarTooltipUseStripHint")}</p>
+        <div className="settings-section__group">
+          <ol className="taskbar-entries">
+            {(settings.taskbarTooltipEntries ?? []).map((entry, index) => (
+              <li
+                key={`tip-${entry.providerId}-${entry.window}-${index}`}
+                className="taskbar-entries__row"
+              >
+                <span className="taskbar-entries__index">{index + 1}</span>
+                <Select
+                  value={entry.providerId}
+                  disabled={saving || !enabled}
+                  options={providerChoices.map((choice) => ({
+                    value: choice.id,
+                    label: choice.label,
+                  }))}
+                  onChange={(value) => {
+                    const next = [...(settings.taskbarTooltipEntries ?? [])];
+                    next[index] = { ...next[index], providerId: value };
+                    set({ taskbarTooltipEntries: next });
+                  }}
+                />
+                <Select
+                  value={entry.window}
+                  disabled={saving || !enabled}
+                  options={WINDOW_KINDS.map((kind) => ({
+                    value: kind,
+                    label: t(WINDOW_LABEL_KEYS[kind]),
+                  }))}
+                  onChange={(value) => {
+                    const next = [...(settings.taskbarTooltipEntries ?? [])];
+                    next[index] = {
+                      ...next[index],
+                      window: value as TaskbarWindowKind,
+                    };
+                    set({ taskbarTooltipEntries: next });
+                  }}
+                />
+                <button
+                  type="button"
+                  className="is-destructive"
+                  aria-label={t("TaskbarEntriesRemove")}
+                  disabled={saving || !enabled}
+                  onClick={() =>
+                    set({
+                      taskbarTooltipEntries: (
+                        settings.taskbarTooltipEntries ?? []
+                      ).filter((_, i) => i !== index),
+                    })
+                  }
+                >
+                  ✕
+                </button>
+              </li>
+            ))}
+          </ol>
+          <button
+            type="button"
+            disabled={
+              saving ||
+              !enabled ||
+              (settings.taskbarTooltipEntries ?? []).length >= MAX_ENTRIES
+            }
+            onClick={() =>
+              set({
+                taskbarTooltipEntries: [
+                  ...(settings.taskbarTooltipEntries ?? []),
+                  { providerId: TASKBAR_PROVIDER_AUTO, window: "session" },
+                ],
+              })
+            }
+          >
+            {t("TaskbarEntriesAdd")}
+          </button>
+        </div>
+      </section>
+
       <section className="settings-section">
         <div className="settings-section-heading">
           <h3 className="settings-section__title">{t("TaskbarEntriesLabel")}</h3>

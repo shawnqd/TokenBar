@@ -327,6 +327,44 @@ pub struct Settings {
     /// a renderer would be an inert setting.
     #[serde(default = "default_true")]
     pub taskbar_show_as_used: bool,
+
+    /// Ordered right-click actions for the mini status bar (taskbar strip).
+    /// Known ids: `open_panel`, `refresh`, `settings`, `quit`. Empty falls back
+    /// to the default four-item menu (TASK-021 item 8).
+    #[serde(default = "default_taskbar_context_menu_actions")]
+    pub taskbar_context_menu_actions: Vec<String>,
+
+    /// Hover/tooltip entries for the mini status bar and tray icon, independent
+    /// of the painted strip entries (TASK-021 item 9). Empty → reuse strip
+    /// entries / primary tray lines.
+    #[serde(default)]
+    pub taskbar_tooltip_entries: Vec<TaskbarEntry>,
+}
+
+fn default_taskbar_context_menu_actions() -> Vec<String> {
+    vec![
+        "open_panel".into(),
+        "refresh".into(),
+        "settings".into(),
+        "quit".into(),
+    ]
+}
+
+/// Keep only known menu action ids, preserve order, drop duplicates.
+pub fn normalize_taskbar_context_menu_actions(actions: &[String]) -> Vec<String> {
+    const KNOWN: &[&str] = &["open_panel", "refresh", "settings", "quit"];
+    let mut out = Vec::new();
+    for action in actions {
+        let id = action.trim();
+        if KNOWN.contains(&id) && !out.iter().any(|existing: &String| existing == id) {
+            out.push(id.to_string());
+        }
+    }
+    if out.is_empty() {
+        default_taskbar_context_menu_actions()
+    } else {
+        out
+    }
 }
 
 fn default_window_scale_percent() -> u16 {
@@ -717,6 +755,8 @@ impl Default for Settings {
             dashboard_show_as_used: true,
             dashboard_reset_time_relative: true,
             taskbar_show_as_used: true,
+            taskbar_context_menu_actions: default_taskbar_context_menu_actions(),
+            taskbar_tooltip_entries: Vec::new(),
         }
     }
 }

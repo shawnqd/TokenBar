@@ -1,4 +1,4 @@
-import { render, screen, fireEvent } from "@testing-library/react";
+﻿import { render, screen, fireEvent } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
 vi.mock("../../../hooks/useLocale", () => ({
@@ -34,6 +34,8 @@ const settings = {
   dashboardShowAsUsed: true,
   dashboardResetTimeRelative: true,
   taskbarShowAsUsed: true,
+    taskbarContextMenuActions: ["open_panel", "refresh", "settings", "quit"],
+    taskbarTooltipEntries: [],
   taskbarWidgetEnabled: true,
   taskbarWidgetPosition: "notification",
   taskbarWidgetFontWeight: 400,

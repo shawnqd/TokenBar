@@ -2132,10 +2132,16 @@ html {
 .providers-tab-content {
   display: flex;
   flex: 1;
-  height: 100%;
+  /* The shared detached page canvas owns the viewport height. This content
+     stack must not advertise a percentage height of its own. */
+  height: auto;
   min-height: 0;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
   flex-direction: column;
   gap: 10px;
+  box-sizing: border-box;
 }
 
 /* Pinned "批量导入 Cookie" sidebar row (Providers tab): sits above the
@@ -2364,6 +2370,9 @@ html {
   min-height: 0;
   overflow: hidden;
   min-width: 0;
+  width: 100%;
+  max-width: 100%;
+  box-sizing: border-box;
 }
 
 .provider-sidebar {
@@ -2437,6 +2446,8 @@ html {
   --provider-workspace-gap: 12px;
   --provider-workspace-padding: 14px 16px;
   flex: 1;
+  width: 0;
+  max-width: 100%;
   min-width: 0;
   min-height: 0;
   height: 100%;
@@ -2445,7 +2456,10 @@ html {
   box-sizing: border-box;
   background: transparent;
   border-radius: var(--provider-workspace-radius);
-  padding: 4px 8px 24px;
+  /* The split grid already supplies the shared top edge. Keeping a top
+     inset here made the right pane start several pixels below the sidebar
+     and was especially visible during the first paint. */
+  padding: 0 8px 24px;
   color: var(--text-primary);
   font-size: var(--font-body);
 }
@@ -5475,16 +5489,22 @@ body:has(.menu-surface--popout) .popout-scale-shell,
    effects inside a small transparent gutter avoids the square Win32 frame
    that previously made Settings look flat and unrelated to the flyout. */
 html:has(.settings-window-frame),
-body:has(.settings-window-frame) {
+body:has(.settings-window-frame),
+body:has(.settings-window-frame) #root {
   width: 100%;
+  /* The detached native window is the viewport. Keep this chain definite so
+     the flex body and its scroll panel can resolve their percentage sizes on
+     the first WebView2 paint. The content panes below still own scrolling;
+     this does not make the window content-driven. */
   height: 100%;
+  min-height: 0;
   background: transparent;
   overflow: hidden;
 }
 
 .settings-surface--full.settings-window-frame {
   width: 100%;
-  height: 100vh;
+  height: 100%;
   /* Transparent gutter that holds the drop shadow.
      It must be WIDER than the shadow reaches, not equal to it: a box-shadow
      extends |offset| + blur/2, so the old 12px gutter against a `0 4px 16px`
@@ -5531,10 +5551,13 @@ body:has(.settings-window-frame) {
     0 1px 3px rgba(0, 0, 0, 0.10);
 }
 
+/* Detached Settings lives inside `.settings-window-frame` with a 24px gutter.
+   Never use 100vh here — that forces the card to be taller than the frame's
+   content box and was one source of the "whole window stretch" flash. */
 .settings {
   background: var(--app-bg);
-  min-height: 100vh;
-  height: 100vh;
+  min-height: 0;
+  height: 100%;
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -5648,6 +5671,13 @@ body:has(.settings-window-frame) {
   gap: 6px;
   padding: 8px 12px;
   margin: 0 0 4px;
+  /* This is chrome, not page content. The old `flex-shrink: 1` let the
+     longest tab (Taskbar) compress the toolbar itself, which is why the same
+     settings window showed a normal tab bar on General, a short one on
+     FloatBar, and an almost invisible one on Taskbar. */
+  flex: 0 0 auto;
+  min-height: 48px;
+  align-items: center;
   background: linear-gradient(180deg, rgba(255, 255, 255, 0.03), rgba(255, 255, 255, 0));
   border-bottom: 1px solid rgba(255, 255, 255, 0.08);
   border-radius: 0;
@@ -5671,6 +5701,7 @@ body:has(.settings-window-frame) {
   justify-content: center;
   gap: 6px;
   flex: 0 0 auto;
+  min-height: 32px;
   padding: 7px 16px;
   border: 1px solid transparent;
   border-radius: 999px;
@@ -5726,57 +5757,148 @@ body:has(.settings-window-frame) {
   box-shadow: none;
 }
 
-/* ── Settings body container: fills the fixed-width settings window
-   (see SETTINGS_WINDOW_WIDTH in Settings.tsx) the same way on every tab —
-   no per-tab width cap, so General/Display/etc. use the same content
-   width as the Providers tab instead of leaving blank space on the
-   right. ─── */
+/* One body layout for every tab. The body is the only flex viewport; normal
+   pages are ordinary block flow and the panel owns their scroll. Providers
+   is the sole exception because its sidebar/detail split must fill the
+   remaining viewport. Keeping that distinction at this boundary prevents a
+   tab component from shrinking its siblings or feeding a percentage height
+   back into the native window. */
 .settings-body {
   position: relative;
   width: 100%;
   max-width: 100%;
-  margin: 0 auto;
+  margin: 0;
   padding: 16px 20px 24px;
-  flex: 1;
-  overflow-y: auto;
+  /* The body receives the remaining viewport. Its intrinsic page height must
+     never compete with the title bar or tabs for flex space. */
+  flex: 1 1 0;
   min-height: 0;
-}
-.settings-body--providers {
+  min-width: 0;
   display: flex;
   flex-direction: column;
-  overflow: clip;
+  overflow: hidden;
+  scrollbar-gutter: stable;
 }
 
-.settings-body--providers .settings-tab-panel {
+.settings-tab-panel {
+  display: block;
+  width: 100%;
+  max-width: 100%;
+  flex: 1 1 0;
+  min-height: 0;
+  min-width: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  /* Reserve the scrollbar track even on short tabs. Without this, Taskbar
+     and FloatBar lose ~10px of content width only because they scroll, so
+     their cards visibly use a different right edge from General/Dashboard. */
+  scrollbar-gutter: stable;
+  /* Opacity only — no transform/scale (those painted as window stretch). */
+  animation: settings-tab-fade-in 140ms ease-out both;
+}
+
+.settings-tab-panel--providers {
   display: flex;
-  flex: 1;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+/* Canonical page root shared by every Settings tab. All tab components render
+   fragments; this single root is the only layer that owns page width/flow.
+   It deliberately uses block flow for normal pages: a flex child with an
+   intrinsic height can be shrunk by a resizable WebView2 viewport, which was
+   the reason FloatBar/Taskbar sections appeared compressed while Providers
+   happened to look correct. */
+.settings-page {
+  display: block;
+  width: 100%;
+  max-width: none;
+  min-width: 0;
+  min-height: 100%;
+  margin: 0;
+  box-sizing: border-box;
+}
+
+.settings-page--providers {
+  display: flex;
+  flex: 1 1 0;
+  flex-direction: column;
+  max-width: none;
   min-height: 0;
 }
 
-/* Subtle blurred left/right slide on every tab switch (see key={activeTab}
-   in Settings.tsx, which remounts this wrapper so the animation replays).
-   `--tab-slide-x` (set inline by Settings.tsx) carries the entry side: a
-   positive offset slides in from the right when moving to a tab further
-   right in the bar, negative from the left when moving left — small
-   amplitude on purpose, this is a hint, not a page transition. */
-.settings-tab-panel {
+/* Every tab root must be allowed to paint at its natural width. The explicit
+   `height:auto` is intentional: only the outer panel has a viewport height;
+   normal pages must not inherit a stale percentage height from an old tab. */
+.settings-page > * {
   width: 100%;
-  animation: settings-tab-slide-in 180ms ease-out both;
+  max-width: none;
+  min-width: 0;
+  height: auto;
+  flex: 0 0 auto;
 }
-.settings-tab-panel--narrow {
-  max-width: 720px;
-  margin: 0 auto;
+
+.settings-page--providers > .providers-tab-content {
+  flex: 1 1 auto;
+  min-height: 0;
+  height: 100%;
 }
-@keyframes settings-tab-slide-in {
+
+/* The panel is the sole scroll owner for normal tabs. The inner page is a
+   width/spacing surface, not another scroll container. */
+.settings-tab-panel:not(.settings-tab-panel--providers) {
+  width: 100%;
+  max-width: 100%;
+  margin-inline: 0;
+  align-self: stretch;
+}
+
+/* Legacy body alias remains harmless for callers that still add it. */
+.settings-body--providers {
+  min-width: 0;
+}
+
+/* Detached Settings keeps one stable flex viewport. Do not use `height: 0`
+   here: WebView2 can report an unresolved percentage height during the first
+   prewarmed paint, which collapses the whole content layer while leaving the
+   title/tabs visible. `min-height: 0` plus the panel overflow is sufficient to
+   keep long pages inside the window without making the body disappear. */
+.settings-window-frame .settings-body {
+  flex: 1 1 0;
+  min-height: 0;
+  min-width: 0;
+}
+
+.settings-window-frame .settings-tab-panel {
+  flex: 1 1 0;
+  min-height: 0;
+}
+
+.settings-window-frame .settings-tab-panel--providers {
+  min-height: 0;
+}
+
+.settings-window-frame .settings-page {
+  width: 100%;
+  max-width: none;
+}
+
+.settings-window-frame .settings-page--providers {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.settings-window-frame .providers-tab-content {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+@keyframes settings-tab-fade-in {
   from {
     opacity: 0;
-    transform: translateX(var(--tab-slide-x, 10px));
-    filter: blur(2px);
   }
   to {
     opacity: 1;
-    transform: translateX(0);
-    filter: blur(0);
   }
 }
 @media (prefers-reduced-motion: reduce) {
@@ -6009,6 +6131,51 @@ body:has(.settings-window-frame) {
     min-width: 0;
   }
 }
+
+/* Native-size-safe Providers workspace. Keep the sidebar and detail pane in
+   explicit grid tracks so changing the Settings window size cannot make the
+   detail column stretch the entire frame or collapse to zero width. This is
+   intentionally scoped to the real Providers tab; legacy provider-sidebar
+   rules above remain available to older callers without participating here. */
+.providers-tab-content > .provider-split {
+  display: grid;
+  grid-template-columns: minmax(220px, 244px) minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
+  flex: 1 1 0;
+  align-items: stretch;
+  gap: 16px;
+  width: 100%;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.providers-tab-content > .provider-split > .providers-sidebar-shell {
+  width: auto;
+  min-width: 0;
+  max-width: 244px;
+}
+
+.providers-tab-content > .provider-split > .provider-detail,
+.providers-tab-content > .provider-split > .cookie-import-pane {
+  width: auto;
+  min-width: 0;
+  max-width: none;
+}
+
+.settings-window-frame .providers-tab-content > .provider-split > .provider-detail {
+  /* The grid row supplies the height. Do not feed a percentage height back
+     into the flex/grid ancestors while the detail payload is changing. */
+  height: auto;
+  align-self: stretch;
+}
+
+@media (max-width: 760px) {
+  .providers-tab-content > .provider-split {
+    grid-template-columns: minmax(196px, 220px) minmax(0, 1fr);
+    gap: 12px;
+  }
+}
 .settings-section__title {
   margin: 0 0 8px;
   padding: 0 2px;
@@ -6193,6 +6360,12 @@ body:has(.settings-window-frame) {
 }
 .providers-sidebar__subtitle {
   font-size: var(--font-caption);
+  /* Keep the two-line metadata block stable while provider data is loading. */
+  min-height: 2.5em;
+}
+.providers-sidebar__subtitle-secondary {
+  display: block;
+  min-height: 1.25em;
 }
 
 /* ── About pane parity ────────────────────────────────────────────── */

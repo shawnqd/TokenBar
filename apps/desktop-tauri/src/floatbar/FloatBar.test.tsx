@@ -1,4 +1,4 @@
-import { act, render, waitFor } from "@testing-library/react";
+﻿import { act, render, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const tauriMocks = vi.hoisted(() => ({
@@ -155,6 +155,8 @@ function settings(overrides: Partial<SettingsSnapshot> = {}): SettingsSnapshot {
     dashboardShowAsUsed: true,
     dashboardResetTimeRelative: true,
     taskbarShowAsUsed: true,
+    taskbarContextMenuActions: ["open_panel", "refresh", "settings", "quit"],
+    taskbarTooltipEntries: [],
     ...overrides,
   };
 }
@@ -273,6 +275,8 @@ describe("FloatBar", () => {
       floatBarShowAsUsed: true,
       dashboardShowAsUsed: false,
       taskbarShowAsUsed: false,
+    taskbarContextMenuActions: ["open_panel", "refresh", "settings", "quit"],
+    taskbarTooltipEntries: [],
     };
     tauriMocks.getSettingsSnapshot.mockResolvedValue(settings(overrides));
 

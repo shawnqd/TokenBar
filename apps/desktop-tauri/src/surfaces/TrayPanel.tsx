@@ -169,9 +169,9 @@ export default function TrayPanel({ state }: { state: BootstrapState }) {
     return [match];
   }, [denseTrayProviders, sorted, selectedProviderId, gridExpanded]);
 
-  // The tray panel is hosted by the dedicated `flyout` window. It is a fixed
-  // 328×776 logical surface; provider data can update its contents but never
-  // changes the native window geometry.
+  // The tray panel is hosted by the dedicated `flyout` window. It opens at the
+  // 328×776 logical reference size, then lets the native window own edge
+  // resizing and remembered dimensions; provider data must never write size.
   // The display-mode setting only governs the "all providers" overview list.
   // Opening a single provider is an explicit "show me everything" action, so
   // its detail card always renders full content regardless of the mode —
@@ -185,8 +185,6 @@ export default function TrayPanel({ state }: { state: BootstrapState }) {
     // IsWindowVisible=false during a slow first refresh and misclassify that
     // as blur-dismiss.
     canMeasure: true,
-    fixedLogicalWidth: 328,
-    fixedLogicalHeight: 776,
   });
 
   const openSettings = useCallback(() => {
@@ -265,7 +263,7 @@ export default function TrayPanel({ state }: { state: BootstrapState }) {
   const handleGestureEnd = useCallback(() => {
     void endFlyoutGesture().catch(() => {});
   }, []);
-  const revealClassName = `tray-panel-reveal tray-panel-reveal--fixed-height${layoutReady ? " tray-panel-reveal--ready" : ""}${expectsDenseOverview ? " tray-panel-reveal--dense" : ""}${selectedProviderId !== null ? " tray-panel-reveal--detail" : ""}`;
+  const revealClassName = `tray-panel-reveal tray-panel-reveal--native-size${layoutReady ? " tray-panel-reveal--ready" : ""}${expectsDenseOverview ? " tray-panel-reveal--dense" : ""}${selectedProviderId !== null ? " tray-panel-reveal--detail" : ""}`;
   const isDetailView = selectedProviderId !== null;
   const renderProviderCard = (p: ProviderUsageSnapshot) => {
     const isSelected =

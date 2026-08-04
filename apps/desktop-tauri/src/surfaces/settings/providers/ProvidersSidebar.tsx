@@ -347,11 +347,12 @@ export function ProvidersSidebar({
                   <span className="providers-sidebar__subtitle-primary">
                     {p.subtitlePrimary}
                   </span>
-                  {p.subtitleSecondary && (
-                    <span className="providers-sidebar__subtitle-secondary">
-                      {p.subtitleSecondary}
-                    </span>
-                  )}
+                  <span
+                    className="providers-sidebar__subtitle-secondary"
+                    aria-hidden={!p.subtitleSecondary}
+                  >
+                    {p.subtitleSecondary || "\u00a0"}
+                  </span>
                 </span>
               </div>
               <span

@@ -1093,11 +1093,12 @@ export default function MenuCard({
       // detailed/compact/minimal all reserve that space for the percentage.
       planLabel={null}
       pace={provider.pace}
-      // Only the detailed tier has room for the forecast copy; compact and
-      // minimal are summaries by design.
-      showForecast={
-        densityMode === "detailed" && primaryMetric.id === weeklyMetricId
-      }
+      // All three density tiers share the same forecast *language*. Detailed
+      // shows the full runway row inside the weekly quota block; compact and
+      // minimal also attach the forecast when the hero row *is* the weekly
+      // window so they never go blank on pace (TASK-021 item 4). Compact/
+      // minimal still reduce surrounding density elsewhere.
+      showForecast={primaryMetric.id === weeklyMetricId}
     />
   ) : balance ? (
     <ProviderBalanceBlock balance={balance} showTitle={false} />
@@ -1163,7 +1164,9 @@ export default function MenuCard({
       );
     }
     // minimal — bare metrics block, no tinted zone background (kept
-    // deliberately lighter-weight than the detailed/compact zones).
+    // deliberately lighter-weight than the detailed/compact zones). The hero
+    // row still carries forecast when it is the weekly window (see
+    // densityPrimaryRow.showForecast).
     return <section className="menu-card__metrics">{densityPrimaryRow}</section>;
   })();
 
