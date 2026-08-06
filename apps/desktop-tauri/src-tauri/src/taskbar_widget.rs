@@ -32,6 +32,8 @@
 use std::ffi::c_void;
 use std::sync::{Mutex, OnceLock};
 
+use tauri::Manager;
+
 /// One printable line of the strip.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct StripLine {
@@ -62,6 +64,10 @@ static WIDGET_HWND: Mutex<isize> = Mutex::new(0);
 /// The color-key painter is visually transparent, so this sibling keeps the
 /// full rectangle interactive without covering the taskbar pixels.
 static HIT_PROXY_HWND: Mutex<isize> = Mutex::new(0);
+/// TASK-021 item 9: the strip's own hover tooltip (`tooltips_class32`),
+/// distinct from the notification-area tray icon's tooltip in `tray_bridge.rs`
+/// but composed from the same `build_tooltip` text.
+static TOOLTIP_HWND: Mutex<isize> = Mutex::new(0);
 static APP_HANDLE: OnceLock<tauri::AppHandle> = OnceLock::new();
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -96,7 +102,6 @@ const WM_PAINT: u32 = 0x000F;
 const WM_ERASEBKGND: u32 = 0x0014;
 const WM_TIMER: u32 = 0x0113;
 const WM_COMMAND: u32 = 0x0111;
-const WM_NULL: u32 = 0x0000;
 const WM_RBUTTONUP: u32 = 0x0205;
 const WM_NCHITTEST: u32 = 0x0084;
 const WM_MOUSEACTIVATE: u32 = 0x0021;
@@ -106,14 +111,14 @@ const MA_NOACTIVATE: isize = 3;
 const SWP_NOACTIVATE: u32 = 0x0010;
 const SWP_NOSIZE: u32 = 0x0001;
 const SWP_NOMOVE: u32 = 0x0002;
-const MF_STRING: u32 = 0x0000;
-const TPM_RIGHTBUTTON: u32 = 0x0002;
-const TPM_RETURNCMD: u32 = 0x0100;
 const LWA_COLORKEY: u32 = 0x0000_0001;
 const ID_OPEN_PANEL: usize = 1;
 const ID_REFRESH: usize = 2;
 const ID_SETTINGS: usize = 3;
 const ID_QUIT: usize = 4;
+/// TASK-021 new user report: "显示任务栏" — toggles `taskbar_widget_enabled`
+/// from the strip's own right-click menu. See `handle_context_command`.
+const ID_SHOW_STRIP: usize = 5;
 const DT_SINGLELINE: u32 = 0x0020;
 const DT_VCENTER: u32 = 0x0004;
 const DT_LEFT: u32 = 0x0000;
@@ -121,6 +126,20 @@ const DT_CENTER: u32 = 0x0001;
 const DT_RIGHT: u32 = 0x0002;
 const DT_NOPREFIX: u32 = 0x0800;
 const DT_END_ELLIPSIS: u32 = 0x8000;
+const WS_EX_TOPMOST: u32 = 0x0000_0008;
+
+// ── Hover tooltip (TASK-021 item 9) ─────────────────────────────────────────
+const WM_USER: u32 = 0x0400;
+const TTS_ALWAYSTIP: u32 = 0x0001;
+const TTS_NOPREFIX: u32 = 0x0002;
+const TTF_IDISHWND: u32 = 0x0001;
+const TTF_SUBCLASS: u32 = 0x0010;
+const TTM_ACTIVATE: u32 = WM_USER + 1;
+const TTM_ADDTOOLW: u32 = WM_USER + 50;
+const TTM_SETMAXTIPWIDTH: u32 = WM_USER + 24;
+const TTM_UPDATETIPTEXTW: u32 = WM_USER + 57;
+const ICC_WIN95_CLASSES: u32 = 0x0000_00FF;
+const CW_USEDEFAULT: i32 = 0x8000_0000u32 as i32;
 
 const TRANSPARENT_BK: i32 = 1;
 const REASSERT_TIMER_ID: usize = 1;
@@ -149,6 +168,22 @@ struct PaintStruct {
     f_restore: i32,
     f_inc_update: i32,
     rgb_reserved: [u8; 32],
+}
+
+/// `TOOLINFOW` (commctrl.h). Field order/types match the SDK struct exactly so
+/// `repr(C)` produces identical layout (including the implicit padding before
+/// `hwnd` on 64-bit) without a manual padding field.
+#[repr(C)]
+struct ToolInfoW {
+    cb_size: u32,
+    u_flags: u32,
+    hwnd: isize,
+    u_id: usize,
+    rect: Rect,
+    h_inst: isize,
+    lpsz_text: *mut u16,
+    l_param: isize,
+    lp_reserved: *mut c_void,
 }
 
 #[repr(C)]
@@ -208,21 +243,7 @@ unsafe extern "system" {
     fn ReleaseDC(hwnd: isize, hdc: isize) -> i32;
     fn GetPixel(hdc: isize, x: i32, y: i32) -> u32;
     fn SetLayeredWindowAttributes(hwnd: isize, color_key: u32, alpha: u8, flags: u32) -> i32;
-    fn CreatePopupMenu() -> isize;
-    fn AppendMenuW(menu: isize, flags: u32, id: usize, text: *const u16) -> i32;
-    fn GetCursorPos(point: *mut Point) -> i32;
-    fn SetForegroundWindow(hwnd: isize) -> i32;
-    fn TrackPopupMenu(
-        menu: isize,
-        flags: u32,
-        x: i32,
-        y: i32,
-        reserved: i32,
-        owner: isize,
-        rect: *const Rect,
-    ) -> i32;
-    fn DestroyMenu(menu: isize) -> i32;
-    fn PostMessageW(hwnd: isize, msg: u32, wparam: usize, lparam: isize) -> i32;
+    fn SendMessageW(hwnd: isize, msg: u32, wparam: usize, lparam: isize) -> isize;
 }
 
 #[link(name = "gdi32")]
@@ -255,6 +276,21 @@ unsafe extern "system" {
     fn GetModuleHandleW(name: *const u16) -> isize;
 }
 
+/// Only used to make sure `tooltips_class32` is registered before we create
+/// the strip's hover tooltip — comctl32 v6 (already the default on Windows
+/// 10/11) does this automatically, but calling it explicitly costs nothing
+/// and removes the dependency on that default holding.
+#[repr(C)]
+struct InitCommonControlsExStruct {
+    dw_size: u32,
+    dw_icc: u32,
+}
+
+#[link(name = "comctl32")]
+unsafe extern "system" {
+    fn InitCommonControlsEx(icc: *const InitCommonControlsExStruct) -> i32;
+}
+
 const HKEY_CURRENT_USER: isize = -2147483647; // 0x80000001, sign-extended to isize
 const KEY_READ: u32 = 0x20019;
 
@@ -282,7 +318,7 @@ unsafe extern "system" {
 /// decide whether the taskbar itself (not just apps) is light or dark.
 /// Defaults to dark, Windows' own out-of-box default, if the key is absent
 /// or unreadable.
-fn taskbar_is_light() -> bool {
+pub(crate) fn taskbar_is_light() -> bool {
     let sub_key = wide(r"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize");
     let value_name = wide("SystemUsesLightTheme");
     let mut hkey: isize = 0;
@@ -332,6 +368,27 @@ pub fn set_entries(entries: Vec<StripLine>) {
         *guard = entries;
     }
     repaint();
+    // TASK-021 item 9: this is the same beat `tray_bridge::update_tray_icon_and_tooltip`
+    // rebuilds the tray icon's tooltip on (it calls `set_entries` immediately
+    // before composing that tooltip) — not the 1s `REASSERT_TIMER_ID` tick,
+    // which only repositions/repaints already-resolved data and would otherwise
+    // reload `Settings` from disk once a second for no new information.
+    update_tooltip_text();
+}
+
+/// The font family the strip paints with, falling back the same way `paint`
+/// always has. Shared with the context menu so its label text matches the
+/// strip's own typeface.
+pub(crate) fn widget_font_family() -> String {
+    let family = WIDGET_FONT_FAMILY
+        .lock()
+        .map(|f| f.clone())
+        .unwrap_or_default();
+    if family.trim().is_empty() {
+        "Microsoft YaHei UI".to_string()
+    } else {
+        family
+    }
 }
 
 /// Exactly what the strip is printing right now.
@@ -638,6 +695,141 @@ pub fn content() -> String {
         .unwrap_or_else(|_| "usage".to_string())
 }
 
+// ── Hover tooltip (TASK-021 item 9) ─────────────────────────────────────────
+//
+// Standard Win32 `tooltips_class32` control with `TTF_SUBCLASS`: the tooltip
+// control subclasses the target window itself (installs its own WNDPROC ahead
+// of ours, then chains to ours for anything it doesn't need) and drives its
+// own `WM_MOUSEMOVE`/hover/leave bookkeeping — no manual `TrackMouseEvent`
+// state machine needed here, and it does not disturb the strip's or the hit
+// proxy's own message handling below.
+//
+// The tool is registered against BOTH `hwnd` and the hit proxy, mirroring the
+// same "either one might be the window that actually receives the mouse"
+// uncertainty the file already documents for right-click handling — cheaper
+// to cover both than to guess.
+
+/// Composes the same tooltip text the notification-area tray icon shows.
+///
+/// Reuses `tray_bridge::build_tooltip` (made `pub(crate)` there for this)
+/// rather than re-deriving which window/provider resolves and how a balance
+/// or error line prints — see that function's own doc comment for why a
+/// second copy of those rules would eventually drift from the original.
+fn compose_tooltip_text() -> String {
+    let Some(app) = APP_HANDLE.get() else {
+        return "CodexBar Desktop".to_string();
+    };
+    let settings = codexbar::settings::Settings::load();
+    let snapshots = app
+        .try_state::<Mutex<crate::state::AppState>>()
+        .map(|state| state.lock().unwrap().provider_cache.clone())
+        .unwrap_or_default();
+    crate::tray_bridge::build_tooltip(&snapshots, settings.ui_language, &settings.taskbar_tooltip_entries)
+}
+
+/// Registers one tool (`target`) on the shared tooltip control, with the
+/// current composed text as its initial content.
+fn add_tooltip_tool(tooltip: isize, target: isize, instance: isize) {
+    if target == 0 {
+        return;
+    }
+    let mut text = wide(&compose_tooltip_text());
+    let mut info = ToolInfoW {
+        cb_size: std::mem::size_of::<ToolInfoW>() as u32,
+        u_flags: TTF_SUBCLASS | TTF_IDISHWND,
+        hwnd: target,
+        u_id: target as usize,
+        rect: Rect::default(),
+        h_inst: instance,
+        lpsz_text: text.as_mut_ptr(),
+        l_param: 0,
+        lp_reserved: std::ptr::null_mut(),
+    };
+    unsafe { SendMessageW(tooltip, TTM_ADDTOOLW, 0, &raw mut info as isize) };
+}
+
+/// Creates the strip's own hover tooltip and attaches it to both the painter
+/// window and the hit proxy. Called once per `start()`, mirroring how
+/// `WIDGET_HWND`/`HIT_PROXY_HWND` are themselves created once per `start()`.
+fn create_tooltip(hwnd: isize, proxy: isize) {
+    if TOOLTIP_HWND.lock().map(|g| *g).unwrap_or(0) != 0 {
+        return;
+    }
+    let icc = InitCommonControlsExStruct {
+        dw_size: std::mem::size_of::<InitCommonControlsExStruct>() as u32,
+        dw_icc: ICC_WIN95_CLASSES,
+    };
+    unsafe { InitCommonControlsEx(&raw const icc) };
+
+    let instance = unsafe { GetModuleHandleW(std::ptr::null()) };
+    let tooltip = unsafe {
+        CreateWindowExW(
+            WS_EX_TOPMOST,
+            wide("tooltips_class32").as_ptr(),
+            std::ptr::null(),
+            WS_POPUP | TTS_ALWAYSTIP | TTS_NOPREFIX,
+            CW_USEDEFAULT,
+            CW_USEDEFAULT,
+            CW_USEDEFAULT,
+            CW_USEDEFAULT,
+            hwnd,
+            0,
+            instance,
+            std::ptr::null_mut(),
+        )
+    };
+    if tooltip == 0 {
+        tracing::warn!("taskbar widget: tooltip window creation failed");
+        return;
+    }
+
+    add_tooltip_tool(tooltip, proxy, instance);
+    add_tooltip_tool(tooltip, hwnd, instance);
+    unsafe {
+        // Enables word-wrap sizing and, with it, honors the "\n" line breaks
+        // `build_tooltip` joins its rows with — a plain tooltip otherwise
+        // renders embedded newlines as garbage rather than separate lines.
+        SendMessageW(tooltip, TTM_SETMAXTIPWIDTH, 0, 320);
+        SendMessageW(tooltip, TTM_ACTIVATE, 1, 0);
+    }
+
+    if let Ok(mut guard) = TOOLTIP_HWND.lock() {
+        *guard = tooltip;
+    }
+}
+
+/// Pushes fresh tooltip text to both registered tools. Called from
+/// `set_entries`, the same call site `tray_bridge` uses right before it
+/// rebuilds the tray icon's own tooltip — see that call site's comment for why
+/// this beat was chosen over the 1-second reassert timer.
+fn update_tooltip_text() {
+    let tooltip = TOOLTIP_HWND.lock().map(|g| *g).unwrap_or(0);
+    if tooltip == 0 || unsafe { IsWindow(tooltip) } == 0 {
+        return;
+    }
+    let text = compose_tooltip_text();
+    let proxy = HIT_PROXY_HWND.lock().map(|g| *g).unwrap_or(0);
+    let widget = WIDGET_HWND.lock().map(|g| *g).unwrap_or(0);
+    for target in [proxy, widget] {
+        if target == 0 {
+            continue;
+        }
+        let mut wide_text = wide(&text);
+        let mut info = ToolInfoW {
+            cb_size: std::mem::size_of::<ToolInfoW>() as u32,
+            u_flags: TTF_SUBCLASS | TTF_IDISHWND,
+            hwnd: target,
+            u_id: target as usize,
+            rect: Rect::default(),
+            h_inst: 0,
+            lpsz_text: wide_text.as_mut_ptr(),
+            l_param: 0,
+            lp_reserved: std::ptr::null_mut(),
+        };
+        unsafe { SendMessageW(tooltip, TTM_UPDATETIPTEXTW, 0, &raw mut info as isize) };
+    }
+}
+
 fn reassert(hwnd: isize) {
     let parent = taskbar();
     if parent == 0 {
@@ -669,52 +861,75 @@ fn reassert(hwnd: isize) {
     }
 }
 
+/// Builds the strip's right-click menu and hands it to the self-drawn popup in
+/// [`crate::taskbar_menu`].
+///
+/// This window stays the menu's owner: the chosen row's id comes back as a
+/// `WM_COMMAND`, exactly the shape `TPM_RETURNCMD` used to deliver, so
+/// `handle_context_command` needs no change. Unlike `TrackPopupMenu` the call
+/// returns immediately rather than running a modal loop.
 fn show_context_menu(hwnd: isize) {
-    let menu = unsafe { CreatePopupMenu() };
-    if menu == 0 {
-        return;
-    }
+    use crate::taskbar_menu::MenuItem;
+    use codexbar::locale::{LocaleKey, get_text};
+
     // TASK-021 item 8: actions and order come from settings; labels are localized.
     let settings = codexbar::settings::Settings::load();
     let lang = settings.ui_language;
-    let actions =
-        codexbar::settings::normalize_taskbar_context_menu_actions(&settings.taskbar_context_menu_actions);
-    use codexbar::locale::{LocaleKey, get_text};
-    for action in actions {
-        let (id, key) = match action.as_str() {
-            "open_panel" => (ID_OPEN_PANEL, LocaleKey::TrayOpenPanel),
-            "refresh" => (ID_REFRESH, LocaleKey::ActionRefresh),
-            "settings" => (ID_SETTINGS, LocaleKey::MenuSettings),
-            "quit" => (ID_QUIT, LocaleKey::MenuQuit),
-            _ => continue,
-        };
-        let label = get_text(lang, key);
-        let text = wide(&label);
-        unsafe { AppendMenuW(menu, MF_STRING, id, text.as_ptr()) };
-    }
+    let actions = codexbar::settings::normalize_taskbar_context_menu_actions(
+        &settings.taskbar_context_menu_actions,
+    );
 
-    let mut cursor = Point::default();
-    if unsafe { GetCursorPos(&raw mut cursor) } != 0 {
-        unsafe { SetForegroundWindow(hwnd) };
-        let selected = unsafe {
-            TrackPopupMenu(
-                menu,
-                TPM_RIGHTBUTTON | TPM_RETURNCMD,
-                cursor.x,
-                cursor.y,
-                0,
-                hwnd,
-                std::ptr::null(),
-            )
-        } as usize;
-        if selected != 0 {
-            unsafe { PostMessageW(hwnd, WM_COMMAND, selected, 0) };
+    // Quit is pulled out and re-appended last (behind its own separator) so
+    // the "show strip" toggle lands next to the other app-state entries rather
+    // than after Quit, regardless of the user's configured order.
+    let mut items: Vec<MenuItem> = Vec::new();
+    let mut quit_item: Option<MenuItem> = None;
+    for action in actions {
+        let entry = match action.as_str() {
+            "open_panel" => Some(MenuItem::action(
+                ID_OPEN_PANEL,
+                get_text(lang, LocaleKey::TrayOpenPanel),
+            )),
+            "refresh" => Some(MenuItem::action(
+                ID_REFRESH,
+                get_text(lang, LocaleKey::ActionRefresh),
+            )),
+            "settings" => Some(MenuItem::action(
+                ID_SETTINGS,
+                get_text(lang, LocaleKey::MenuSettings),
+            )),
+            "quit" => Some(MenuItem::action(
+                ID_QUIT,
+                get_text(lang, LocaleKey::MenuQuit),
+            )),
+            _ => None,
+        };
+        let Some(entry) = entry else { continue };
+        if entry.id == ID_QUIT {
+            quit_item = Some(entry);
+        } else {
+            items.push(entry);
         }
     }
-    unsafe {
-        DestroyMenu(menu);
-        PostMessageW(hwnd, WM_NULL, 0, 0);
+
+    // Named with item 7's vocabulary (小型状态栏), not 任务栏: the strip lives
+    // *inside* the Windows taskbar but is not it. `TrayShowMiniStatusBar` used
+    // to carry that same wording for `float_bar_enabled`; it was renamed to the
+    // floating bar's own word (悬浮栏) so the two toggles stay distinguishable.
+    items.push(
+        MenuItem::action(
+            ID_SHOW_STRIP,
+            get_text(lang, LocaleKey::TaskbarContextMenuShowStrip),
+        )
+        .checked(settings.taskbar_widget_enabled),
+    );
+
+    if let Some(quit) = quit_item {
+        items.push(MenuItem::separator());
+        items.push(quit);
     }
+
+    crate::taskbar_menu::show(hwnd, items);
 }
 
 fn handle_context_command(id: usize) {
@@ -733,6 +948,22 @@ fn handle_context_command(id: usize) {
         }
         ID_SETTINGS => {
             let _ = crate::shell::settings_window::open_or_focus(app, "general");
+        }
+        ID_SHOW_STRIP => {
+            // Same read-modify-save-apply pattern `commands/settings.rs`
+            // uses for this exact setting (`taskbar_widget_enabled`).
+            let mut settings = codexbar::settings::Settings::load();
+            let next = !settings.taskbar_widget_enabled;
+            settings.taskbar_widget_enabled = next;
+            let _ = settings.save();
+            set_enabled(next);
+            // Every other writer of this setting goes through
+            // `update_settings`, which broadcasts afterwards. Without the same
+            // broadcast here the Settings window keeps rendering its stale
+            // snapshot — its toggle still reads "on", so the next click sends
+            // `false` against a setting that is already false, and the strip
+            // looks impossible to turn back on.
+            crate::events::emit_settings_changed(app);
         }
         ID_QUIT => app.exit(0),
         _ => {}
@@ -939,15 +1170,7 @@ unsafe fn paint(hwnd: isize) {
         .lock()
         .map(|weight| *weight)
         .unwrap_or(400) as f32;
-    let family = WIDGET_FONT_FAMILY
-        .lock()
-        .map(|f| f.clone())
-        .unwrap_or_default();
-    let family = if family.trim().is_empty() {
-        "Microsoft YaHei UI".to_string()
-    } else {
-        family
-    };
+    let family = widget_font_family();
 
     let entries = LINES.lock().map(|g| g.clone()).unwrap_or_default();
     let pad = (6 * dpi as i32) / 96;
@@ -1058,9 +1281,39 @@ pub fn install() {
     }
 }
 
-/// Applies a live toggle from the Settings UI: creates the strip when turned
-/// on, destroys it when turned off. No-op if already in the requested state.
+/// Applies a live toggle: creates the strip when turned on, destroys it when
+/// turned off. No-op if already in the requested state.
+///
+/// **Marshals to the main thread**, because both halves are thread-affine and
+/// its main caller is not on it. `update_settings` is an `async` Tauri command,
+/// so it runs on the async runtime's worker pool:
+///
+/// * `start()` there would create the window on a thread with no message pump.
+///   `CreateWindowExW` succeeds, so the strip looks created and `WIDGET_HWND`
+///   goes non-zero — but nothing ever dispatches its `WM_PAINT`, its reassert
+///   timer or its right-click, and because `start()` early-returns while
+///   `WIDGET_HWND` is set, no later call can repair it.
+/// * `DestroyWindow` outright refuses to destroy a window owned by another
+///   thread, so `stop()` there left the strip on screen while the app forgot
+///   about it — and the next enable would build a second one.
+///
+/// Turning the strip off from the right-click menu and then back on from
+/// Settings hit both halves in sequence, which is what made the Settings toggle
+/// look dead.
 pub fn set_enabled(enabled: bool) {
+    let Some(app) = APP_HANDLE.get() else {
+        // Before `set_app_handle` — only reachable from `install()`'s own
+        // thread, which is already the right one.
+        apply_enabled(enabled);
+        return;
+    };
+    let app = app.clone();
+    if app.run_on_main_thread(move || apply_enabled(enabled)).is_err() {
+        tracing::warn!("taskbar widget toggle could not reach the main thread");
+    }
+}
+
+fn apply_enabled(enabled: bool) {
     if enabled {
         if let Err(err) = start() {
             tracing::warn!("taskbar widget unavailable: {err}");
@@ -1072,6 +1325,17 @@ pub fn set_enabled(enabled: bool) {
 
 /// Destroys the strip window, if any. Safe to call when it doesn't exist.
 pub fn stop() {
+    // Destroyed first: the tooltip control subclassed both target windows
+    // (`TTF_SUBCLASS`), and tearing it down before its subclassed targets are
+    // themselves destroyed lets its own `WM_NCDESTROY` handling un-subclass
+    // them cleanly.
+    let tooltip = TOOLTIP_HWND.lock().map(|g| *g).unwrap_or(0);
+    if tooltip != 0 && unsafe { IsWindow(tooltip) } != 0 {
+        unsafe { DestroyWindow(tooltip) };
+    }
+    if let Ok(mut guard) = TOOLTIP_HWND.lock() {
+        *guard = 0;
+    }
     let proxy = HIT_PROXY_HWND.lock().map(|g| *g).unwrap_or(0);
     if proxy != 0 && unsafe { IsWindow(proxy) } != 0 {
         unsafe { DestroyWindow(proxy) };
@@ -1219,6 +1483,9 @@ pub fn start() -> Result<(), String> {
     if let Ok(mut guard) = WIDGET_HWND.lock() {
         *guard = hwnd;
     }
+    // TASK-021 item 9: hover tooltip, driven by the same data the
+    // notification-area tray icon's tooltip uses.
+    create_tooltip(hwnd, proxy);
     unsafe {
         SetTimer(
             hwnd,
@@ -1332,4 +1599,5 @@ mod tests {
             assert!(r.bottom >= r.top, "inverted rect: {r:?}");
         }
     }
+
 }

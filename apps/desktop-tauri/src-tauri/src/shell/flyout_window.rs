@@ -123,6 +123,267 @@ fn native_resize_gesture(_window: &tauri::Window) -> bool {
     false
 }
 
+// ─── Click-outside dismissal (focus-independent) ───────────────────────────
+//
+// `handle_window_event`'s `Focused(false)` arm is the primary dismiss path,
+// but it only fires when Windows actually changes window activation. Some
+// outside clicks never do that: a window that answers `WM_MOUSEACTIVATE`
+// with `MA_NOACTIVATE` (the taskbar strip in `taskbar_widget.rs`, by design,
+// so clicking it never steals input focus from whatever app is active) can
+// be clicked while the flyout is open without the flyout ever losing
+// activation — so `Focused(false)` never fires and the panel is stuck open.
+// The fix is a second, focus-independent trigger: a low-level mouse hook
+// that watches every button-down system-wide and hides the flyout when one
+// lands outside both the flyout's own rect and its companion surfaces.
+
+/// A physical-pixel screen rectangle — the coordinate space Win32 mouse
+/// hooks and window rects share.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ScreenRect {
+    pub x: i32,
+    pub y: i32,
+    pub width: i32,
+    pub height: i32,
+}
+
+impl ScreenRect {
+    pub fn contains(&self, x: i32, y: i32) -> bool {
+        x >= self.x
+            && x < self.x.saturating_add(self.width)
+            && y >= self.y
+            && y < self.y.saturating_add(self.height)
+    }
+}
+
+/// Everything the click-outside decision needs, gathered from live
+/// window/state queries by the (platform-specific, window-owning) caller.
+/// Deliberately free of any HWND/`AppHandle` so the decision function below
+/// is unit-testable without a live window.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ClickOutsideContext {
+    pub flyout_rect: ScreenRect,
+    /// Settings is a companion window: mirrors the existing rule in
+    /// `handle_window_event`'s `Focused(false)` arm that a blur while
+    /// Settings is visible is never treated as an outside click.
+    pub settings_visible: bool,
+    pub proof_mode: bool,
+    pub recently_shown: bool,
+    pub gesture_guard_active: bool,
+    /// The app's popup menu (`taskbar_menu`) is on screen. It paints *outside*
+    /// the flyout's rect, so without this carve-out, clicking one of its rows
+    /// reads as an outside click and hides the flyout mid-interaction.
+    pub native_menu_tracking: bool,
+}
+
+/// Pure decision: should a mouse-button-down at `(x, y)` (physical screen
+/// pixels) dismiss the flyout? This is the click-driven counterpart to the
+/// focus-driven guards in `handle_window_event`'s `Focused(false)` arm, and
+/// applies the same three guards (proof mode, recently-shown grace, gesture
+/// blur guard) plus the same companion-window carve-out, so the two dismiss
+/// paths agree on when *not* to hide the panel — they differ only in what
+/// triggers the check in the first place.
+pub fn should_dismiss_for_click(ctx: &ClickOutsideContext, x: i32, y: i32) -> bool {
+    if ctx.proof_mode {
+        return false;
+    }
+    if ctx.flyout_rect.contains(x, y) {
+        return false;
+    }
+    if ctx.settings_visible {
+        return false;
+    }
+    if ctx.recently_shown {
+        return false;
+    }
+    if ctx.gesture_guard_active {
+        return false;
+    }
+    if ctx.native_menu_tracking {
+        return false;
+    }
+    true
+}
+
+#[cfg(windows)]
+#[link(name = "user32")]
+unsafe extern "system" {
+    fn SetWindowsHookExW(
+        id_hook: i32,
+        lpfn: Option<unsafe extern "system" fn(i32, usize, isize) -> isize>,
+        hmod: isize,
+        thread_id: u32,
+    ) -> isize;
+    fn CallNextHookEx(hhk: isize, code: i32, wparam: usize, lparam: isize) -> isize;
+}
+
+/// Is the app's popup menu currently on screen?
+///
+/// This used to probe `FindWindowW("#32768")`, the system menu class, back when
+/// the strip's right-click menu was a `TrackPopupMenu` popup. It is now our own
+/// self-drawn layered window (`taskbar_menu`), which that probe would never
+/// match, so the module reports its own state instead — more direct, and it
+/// cannot be confused by some other process's menu being up.
+#[cfg(windows)]
+fn native_menu_is_tracking() -> bool {
+    crate::taskbar_menu::is_open()
+}
+
+#[cfg(windows)]
+#[link(name = "kernel32")]
+unsafe extern "system" {
+    fn GetModuleHandleW(module_name: *const u16) -> isize;
+}
+
+#[cfg(windows)]
+const WH_MOUSE_LL: i32 = 14;
+#[cfg(windows)]
+const WM_LBUTTONDOWN: usize = 0x0201;
+#[cfg(windows)]
+const WM_RBUTTONDOWN: usize = 0x0204;
+
+#[cfg(windows)]
+#[repr(C)]
+struct MsllPoint {
+    x: i32,
+    y: i32,
+}
+
+/// Layout of `MSLLHOOKSTRUCT`, the payload Windows passes a `WH_MOUSE_LL`
+/// hook procedure via `lParam`.
+#[cfg(windows)]
+#[repr(C)]
+struct MsllHookStruct {
+    pt: MsllPoint,
+    mouse_data: u32,
+    flags: u32,
+    time: u32,
+    dw_extra_info: usize,
+}
+
+/// The app handle the hook procedure dispatches into. Set once by
+/// [`install_click_outside_watcher`]; a plain `extern "system"` callback has
+/// no closure environment, so this is how it reaches Tauri state.
+#[cfg(windows)]
+static WATCHED_APP: std::sync::OnceLock<AppHandle> = std::sync::OnceLock::new();
+
+/// The installed hook handle. `SetWindowsHookExW` handles are process-wide
+/// and outlive any single window; the flyout itself is hidden rather than
+/// destroyed for the whole app lifetime, so there is no natural "uninstall"
+/// point before process exit, which already releases the hook for free.
+#[cfg(windows)]
+static HOOK_HANDLE: Mutex<Option<isize>> = Mutex::new(None);
+
+#[cfg(windows)]
+unsafe extern "system" fn click_outside_hook_proc(
+    code: i32,
+    wparam: usize,
+    lparam: isize,
+) -> isize {
+    if code >= 0
+        && matches!(wparam, WM_LBUTTONDOWN | WM_RBUTTONDOWN)
+        && let Some(app) = WATCHED_APP.get()
+    {
+        let info = unsafe { &*(lparam as *const MsllHookStruct) };
+        handle_global_click(app, info.pt.x, info.pt.y);
+    }
+    unsafe { CallNextHookEx(0, code, wparam, lparam) }
+}
+
+/// Read one boolean out of [`AppState`] without ever blocking the calling
+/// thread. Returns `true` (guard active → do not dismiss) when the state is
+/// missing or the lock is held, so a contended or poisoned lock can never
+/// turn into a surprise dismissal or a panic inside the input hook.
+#[cfg(windows)]
+fn guard_state(app: &AppHandle, read: impl FnOnce(&AppState) -> bool) -> bool {
+    let Some(state) = app.try_state::<Mutex<AppState>>() else {
+        return true;
+    };
+    match state.try_lock() {
+        Ok(st) => read(&st),
+        Err(_) => true,
+    }
+}
+
+/// Gather live window/state into a [`ClickOutsideContext`] and apply
+/// [`should_dismiss_for_click`]. No-op whenever the flyout is not the
+/// visible window (most clicks, most of the time).
+#[cfg(windows)]
+fn handle_global_click(app: &AppHandle, x: i32, y: i32) {
+    let Some(window) = app.get_webview_window(FLYOUT_LABEL) else {
+        return;
+    };
+    if !window.is_visible().unwrap_or(false) {
+        return;
+    }
+    let Ok(position) = window.outer_position() else {
+        return;
+    };
+    let Ok(size) = window.outer_size() else {
+        return;
+    };
+
+    let ctx = ClickOutsideContext {
+        flyout_rect: ScreenRect {
+            x: position.x,
+            y: position.y,
+            width: size.width as i32,
+            height: size.height as i32,
+        },
+        settings_visible: crate::shell::settings_window::is_visible(app),
+        proof_mode: crate::proof_harness::is_proof_mode(app),
+        // `try_lock`, never `lock().unwrap()`: this runs synchronously inside a
+        // WH_MOUSE_LL callback. Blocking here stalls mouse input for the whole
+        // desktop and, past LowLevelHooksTimeout (~300ms), makes Windows
+        // silently evict the hook; a poisoned-lock unwrap would panic inside
+        // an input hook. If the lock is contended we cannot know whether a
+        // guard is active, so we assume it is and leave the panel open — the
+        // conservative direction, and identical to the pre-fix behaviour.
+        recently_shown: guard_state(app, |st| {
+            st.was_tray_panel_recently_shown(Instant::now(), RECENTLY_SHOWN_GRACE)
+        }),
+        gesture_guard_active: guard_state(app, |st| {
+            st.is_gesture_blur_guard_active(Instant::now())
+        }),
+        native_menu_tracking: native_menu_is_tracking(),
+    };
+
+    if !should_dismiss_for_click(&ctx, x, y) {
+        return;
+    }
+
+    if hide(app).is_ok()
+        && let Some(st) = app.try_state::<Mutex<AppState>>()
+    {
+        st.lock().unwrap().mark_blur_dismissed(Instant::now());
+    }
+}
+
+/// Install the global low-level mouse hook once, for the process lifetime.
+/// Idempotent — a second call (there should not be one, but `prewarm` is the
+/// only caller and only runs once at startup) only refreshes the watched
+/// `AppHandle` and leaves an already-installed hook alone.
+#[cfg(windows)]
+fn install_click_outside_watcher(app: &AppHandle) {
+    let _ = WATCHED_APP.set(app.clone());
+    let mut guard = HOOK_HANDLE.lock().unwrap();
+    if guard.is_some() {
+        return;
+    }
+    let hmod = unsafe { GetModuleHandleW(std::ptr::null()) };
+    let handle = unsafe { SetWindowsHookExW(WH_MOUSE_LL, Some(click_outside_hook_proc), hmod, 0) };
+    if handle == 0 {
+        tracing::warn!(
+            error = %std::io::Error::last_os_error(),
+            "flyout: failed to install global click-outside mouse hook"
+        );
+        return;
+    }
+    *guard = Some(handle);
+}
+
+#[cfg(not(windows))]
+fn install_click_outside_watcher(_app: &AppHandle) {}
+
 /// Whether the flyout window currently exists and is visible. Canonical
 /// replacement for the pre-split `surface_machine.current() == TrayPanel`
 /// check, now that the flyout is not a state of the shared machine.
@@ -257,6 +518,10 @@ fn open_or_focus_inner(
 /// keeping it hidden. The first tray click can then show an already-rendered
 /// surface instead of spending that click creating WebView2.
 pub fn prewarm(app: &AppHandle) -> Result<(), String> {
+    // Click-outside dismissal cannot rely on `Focused(false)` alone (see the
+    // "Click-outside dismissal" section above), so arm the focus-independent
+    // watcher alongside the window itself, once, at startup.
+    install_click_outside_watcher(app);
     open_or_focus_inner(app, None, false)
 }
 
@@ -521,5 +786,98 @@ mod tests {
     fn first_hidden_build_does_not_start_show_grace() {
         assert!(show_grace_starts_now(false));
         assert!(!show_grace_starts_now(true));
+    }
+
+    fn sample_flyout_rect() -> ScreenRect {
+        ScreenRect {
+            x: 1600,
+            y: 800,
+            width: 328,
+            height: 776,
+        }
+    }
+
+    fn clear_context() -> ClickOutsideContext {
+        ClickOutsideContext {
+            flyout_rect: sample_flyout_rect(),
+            settings_visible: false,
+            proof_mode: false,
+            recently_shown: false,
+            gesture_guard_active: false,
+            native_menu_tracking: false,
+        }
+    }
+
+    #[test]
+    fn native_menu_tracking_suppresses_dismissal() {
+        // The taskbar strip's right-click menu paints outside the flyout's
+        // rect. Without this carve-out, clicking one of its rows would read as
+        // an outside click and hide the flyout mid-interaction.
+        let mut ctx = clear_context();
+        ctx.native_menu_tracking = true;
+        assert!(!should_dismiss_for_click(&ctx, 0, 0));
+    }
+
+    #[test]
+    fn screen_rect_contains_is_half_open() {
+        let rect = sample_flyout_rect();
+        // Top-left corner is inside; the far edge (x + width, y + height) is
+        // exclusive, matching how outer_position/outer_size describe bounds.
+        assert!(rect.contains(1600, 800));
+        assert!(rect.contains(1600 + 327, 800 + 775));
+        assert!(!rect.contains(1600 + 328, 800));
+        assert!(!rect.contains(1600, 800 + 776));
+        assert!(!rect.contains(1599, 850));
+    }
+
+    #[test]
+    fn click_inside_flyout_never_dismisses() {
+        let ctx = clear_context();
+        // A resize-grip drag or a card drag-reorder mousedown lands inside
+        // the flyout's own outer rect (the resize border is part of it), so
+        // this also covers those gestures without needing a focus-based
+        // guard for this trigger.
+        assert!(!should_dismiss_for_click(&ctx, 1650, 900));
+    }
+
+    #[test]
+    fn click_outside_with_no_guards_active_dismisses() {
+        // Regression for the reported bug: a click on a window that answers
+        // WM_MOUSEACTIVATE with MA_NOACTIVATE (e.g. the taskbar strip) never
+        // fires Focused(false), so this click-driven path must be able to
+        // dismiss on its own.
+        let ctx = clear_context();
+        assert!(should_dismiss_for_click(&ctx, 0, 0));
+    }
+
+    #[test]
+    fn click_outside_during_proof_mode_never_dismisses() {
+        let mut ctx = clear_context();
+        ctx.proof_mode = true;
+        assert!(!should_dismiss_for_click(&ctx, 0, 0));
+    }
+
+    #[test]
+    fn click_outside_while_settings_visible_never_dismisses() {
+        // Settings is a companion window: mirrors handle_window_event's
+        // Focused(false) rule that any blur while Settings is open is not an
+        // outside click, regardless of where on screen it landed.
+        let mut ctx = clear_context();
+        ctx.settings_visible = true;
+        assert!(!should_dismiss_for_click(&ctx, 0, 0));
+    }
+
+    #[test]
+    fn click_outside_during_recently_shown_grace_never_dismisses() {
+        let mut ctx = clear_context();
+        ctx.recently_shown = true;
+        assert!(!should_dismiss_for_click(&ctx, 0, 0));
+    }
+
+    #[test]
+    fn click_outside_during_gesture_guard_never_dismisses() {
+        let mut ctx = clear_context();
+        ctx.gesture_guard_active = true;
+        assert!(!should_dismiss_for_click(&ctx, 0, 0));
     }
 }

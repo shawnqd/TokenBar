@@ -4031,13 +4031,13 @@ html {
 }
 
 /* Draggable title bar for the PopOut window mode (borderless window has no
-   native caption). Bleeds past the surface's 6px/10px padding so it sits
-   flush to the window edges, mirroring `.settings-titlebar`. */
+   native caption). `.menu-surface--popout` carries no outer padding (see
+   below, matching `.menu-surface--tray`), so this sits flush to the window
+   edges by default flow now — no negative-margin bleed needed any more. */
 .popout-titlebar {
   display: flex;
   align-items: center;
   height: 30px;
-  margin: -6px -10px 0;
   padding: 0 4px 0 12px;
   background: #1e1e1e;
   -webkit-app-region: drag;
@@ -4124,12 +4124,39 @@ html {
   cursor: not-allowed;
 }
 
+/* TASK-021 dashboard-chrome-parity follow-up: this used to be declared a
+   second time near the tray-flyout block below (`border-radius: 0; border:
+   none; box-shadow: none;`), which always won the cascade and stripped the
+   rounded corner this rule already intended. Collapsed into this one
+   declaration instead of adding a third override (forbidden by
+   docs/GROK_TASK_PACKAGE_021.md).
+   `--window-radius` and the clip-path technique are the exact values/approach
+   `.menu-surface--tray` (below) and `.settings-window-frame .settings` use —
+   `border-radius` alone leaves square corners on children that paint their
+   own background (e.g. `.popout-titlebar`), so `clip-path` does the actual
+   rounding. `border: 0; box-shadow: none;` also match the tray flyout
+   exactly: this only produces real rounded corners once the native `main`
+   window is transparent (see `apps/desktop-tauri/src-tauri/tauri.conf.json`,
+   which has no `transparent` key for the `main` window, unlike the flyout/
+   settings windows built with `.transparent(true)` in
+   `apps/desktop-tauri/src-tauri/src/shell/flyout_window.rs` and
+   `settings_window.rs`) — until then the clipped-away corners will show the
+   window's own opaque backdrop instead of the desktop. That native change is
+   outside this file's ownership and is not made here.
+   `padding: 0` matches `.menu-surface--tray`'s own reset further down
+   (was `6px 10px`, inherited from base `.menu-surface`, compounding with the
+   provider grid/card's own padding to read as an oversized gutter that the
+   tray does not have). */
 .menu-surface--popout {
   width: 100%;
-  padding: 6px 10px;
   height: 100vh;
   max-height: 100vh;
   min-height: 0;
+  padding: 0;
+  border-radius: var(--window-radius);
+  clip-path: inset(0 round var(--window-radius));
+  border: 0;
+  box-shadow: none;
 }
 
 .menu-surface__summary {
@@ -4148,29 +4175,20 @@ html {
   overflow-y: auto;
 }
 
+/* No visible scrollbar, matching `.menu-surface--tray .menu-surface__body`
+   (below): `scrollbar-width: none` plus `::-webkit-scrollbar { display: none }`
+   is the reliable pairing on this Chromium/WebView2 target — the body still
+   scrolls via `overflow-y: auto`, it just never paints a track/thumb. */
 .menu-surface--popout .menu-surface__body {
   flex: 1 1 auto;
   min-height: 0;
   overflow-y: auto;
   overflow-x: hidden;
-  scrollbar-width: thin;
-  scrollbar-color: rgba(142, 142, 147, 0.45) transparent;
+  scrollbar-width: none;
 }
 
 .menu-surface--popout .menu-surface__body::-webkit-scrollbar {
-  width: 6px;
-}
-
-.menu-surface--popout .menu-surface__body::-webkit-scrollbar-track {
-  background: transparent;
-}
-
-.menu-surface--popout .menu-surface__body::-webkit-scrollbar-thumb {
-  min-height: 36px;
-  border: 1px solid transparent;
-  border-radius: 999px;
-  background: rgba(142, 142, 147, 0.45);
-  background-clip: padding-box;
+  display: none;
 }
 
 .menu-surface--popout .provider-grid {
@@ -4438,6 +4456,90 @@ body:has(.menu-surface--popout) .popout-scale-shell,
 /* Grouped into one tinted panel (like the reset-credits/forecast boxes
    above it) instead of floating directly on the card background — reads as
    one "stats" unit rather than loose text. */
+/* Card zones and the insight rows inside them (output speed, local usage).
+ *
+ * Every rule for these used to be written as `.menu-surface--tray ...`, so the
+ * dashboard — which is `.menu-surface--popout` — rendered the same markup with
+ * no layout at all: no zone card, and label and value running together as one
+ * string ("最近输出速度51.2 t/s"). The two surfaces were sharing the component
+ * but not the rules, which is the drift TASK-021 item 1/6 is about.
+ *
+ * Structure and a default type scale live here so any surface that renders a
+ * MenuCard gets the same row. The tray keeps its own `--flyout-u` sizing in the
+ * scoped block further down; those selectors carry higher specificity, so the
+ * tray's appearance is unchanged by this base layer.
+ */
+.menu-card__zone {
+  position: relative;
+  overflow: hidden;
+  padding: 12px;
+  border-radius: 12px;
+  background: var(--surface-elevated);
+}
+
+.menu-card__zone--insights {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+
+.menu-card__zone--insights .menu-card__divider {
+  height: 1px;
+  flex-shrink: 0;
+  margin: 11px 0;
+  background: color-mix(in srgb, var(--text-secondary) 22%, transparent);
+}
+
+.menu-card__insight-block {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+
+.menu-card__insight-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+}
+
+.menu-card__insight-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-secondary);
+  font-size: var(--font-caption);
+  font-weight: 400;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.menu-card__insight-label svg {
+  flex: none;
+  width: 13px;
+  height: 13px;
+  opacity: 0.85;
+}
+
+.menu-card__insight-value {
+  flex: none;
+  color: var(--text-primary);
+  font-size: 1.05rem;
+  font-weight: 720;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  text-align: right;
+}
+
+.menu-card__insight-unit,
+.menu-card__insight-approx {
+  color: var(--text-secondary);
+  font-size: var(--font-caption);
+  font-weight: 500;
+}
+
 .menu-card__local-usage {
   padding: 12px 14px;
   border-radius: 12px;
@@ -5157,15 +5259,12 @@ body:has(.menu-surface--popout) .popout-scale-shell,
   font-size: var(--font-body);
   line-height: var(--line-tight);
 }
-.menu-surface--popout {
-  width: 100%;
-  border-radius: 0;
-  border: none;
-  box-shadow: none;
-  height: 100vh;
-  max-height: 100vh;
-  min-height: 0;
-}
+/* .menu-surface--popout's corner/border/shadow/padding is declared once,
+   above, next to `.settings-field input[type="range"]`. It used to be
+   redeclared here with `border-radius: 0; border: none; box-shadow: none;`,
+   which — being later in the cascade — always won and stripped the rounded
+   corner the other declaration intended. See the comment on that rule for
+   the full history; do not reintroduce a second declaration here. */
 [data-theme="light"] .menu-surface {
   background: var(--menu-popover-bg);
   border: 1px solid rgba(0, 0, 0, 0.15);
@@ -5793,7 +5892,25 @@ body:has(.settings-window-frame) #root {
      and FloatBar lose ~10px of content width only because they scroll, so
      their cards visibly use a different right edge from General/Dashboard. */
   scrollbar-gutter: stable;
-  /* Opacity only — no transform/scale (those painted as window stretch). */
+  /* TASK-021 (2185d20f) reduced this to opacity-only because a horizontal
+     translateX slide, combined with the window itself calling setSize() per
+     tab and single-column tabs using a narrower centered width than
+     Providers, amplified into a visible whole-window stretch. Both of those
+     root causes are gone now (window geometry is fixed and owned natively;
+     every tab shares .settings-page at full width), but the fade alone reads
+     as no transition at all, which is what prompted this follow-up. Restored
+     the small vertical lift already used one rule below for
+     .settings-status (settings-status-in) and for .dropdown__panel /
+     .providers-sidebar__row--reveal elsewhere in this file — same 140ms
+     ease-out, same -4px amplitude, so this reuses the app's existing
+     entrance-motion vocabulary instead of inventing a new one. The `to`
+     keyframe below uses the literal `none` (not translateY(0)) so that once
+     the animation ends, `transform` stops being set at all — translateY(0)
+     is visually identical but would otherwise permanently turn this
+     scrollable panel into a containing block for any fixed/absolute
+     descendant a tab renders later. transform/opacity are both
+     compositor-only, so this never triggers layout/reflow (no CLS) and
+     never blocks pointer interaction. */
   animation: settings-tab-fade-in 140ms ease-out both;
 }
 
@@ -5896,9 +6013,11 @@ body:has(.settings-window-frame) #root {
 @keyframes settings-tab-fade-in {
   from {
     opacity: 0;
+    transform: translateY(-4px);
   }
   to {
     opacity: 1;
+    transform: none;
   }
 }
 @media (prefers-reduced-motion: reduce) {
@@ -7703,8 +7822,9 @@ body:has(.tray-panel-reveal) {
   transition: width 0.3s ease;
 }
 
-.menu-surface--tray .menu-card--compact .menu-metric__forecast,
-.menu-surface--tray .menu-card--minimal .menu-metric__forecast,
+/* The compact and minimal forecast rows used to be listed here as well, so the
+   markup TASK-021 item 4 added for them rendered and was then hidden. All three
+   tiers now show the same forecast row; only the surrounding density differs. */
 .menu-surface--tray .menu-card--detailed .provider-quota__fill-label,
 .menu-surface--tray .menu-card--detailed .provider-quota__fill-label-clip,
 .menu-surface--tray .menu-card--detailed .provider-quota__sub-pct-suffix,
@@ -8059,6 +8179,36 @@ body:has(.tray-panel-reveal) {
 }
 .menu-surface--tray .menu-card--compact .menu-card__compact-secondary-track {
   height: calc(4 * var(--flyout-u));
+}
+
+/* ── Forecast in the reduced tiers (item 4) ───────────────────────────────
+   Deliberately NOT resized. The forecast row is the one element the three
+   tiers must render identically — detailed leaves it at the global
+   `--font-caption`, so compact and minimal do too. Scaling it by `--flyout-u`
+   like the text around it is what would break the parity this row exists for.
+   Only the spacing that separates it from its quota row is tier-specific. */
+.menu-surface--tray .menu-card--compact .menu-card__compact-secondary .menu-metric__forecast {
+  margin-top: calc(5 * var(--flyout-u));
+}
+
+/* Minimal draws a single hero row, so a provider whose weekly window sits in
+   `secondary` (Claude, Codex) has no row to hang the forecast under and gets
+   this standalone block instead. The label appears only when nothing above
+   already names the window — see `densityOrphanForecast` in MenuCard. */
+.menu-card__orphan-forecast {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.menu-card__orphan-forecast-label {
+  color: var(--text-secondary);
+  font-size: var(--font-caption);
+  font-weight: 400;
+}
+
+.menu-card__orphan-forecast .menu-metric__forecast {
+  margin-top: 0;
 }
 
 /* ── Insights panel (detailed) — ref .usage-panel ─────────────────────── */

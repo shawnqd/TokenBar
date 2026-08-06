@@ -648,6 +648,7 @@ export const ALL_LOCALE_KEYS = [
   "ProviderIssueCategoryUnknown",
   "TaskbarContextMenuSection",
   "TaskbarContextMenuHelper",
+  "TaskbarContextMenuShowStrip",
   "TaskbarTooltipSection",
   "TaskbarTooltipHelper",
   "TaskbarTooltipUseStripHint",

@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useState, type ReactNode } from "react";
+import type { LocaleKey } from "../../../i18n/keys";
 import type {
   CookieSourceOption,
   CredentialStorageStatus,
+  ProviderAuthCapabilitiesBridge,
   ProviderDetail,
   ProviderUsageSnapshot,
   LocalUsagePeriod,
@@ -12,6 +14,7 @@ import type {
 import { useLocale } from "../../../hooks/useLocale";
 import {
   getCredentialStorageStatus,
+  getProviderAuthCapabilities,
   getProviderCookieSourceOptions,
   getProviderDetail,
   getProviderRegionOptions,
@@ -50,6 +53,7 @@ import { useOutputSpeedSnapshot } from "../../../hooks/useOutputSpeedSnapshot";
 import { outputSpeedProviderId } from "../../../lib/outputSpeed";
 import type { QuotaDisplayContext } from "../../../lib/quotaDisplay";
 import {
+  ProviderAuthMethod,
   ProviderHeaderSkeleton,
   ProviderSection,
   ProviderSectionSkeleton,
@@ -79,9 +83,10 @@ interface Props {
  *   1. Provider header (fixed shell)
  *   2. Quick actions (sticky toolbar)
  *   3. Status / quota overview (subscription or balance variant)
- *   4. Recent data (stats / charts)
- *   5. Auth & credentials (primary expanded, secondary collapsed)
- *   6. Display settings
+ *   4. Recent data (stats / charts), plus Codex's local usage-history note
+ *   5. Auth sources (primary expanded, secondary collapsed) — every entry is
+ *      a real, capability-driven auth method; see `AuthWorkspace` below
+ *   6. Display settings (own "Display" heading, TASK-021 item 2)
  */
 export function ProviderDetailPane({
   providerId,
@@ -100,6 +105,11 @@ export function ProviderDetailPane({
   const [regionOptions, setRegionOptions] = useState<RegionOption[]>([]);
   const [credentialStatus, setCredentialStatus] =
     useState<CredentialStorageStatus | null>(null);
+  // `null` means "unknown" (including: the backend command isn't registered
+  // yet), which the entry list treats the same as "no OAuth/CLI sign-in" —
+  // never as a reason to error the whole pane. See `getProviderAuthCapabilities`.
+  const [authCapabilities, setAuthCapabilities] =
+    useState<ProviderAuthCapabilitiesBridge | null>(null);
   const [credentialRevision, setCredentialRevision] = useState(0);
   const [tokenProviderIds, setTokenProviderIds] = useState<Set<string>>(
     () => new Set(),
@@ -154,6 +164,16 @@ export function ProviderDetailPane({
     } finally {
       if (!signal?.stale) setLoading(false);
     }
+
+    // Independent of the payload above: this only refines which auth entry
+    // is expanded by default, so a rejection (e.g. the command is not yet
+    // registered) must never surface as a pane-wide error.
+    try {
+      const capabilities = await getProviderAuthCapabilities(id);
+      if (!signal?.stale) setAuthCapabilities(capabilities);
+    } catch {
+      if (!signal?.stale) setAuthCapabilities(null);
+    }
   }, []);
 
   useEffect(() => {
@@ -162,6 +182,7 @@ export function ProviderDetailPane({
       setCookieOptions([]);
       setRegionOptions([]);
       setCredentialStatus(null);
+      setAuthCapabilities(null);
       setError(null);
       setLoading(false);
       return;
@@ -172,6 +193,7 @@ export function ProviderDetailPane({
     setCookieOptions([]);
     setRegionOptions([]);
     setCredentialStatus(null);
+    setAuthCapabilities(null);
     setError(null);
     const signal = { stale: false };
     void load(providerId, signal);
@@ -369,27 +391,37 @@ export function ProviderDetailPane({
         />
       )}
 
+      {/* Codex-only local usage-history note. This used to live inside the
+          auth-sources zone (it is not an auth source), rendered next to
+          StatsSection where usage history belongs — TASK-021 item 2. */}
+      {detail?.id === "codex" && <CodexUsageHistoryNote t={t} />}
+
       {/* 4. Auth sources — Cookie / browser login / CLI / API / token plan in one zone */}
       {detail && (
         <AuthWorkspace
           providerId={detail.id}
+          dashboardUrl={detail.dashboardUrl}
           cookieDomain={cookieDomain}
+          capabilities={authCapabilities}
           credentialRevision={credentialRevision}
           hasTokenAccounts={hasTokenAccounts}
           credentialStatus={credentialStatus}
           busy={busy}
-          primary={resolvePrimaryAuth(detail.id, cookieDomain)}
           cookieSource={detail.cookieSource}
           cookieOptions={cookieOptions}
           onCookieSourceChanged={() => void load(detail.id)}
           onRevoke={handleRevokeCredentials}
+          onSignIn={handleSwitchAccount}
           t={t}
         />
       )}
 
-      {/* 5. Display settings (tray metric + region only; auth sources live above) */}
+      {/* 5. Display settings (tray metric + region only; auth sources live above).
+          Its own heading keeps these display-only controls from reading as
+          part of the auth zone above — TASK-021 item 2. */}
       {detail && (
-        <div className="provider-detail-display-zone">
+        <div className="provider-detail-display-zone settings-section">
+          <h3 className="settings-section__title">{t("TabDisplay")}</h3>
           <MenuBarMetricSection
             provider={detail}
             providerMetrics={providerMetrics}
@@ -411,21 +443,43 @@ export function ProviderDetailPane({
   );
 }
 
-type PrimaryAuthKind = "bespoke" | "cookie" | "apiKey";
+type PrimaryAuthKind = "bespoke" | "cookie" | "signIn" | "apiKey";
+
+/** Which real UI methods this provider currently offers, decided once so
+ *  both the primary pick and the "other methods" list agree on it. */
+interface AuthEntryAvailability {
+  bespoke: boolean;
+  cookie: boolean;
+  signIn: boolean;
+}
 
 /**
- * Pick the auth surface that should stay expanded for this provider family.
- * Remaining methods collapse under "Other authentication methods".
+ * Pick the auth surface that should stay expanded for this provider family:
+ * the first entry that is actually available, in a fixed preference order.
+ * `apiKey` is the guaranteed last resort — `ApiKeySection` self-hides when a
+ * provider has no API-key entry, exactly as it did before this list existed.
+ *
+ * Preference order: a hand-built credentials UI beats the generic entries;
+ * a cookie-domain provider keeps its existing cookie-primary behaviour
+ * (unchanged for every provider that had one before); only then does a
+ * bare OAuth/CLI sign-in — the button that used to live only in the quick
+ * actions toolbar — become the lead entry (this is what fills Codex's and
+ * GitHub Copilot's auth block, since neither has a cookie domain it should
+ * use as primary and Codex now has no bespoke entry at all).
  */
-function resolvePrimaryAuth(
-  providerId: string,
-  cookieDomain: string | null,
-): PrimaryAuthKind {
-  if (hasBespokeCredentials(providerId)) return "bespoke";
-  if (cookieDomain) return "cookie";
+function resolvePrimaryAuth(availability: AuthEntryAvailability): PrimaryAuthKind {
+  if (availability.bespoke) return "bespoke";
+  if (availability.cookie) return "cookie";
+  if (availability.signIn) return "signIn";
   return "apiKey";
 }
 
+/**
+ * Provider ids with a hand-built credentials component (see
+ * `CredentialsDispatcher`). This is a frontend routing table, not a
+ * capability — Rust has no notion of which React component renders a
+ * provider's controls — so it stays a small explicit list.
+ */
 function hasBespokeCredentials(providerId: string): boolean {
   switch (providerId) {
     case "gemini":
@@ -433,7 +487,6 @@ function hasBespokeCredentials(providerId: string): boolean {
     case "jetbrains":
     case "kiro":
     case "claude":
-    case "codex":
     case "openaiapi":
     case "litellm":
     case "devin":
@@ -449,61 +502,112 @@ function hasBespokeCredentials(providerId: string): boolean {
 
 function AuthWorkspace({
   providerId,
+  dashboardUrl,
   cookieDomain,
+  capabilities,
   credentialRevision,
   hasTokenAccounts,
   credentialStatus,
   busy,
-  primary,
   cookieSource,
   cookieOptions,
   onCookieSourceChanged,
   onRevoke,
+  onSignIn,
   t,
 }: {
   providerId: string;
+  dashboardUrl: string | null;
   cookieDomain: string | null;
+  capabilities: ProviderAuthCapabilitiesBridge | null;
   credentialRevision: number;
   hasTokenAccounts: boolean;
   credentialStatus: CredentialStorageStatus | null;
   busy: boolean;
-  primary: PrimaryAuthKind;
   cookieSource: string | null | undefined;
   cookieOptions: CookieSourceOption[];
   onCookieSourceChanged: () => void;
   onRevoke: () => void;
+  onSignIn: () => void;
   t: ReturnType<typeof useLocale>["t"];
 }) {
+  // Codex keeps its long-standing carve-out: its own auto/manual/off cookie
+  // *source* picker (`CookieSourceSection` below) already covers cookies for
+  // this provider, so a second, plain cookie-paste card would be redundant —
+  // unchanged from before TASK-021.
   const showCookie = cookieDomain !== null && providerId !== "codex";
   const showCookieSource = providerId !== "codex" && cookieOptions.length > 0;
-  const bespoke = (
+  const isBespoke = hasBespokeCredentials(providerId);
+  const supportsOAuth = capabilities?.supportsOAuth ?? false;
+  const supportsCli = capabilities?.supportsCli ?? false;
+  // `triggerProviderLogin` (reused, unmodified) only has a real destination
+  // when the provider advertises one, exactly like the existing "切换账号"
+  // quick-action button already gates itself — see `QuickActionsSection`.
+  // Bespoke components (ClaudeCreds, GeminiCliCreds, …) already tell their
+  // own OAuth/CLI story, so this only appears where nothing else would.
+  const showSignIn =
+    !isBespoke && (supportsOAuth || supportsCli) && dashboardUrl !== null;
+  // `null` (capabilities not loaded yet, or the backend command is not
+  // registered) falls back to the old universal behaviour: always show it
+  // and let `ApiKeySection` self-hide when the provider has no entry.
+  const showApiKey = capabilities ? capabilities.supportsApiKey : true;
+
+  const availability: AuthEntryAvailability = {
+    bespoke: isBespoke,
+    cookie: showCookie,
+    signIn: showSignIn,
+  };
+  const primary = resolvePrimaryAuth(availability);
+
+  const bespokeNode = isBespoke ? (
     <CredentialsDispatcher key={`creds-${providerId}`} providerId={providerId} t={t} />
-  );
-  const cookie = showCookie ? (
+  ) : null;
+  const cookieNode = showCookie ? (
     <CookieSection
       key={`cookie-${providerId}-${credentialRevision}`}
       providerId={providerId}
       cookieDomain={cookieDomain}
     />
   ) : null;
-  const apiKey = (
+  const signInNode = showSignIn ? (
+    <ProviderSignInEntry
+      key={`signin-${providerId}`}
+      supportsOAuth={supportsOAuth}
+      supportsCli={supportsCli}
+      busy={busy}
+      onSignIn={onSignIn}
+      t={t}
+    />
+  ) : null;
+  const apiKeyNode = (
     <ApiKeySection
       key={`api-${providerId}-${credentialRevision}`}
       providerId={providerId}
     />
   );
 
+  const entries: { kind: Exclude<PrimaryAuthKind, "apiKey">; node: ReactNode; label: LocaleKey }[] = [
+    { kind: "bespoke", node: bespokeNode, label: "CredentialsSectionTitle" },
+    { kind: "cookie", node: cookieNode, label: "CredentialManualCookies" },
+    { kind: "signIn", node: signInNode, label: "OAuth" },
+  ];
+
   const primaryNode: ReactNode =
-    primary === "bespoke"
-      ? bespoke
-      : primary === "cookie"
-        ? cookie
-        : apiKey;
+    primary === "apiKey"
+      ? apiKeyNode
+      : entries.find((entry) => entry.kind === primary)?.node ?? apiKeyNode;
 
   const secondaryNodes: ReactNode[] = [];
-  if (primary !== "bespoke") secondaryNodes.push(bespoke);
-  if (primary !== "cookie" && cookie) secondaryNodes.push(cookie);
-  if (primary !== "apiKey") secondaryNodes.push(apiKey);
+  const secondaryLabels: string[] = [];
+  for (const entry of entries) {
+    if (entry.kind === primary || !entry.node) continue;
+    secondaryNodes.push(entry.node);
+    secondaryLabels.push(t(entry.label));
+  }
+  if (primary !== "apiKey" && showApiKey) {
+    secondaryNodes.push(apiKeyNode);
+    secondaryLabels.push(t("CredentialApiKeys"));
+  }
   if (hasTokenAccounts) {
     secondaryNodes.push(
       <TokenAccountsPanel
@@ -512,6 +616,7 @@ function AuthWorkspace({
         compact
       />,
     );
+    secondaryLabels.push(t("CredentialTokenAccounts"));
   }
   secondaryNodes.push(
     <CredentialStorageSection
@@ -545,13 +650,81 @@ function AuthWorkspace({
         />
       )}
       <div className="provider-detail-auth-primary">{primaryNode}</div>
+      {/* Named rather than a bare "other methods" label — TASK-021 item 2 —
+          since the entry count here (cookie / API key / token accounts / …)
+          is large enough on some providers that flattening would push the
+          identity + quota + stats content too far down the pane. */}
       <details className="provider-detail-section provider-detail-auth-more">
         <summary className="provider-detail-auth-more__summary">
           {t("ProviderAuthOtherMethods")}
+          {secondaryLabels.length > 0 && ` (${secondaryLabels.join(" · ")})`}
         </summary>
         <div className="provider-detail-auth-more__body">{secondaryNodes}</div>
       </details>
     </div>
+  );
+}
+
+/**
+ * Generic OAuth/CLI sign-in entry. Reuses the exact same
+ * `trigger_provider_login` command the "切换账号…" quick action already
+ * calls (`handleSwitchAccount` in `ProviderDetailPane`) — this only gives it
+ * a second, labelled home inside the auth-sources zone so providers whose
+ * only real auth method is "open the browser and sign in" (Codex, GitHub
+ * Copilot, …) are not left with an empty or misleading primary card.
+ */
+function ProviderSignInEntry({
+  supportsOAuth,
+  supportsCli,
+  busy,
+  onSignIn,
+  t,
+}: {
+  supportsOAuth: boolean;
+  supportsCli: boolean;
+  busy: boolean;
+  onSignIn: () => void;
+  t: ReturnType<typeof useLocale>["t"];
+}) {
+  const methodLabels = [
+    supportsOAuth ? t("OAuth") : null,
+    supportsCli ? t("ProviderSourceCliShort") : null,
+  ].filter((label): label is string => Boolean(label));
+
+  return (
+    <ProviderSection title={t("CredentialsSectionTitle")}>
+      <ProviderAuthMethod
+        title={methodLabels.length > 0 ? methodLabels.join(" / ") : t("CredentialsSectionTitle")}
+        actions={
+          <button
+            type="button"
+            className="credential-btn credential-btn--primary"
+            disabled={busy}
+            onClick={onSignIn}
+          >
+            {t("ActionSwitchAccount")}
+          </button>
+        }
+      />
+    </ProviderSection>
+  );
+}
+
+/**
+ * Codex-only local usage-history note (moved out of the auth-sources zone —
+ * TASK-021 item 2). Both strings are unchanged upstream copy; only their
+ * location changed, since local history tracking is not an auth source.
+ */
+function CodexUsageHistoryNote({
+  t,
+}: {
+  t: ReturnType<typeof useLocale>["t"];
+}) {
+  return (
+    <ProviderSection title={t("ProviderHistoricalTracking")}>
+      <div className="provider-detail-helper">{t("ProviderCodexHistoryHelp")}</div>
+      <div className="provider-detail-helper">{t("CredsOpenAiHistoryHelp")}</div>
+    </ProviderSection>
   );
 }
 
@@ -741,8 +914,6 @@ function CredentialsDispatcher({
       return <KiroCreds t={t} />;
     case "claude":
       return <ClaudeCreds t={t} />;
-    case "codex":
-      return <OpenAiExtras providerId={providerId} t={t} />;
     case "openaiapi":
       return <OpenAiExtras providerId={providerId} t={t} />;
     case "litellm":

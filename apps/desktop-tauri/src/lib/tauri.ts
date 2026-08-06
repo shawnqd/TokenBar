@@ -11,6 +11,7 @@ import type {
   CookieFilePreviewBridge,
   Language,
   LocaleStrings,
+  ProviderAuthCapabilitiesBridge,
   ProviderCatalogEntry,
   ProviderChartData,
   ProviderDetail,
@@ -386,6 +387,22 @@ export function getProviderCookieSourceOptions(
 
 export function getProviderRegionOptions(providerId: string): Promise<RegionOption[]> {
   return invoke<RegionOption[]>("get_provider_region_options", { providerId });
+}
+
+/**
+ * TASK-021 item 2 — read-only per-provider auth capability. Requires the
+ * backend `get_provider_auth_capabilities` command to be registered in
+ * `main.rs`; callers must treat a failure as "capabilities unknown" rather
+ * than surfacing an error, since this only refines which entries the auth
+ * block renders.
+ */
+export function getProviderAuthCapabilities(
+  providerId: string,
+): Promise<ProviderAuthCapabilitiesBridge> {
+  return invoke<ProviderAuthCapabilitiesBridge>(
+    "get_provider_auth_capabilities",
+    { providerId },
+  );
 }
 
 export function setProviderCookieSource(providerId: string, source: string): Promise<void> {

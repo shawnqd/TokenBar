@@ -849,6 +849,20 @@ export interface RegionOption {
   label: string;
 }
 
+/**
+ * Per-provider authentication capability, mirroring the shared `Provider`
+ * trait (`supports_oauth` / `supports_cli` / `supports_web`) plus the
+ * API-key catalog and `ProviderId::cookie_domain()`. Drives which entries the
+ * Settings → Providers "认证来源" block offers — read-only, presentation only.
+ */
+export interface ProviderAuthCapabilitiesBridge {
+  supportsOAuth: boolean;
+  supportsCli: boolean;
+  supportsWeb: boolean;
+  supportsApiKey: boolean;
+  hasCookieDomain: boolean;
+}
+
 // ── Phase 6d — credential detection ──────────────────────────────────
 
 export interface GeminiCliStatus {

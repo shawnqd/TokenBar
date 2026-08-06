@@ -507,3 +507,77 @@ pub fn get_provider_cookie_source_options(
 pub fn get_provider_region_options(provider_id: String) -> Result<Vec<RegionOption>, String> {
     Ok(region_options_for(&provider_id))
 }
+
+// ── TASK-021 item 2 — per-provider auth capability ────────────────────
+
+/// Read-only summary of which authentication surfaces this provider's
+/// `Provider` trait implementation actually exposes. The Settings →
+/// Providers detail pane uses this to decide which entries belong in its
+/// "认证来源" (authentication sources) block. This is presentation data only
+/// — it mirrors existing trait methods and catalogs, and changes nothing
+/// about how any credential, cookie, or login flow works.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ProviderAuthCapabilities {
+    /// `Provider::supports_oauth()` — a real OAuth/device sign-in flow exists.
+    pub supports_oauth: bool,
+    /// `Provider::supports_cli()` — a local CLI-stored credential probe exists.
+    pub supports_cli: bool,
+    /// `Provider::supports_web()` — the shared `SourceMode::Web` cookie fetch
+    /// path exists (independent of whether a cookie *import* domain exists).
+    pub supports_web: bool,
+    /// This provider id has an entry in the API-key catalog
+    /// (`codexbar::settings::get_api_key_providers`), i.e. `ApiKeySection`
+    /// would render a real control rather than self-hiding.
+    pub supports_api_key: bool,
+    /// `ProviderId::cookie_domain()` is `Some` — browser cookie import is
+    /// offered for this provider.
+    pub has_cookie_domain: bool,
+}
+
+#[tauri::command]
+pub fn get_provider_auth_capabilities(
+    provider_id: String,
+) -> Result<ProviderAuthCapabilities, String> {
+    let id = parse_provider_arg(&provider_id)?;
+    let provider = instantiate_provider(id);
+    let supports_api_key = codexbar::settings::get_api_key_providers()
+        .into_iter()
+        .any(|info| info.id == id);
+    Ok(ProviderAuthCapabilities {
+        supports_oauth: provider.supports_oauth(),
+        supports_cli: provider.supports_cli(),
+        supports_web: provider.supports_web(),
+        supports_api_key,
+        has_cookie_domain: id.cookie_domain().is_some(),
+    })
+}
+
+#[cfg(test)]
+mod auth_capability_tests {
+    use super::get_provider_auth_capabilities;
+
+    #[test]
+    fn codex_supports_oauth_and_cli_but_not_web() {
+        let caps = get_provider_auth_capabilities("codex".to_string()).unwrap();
+        assert!(caps.supports_oauth);
+        assert!(caps.supports_cli);
+        assert!(!caps.supports_web);
+        assert!(caps.has_cookie_domain);
+    }
+
+    #[test]
+    fn cookie_only_provider_does_not_advertise_oauth_or_cli() {
+        // Cursor only supports the shared cookie/web fetch path.
+        let caps = get_provider_auth_capabilities("cursor".to_string()).unwrap();
+        assert!(!caps.supports_oauth);
+        assert!(!caps.supports_cli);
+        assert!(caps.supports_web);
+        assert!(caps.has_cookie_domain);
+    }
+
+    #[test]
+    fn unknown_provider_id_is_rejected() {
+        assert!(get_provider_auth_capabilities("not-a-provider".to_string()).is_err());
+    }
+}

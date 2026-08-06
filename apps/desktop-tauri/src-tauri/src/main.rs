@@ -17,6 +17,8 @@ mod surface;
 mod surface_target;
 mod taskbar_entries;
 #[cfg(windows)]
+mod taskbar_menu;
+#[cfg(windows)]
 mod taskbar_text;
 #[cfg(windows)]
 mod taskbar_widget;
@@ -204,6 +206,7 @@ fn main() {
             commands::set_provider_cookie_source,
             commands::get_provider_cookie_source,
             commands::get_provider_cookie_source_options,
+            commands::get_provider_auth_capabilities,
             commands::set_provider_region,
             commands::get_provider_region,
             commands::get_provider_region_options,

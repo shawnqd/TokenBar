@@ -769,7 +769,7 @@ fn max_metric_percent<const N: usize>(values: [Option<f64>; N]) -> Option<f64> {
 /// (provider + window) rows drive the hover text. Otherwise the historical
 /// per-enabled-provider primary line is used. Raw secrets/long errors are
 /// truncated; auth/network categories are not dumped as full payloads.
-fn build_tooltip(
+pub(crate) fn build_tooltip(
     snapshots: &[crate::commands::ProviderUsageSnapshot],
     lang: codexbar::settings::Language,
     tooltip_entries: &[codexbar::settings::TaskbarEntry],

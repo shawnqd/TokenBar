@@ -229,6 +229,94 @@ describe("MenuCard", () => {
     expect(screen.queryByText("ChatGPT Plus")).not.toBeInTheDocument();
   });
 
+  // Package item 4: 三个档位使用同一套预测视觉语言，简洁和平衡只减少信息密度，
+  // 不能出现详细模式有预测、其他模式只剩空白的情况。
+  //
+  // The fixture is the shape Claude and Codex actually ship: the hero window is
+  // the 5-hour one and the *weekly* window — the only one `pace` measures — sits
+  // in `secondary`. That is precisely the case the previous implementation
+  // dropped, because it attached the forecast to the hero row or not at all.
+  function weeklySecondPaced() {
+    const snapshot = provider(null, 78);
+    snapshot.primaryLabel = "Session";
+    snapshot.primary = rateWindow(78, { windowMinutes: 5 * 60 });
+    snapshot.secondaryLabel = "Weekly";
+    snapshot.secondary = rateWindow(52, {
+      windowMinutes: 7 * 24 * 60,
+      kind: "weekly",
+      resetsAt: "2026-05-30T00:00:00Z",
+    });
+    snapshot.pace = {
+      stage: "ahead",
+      deltaPercent: 12.3,
+      willLastToReset: true,
+      etaSeconds: null,
+      expectedUsedPercent: 40,
+      actualUsedPercent: 52.3,
+      speedMultiplierToReset: 1.5,
+    };
+    return snapshot;
+  }
+
+  it.each(["detailed", "compact", "minimal"] as const)(
+    "renders the weekly forecast in the %s tier",
+    async (densityMode) => {
+      const { container } = renderCard(weeklySecondPaced(), { densityMode });
+
+      await screen.findByText("Claude");
+      const forecast = container.querySelector(".menu-metric__forecast");
+      expect(forecast).toBeInTheDocument();
+      // Same words in every tier, not a tier-specific paraphrase.
+      expect(forecast).toHaveTextContent("12.3% in deficit");
+      expect(forecast).toHaveTextContent("Enough to last until the next reset");
+      expect(container.querySelector(".menu-metric__forecast--unavailable")).toBeNull();
+    },
+  );
+
+  it("hangs the forecast off the weekly row, not the hero, in every tier", async () => {
+    const detailed = renderCard(weeklySecondPaced(), { densityMode: "detailed" });
+    await screen.findByText("Claude");
+    // Detailed draws both windows as quota blocks; the forecast belongs to the
+    // second one (weekly), never the first (5-hour).
+    const blocks = detailed.container.querySelectorAll(".provider-quota");
+    expect(blocks.length).toBeGreaterThan(1);
+    expect(blocks[0].querySelector(".menu-metric__forecast")).toBeNull();
+    detailed.unmount();
+
+    const compact = renderCard(weeklySecondPaced(), { densityMode: "compact" });
+    await screen.findByText("Claude");
+    // Compact keeps the weekly window as its secondary row, so the forecast
+    // rides along with it rather than annotating the 5-hour hero.
+    expect(
+      compact.container.querySelector(".menu-card__compact-secondary .menu-metric__forecast"),
+    ).toBeInTheDocument();
+    compact.unmount();
+
+    const minimal = renderCard(weeklySecondPaced(), { densityMode: "minimal" });
+    await screen.findByText("Claude");
+    // Minimal draws one quota row only, so the weekly forecast has no row to
+    // sit under and gets the standalone block instead — with no label, because
+    // the summary line above already names the weekly window.
+    const orphan = minimal.container.querySelector(".menu-card__orphan-forecast");
+    expect(orphan).toBeInTheDocument();
+    expect(orphan?.querySelector(".menu-card__orphan-forecast-label")).toBeNull();
+    expect(minimal.container.querySelector(".provider-quota .menu-metric__forecast")).toBeNull();
+  });
+
+  it("drops the tier-specific pace chip and segment in favour of the forecast", async () => {
+    const compact = renderCard(weeklySecondPaced(), { densityMode: "compact" });
+    await screen.findByText("Claude");
+    // The old compact chip printed a bare signed delta with a stage caption.
+    expect(compact.container.querySelector('[data-pace-direction]')).toBeNull();
+    expect(screen.queryByText("+12.3%")).not.toBeInTheDocument();
+    compact.unmount();
+
+    const minimal = renderCard(weeklySecondPaced(), { densityMode: "minimal" });
+    await screen.findByText("Claude");
+    expect(minimal.container.querySelector('[data-pace-direction]')).toBeNull();
+    expect(screen.queryByText("+12.3%")).not.toBeInTheDocument();
+  });
+
   it("scales the detailed provider mark to the reference proportion", async () => {
     const { container } = renderCard(provider(null, 35), {
       densityMode: "detailed",

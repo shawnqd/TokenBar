@@ -14,15 +14,16 @@ interface Props {
 }
 
 /**
- * OpenAI/Codex-specific detail help.
+ * Bespoke "extra config" credential row for the OpenAI-shaped providers that
+ * expose a single workspace/project id, base URL, or gateway field
+ * (openaiapi, litellm, devin, opencodego, zed, sub2api, wayfinder).
  *
- * Port of the help strings below the `ProviderId::Codex` toggles in
- * `rust/src/native_ui/preferences.rs::render_provider_detail_panel` (~6625).
- * The toggles themselves (`codex_historical_tracking`,
- * `codex_openai_web_extras`) are not yet persisted through
- * `update_settings` in the Tauri bridge, so this component shows the
- * upstream hint copy only. The toggles will be surfaced once they join
- * the SettingsUpdate bridge (tracked alongside Phase 6e token-accounts).
+ * Codex used to fall through this component's no-config branch and render
+ * only usage-history help text here, which made its 认证来源 (auth sources)
+ * block look empty (TASK-021 item 2). Codex has its own real auth entry now
+ * (see `ProviderSignInEntry` in `ProviderDetailPane.tsx`) and no longer
+ * dispatches here; the no-config branch below is a defensive fallback only
+ * and renders nothing.
  */
 export function OpenAiExtras({ providerId = "codex", t }: Props) {
   const [projectId, setProjectId] = useState("");
@@ -104,16 +105,12 @@ export function OpenAiExtras({ providerId = "codex", t }: Props) {
     );
   }
 
-  return (
-    <ProviderSection title={t("CredentialsSectionTitle")}>
-      <div className="provider-detail-helper">
-        {t("ProviderCodexHistoryHelp")}
-      </div>
-      <div className="provider-detail-helper">
-        {t("CredsOpenAiHistoryHelp")}
-      </div>
-    </ProviderSection>
-  );
+  // No bespoke field is defined for this provider id — nothing to render.
+  // (Historically this rendered the Codex usage-history help text; that copy
+  // now lives next to `StatsSection` — see `CodexUsageHistoryNote` in
+  // `ProviderDetailPane.tsx` — since it describes local history tracking,
+  // not an authentication source.)
+  return null;
 }
 
 function extraConfig(

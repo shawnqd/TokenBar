@@ -675,6 +675,7 @@ locale_keys! {
     TaskbarWidgetSystemStyleHint,
     TaskbarContextMenuSection,
     TaskbarContextMenuHelper,
+    TaskbarContextMenuShowStrip,
     TaskbarTooltipSection,
     TaskbarTooltipHelper,
     TaskbarTooltipUseStripHint,

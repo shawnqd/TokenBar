@@ -553,26 +553,11 @@ function displayPlanName(planName: string | null): string | null {
   return planName;
 }
 
-function paceStageKey(stage: PaceSnapshot["stage"]): LocaleKey {
-  switch (stage) {
-    case "on_track":
-      return "DetailPaceOnTrack";
-    case "slightly_ahead":
-      return "DetailPaceSlightlyAhead";
-    case "ahead":
-      return "DetailPaceAhead";
-    case "far_ahead":
-      return "DetailPaceFarAhead";
-    case "slightly_behind":
-      return "DetailPaceSlightlyBehind";
-    case "behind":
-      return "DetailPaceBehind";
-    case "far_behind":
-      return "DetailPaceFarBehind";
-    default:
-      return "DetailPaceOnTrack";
-  }
-}
+// `paceStageKey` lived here to caption the compact tier's pace chip with a
+// stage word ("略微领先" …). That chip was the divergent forecast language item
+// 4 removes, and `paceStateOf` — which the shared forecast row uses — collapses
+// the same stages into the three states the row actually renders. The
+// DetailPace* keys stay in the locale files for the Providers detail view.
 
 /** Runway line shared by the legacy pace section and the tray density-tier
  * pace row — the weekly usage forecast merged in: status (icon + text) on
@@ -835,11 +820,22 @@ function CompactSecondaryQuota({
   title,
   rate,
   display,
+  pace = null,
+  showForecast = false,
 }: {
   title: string;
   rate: RateWindowSnapshot;
   display: QuotaDisplayContext;
+  /** The provider's weekly pace snapshot, or null when it has none. */
+  pace?: PaceSnapshot | null;
+  /**
+   * Render the merged weekly forecast under this row. Compact usually carries
+   * the weekly window here rather than in the hero, so this is where the tier
+   * meets item 4's "same forecast language in all three tiers" requirement.
+   */
+  showForecast?: boolean;
 }) {
+  const { t } = useLocale();
   const percent = quotaPercentDisplay(rate, display);
 
   return (
@@ -851,6 +847,9 @@ function CompactSecondaryQuota({
       <div className="menu-card__compact-secondary-track">
         <span style={{ width: `${percent.fillPercent}%` }} />
       </div>
+      {showForecast && !rate.isInformational && !rate.isExhausted && (
+        <WeeklyForecast forecast={quotaForecastDisplay(pace, rate)} t={t} />
+      )}
     </div>
   );
 }
@@ -1036,6 +1035,23 @@ export default function MenuCard({
   const primaryMetric = metrics[0] ?? null;
   const secondaryMetric = metrics[1] ?? null;
   const hasPaceForDensity = !provider.error && !!provider.pace;
+
+  // Which quota row inside THIS tier renders the weekly forecast.
+  //
+  // Detailed draws every metric, so the weekly row always owns it. Compact
+  // draws two rows and minimal draws one, so the weekly window may not be
+  // drawn at all — then no row owns the forecast and `densityOrphanForecast`
+  // below renders it standalone. Package item 4: the three tiers share one
+  // forecast language, and none of them may go blank on pace.
+  const densityForecastRowId = (() => {
+    if (!weeklyMetricId) return null;
+    if (densityMode === "detailed") return weeklyMetricId;
+    const drawn =
+      densityMode === "compact"
+        ? [primaryMetric?.id, secondaryMetric?.id]
+        : [primaryMetric?.id];
+    return drawn.includes(weeklyMetricId) ? weeklyMetricId : null;
+  })();
   const densityLocalUsageLead =
     !provider.error && chartData?.localUsage
       ? resolveLocalUsageLead(localUsagePeriod, chartData.localUsage, t)
@@ -1098,7 +1114,7 @@ export default function MenuCard({
       // minimal also attach the forecast when the hero row *is* the weekly
       // window so they never go blank on pace (TASK-021 item 4). Compact/
       // minimal still reduce surrounding density elsewhere.
-      showForecast={primaryMetric.id === weeklyMetricId}
+      showForecast={primaryMetric.id === densityForecastRowId}
     />
   ) : balance ? (
     <ProviderBalanceBlock balance={balance} showTitle={false} />
@@ -1158,6 +1174,8 @@ export default function MenuCard({
               title={secondaryMetric.label}
               rate={secondaryMetric.snap}
               display={display}
+              pace={provider.pace}
+              showForecast={secondaryMetric.id === densityForecastRowId}
             />
           )}
         </section>
@@ -1260,21 +1278,11 @@ export default function MenuCard({
         </div>,
       );
     }
-    if (hasPaceForDensity && provider.pace) {
-      const ahead = provider.pace.deltaPercent >= 0;
-      chips.push(
-        <div className="menu-card__chip" key="pace">
-          <span
-            className="menu-card__chip-value"
-            data-pace-direction={ahead ? "ahead" : "behind"}
-          >
-            {ahead ? "+" : ""}
-            {provider.pace.deltaPercent.toFixed(1)}%
-          </span>
-          <span className="menu-card__chip-caption">{t(paceStageKey(provider.pace.stage))}</span>
-        </div>,
-      );
-    }
+    // No pace chip. It used to print a bare signed delta ("+12.3%" + stage
+    // caption) — a second, divergent way of saying what the weekly forecast
+    // row now says in the language all three tiers share (item 4: 同一套预测
+    // 视觉语言). Detailed dropped its duplicate pace summary for the same
+    // reason; see the note in `densityInsightsZone`.
     if (chips.length === 0) return null;
     return <div className="menu-card__chip-row">{chips}</div>;
   })();
@@ -1296,21 +1304,34 @@ export default function MenuCard({
         </span>,
       );
     }
-    if (hasPaceForDensity && provider.pace) {
-      const ahead = provider.pace.deltaPercent >= 0;
-      segments.push(
-        <span
-          className="menu-card__minimal-segment"
-          data-pace-direction={ahead ? "ahead" : "behind"}
-          key="pace"
-        >
-          {ahead ? "+" : ""}
-          {provider.pace.deltaPercent.toFixed(1)}%
-        </span>,
-      );
-    }
+    // No bare pace segment here either — same reason as the compact chip row.
     if (segments.length === 0) return null;
     return <div className="menu-card__minimal-line">{segments}</div>;
+  })();
+
+  // The weekly window is not drawn as a quota row in this tier (minimal shows
+  // only the hero, so a provider whose weekly sits in `secondary` — Claude and
+  // Codex both do — would otherwise lose the forecast entirely, which is
+  // exactly the "详细模式有预测、其他模式只剩空白" case item 4 forbids).
+  //
+  // It names the window it measures, because without the name it reads as a
+  // statement about the hero row above — the misattribution `weeklyMetricId`
+  // exists to prevent. The one exception is minimal's summary line, which
+  // already prints that window's label and percentage right above.
+  const densityOrphanForecast = (() => {
+    if (!densityMode || densityMode === "detailed") return null;
+    if (!weeklyMetricId || densityForecastRowId) return null;
+    const weekly = metrics.find((m) => m.id === weeklyMetricId);
+    if (!weekly || weekly.snap.isInformational || weekly.snap.isExhausted) return null;
+    const namedAbove = densityMode === "minimal" && secondaryMetric?.id === weeklyMetricId;
+    return (
+      <div className="menu-card__orphan-forecast">
+        {!namedAbove && (
+          <span className="menu-card__orphan-forecast-label">{weekly.label}</span>
+        )}
+        <WeeklyForecast forecast={quotaForecastDisplay(provider.pace, weekly.snap)} t={t} />
+      </div>
+    );
   })();
 
   return (
@@ -1355,6 +1376,7 @@ export default function MenuCard({
           {densityInsightsZone}
           {densityChipRow}
           {densityMinimalSummaryLine}
+          {densityOrphanForecast}
         </div>
       )}
 

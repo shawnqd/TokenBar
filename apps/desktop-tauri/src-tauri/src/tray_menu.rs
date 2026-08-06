@@ -282,7 +282,7 @@ mod tests {
                 "Refresh All",
                 "Open Tray Panel",
                 "Open Dashboard",
-                "Show Mini Status Bar",
+                "Show Floating Bar",
                 "Providers",
                 "Settings...",
                 "About CodexBar",
@@ -361,7 +361,10 @@ mod tests {
             .find(|e| e.id.as_deref() == Some("toggle_float_bar"))
             .expect("float bar toggle present");
         assert_eq!(toggle.checked, Some(true));
-        assert_eq!(toggle.label, "Show Mini Status Bar");
+        // "Floating Bar", not "Mini Status Bar": this toggle drives
+        // `float_bar_enabled`, and item 7 gave "mini status bar" to the native
+        // taskbar strip, which is a different surface with its own toggle.
+        assert_eq!(toggle.label, "Show Floating Bar");
 
         let menu_off = build_tray_menu_with(
             &sample_provider_catalog(),
