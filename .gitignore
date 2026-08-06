@@ -107,3 +107,7 @@ codexbar-desktop-tauri.exe
 # Local git worktrees
 .worktrees/
 .atl/
+
+# Local Playwright CLI capture output (console logs from browser QA runs —
+# can contain page data from signed-in provider sessions, never commit).
+.playwright-cli/
