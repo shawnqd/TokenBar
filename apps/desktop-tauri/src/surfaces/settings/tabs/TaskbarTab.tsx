@@ -27,6 +27,7 @@ import type {
 } from "../../../types/bridge";
 import type { TabProps } from "../../Settings";
 import BinaryChoiceField from "../BinaryChoiceField";
+import TaskbarEntryList from "../TaskbarEntryList";
 
 /** OpenType `wght` axis bounds. */
 
@@ -92,17 +93,6 @@ export default function TaskbarTab({ settings, set, saving }: TabProps) {
 
   const commitEntries = (next: TaskbarEntry[]) =>
     set({ taskbarWidgetEntries: next });
-  const replaceEntry = (index: number, patch: Partial<TaskbarEntry>) =>
-    commitEntries(
-      entries.map((entry, i) => (i === index ? { ...entry, ...patch } : entry)),
-    );
-  const moveEntry = (index: number, delta: number) => {
-    const target = index + delta;
-    if (target < 0 || target >= entries.length) return;
-    const next = [...entries];
-    [next[index], next[target]] = [next[target], next[index]];
-    commitEntries(next);
-  };
   const [families, setFamilies] = useState<TaskbarFontFamily[]>([]);
   const [showAllFonts, setShowAllFonts] = useState(false);
   const [availability, setAvailability] = useState<Record<
@@ -410,78 +400,16 @@ export default function TaskbarTab({ settings, set, saving }: TabProps) {
         <p className="settings-section__hint">{t("TaskbarTooltipHelper")}</p>
         <p className="settings-section__hint">{t("TaskbarTooltipUseStripHint")}</p>
         <div className="settings-section__group">
-          <ol className="taskbar-entries">
-            {(settings.taskbarTooltipEntries ?? []).map((entry, index) => (
-              <li
-                key={`tip-${entry.providerId}-${entry.window}-${index}`}
-                className="taskbar-entries__row"
-              >
-                <span className="taskbar-entries__index">{index + 1}</span>
-                <Select
-                  value={entry.providerId}
-                  disabled={saving || !enabled}
-                  options={providerChoices.map((choice) => ({
-                    value: choice.id,
-                    label: choice.label,
-                  }))}
-                  onChange={(value) => {
-                    const next = [...(settings.taskbarTooltipEntries ?? [])];
-                    next[index] = { ...next[index], providerId: value };
-                    set({ taskbarTooltipEntries: next });
-                  }}
-                />
-                <Select
-                  value={entry.window}
-                  disabled={saving || !enabled}
-                  options={WINDOW_KINDS.map((kind) => ({
-                    value: kind,
-                    label: t(WINDOW_LABEL_KEYS[kind]),
-                  }))}
-                  onChange={(value) => {
-                    const next = [...(settings.taskbarTooltipEntries ?? [])];
-                    next[index] = {
-                      ...next[index],
-                      window: value as TaskbarWindowKind,
-                    };
-                    set({ taskbarTooltipEntries: next });
-                  }}
-                />
-                <button
-                  type="button"
-                  className="is-destructive"
-                  aria-label={t("TaskbarEntriesRemove")}
-                  disabled={saving || !enabled}
-                  onClick={() =>
-                    set({
-                      taskbarTooltipEntries: (
-                        settings.taskbarTooltipEntries ?? []
-                      ).filter((_, i) => i !== index),
-                    })
-                  }
-                >
-                  ✕
-                </button>
-              </li>
-            ))}
-          </ol>
-          <button
-            type="button"
-            disabled={
-              saving ||
-              !enabled ||
-              (settings.taskbarTooltipEntries ?? []).length >= MAX_ENTRIES
-            }
-            onClick={() =>
-              set({
-                taskbarTooltipEntries: [
-                  ...(settings.taskbarTooltipEntries ?? []),
-                  { providerId: TASKBAR_PROVIDER_AUTO, window: "session" },
-                ],
-              })
-            }
-          >
-            {t("TaskbarEntriesAdd")}
-          </button>
+          <TaskbarEntryList
+            entries={settings.taskbarTooltipEntries ?? []}
+            providerChoices={providerChoices}
+            windowOptionsFor={windowOptionsFor}
+            windowLabelKeys={WINDOW_LABEL_KEYS}
+            newEntryWindow="session"
+            maxEntries={MAX_ENTRIES}
+            disabled={saving || !enabled}
+            onChange={(next) => set({ taskbarTooltipEntries: next })}
+          />
         </div>
       </section>
 
@@ -499,87 +427,20 @@ export default function TaskbarTab({ settings, set, saving }: TabProps) {
         </div>
         <p className="settings-section__hint">{t("TaskbarEntriesHelper")}</p>
         <div className="settings-section__group">
-          <ol className="taskbar-entries">
-          {entries.map((entry, index) => (
-            <li
-              key={`${entry.providerId}-${entry.window}-${index}`}
-              className="taskbar-entries__row"
-              /* Entries past the strip's height still render here, marked, so
-                 the user can see what is configured but not displayed rather
-                 than wondering why a line never appears. */
-              data-hidden={index >= VISIBLE_LINES ? "true" : undefined}
-            >
-              <span className="taskbar-entries__index">{index + 1}</span>
-              <Select
-                value={entry.providerId}
-                disabled={saving || !enabled}
-                options={providerChoices.map((choice) => ({
-                  value: choice.id,
-                  label: choice.label,
-                }))}
-                onChange={(value) => replaceEntry(index, { providerId: value })}
-              />
-              <Select
-                value={entry.window}
-                disabled={saving || !enabled}
-                options={windowOptionsFor(entry).map((kind) => ({
-                  value: kind,
-                  label: t(WINDOW_LABEL_KEYS[kind]),
-                }))}
-                onChange={(value) =>
-                  replaceEntry(index, { window: value as TaskbarWindowKind })
-                }
-              />
-              {index >= VISIBLE_LINES && (
-                <span className="taskbar-entries__hidden-note">
-                  {t("TaskbarEntriesHidden")}
-                </span>
-              )}
-              <span className="taskbar-entries__actions">
-                <button
-                  type="button"
-                  aria-label={t("TaskbarEntriesMoveUp")}
-                  disabled={saving || !enabled || index === 0}
-                  onClick={() => moveEntry(index, -1)}
-                >
-                  ↑
-                </button>
-                <button
-                  type="button"
-                  aria-label={t("TaskbarEntriesMoveDown")}
-                  disabled={saving || !enabled || index === entries.length - 1}
-                  onClick={() => moveEntry(index, 1)}
-                >
-                  ↓
-                </button>
-                <button
-                  type="button"
-                  className="is-destructive"
-                  aria-label={t("TaskbarEntriesRemove")}
-                  disabled={saving || !enabled || entries.length <= 1}
-                  onClick={() =>
-                    commitEntries(entries.filter((_, i) => i !== index))
-                  }
-                >
-                  ✕
-                </button>
-              </span>
-            </li>
-          ))}
-          </ol>
-          <button
-            type="button"
-            className="taskbar-entries__add"
-            disabled={saving || !enabled || entries.length >= MAX_ENTRIES}
-            onClick={() =>
-              commitEntries([
-                ...entries,
-                { providerId: TASKBAR_PROVIDER_AUTO, window: "weekly" },
-              ])
-            }
-          >
-            + {t("TaskbarEntriesAdd")}
-          </button>
+          <TaskbarEntryList
+            entries={entries}
+            providerChoices={providerChoices}
+            windowOptionsFor={windowOptionsFor}
+            windowLabelKeys={WINDOW_LABEL_KEYS}
+            newEntryWindow="weekly"
+            maxEntries={MAX_ENTRIES}
+            hiddenFrom={VISIBLE_LINES}
+            /* The strip always paints at least one line; an empty list would
+               make it disappear with no way back from this page. */
+            minEntries={1}
+            disabled={saving || !enabled}
+            onChange={commitEntries}
+          />
         </div>
       </section>
 

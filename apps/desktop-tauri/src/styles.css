@@ -8422,6 +8422,13 @@ body:has(.tray-panel-reveal) {
    the strip renders only the first `MAX_VISIBLE_LINES`, so the index says what
    will actually appear, and rows past that are marked rather than hidden so a
    configured-but-invisible entry is never a mystery. */
+/* Sections that explain themselves in two sentences put each on its own line;
+   without this the second hint butts against the first and reads as a single
+   wrapped paragraph. */
+.settings-section__hint + .settings-section__hint {
+  margin-top: 4px;
+}
+
 .taskbar-entries {
   display: flex;
   flex-direction: column;
@@ -8435,6 +8442,10 @@ body:has(.tray-panel-reveal) {
   align-items: center;
   gap: 8px;
   padding: 7px 10px;
+  /* Reserve the actions cluster's width on every row, including the ones whose
+     buttons are disabled, so the two dropdown columns keep the same right edge
+     all the way down. */
+  min-height: 42px;
 }
 
 .taskbar-entries__row + .taskbar-entries__row {
@@ -8473,10 +8484,23 @@ body:has(.tray-panel-reveal) {
 }
 
 /* Let each row's two dropdowns share the free width instead of hugging their
-   content, so the rows line up into columns. */
+   content, so the rows line up into columns.
+   Not an even split: the provider column carries names like "deepseek" while
+   the window column carries "周" or "5小时", so giving them equal width left
+   the second one mostly empty and pushed the row's controls apart for no
+   reason. 1.5 : 1 with a cap keeps both columns aligned down the list without
+   the window select stretching across half the row. */
 .taskbar-entries__row > .dropdown {
   flex: 1 1 0;
   min-width: 0;
+}
+
+.taskbar-entries__row > .dropdown:nth-of-type(1) {
+  flex-grow: 1.5;
+}
+
+.taskbar-entries__row > .dropdown:nth-of-type(2) {
+  max-width: 210px;
 }
 
 .taskbar-entries__row > .dropdown .dropdown__trigger {
