@@ -170,6 +170,8 @@ pub(super) struct RawSettings {
     taskbar_widget_position: String,
     #[serde(default = "default_taskbar_widget_font_weight")]
     taskbar_widget_font_weight: RawTaskbarWidgetFontWeight,
+    #[serde(default = "default_menu_font_weight")]
+    menu_font_weight: u16,
     #[serde(default = "default_taskbar_widget_content")]
     taskbar_widget_content: String,
     // `Option` so an absent key is distinguishable from an explicitly stored
@@ -215,6 +217,12 @@ fn default_taskbar_widget_position() -> String {
 
 fn default_taskbar_widget_font_weight() -> RawTaskbarWidgetFontWeight {
     RawTaskbarWidgetFontWeight::Numeric(400)
+}
+
+/// Plain `u16`, unlike the taskbar's weight: this key is new, so there is no
+/// legacy `"bold"`/`"normal"` string form on disk to accept.
+fn default_menu_font_weight() -> u16 {
+    300
 }
 
 fn default_taskbar_widget_content() -> String {
@@ -320,6 +328,7 @@ impl Default for RawSettings {
             taskbar_widget_font_weight: RawTaskbarWidgetFontWeight::Numeric(
                 s.taskbar_widget_font_weight,
             ),
+            menu_font_weight: s.menu_font_weight,
             taskbar_widget_content: s.taskbar_widget_content,
             taskbar_widget_entries: Some(s.taskbar_widget_entries),
             taskbar_widget_font_family: s.taskbar_widget_font_family.clone(),
@@ -602,6 +611,7 @@ impl From<RawSettings> for Settings {
                 _ => "notification".to_string(),
             },
             taskbar_widget_font_weight: raw.taskbar_widget_font_weight.normalized(),
+            menu_font_weight: normalize_taskbar_widget_font_weight(raw.menu_font_weight),
             // Absent list: seed from whatever the old single-choice setting said,
             // so upgrading an existing install changes nothing on screen.
             taskbar_widget_entries: normalize_taskbar_entries(

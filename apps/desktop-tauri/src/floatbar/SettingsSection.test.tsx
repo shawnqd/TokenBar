@@ -16,6 +16,7 @@ const settings = {
   floatBarShowCost: false,
   floatBarShowResetInline: false,
   taskbarWidgetEnabled: false,
+  menuFontWeight: 300,
   taskbarWidgetPosition: "notification",
   taskbarWidgetFontWeight: 400,
   taskbarWidgetContent: "usage",

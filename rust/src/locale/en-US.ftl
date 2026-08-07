@@ -767,3 +767,8 @@ FloatBarResetWindowPrimary = Provider default
 TaskbarFontShowAll = Show every installed font
 TaskbarFontVariableTag = continuous weight
 TaskbarFontNoCjkTag = no Chinese
+
+# Right-click menu (shared by the strip and the tray icon).
+ContextMenuSection = Context Menu
+ContextMenuFontWeightHelper = Applies to the right-click menu on the mini status bar and the tray icon.
+FontWeightRegular = Regular

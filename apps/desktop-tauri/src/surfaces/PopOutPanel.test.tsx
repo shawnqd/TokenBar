@@ -164,6 +164,7 @@ function settings(): SettingsSnapshot {
     floatBarShowResetInline: false,
     floatBarResetWindows: ["primary"],
     taskbarWidgetEnabled: false,
+    menuFontWeight: 300,
     taskbarWidgetPosition: "notification",
     taskbarWidgetFontWeight: 400,
     taskbarWidgetContent: "usage",

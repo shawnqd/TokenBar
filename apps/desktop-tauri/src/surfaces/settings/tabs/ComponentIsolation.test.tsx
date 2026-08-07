@@ -37,6 +37,7 @@ const settings = {
     taskbarContextMenuActions: ["open_panel", "refresh", "settings", "quit"],
     taskbarTooltipEntries: [],
   taskbarWidgetEnabled: true,
+  menuFontWeight: 300,
   taskbarWidgetPosition: "notification",
   taskbarWidgetFontWeight: 400,
   taskbarWidgetContent: "usage",

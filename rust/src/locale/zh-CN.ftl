@@ -767,3 +767,8 @@ FloatBarResetWindowPrimary = 服务商默认
 TaskbarFontShowAll = 显示全部已安装字体
 TaskbarFontVariableTag = 连续字重
 TaskbarFontNoCjkTag = 无中文
+
+# Right-click menu (shared by the strip and the tray icon).
+ContextMenuSection = 右键菜单
+ContextMenuFontWeightHelper = 用于小型状态栏和托盘图标的右键菜单。
+FontWeightRegular = 常规

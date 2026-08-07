@@ -767,3 +767,8 @@ FloatBarResetWindowPrimary = Predeterminado del proveedor
 TaskbarFontShowAll = Mostrar todas las fuentes instaladas
 TaskbarFontVariableTag = peso continuo
 TaskbarFontNoCjkTag = sin chino
+
+# Right-click menu (shared by the strip and the tray icon).
+ContextMenuSection = Menú contextual
+ContextMenuFontWeightHelper = Se aplica al menú contextual de la barra de estado compacta y del icono de la bandeja.
+FontWeightRegular = Normal

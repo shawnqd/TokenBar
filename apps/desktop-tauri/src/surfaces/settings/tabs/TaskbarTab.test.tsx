@@ -49,6 +49,7 @@ import type { SettingsSnapshot } from "../../../types/bridge";
 const settings = {
   enabledProviders: ["codex", "grok", "deepseek"],
   taskbarWidgetEnabled: true,
+  menuFontWeight: 300,
   taskbarWidgetPosition: "notification",
   taskbarWidgetFontWeight: 400,
   taskbarWidgetContent: "usage",

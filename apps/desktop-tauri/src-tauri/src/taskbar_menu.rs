@@ -132,10 +132,28 @@ const FONT_SIZE_DIP: i32 = 12;
 /// font, which the user picks for a two-line readout squeezed into the taskbar;
 /// the menu is a separate surface and should not inherit it. The face carries
 /// Latin as well as CJK, so this holds for every locale.
-const FONT_FAMILY: &str = "Microsoft YaHei UI Light";
-/// Kept at 300 to match the named face. If the face is missing, this at least
-/// stops the mapper substituting something heavier than it has to.
-const FONT_WEIGHT: i32 = 300;
+const FONT_FAMILY_LIGHT: &str = "Microsoft YaHei UI Light";
+/// The regular face, used from 350 upward. GDI *can* synthesise bolder, so a
+/// heavier request against this one is honoured.
+const FONT_FAMILY_REGULAR: &str = "Microsoft YaHei UI";
+/// Weights at or below this pick the named Light face. Above it the regular
+/// family is used, because there is no lighter face to name and asking the
+/// mapper for one silently gets you the regular face anyway.
+const LIGHT_FACE_CEILING: u16 = 350;
+
+/// Resolves a configured weight to the `(face, weight)` pair to hand
+/// `CreateFontW`.
+///
+/// Split out and tested because the mapping is where a light request can
+/// silently become a regular one: GDI synthesises bolder but never lighter, so
+/// below the ceiling the *face* has to change, not the weight number.
+fn resolve_font(weight: u16) -> (&'static str, i32) {
+    if weight <= LIGHT_FACE_CEILING {
+        (FONT_FAMILY_LIGHT, 300)
+    } else {
+        (FONT_FAMILY_REGULAR, weight as i32)
+    }
+}
 /// Deliberately modest: a wide floor leaves short labels stranded against the
 /// left column and makes the whole card read as left-heavy.
 const MIN_CARD_WIDTH_DIP: i32 = 148;
@@ -494,7 +512,7 @@ fn surface_is_light() -> bool {
     }
 }
 
-fn measure_text_width(text: &str, font_px: i32, family: &str) -> i32 {
+fn measure_text_width(text: &str, font_px: i32, family: &str, weight: i32) -> i32 {
     let hdc = unsafe { GetDC(0) };
     if hdc == 0 {
         return text.chars().count() as i32 * font_px;
@@ -505,7 +523,7 @@ fn measure_text_width(text: &str, font_px: i32, family: &str) -> i32 {
             0,
             0,
             0,
-            FONT_WEIGHT,
+            weight,
             0,
             0,
             0,
@@ -536,13 +554,13 @@ fn measure_text_width(text: &str, font_px: i32, family: &str) -> i32 {
 }
 
 /// Stacks the rows and returns `(rows, card_width, card_height)`.
-fn lay_out(items: Vec<MenuItem>, m: &Metrics, family: &str) -> (Vec<Row>, i32, i32) {
+fn lay_out(items: Vec<MenuItem>, m: &Metrics, family: &str, weight: i32) -> (Vec<Row>, i32, i32) {
     let mut width = m.min_width;
     for item in &items {
         if item.separator {
             continue;
         }
-        let text_w = measure_text_width(&item.label, m.font_px, family);
+        let text_w = measure_text_width(&item.label, m.font_px, family, weight);
         width = width.max(m.check_col + m.text_gap + text_w + m.pad_right);
     }
 
@@ -796,6 +814,7 @@ struct MenuState {
     metrics: Metrics,
     light: bool,
     family: String,
+    font_weight: i32,
     /// Full window size, card plus shadow margin on all sides.
     size: Size,
     card_w: i32,
@@ -887,8 +906,11 @@ pub fn show(owner: isize, items: Vec<MenuItem>) {
     };
     let metrics = Metrics::new(dpi);
     let light = surface_is_light();
-    let family = FONT_FAMILY.to_string();
-    let (rows, card_w, card_h) = lay_out(items, &metrics, &family);
+    // Read once per open, not per frame: the menu is rebuilt each time it
+    // appears, so a change in Settings takes effect on the next right-click.
+    let (family, weight) = resolve_font(codexbar::settings::Settings::load().menu_font_weight);
+    let family = family.to_string();
+    let (rows, card_w, card_h) = lay_out(items, &metrics, &family, weight);
     let size = Size {
         cx: card_w + metrics.margin * 2,
         cy: card_h + metrics.margin * 2,
@@ -937,6 +959,7 @@ pub fn show(owner: isize, items: Vec<MenuItem>) {
         metrics,
         light,
         family,
+        font_weight: weight,
         size,
         card_w,
         base,
@@ -1046,7 +1069,7 @@ fn render_card() {
     // over the antialiased edge where alpha is fractional.
     unsafe { SetBkMode(state.canvas.hdc, TRANSPARENT_BK) };
     let check_font = create_font(m.check_glyph, 400, "Segoe MDL2 Assets");
-    let text_font = create_font(m.font_px, FONT_WEIGHT, &state.family);
+    let text_font = create_font(m.font_px, state.font_weight, &state.family);
 
     for row in &state.rows {
         if row.item.separator {
@@ -1497,7 +1520,7 @@ mod tests {
     #[test]
     fn rows_stack_without_gaps_and_separators_are_shorter() {
         let m = Metrics::new(96);
-        let (rows, _, card_h) = lay_out(sample_items(), &m, "Segoe UI");
+        let (rows, _, card_h) = lay_out(sample_items(), &m, "Segoe UI", 400);
         assert_eq!(rows.len(), 5);
         for pair in rows.windows(2) {
             assert_eq!(pair[0].top + pair[0].height, pair[1].top);
@@ -1518,8 +1541,8 @@ mod tests {
         let m = Metrics::new(96);
         let unchecked = vec![MenuItem::action(1, "A".repeat(40))];
         let checked = vec![MenuItem::action(1, "A".repeat(40)).checked(true)];
-        let (_, plain_w, _) = lay_out(unchecked, &m, "Segoe UI");
-        let (_, checked_w, _) = lay_out(checked, &m, "Segoe UI");
+        let (_, plain_w, _) = lay_out(unchecked, &m, "Segoe UI", 400);
+        let (_, checked_w, _) = lay_out(checked, &m, "Segoe UI", 400);
         assert_eq!(plain_w, checked_w);
     }
 
@@ -1623,7 +1646,7 @@ mod tests {
     #[test]
     fn separator_rows_are_never_hit_targets() {
         let m = Metrics::new(96);
-        let (rows, ..) = lay_out(sample_items(), &m, "Segoe UI");
+        let (rows, ..) = lay_out(sample_items(), &m, "Segoe UI", 400);
         let separator = &rows[3];
         let hit = rows.iter().position(|row| {
             !row.item.separator
@@ -1632,5 +1655,19 @@ mod tests {
                 && separator.top < row.top + row.height
         });
         assert_eq!(hit, None);
+    }
+
+    /// The lever that actually lightens the labels is the *face*, not the
+    /// weight number: GDI synthesises bolder but never lighter, so asking the
+    /// regular family for 300 can legitimately come back regular.
+    #[test]
+    fn light_weights_pick_the_light_face() {
+        assert_eq!(resolve_font(100), (FONT_FAMILY_LIGHT, 300));
+        assert_eq!(resolve_font(300), (FONT_FAMILY_LIGHT, 300));
+        assert_eq!(resolve_font(350), (FONT_FAMILY_LIGHT, 300));
+        // Above the ceiling the number is honoured, because bolder is
+        // something GDI can actually produce.
+        assert_eq!(resolve_font(400), (FONT_FAMILY_REGULAR, 400));
+        assert_eq!(resolve_font(700), (FONT_FAMILY_REGULAR, 700));
     }
 }

@@ -83,6 +83,7 @@ describe("Language type", () => {
       taskbarWidgetEnabled: false,
       taskbarWidgetPosition: "notification",
       taskbarWidgetFontWeight: 400,
+      menuFontWeight: 300,
       taskbarWidgetContent: "usage",
       taskbarWidgetEntries: [
         { providerId: "auto", window: "session" },

@@ -255,6 +255,15 @@ pub struct Settings {
     #[serde(default = "default_taskbar_widget_font_weight")]
     pub taskbar_widget_font_weight: u16,
 
+    /// Stroke weight for the self-drawn right-click menu's labels.
+    ///
+    /// Separate from [`taskbar_widget_font_weight`] on purpose: that one is
+    /// chosen for a two-line readout squeezed into the taskbar, and the menu is
+    /// a different surface with different legibility constraints. Shares the
+    /// same clamp, so the two stay comparable.
+    #[serde(default = "default_menu_font_weight")]
+    pub menu_font_weight: u16,
+
     /// DirectWrite font family for the taskbar strip.
     ///
     /// Must be a real installed family; the settings UI populates the choices
@@ -377,6 +386,12 @@ fn default_taskbar_widget_position() -> String {
 
 fn default_taskbar_widget_font_weight() -> u16 {
     400
+}
+
+/// Light. The menu is a floating card read at a glance, not a dense readout,
+/// and the Windows flyouts it sits next to are lighter than 400.
+fn default_menu_font_weight() -> u16 {
+    300
 }
 
 /// Clamp a taskbar weight to the OpenType `wght` axis range.
@@ -744,6 +759,7 @@ impl Default for Settings {
             taskbar_widget_enabled: false,
             taskbar_widget_position: default_taskbar_widget_position(),
             taskbar_widget_font_weight: default_taskbar_widget_font_weight(),
+            menu_font_weight: default_menu_font_weight(),
             taskbar_widget_font_family: default_taskbar_widget_font_family(),
             taskbar_widget_content: default_taskbar_widget_content(),
             taskbar_widget_entries: default_taskbar_widget_entries(),

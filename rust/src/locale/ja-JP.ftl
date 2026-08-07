@@ -767,3 +767,8 @@ FloatBarResetWindowPrimary = プロバイダー既定
 TaskbarFontShowAll = インストール済みフォントをすべて表示
 TaskbarFontVariableTag = 連続ウェイト
 TaskbarFontNoCjkTag = 中国語なし
+
+# Right-click menu (shared by the strip and the tray icon).
+ContextMenuSection = コンテキストメニュー
+ContextMenuFontWeightHelper = ミニステータスバーとトレイアイコンの右クリックメニューに適用されます。
+FontWeightRegular = 標準

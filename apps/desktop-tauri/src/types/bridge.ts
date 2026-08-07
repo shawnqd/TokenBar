@@ -335,6 +335,9 @@ export interface SettingsSnapshot {
   /** Windows only: placement of the taskbar usage overlay. */
   taskbarWidgetPosition: TaskbarWidgetPosition;
   taskbarWidgetFontWeight: TaskbarWidgetFontWeight;
+  /** Stroke weight for the self-drawn right-click menu. Own axis value,
+   *  independent of the taskbar strip's. */
+  menuFontWeight: number;
   taskbarWidgetContent: TaskbarWidgetContent;
   /**
    * Ordered strip entries. Order is itself a setting: the strip has room for
@@ -427,6 +430,7 @@ export interface SettingsUpdate {
   taskbarWidgetEnabled?: boolean;
   taskbarWidgetPosition?: TaskbarWidgetPosition;
   taskbarWidgetFontWeight?: TaskbarWidgetFontWeight;
+  menuFontWeight?: number;
   taskbarWidgetContent?: TaskbarWidgetContent;
   taskbarWidgetEntries?: TaskbarEntry[];
   taskbarWidgetFontFamily?: string;
