@@ -100,6 +100,7 @@ describe("Language type", () => {
       dashboardShowAsUsed: true,
       dashboardResetTimeRelative: true,
       taskbarShowAsUsed: true,
+      taskbarResetTimeRelative: true,
     taskbarContextMenuActions: ["open_panel", "refresh", "settings", "quit"],
     taskbarTooltipEntries: [],
     };

@@ -26,6 +26,7 @@ import type {
   TrayIconMode,
 } from "../../../types/bridge";
 import type { TabProps } from "../../Settings";
+import BinaryChoiceField from "../BinaryChoiceField";
 
 /** OpenType `wght` axis bounds. */
 
@@ -343,13 +344,26 @@ export default function TaskbarTab({ settings, set, saving }: TabProps) {
           {/* The strip's own used/remaining choice. Independent of the dashboard
               and the floating bar by design (item H) — before this page had a
               control, the key could only be set by migration. */}
-          <Field label={t("ShowAsUsedLabel")} description={t("ShowAsUsedHelper")}>
-            <Toggle
-              checked={settings.taskbarShowAsUsed}
-              disabled={saving || !enabled}
-              onChange={(value) => set({ taskbarShowAsUsed: value })}
-            />
-          </Field>
+          <BinaryChoiceField
+            label={t("ShowAsUsedLabel")}
+            description={t("ShowAsUsedHelper")}
+            onLabel={t("QuotaShowUsedOption")}
+            offLabel={t("QuotaShowRemainingOption")}
+            value={settings.taskbarShowAsUsed}
+            disabled={saving || !enabled}
+            onChange={(value) => set({ taskbarShowAsUsed: value })}
+          />
+          {/* New with the context menu's status row, which is the first thing
+              in this family to print a reset time at all. */}
+          <BinaryChoiceField
+            label={t("ResetTimeRelative")}
+            description={t("ResetTimeRelativeHelper")}
+            onLabel={t("ResetTimeCountdownOption")}
+            offLabel={t("ResetTimeAbsoluteOption")}
+            value={settings.taskbarResetTimeRelative}
+            disabled={saving || !enabled}
+            onChange={(value) => set({ taskbarResetTimeRelative: value })}
+          />
           <Field
             label={t("TaskbarWidgetPositionLabel")}
             description={t("TaskbarWidgetPositionHelper")}

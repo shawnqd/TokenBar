@@ -532,9 +532,14 @@ fn measure_text_width(text: &str, font_px: i32, family: &str, weight: i32) -> i3
 
 /// Stacks the rows and returns `(rows, card_width, card_height)`.
 fn lay_out(items: Vec<MenuItem>, m: &Metrics, family: &str, weight: i32) -> (Vec<Row>, i32, i32) {
+    // **Disabled rows do not get a vote on the width.** They are the live
+    // status readouts, and theirs is by far the longest string in the menu —
+    // letting it size the card made the whole menu roughly twice as wide as its
+    // actions needed, for a row that is not even clickable. It is trimmed with
+    // an ellipsis instead, which is the trade the user accepted.
     let mut width = m.min_width;
     for item in &items {
-        if item.separator {
+        if item.separator || item.disabled {
             continue;
         }
         let text_w = measure_text_width(&item.label, m.font_px, family, weight);
@@ -1699,4 +1704,21 @@ mod tests {
         assert_eq!(hit, None);
     }
 
+
+    /// A long status readout must not widen the card. This is the whole reason
+    /// the menu was twice as wide as its actions needed.
+    #[test]
+    fn disabled_rows_do_not_widen_the_card() {
+        let m = Metrics::new(96, FALLBACK_FONT_SIZE_DIP);
+        let actions = vec![MenuItem::action(1, "Refresh".into())];
+        let (_, actions_only, _) = lay_out(actions, &m, "Segoe UI", 400);
+
+        let mut with_status = vec![MenuItem::action(1, "Refresh".into())];
+        let mut status = MenuItem::action(2, "Codex 81% • ".repeat(8));
+        status.disabled = true;
+        with_status.insert(0, status);
+        let (_, widened, _) = lay_out(with_status, &m, "Segoe UI", 400);
+
+        assert_eq!(widened, actions_only);
+    }
 }

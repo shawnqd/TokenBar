@@ -339,9 +339,10 @@ impl ProviderUsageSnapshot {
 pub(crate) fn compact_tray_status_label(
     window: &RateWindowSnapshot,
     lang: codexbar::settings::Language,
+    relative: bool,
 ) -> String {
     let pct = format!("{:.0}%", window.used_percent);
-    if let Some(reset) = compact_reset_description(window, lang) {
+    if let Some(reset) = compact_reset_description(window, lang, relative) {
         format!("{pct} • {reset}")
     } else {
         pct
@@ -351,11 +352,15 @@ pub(crate) fn compact_tray_status_label(
 fn compact_reset_description(
     window: &RateWindowSnapshot,
     lang: codexbar::settings::Language,
+    relative: bool,
 ) -> Option<String> {
     if let Some(ref resets_at) = window.resets_at {
         let dt = chrono::DateTime::parse_from_rfc3339(resets_at)
             .ok()
             .map(|dt| dt.with_timezone(&chrono::Utc))?;
+        if !relative {
+            return Some(format_absolute_reset_moment(dt));
+        }
         return Some(format_compact_reset_countdown(dt, lang));
     }
 
@@ -364,6 +369,23 @@ fn compact_reset_description(
         .as_deref()
         .map(|desc| normalize_reset_description(desc, lang))
         .filter(|desc| !desc.is_empty())
+}
+
+/// The reset moment itself, in the machine's own timezone.
+///
+/// Deliberately numeric and language-free: this string shares a very narrow row
+/// with a provider name and a percentage, and a localized month name would cost
+/// more width than it earns. Same-day resets drop the date entirely, which is
+/// the common case for a five-hour window.
+fn format_absolute_reset_moment(resets_at: chrono::DateTime<chrono::Utc>) -> String {
+    use chrono::Local;
+    let local = resets_at.with_timezone(&Local);
+    let now = Local::now();
+    if local.date_naive() == now.date_naive() {
+        local.format("%H:%M").to_string()
+    } else {
+        local.format("%m-%d %H:%M").to_string()
+    }
 }
 
 fn format_compact_reset_countdown(
@@ -546,6 +568,7 @@ pub struct SettingsSnapshot {
     dashboard_show_as_used: bool,
     dashboard_reset_time_relative: bool,
     taskbar_show_as_used: bool,
+    taskbar_reset_time_relative: bool,
     taskbar_context_menu_actions: Vec<String>,
     taskbar_tooltip_entries: Vec<TaskbarEntryBridge>,
 }
@@ -654,6 +677,7 @@ impl From<Settings> for SettingsSnapshot {
             dashboard_show_as_used: settings.dashboard_show_as_used,
             dashboard_reset_time_relative: settings.dashboard_reset_time_relative,
             taskbar_show_as_used: settings.taskbar_show_as_used,
+            taskbar_reset_time_relative: settings.taskbar_reset_time_relative,
             taskbar_context_menu_actions: settings.taskbar_context_menu_actions.clone(),
             taskbar_tooltip_entries: settings
                 .taskbar_tooltip_entries
@@ -777,7 +801,7 @@ mod tests {
             Some("Jun 10 at 3:00PM".to_string()),
         );
 
-        let label = compact_tray_status_label(&window, Language::English);
+        let label = compact_tray_status_label(&window, Language::English, true);
 
         assert!(label.starts_with("13% • Resets in 2h "));
         assert!(label.ends_with('m'));
@@ -789,7 +813,7 @@ mod tests {
         let window = snapshot_window_with(8.0, Some(300), None, Some("2h 05m".to_string()));
 
         assert_eq!(
-            compact_tray_status_label(&window, Language::English),
+            compact_tray_status_label(&window, Language::English, true),
             "8% • Resets in 2h 05m"
         );
     }
@@ -805,7 +829,7 @@ mod tests {
             None,
         );
 
-        let label = compact_tray_status_label(&window, Language::Japanese);
+        let label = compact_tray_status_label(&window, Language::Japanese, true);
 
         assert!(label.contains("リセットまで"), "{label}");
         assert!(!label.to_ascii_lowercase().contains("resets in"), "{label}");
@@ -819,7 +843,7 @@ mod tests {
         let window =
             snapshot_window_with(8.0, Some(300), None, Some("Resets in 2h 05m".to_string()));
 
-        let label = compact_tray_status_label(&window, Language::Japanese);
+        let label = compact_tray_status_label(&window, Language::Japanese, true);
 
         assert!(label.contains("リセットまで"), "{label}");
         assert!(!label.to_ascii_lowercase().contains("resets in"), "{label}");
@@ -835,8 +859,8 @@ mod tests {
             None,
         );
 
-        let english = compact_tray_status_label(&window, Language::English);
-        let japanese = compact_tray_status_label(&window, Language::Japanese);
+        let english = compact_tray_status_label(&window, Language::English, true);
+        let japanese = compact_tray_status_label(&window, Language::Japanese, true);
 
         assert!(english.contains("Resets in"), "{english}");
         assert!(japanese.contains("リセットまで"), "{japanese}");

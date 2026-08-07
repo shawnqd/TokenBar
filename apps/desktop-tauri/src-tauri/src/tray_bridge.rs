@@ -607,7 +607,7 @@ fn status_labels_for_settings(
     if settings.tray_icon_mode == TrayIconMode::PerProvider {
         return healthy
             .into_iter()
-            .map(|s| provider_status_label(s, lang))
+            .map(|s| provider_status_label(s, lang, settings.taskbar_reset_time_relative))
             .collect::<Vec<_>>();
     }
 
@@ -618,7 +618,7 @@ fn status_labels_for_settings(
         return vec![];
     };
 
-    let (_, label) = provider_status_label(selected, lang);
+    let (_, label) = provider_status_label(selected, lang, settings.taskbar_reset_time_relative);
     vec![("status_summary".to_string(), label)]
 }
 
@@ -649,8 +649,10 @@ fn ordered_snapshot_refs<'a>(
 fn provider_status_label(
     snapshot: &crate::commands::ProviderUsageSnapshot,
     lang: codexbar::settings::Language,
+    relative_reset: bool,
 ) -> (String, String) {
-    let label = crate::commands::compact_tray_status_label(&snapshot.primary, lang);
+    let label =
+        crate::commands::compact_tray_status_label(&snapshot.primary, lang, relative_reset);
     (
         snapshot.provider_id.clone(),
         format!("{} {}", snapshot.display_name, label),
@@ -860,7 +862,7 @@ pub(crate) fn build_tooltip(
                     .or(Some(&s.primary)),
             };
             let label = window
-                .map(|w| crate::commands::compact_tray_status_label(w, lang))
+                .map(|w| crate::commands::compact_tray_status_label(w, lang, true))
                 .unwrap_or_else(|| "—".to_string());
             lines.push(format!(
                 "{}: {}",
@@ -874,7 +876,7 @@ pub(crate) fn build_tooltip(
                 let short = truncate_tooltip_text(err, 36);
                 format!("{}: {} ({})", s.display_name, error_label, short)
             } else {
-                let label = crate::commands::compact_tray_status_label(&s.primary, lang);
+                let label = crate::commands::compact_tray_status_label(&s.primary, lang, true);
                 format!("{}: {}", s.display_name, truncate_tooltip_text(&label, 42))
             };
             lines.push(status);
@@ -1436,11 +1438,32 @@ mod tests {
         );
 
         let (_, english_label) =
-            provider_status_label(&claude, codexbar::settings::Language::English);
+            provider_status_label(&claude, codexbar::settings::Language::English, true);
         let (_, japanese_label) =
-            provider_status_label(&claude, codexbar::settings::Language::Japanese);
+            provider_status_label(&claude, codexbar::settings::Language::Japanese, true);
         assert!(english_label.contains("Resets in"), "{english_label}");
         assert!(japanese_label.contains("リセットまで"), "{japanese_label}");
+    }
+
+    /// The absolute mode has to be language-free and short — it shares one
+    /// narrow menu row with a provider name and a percentage, and a localized
+    /// month name would cost more width than it earns.
+    #[test]
+    fn absolute_reset_mode_drops_the_countdown_wording() {
+        let mut claude = fake_snapshot("claude", "Claude", 13.0);
+        claude.primary.resets_at =
+            Some((chrono::Utc::now() + chrono::Duration::hours(2)).to_rfc3339());
+        for lang in [
+            codexbar::settings::Language::English,
+            codexbar::settings::Language::Japanese,
+        ] {
+            let (_, label) = provider_status_label(&claude, lang, false);
+            assert!(!label.contains("Resets in"), "{label}");
+            assert!(!label.contains("リセットまで"), "{label}");
+            // Still carries the percentage, and a clock time after it.
+            assert!(label.contains('%'), "{label}");
+            assert!(label.contains(':'), "{label}");
+        }
     }
 
     #[test]

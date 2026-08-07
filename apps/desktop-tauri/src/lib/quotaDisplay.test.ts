@@ -63,6 +63,7 @@ describe("quotaDisplayContext", () => {
     dashboardShowAsUsed: true,
     dashboardResetTimeRelative: false,
     taskbarShowAsUsed: false,
+    taskbarResetTimeRelative: true,
     taskbarContextMenuActions: ["open_panel", "refresh", "settings", "quit"],
     taskbarTooltipEntries: [],
     highUsageThreshold: 75,

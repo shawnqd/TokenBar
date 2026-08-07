@@ -34,6 +34,7 @@ const settings = {
   dashboardShowAsUsed: true,
   dashboardResetTimeRelative: true,
   taskbarShowAsUsed: true,
+  taskbarResetTimeRelative: true,
     taskbarContextMenuActions: ["open_panel", "refresh", "settings", "quit"],
     taskbarTooltipEntries: [],
   taskbarWidgetEnabled: true,
@@ -73,9 +74,15 @@ describe("settings component isolation", () => {
       const { container } = render(
         <Tab settings={settings} set={set} saving={false} />,
       );
-      // Exercise every toggle on the page.
+      // Exercise every binary control on the page. `role="radio"` covers the
+      // SegmentedControl: settings that are stored as a boolean but read as a
+      // choice between two named things (used/remaining, countdown/exact time)
+      // stopped being switches, and without this the FloatBar page had no
+      // clickable control left and the assertion below passed vacuously.
       container
-        .querySelectorAll('input[type="checkbox"], button[role="switch"]')
+        .querySelectorAll(
+          'input[type="checkbox"], button[role="switch"], button[role="radio"]',
+        )
         .forEach((el) => fireEvent.click(el));
 
       expect(written.length).toBeGreaterThan(0);

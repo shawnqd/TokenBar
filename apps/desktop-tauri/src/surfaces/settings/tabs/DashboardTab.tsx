@@ -7,6 +7,7 @@ import type {
   TrayIconMode,
 } from "../../../types/bridge";
 import type { TabProps } from "../../Settings";
+import BinaryChoiceField from "../BinaryChoiceField";
 
 /**
  * Dashboard settings — the tray flyout and the pop-out panel.
@@ -104,23 +105,24 @@ export default function DashboardTab({ settings, set, saving }: TabProps) {
               }
             />
           </Field>
-          <Field label={t("ShowAsUsedLabel")} description={t("ShowAsUsedHelper")}>
-            <Toggle
-              checked={settings.dashboardShowAsUsed}
-              disabled={saving}
-              onChange={(value) => set({ dashboardShowAsUsed: value })}
-            />
-          </Field>
-          <Field
+          <BinaryChoiceField
+            label={t("ShowAsUsedLabel")}
+            description={t("ShowAsUsedHelper")}
+            onLabel={t("QuotaShowUsedOption")}
+            offLabel={t("QuotaShowRemainingOption")}
+            value={settings.dashboardShowAsUsed}
+            disabled={saving}
+            onChange={(value) => set({ dashboardShowAsUsed: value })}
+          />
+          <BinaryChoiceField
             label={t("ResetTimeRelative")}
             description={t("ResetTimeRelativeHelper")}
-          >
-            <Toggle
-              checked={settings.dashboardResetTimeRelative}
-              disabled={saving}
-              onChange={(value) => set({ dashboardResetTimeRelative: value })}
-            />
-          </Field>
+            onLabel={t("ResetTimeCountdownOption")}
+            offLabel={t("ResetTimeAbsoluteOption")}
+            value={settings.dashboardResetTimeRelative}
+            disabled={saving}
+            onChange={(value) => set({ dashboardResetTimeRelative: value })}
+          />
           <Field
             label={t("ShowAllTokenAccountsLabel")}
             description={t("ShowAllTokenAccountsHelper")}
@@ -175,16 +177,15 @@ export default function DashboardTab({ settings, set, saving }: TabProps) {
               onChange={(value) => set({ switcherShowsIcons: value })}
             />
           </Field>
-          <Field
+          <BinaryChoiceField
             label={t("PreferHighestUsage")}
             description={t("PreferHighestUsageHelper")}
-          >
-            <Toggle
-              checked={settings.menuBarShowsHighestUsage}
-              disabled={saving}
-              onChange={(value) => set({ menuBarShowsHighestUsage: value })}
-            />
-          </Field>
+            onLabel={t("TrayProviderHighestOption")}
+            offLabel={t("TrayProviderFirstOption")}
+            value={settings.menuBarShowsHighestUsage}
+            disabled={saving}
+            onChange={(value) => set({ menuBarShowsHighestUsage: value })}
+          />
         </div>
       </section>
     </>

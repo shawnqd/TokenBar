@@ -2,6 +2,7 @@ import { useLocale } from "../../../hooks/useLocale";
 import { Field, Toggle } from "../../../components/FormControls";
 import { FloatBarSettingsSection } from "../../../floatbar";
 import type { TabProps } from "../../Settings";
+import BinaryChoiceField from "../BinaryChoiceField";
 
 /**
  * Floating bar settings.
@@ -61,32 +62,33 @@ export default function FloatBarTab({ settings, set, saving }: TabProps) {
           </button>
         </div>
         <div className="settings-section__group">
-          <Field label={t("ShowAsUsedLabel")} description={t("ShowAsUsedHelper")}>
-            <Toggle
-              checked={settings.floatBarShowAsUsed}
-              disabled={saving}
-              onChange={(value) => set({ floatBarShowAsUsed: value })}
-            />
-          </Field>
+          <BinaryChoiceField
+            label={t("ShowAsUsedLabel")}
+            description={t("ShowAsUsedHelper")}
+            onLabel={t("QuotaShowUsedOption")}
+            offLabel={t("QuotaShowRemainingOption")}
+            value={settings.floatBarShowAsUsed}
+            disabled={saving}
+            onChange={(value) => set({ floatBarShowAsUsed: value })}
+          />
           {/* Unlike the dashboard, the bar prints a reset only when
               `floatBarShowResetInline` is on — and that toggle lives in the
               section below, so with it off this one appears to do nothing. It
               is not inert: the pill's hover tooltip always carries the reset.
               Say so rather than disabling the row, which would be a lie. */}
-          <Field
+          <BinaryChoiceField
             label={t("ResetTimeRelative")}
             description={
               settings.floatBarShowResetInline
                 ? t("ResetTimeRelativeHelper")
                 : `${t("ResetTimeRelativeHelper")} ${t("FloatBarResetFormatNeedsInline")}`
             }
-          >
-            <Toggle
-              checked={settings.floatBarResetTimeRelative}
-              disabled={saving}
-              onChange={(value) => set({ floatBarResetTimeRelative: value })}
-            />
-          </Field>
+            onLabel={t("ResetTimeCountdownOption")}
+            offLabel={t("ResetTimeAbsoluteOption")}
+            value={settings.floatBarResetTimeRelative}
+            disabled={saving}
+            onChange={(value) => set({ floatBarResetTimeRelative: value })}
+          />
         </div>
       </section>
     </>

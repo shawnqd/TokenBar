@@ -339,12 +339,19 @@ pub struct Settings {
     /// (`true`) or remaining (`false`). Consumed by
     /// `tray_bridge::selected_tray_percents`, which feeds both.
     ///
-    /// There is deliberately no `taskbar_reset_time_relative` companion: the
-    /// native strip renders no reset text, and the Taskbar settings page in the
-    /// task package does not define a reset-time mode. Adding the field without
-    /// a renderer would be an inert setting.
     #[serde(default = "default_true")]
     pub taskbar_show_as_used: bool,
+
+    /// Same family as [`taskbar_show_as_used`]: how the strip's and the tray
+    /// icon's surfaces phrase a reset time — `true` for a countdown ("14 小时后"),
+    /// `false` for the moment itself ("08-07 14:30").
+    ///
+    /// This field was deliberately absent for most of TASK-021, because nothing
+    /// in that family rendered reset text and an inert setting is worse than no
+    /// setting. That changed when the self-drawn context menu grew a status row
+    /// (`tray_bridge::provider_status_label`), which does.
+    #[serde(default = "default_true")]
+    pub taskbar_reset_time_relative: bool,
 
     /// Ordered right-click actions for the mini status bar (taskbar strip).
     /// Known ids: `open_panel`, `refresh`, `settings`, `quit`. Empty falls back
@@ -790,6 +797,7 @@ impl Default for Settings {
             dashboard_show_as_used: true,
             dashboard_reset_time_relative: true,
             taskbar_show_as_used: true,
+            taskbar_reset_time_relative: true,
             taskbar_context_menu_actions: default_taskbar_context_menu_actions(),
             taskbar_tooltip_entries: Vec::new(),
         }

@@ -370,6 +370,9 @@ export interface SettingsSnapshot {
    * the native strip renders no reset text, so such a setting would be inert.
    */
   taskbarShowAsUsed: boolean;
+  /** Countdown (`true`) or the reset moment itself (`false`), for the strip
+   *  family's surfaces — today that is the context menu's status row. */
+  taskbarResetTimeRelative: boolean;
   /**
    * Ordered right-click actions for the mini status bar.
    * Known ids: open_panel | refresh | settings | quit.
@@ -446,6 +449,7 @@ export interface SettingsUpdate {
   dashboardShowAsUsed?: boolean;
   dashboardResetTimeRelative?: boolean;
   taskbarShowAsUsed?: boolean;
+  taskbarResetTimeRelative?: boolean;
   taskbarContextMenuActions?: string[];
   taskbarTooltipEntries?: TaskbarEntry[];
 }

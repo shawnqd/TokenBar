@@ -73,6 +73,7 @@ pub struct SettingsUpdate {
     pub dashboard_show_as_used: Option<bool>,
     pub dashboard_reset_time_relative: Option<bool>,
     pub taskbar_show_as_used: Option<bool>,
+    pub taskbar_reset_time_relative: Option<bool>,
     pub taskbar_context_menu_actions: Option<Vec<String>>,
     pub taskbar_tooltip_entries: Option<Vec<TaskbarEntryBridge>>,
 }
@@ -99,6 +100,7 @@ impl SettingsUpdate {
             || self.dashboard_show_as_used.is_some()
             || self.dashboard_reset_time_relative.is_some()
             || self.taskbar_show_as_used.is_some()
+            || self.taskbar_reset_time_relative.is_some()
             || self.menu_bar_display_mode.is_some()
             || self.output_speed_enabled.is_some()
             || self.local_usage_period.is_some()
@@ -228,6 +230,9 @@ impl SettingsUpdate {
         }
         if let Some(v) = self.dashboard_reset_time_relative {
             settings.dashboard_reset_time_relative = v;
+        }
+        if let Some(v) = self.taskbar_reset_time_relative {
+            settings.taskbar_reset_time_relative = v;
         }
         if let Some(v) = self.taskbar_show_as_used {
             settings.taskbar_show_as_used = v;

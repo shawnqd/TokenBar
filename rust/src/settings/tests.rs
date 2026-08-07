@@ -920,16 +920,32 @@ fn per_component_display_settings_round_trip_independently() {
     assert!(!restored.dashboard_reset_time_relative);
 }
 
-/// The taskbar deliberately has no reset-time mode: its native renderer shows
-/// no reset text, so such a setting would be inert. Guard against a later agent
-/// re-adding one out of symmetry.
+/// This used to assert the taskbar had **no** reset-time mode, on the grounds
+/// that its native renderer showed no reset text and the setting would be
+/// inert. That premise expired: the self-drawn context menu grew a status row
+/// (`tray_bridge::provider_status_label`) that prints exactly such a text, and
+/// the user asked to choose its format.
+///
+/// The rule the old test was really protecting — *do not persist a setting
+/// nothing renders* — still stands, so this replaces it with the round-trip
+/// the other per-component modes get. If the consumer is ever deleted, delete
+/// this field with it rather than leaving it inert again.
 #[test]
-fn taskbar_has_no_reset_time_mode_setting() {
-    let json = serde_json::to_string(&Settings::default()).unwrap();
+fn taskbar_reset_time_mode_round_trips() {
+    let mut settings = Settings::default();
     assert!(
-        !json.contains("taskbar_reset_time_relative"),
-        "the taskbar must not persist a reset-time mode it cannot render"
+        settings.taskbar_reset_time_relative,
+        "a countdown is the default, matching the other components"
     );
+
+    settings.taskbar_reset_time_relative = false;
+    let json = serde_json::to_string(&settings).unwrap();
+    let restored: Settings = serde_json::from_str(&json).unwrap();
+    assert!(!restored.taskbar_reset_time_relative);
+
+    // Independent of the other components, like every other key in this family.
+    assert!(restored.dashboard_reset_time_relative);
+    assert!(restored.float_bar_reset_time_relative);
 }
 
 /// Fresh installs show usage as "used" with relative reset times on every
