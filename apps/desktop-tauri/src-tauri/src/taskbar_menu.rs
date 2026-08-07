@@ -39,7 +39,7 @@ use std::ffi::c_void;
 use std::sync::Mutex;
 use std::time::Instant;
 
-use crate::taskbar_widget::{taskbar_is_light, widget_font_family};
+use crate::taskbar_widget::taskbar_is_light;
 
 // ── Public shape ────────────────────────────────────────────────────────────
 
@@ -120,9 +120,21 @@ const CHECK_GLYPH_DIP: i32 = 13;
 const TEXT_GAP_DIP: i32 = 2;
 const TEXT_PAD_RIGHT_DIP: i32 = 26;
 const FONT_SIZE_DIP: i32 = 12;
-/// Label weight. 400 is "regular" and read as too heavy against the Windows
-/// flyouts, whose CJK stack is lighter; 300 selects the real "Microsoft YaHei
-/// UI Light" face rather than synthesising a thinner one, so it stays crisp.
+/// Label face. Named explicitly as **"… Light"** rather than asking for the
+/// regular family at a light weight, because the latter is not binding: GDI's
+/// font mapper can only synthesise *bolder*, never lighter, so a weight-300
+/// request against "Microsoft YaHei UI" may legitimately return the regular
+/// face. Whether it did here was never confirmed on screen — naming the face
+/// removes the question. Verified installed on this machine alongside
+/// "Microsoft YaHei Light".
+///
+/// Deliberately not `widget_font_family()`. That is the *strip's* configured
+/// font, which the user picks for a two-line readout squeezed into the taskbar;
+/// the menu is a separate surface and should not inherit it. The face carries
+/// Latin as well as CJK, so this holds for every locale.
+const FONT_FAMILY: &str = "Microsoft YaHei UI Light";
+/// Kept at 300 to match the named face. If the face is missing, this at least
+/// stops the mapper substituting something heavier than it has to.
 const FONT_WEIGHT: i32 = 300;
 /// Deliberately modest: a wide floor leaves short labels stranded against the
 /// left column and makes the whole card read as left-heavy.
@@ -875,7 +887,7 @@ pub fn show(owner: isize, items: Vec<MenuItem>) {
     };
     let metrics = Metrics::new(dpi);
     let light = surface_is_light();
-    let family = widget_font_family();
+    let family = FONT_FAMILY.to_string();
     let (rows, card_w, card_h) = lay_out(items, &metrics, &family);
     let size = Size {
         cx: card_w + metrics.margin * 2,
