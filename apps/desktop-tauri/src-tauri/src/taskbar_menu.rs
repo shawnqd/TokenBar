@@ -119,41 +119,18 @@ const CHECK_COLUMN_DIP: i32 = 26;
 const CHECK_GLYPH_DIP: i32 = 13;
 const TEXT_GAP_DIP: i32 = 2;
 const TEXT_PAD_RIGHT_DIP: i32 = 26;
-const FONT_SIZE_DIP: i32 = 12;
-/// Label face. Named explicitly as **"… Light"** rather than asking for the
-/// regular family at a light weight, because the latter is not binding: GDI's
-/// font mapper can only synthesise *bolder*, never lighter, so a weight-300
-/// request against "Microsoft YaHei UI" may legitimately return the regular
-/// face. Whether it did here was never confirmed on screen — naming the face
-/// removes the question. Verified installed on this machine alongside
-/// "Microsoft YaHei Light".
+/// Fallback font family, used only when the persisted family is empty.
 ///
-/// Deliberately not `widget_font_family()`. That is the *strip's* configured
-/// font, which the user picks for a two-line readout squeezed into the taskbar;
-/// the menu is a separate surface and should not inherit it. The face carries
-/// Latin as well as CJK, so this holds for every locale.
-const FONT_FAMILY_LIGHT: &str = "Microsoft YaHei UI Light";
-/// The regular face, used from 350 upward. GDI *can* synthesise bolder, so a
-/// heavier request against this one is honoured.
-const FONT_FAMILY_REGULAR: &str = "Microsoft YaHei UI";
-/// Weights at or below this pick the named Light face. Above it the regular
-/// family is used, because there is no lighter face to name and asking the
-/// mapper for one silently gets you the regular face anyway.
-const LIGHT_FACE_CEILING: u16 = 350;
+/// The family, weight and size are all user settings now, read at open time —
+/// the same trio the taskbar strip exposes, driven by the same DirectWrite
+/// renderer. An earlier version hardcoded "Microsoft YaHei UI Light" and
+/// mapped weights onto GDI's three faces; that whole dance existed because GDI
+/// cannot synthesise lighter than the named face, and it is unnecessary now
+/// that the labels go through the `wght` axis.
+const FALLBACK_FONT_FAMILY: &str = "Microsoft YaHei UI";
+/// Fallback em size in DIPs, used only when the persisted size is out of range.
+const FALLBACK_FONT_SIZE_DIP: i32 = 12;
 
-/// Resolves a configured weight to the `(face, weight)` pair to hand
-/// `CreateFontW`.
-///
-/// Split out and tested because the mapping is where a light request can
-/// silently become a regular one: GDI synthesises bolder but never lighter, so
-/// below the ceiling the *face* has to change, not the weight number.
-fn resolve_font(weight: u16) -> (&'static str, i32) {
-    if weight <= LIGHT_FACE_CEILING {
-        (FONT_FAMILY_LIGHT, 300)
-    } else {
-        (FONT_FAMILY_REGULAR, weight as i32)
-    }
-}
 /// Deliberately modest: a wide floor leaves short labels stranded against the
 /// left column and makes the whole card read as left-heavy.
 const MIN_CARD_WIDTH_DIP: i32 = 148;
@@ -436,7 +413,7 @@ struct Metrics {
 }
 
 impl Metrics {
-    fn new(dpi: i32) -> Self {
+    fn new(dpi: i32, font_size_dip: i32) -> Self {
         let s = |dip: i32| ((dip * dpi) / 96).max(1);
         Self {
             dpi,
@@ -454,7 +431,7 @@ impl Metrics {
             travel: s(ANIM_TRAVEL_DIP),
             text_gap: s(TEXT_GAP_DIP),
             pad_right: s(TEXT_PAD_RIGHT_DIP),
-            font_px: s(FONT_SIZE_DIP),
+            font_px: s(font_size_dip),
             min_width: s(MIN_CARD_WIDTH_DIP),
         }
     }
@@ -904,12 +881,22 @@ pub fn show(owner: isize, items: Vec<MenuItem>) {
         let value = unsafe { GetDpiForWindow(owner) };
         if value == 0 { 96 } else { value as i32 }
     };
-    let metrics = Metrics::new(dpi);
-    let light = surface_is_light();
     // Read once per open, not per frame: the menu is rebuilt each time it
     // appears, so a change in Settings takes effect on the next right-click.
-    let (family, weight) = resolve_font(codexbar::settings::Settings::load().menu_font_weight);
-    let family = family.to_string();
+    let settings = codexbar::settings::Settings::load();
+    let weight = settings.menu_font_weight as i32;
+    let family = if settings.menu_font_family.trim().is_empty() {
+        FALLBACK_FONT_FAMILY.to_string()
+    } else {
+        settings.menu_font_family.clone()
+    };
+    let font_size_dip = if (10..=16).contains(&(settings.menu_font_size as i32)) {
+        settings.menu_font_size as i32
+    } else {
+        FALLBACK_FONT_SIZE_DIP
+    };
+    let metrics = Metrics::new(dpi, font_size_dip);
+    let light = surface_is_light();
     let (rows, card_w, card_h) = lay_out(items, &metrics, &family, weight);
     let size = Size {
         cx: card_w + metrics.margin * 2,
@@ -1069,57 +1056,112 @@ fn render_card() {
     // over the antialiased edge where alpha is fractional.
     unsafe { SetBkMode(state.canvas.hdc, TRANSPARENT_BK) };
     let check_font = create_font(m.check_glyph, 400, "Segoe MDL2 Assets");
-    let text_font = create_font(m.font_px, state.font_weight, &state.family);
 
+    // The check mark sits in the left column, where the per-row icons used to
+    // be. Unchecked rows leave it empty rather than shifting their label, so
+    // every label starts on the same x. Still GDI: it is one icon glyph, with
+    // no weight axis to honour.
     for row in &state.rows {
-        if row.item.separator {
-            continue;
-        }
-        let top = row.top;
-        let bottom = row.top + row.height;
-
-        // The check mark sits in the left column, where the per-row icons used
-        // to be. Unchecked rows leave it empty rather than shifting their
-        // label, so every label starts on the same x.
-        if row.item.checked {
+        if row.item.checked && !row.item.separator {
             let mut check = Rect {
                 left: m.margin,
-                top,
+                top: row.top,
                 right: m.margin + m.check_col,
-                bottom,
+                bottom: row.top + row.height,
             };
             draw_glyph(state.canvas.hdc, check_font, &mut check, CHECK_GLYPH, icon_color);
         }
+    }
+    unsafe { DeleteObject(check_font) };
 
-        let mut rect = Rect {
-            left: m.margin + m.check_col + m.text_gap,
-            top,
-            right: m.margin + state.card_w - m.pad_right,
-            bottom,
-        };
-        let previous = unsafe { SelectObject(state.canvas.hdc, text_font) };
-        let colour = if row.item.disabled {
-            muted_color
-        } else {
-            text_color
-        };
-        unsafe { SetTextColor(state.canvas.hdc, colour) };
-        let label = wide(&row.item.label);
-        unsafe {
-            DrawTextW(
-                state.canvas.hdc,
-                label.as_ptr(),
-                -1,
-                &raw mut rect,
-                DT_SINGLELINE | DT_VCENTER | DT_LEFT | DT_NOPREFIX | DT_END_ELLIPSIS,
-            );
-            SelectObject(state.canvas.hdc, previous);
+    // Labels go through the same DirectWrite renderer the strip uses, so the
+    // weight setting drives a real `wght` axis rather than GDI's three faces.
+    // Two passes because `TextStyle` carries one colour and disabled rows are
+    // muted; each pass binds its own DC render target.
+    //
+    // `draw_lines` binds to `bounds` and puts the drawing origin at its
+    // top-left, so line rects are *relative* to it. Binding the whole canvas
+    // makes relative and absolute coincide, which is why the rects below are
+    // plain canvas coordinates.
+    let canvas_bounds = crate::taskbar_text::WinRect {
+        left: 0,
+        top: 0,
+        right: w,
+        bottom: h,
+    };
+    let label_rect = |row: &Row| crate::taskbar_text::WinRect {
+        left: m.margin + m.check_col + m.text_gap,
+        top: row.top,
+        right: m.margin + state.card_w - m.pad_right,
+        bottom: row.top + row.height,
+    };
+
+    let mut drawn = true;
+    for (disabled, colour) in [(false, text_color), (true, muted_color)] {
+        let lines: Vec<crate::taskbar_text::TextLine<'_>> = state
+            .rows
+            .iter()
+            .filter(|row| !row.item.separator && row.item.disabled == disabled)
+            .map(|row| crate::taskbar_text::TextLine {
+                text: row.item.label.as_str(),
+                rect: label_rect(row),
+                mark: None,
+            })
+            .collect();
+        if lines.is_empty() {
+            continue;
         }
+        drawn &= crate::taskbar_text::draw_lines(
+            state.canvas.hdc,
+            canvas_bounds,
+            &lines,
+            &crate::taskbar_text::TextStyle {
+                family: &state.family,
+                weight: state.font_weight as f32,
+                size_px: m.font_px as f32,
+                align: crate::taskbar_text::TextAlign::Left,
+                color_rgb: colour,
+            },
+        );
     }
 
-    unsafe {
-        DeleteObject(check_font);
-        DeleteObject(text_font);
+    if !drawn {
+        // GDI fallback, mirroring the strip's own: the menu must still show
+        // readable labels if DirectWrite is unavailable. Weight is whatever
+        // GDI can map the axis value onto, which is the limitation the
+        // DirectWrite path exists to escape.
+        let text_font = create_font(m.font_px, state.font_weight, &state.family);
+        for row in &state.rows {
+            if row.item.separator {
+                continue;
+            }
+            let previous = unsafe { SelectObject(state.canvas.hdc, text_font) };
+            let colour = if row.item.disabled {
+                muted_color
+            } else {
+                text_color
+            };
+            unsafe { SetTextColor(state.canvas.hdc, colour) };
+            let label = wide(&row.item.label);
+            let bounds = label_rect(row);
+            let mut rect = Rect {
+                left: bounds.left,
+                top: bounds.top,
+                right: bounds.right,
+                bottom: bounds.bottom,
+            };
+            unsafe {
+                DrawTextW(
+                    state.canvas.hdc,
+                    label.as_ptr(),
+                    -1,
+                    &raw mut rect,
+                    DT_SINGLELINE | DT_VCENTER | DT_LEFT | DT_NOPREFIX | DT_END_ELLIPSIS,
+                );
+                SelectObject(state.canvas.hdc, previous);
+            }
+        }
+        unsafe { DeleteObject(text_font) };
     }
     restore_alpha(pixels, &state.alpha);
 }
@@ -1519,7 +1561,7 @@ mod tests {
 
     #[test]
     fn rows_stack_without_gaps_and_separators_are_shorter() {
-        let m = Metrics::new(96);
+        let m = Metrics::new(96, FALLBACK_FONT_SIZE_DIP);
         let (rows, _, card_h) = lay_out(sample_items(), &m, "Segoe UI", 400);
         assert_eq!(rows.len(), 5);
         for pair in rows.windows(2) {
@@ -1538,7 +1580,7 @@ mod tests {
     /// would resize the menu the next time it opens.
     #[test]
     fn checking_a_row_does_not_change_the_width() {
-        let m = Metrics::new(96);
+        let m = Metrics::new(96, FALLBACK_FONT_SIZE_DIP);
         let unchecked = vec![MenuItem::action(1, "A".repeat(40))];
         let checked = vec![MenuItem::action(1, "A".repeat(40)).checked(true)];
         let (_, plain_w, _) = lay_out(unchecked, &m, "Segoe UI", 400);
@@ -1564,8 +1606,8 @@ mod tests {
 
     #[test]
     fn metrics_scale_with_dpi() {
-        let low = Metrics::new(96);
-        let high = Metrics::new(192);
+        let low = Metrics::new(96, FALLBACK_FONT_SIZE_DIP);
+        let high = Metrics::new(192, FALLBACK_FONT_SIZE_DIP);
         assert_eq!(high.row_h, low.row_h * 2);
         assert_eq!(high.radius, low.radius * 2);
         assert_eq!(high.font_px, low.font_px * 2);
@@ -1645,7 +1687,7 @@ mod tests {
 
     #[test]
     fn separator_rows_are_never_hit_targets() {
-        let m = Metrics::new(96);
+        let m = Metrics::new(96, FALLBACK_FONT_SIZE_DIP);
         let (rows, ..) = lay_out(sample_items(), &m, "Segoe UI", 400);
         let separator = &rows[3];
         let hit = rows.iter().position(|row| {
@@ -1657,17 +1699,4 @@ mod tests {
         assert_eq!(hit, None);
     }
 
-    /// The lever that actually lightens the labels is the *face*, not the
-    /// weight number: GDI synthesises bolder but never lighter, so asking the
-    /// regular family for 300 can legitimately come back regular.
-    #[test]
-    fn light_weights_pick_the_light_face() {
-        assert_eq!(resolve_font(100), (FONT_FAMILY_LIGHT, 300));
-        assert_eq!(resolve_font(300), (FONT_FAMILY_LIGHT, 300));
-        assert_eq!(resolve_font(350), (FONT_FAMILY_LIGHT, 300));
-        // Above the ceiling the number is honoured, because bolder is
-        // something GDI can actually produce.
-        assert_eq!(resolve_font(400), (FONT_FAMILY_REGULAR, 400));
-        assert_eq!(resolve_font(700), (FONT_FAMILY_REGULAR, 700));
-    }
 }

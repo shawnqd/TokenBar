@@ -56,6 +56,8 @@ pub struct SettingsUpdate {
     pub taskbar_widget_position: Option<String>,
     pub taskbar_widget_font_weight: Option<u16>,
     pub menu_font_weight: Option<u16>,
+    pub menu_font_family: Option<String>,
+    pub menu_font_size: Option<u8>,
     pub taskbar_widget_content: Option<String>,
     /// The ordered strip entries (item G). Absent before this field existed,
     /// which meant every edit in the composer was silently discarded by serde.
@@ -107,6 +109,8 @@ impl SettingsUpdate {
             || self.taskbar_widget_entries.is_some()
             || self.taskbar_widget_font_weight.is_some()
             || self.menu_font_weight.is_some()
+            || self.menu_font_family.is_some()
+            || self.menu_font_size.is_some()
             || self.taskbar_widget_font_family.is_some()
             || self.taskbar_widget_font_size.is_some()
             || self.taskbar_widget_width.is_some()
@@ -305,6 +309,14 @@ impl SettingsUpdate {
             // Same clamp as the taskbar's weight — the two surfaces pick their
             // own value but share the axis range.
             settings.menu_font_weight = codexbar::settings::normalize_taskbar_widget_font_weight(v);
+        }
+        if let Some(ref v) = self.menu_font_family
+            && !v.trim().is_empty()
+        {
+            settings.menu_font_family = v.clone();
+        }
+        if let Some(v) = self.menu_font_size {
+            settings.menu_font_size = v.clamp(10, 16);
         }
         if let Some(v) = self.taskbar_widget_font_weight {
             settings.taskbar_widget_font_weight =

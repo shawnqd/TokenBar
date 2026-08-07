@@ -84,6 +84,8 @@ describe("Language type", () => {
       taskbarWidgetPosition: "notification",
       taskbarWidgetFontWeight: 400,
       menuFontWeight: 300,
+      menuFontFamily: "Microsoft YaHei UI",
+      menuFontSize: 12,
       taskbarWidgetContent: "usage",
       taskbarWidgetEntries: [
         { providerId: "auto", window: "session" },

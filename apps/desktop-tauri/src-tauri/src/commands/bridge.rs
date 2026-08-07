@@ -531,6 +531,8 @@ pub struct SettingsSnapshot {
     taskbar_widget_position: String,
     taskbar_widget_font_weight: u16,
     menu_font_weight: u16,
+    menu_font_family: String,
+    menu_font_size: u8,
     taskbar_widget_content: String,
     taskbar_widget_entries: Vec<TaskbarEntryBridge>,
     taskbar_widget_font_family: String,
@@ -635,6 +637,8 @@ impl From<Settings> for SettingsSnapshot {
             taskbar_widget_position: settings.taskbar_widget_position,
             taskbar_widget_font_weight: settings.taskbar_widget_font_weight,
             menu_font_weight: settings.menu_font_weight,
+            menu_font_family: settings.menu_font_family.clone(),
+            menu_font_size: settings.menu_font_size,
             taskbar_widget_content: settings.taskbar_widget_content,
             taskbar_widget_entries: settings
                 .taskbar_widget_entries

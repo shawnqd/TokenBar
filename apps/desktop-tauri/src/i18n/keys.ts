@@ -651,7 +651,6 @@ export const ALL_LOCALE_KEYS = [
   "TaskbarContextMenuShowStrip",
   "ContextMenuSection",
   "ContextMenuFontWeightHelper",
-  "FontWeightRegular",
   "TaskbarTooltipSection",
   "TaskbarTooltipHelper",
   "TaskbarTooltipUseStripHint",

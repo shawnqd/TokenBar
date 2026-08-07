@@ -264,6 +264,15 @@ pub struct Settings {
     #[serde(default = "default_menu_font_weight")]
     pub menu_font_weight: u16,
 
+    /// DirectWrite font family and em size for the right-click menu. Mirrors
+    /// the taskbar strip's trio (family / weight / size) because the menu is
+    /// drawn by the same renderer — the settings UI reuses the strip's controls
+    /// rather than inventing menu-specific ones.
+    #[serde(default = "default_menu_font_family")]
+    pub menu_font_family: String,
+    #[serde(default = "default_menu_font_size")]
+    pub menu_font_size: u8,
+
     /// DirectWrite font family for the taskbar strip.
     ///
     /// Must be a real installed family; the settings UI populates the choices
@@ -392,6 +401,14 @@ fn default_taskbar_widget_font_weight() -> u16 {
 /// and the Windows flyouts it sits next to are lighter than 400.
 fn default_menu_font_weight() -> u16 {
     300
+}
+
+fn default_menu_font_family() -> String {
+    "Microsoft YaHei UI".to_string()
+}
+
+fn default_menu_font_size() -> u8 {
+    12
 }
 
 /// Clamp a taskbar weight to the OpenType `wght` axis range.
@@ -760,6 +777,8 @@ impl Default for Settings {
             taskbar_widget_position: default_taskbar_widget_position(),
             taskbar_widget_font_weight: default_taskbar_widget_font_weight(),
             menu_font_weight: default_menu_font_weight(),
+            menu_font_family: default_menu_font_family(),
+            menu_font_size: default_menu_font_size(),
             taskbar_widget_font_family: default_taskbar_widget_font_family(),
             taskbar_widget_content: default_taskbar_widget_content(),
             taskbar_widget_entries: default_taskbar_widget_entries(),

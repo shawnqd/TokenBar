@@ -38,6 +38,8 @@ const settings = {
     taskbarTooltipEntries: [],
   taskbarWidgetEnabled: true,
   menuFontWeight: 300,
+  menuFontFamily: "Microsoft YaHei UI",
+  menuFontSize: 12,
   taskbarWidgetPosition: "notification",
   taskbarWidgetFontWeight: 400,
   taskbarWidgetContent: "usage",

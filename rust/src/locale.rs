@@ -678,7 +678,6 @@ locale_keys! {
     TaskbarContextMenuShowStrip,
     ContextMenuSection,
     ContextMenuFontWeightHelper,
-    FontWeightRegular,
     TaskbarTooltipSection,
     TaskbarTooltipHelper,
     TaskbarTooltipUseStripHint,

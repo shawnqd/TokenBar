@@ -771,4 +771,3 @@ TaskbarFontNoCjkTag = 無中文
 # Right-click menu (shared by the strip and the tray icon).
 ContextMenuSection = 右鍵選單
 ContextMenuFontWeightHelper = 用於小型狀態列與工作列圖示的右鍵選單。
-FontWeightRegular = 常規

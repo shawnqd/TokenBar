@@ -12,6 +12,9 @@ import {
   getTaskbarPreviewLines,
   getTaskbarWindowAvailability,
 } from "../../../lib/tauri";
+import FontSettingsBlock, {
+  normalizeFontWeight,
+} from "../FontSettingsBlock";
 import { TASKBAR_PROVIDER_AUTO } from "../../../types/bridge";
 import type {
   TaskbarEntry,
@@ -25,13 +28,6 @@ import type {
 import type { TabProps } from "../../Settings";
 
 /** OpenType `wght` axis bounds. */
-const MIN_FONT_WEIGHT = 100;
-const MAX_FONT_WEIGHT = 1000;
-
-function normalizeFontWeight(value: number): number {
-  if (!Number.isFinite(value)) return 400;
-  return Math.min(MAX_FONT_WEIGHT, Math.max(MIN_FONT_WEIGHT, Math.round(value)));
-}
 
 // `primary` leads: it is the only kind that resolves for every provider,
 // so it is the safe pick when the user does not know what a provider
@@ -588,76 +584,27 @@ export default function TaskbarTab({ settings, set, saving }: TabProps) {
           </button>
         </div>
         <div className="settings-section__group">
-          <Field
-            label={t("TaskbarWidgetFontSizeLabel")}
-            description={t("TaskbarWidgetFontSizeHelper")}
-          >
-            <div className="settings-value-with-unit">
-              <NumberInput
-                value={fontSize}
-                min={10}
-                max={16}
-                step={1}
-                disabled={saving || !enabled}
-                onChange={(value) => set({ taskbarWidgetFontSize: value })}
-              />
-              <span>px</span>
-            </div>
-          </Field>
-          <Field
-            label={t("TaskbarWidgetFontFamilyLabel")}
-            description={t("TaskbarWidgetFontFamilyHelper")}
-          >
-            <Select
-              value={fontFamily}
-              disabled={saving || !enabled || families.length === 0}
-              options={fontOptions}
-              onChange={(value) => set({ taskbarWidgetFontFamily: value })}
-            />
-          </Field>
-          <Field
-            label={t("TaskbarFontShowAll")}
-            description={`${families.length} / ${recommendedFamilies.length}`}
-          >
-            <Toggle
-              checked={showAllFonts}
-              disabled={saving || !enabled || families.length === 0}
-              onChange={setShowAllFonts}
-            />
-          </Field>
-          <Field
-            label={`${t("TaskbarWidgetFontWeightLabel")} (${fontWeightDraft})`}
-            description={
-              selectedIsVariable
-                ? t("TaskbarWidgetFontWeightHelperVariable")
-                : t("TaskbarWidgetFontWeightHelperStatic")
+          {/* Shared with the right-click menu's block on the 显示 page. Both
+              surfaces are drawn by `taskbar_text.rs`, so duplicating these
+              controls would mean two copies of the same font-enumeration,
+              curation and slider-commit logic drifting apart. */}
+          <FontSettingsBlock
+            value={{ size: fontSize, family: fontFamily, weight: fontWeight }}
+            disabled={saving || !enabled}
+            onChange={(patch) =>
+              set({
+                ...(patch.size !== undefined
+                  ? { taskbarWidgetFontSize: patch.size }
+                  : {}),
+                ...(patch.family !== undefined
+                  ? { taskbarWidgetFontFamily: patch.family }
+                  : {}),
+                ...(patch.weight !== undefined
+                  ? { taskbarWidgetFontWeight: patch.weight }
+                  : {}),
+              })
             }
-          >
-            <div className="taskbar-weight-control">
-              <input
-                type="range"
-                min={MIN_FONT_WEIGHT}
-                max={MAX_FONT_WEIGHT}
-                step={10}
-                value={fontWeightDraft}
-                aria-label={t("TaskbarWidgetFontWeightAriaLabel")}
-                aria-valuetext={`${fontWeightDraft}`}
-                disabled={saving || !enabled}
-                onChange={(event) =>
-                  setFontWeightDraft(normalizeFontWeight(Number(event.target.value)))
-                }
-                onPointerUp={commitFontWeight}
-                onTouchEnd={commitFontWeight}
-                onBlur={commitFontWeight}
-                onKeyUp={commitFontWeight}
-              />
-              <div className="taskbar-weight-control__scale" aria-hidden>
-                <span>{t("TaskbarWidgetFontWeightLight")} · {MIN_FONT_WEIGHT}</span>
-                <output>{fontWeightDraft}</output>
-                <span>{MAX_FONT_WEIGHT} · {t("TaskbarWidgetFontWeightHeavy")}</span>
-              </div>
-            </div>
-          </Field>
+          />
           <Field
             label={t("TaskbarWidgetWidthLabel")}
             description={t("TaskbarWidgetWidthHelper")}

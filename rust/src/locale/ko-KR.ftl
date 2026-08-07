@@ -771,4 +771,3 @@ TaskbarFontNoCjkTag = 중국어 없음
 # Right-click menu (shared by the strip and the tray icon).
 ContextMenuSection = 컨텍스트 메뉴
 ContextMenuFontWeightHelper = 미니 상태 표시줄과 트레이 아이콘의 마우스 오른쪽 메뉴에 적용됩니다.
-FontWeightRegular = 보통

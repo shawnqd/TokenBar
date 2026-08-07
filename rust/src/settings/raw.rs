@@ -172,6 +172,10 @@ pub(super) struct RawSettings {
     taskbar_widget_font_weight: RawTaskbarWidgetFontWeight,
     #[serde(default = "default_menu_font_weight")]
     menu_font_weight: u16,
+    #[serde(default = "default_menu_font_family")]
+    menu_font_family: String,
+    #[serde(default = "default_menu_font_size")]
+    menu_font_size: u8,
     #[serde(default = "default_taskbar_widget_content")]
     taskbar_widget_content: String,
     // `Option` so an absent key is distinguishable from an explicitly stored
@@ -223,6 +227,14 @@ fn default_taskbar_widget_font_weight() -> RawTaskbarWidgetFontWeight {
 /// legacy `"bold"`/`"normal"` string form on disk to accept.
 fn default_menu_font_weight() -> u16 {
     300
+}
+
+fn default_menu_font_family() -> String {
+    "Microsoft YaHei UI".to_string()
+}
+
+fn default_menu_font_size() -> u8 {
+    12
 }
 
 fn default_taskbar_widget_content() -> String {
@@ -329,6 +341,8 @@ impl Default for RawSettings {
                 s.taskbar_widget_font_weight,
             ),
             menu_font_weight: s.menu_font_weight,
+            menu_font_family: s.menu_font_family,
+            menu_font_size: s.menu_font_size,
             taskbar_widget_content: s.taskbar_widget_content,
             taskbar_widget_entries: Some(s.taskbar_widget_entries),
             taskbar_widget_font_family: s.taskbar_widget_font_family.clone(),
@@ -612,6 +626,12 @@ impl From<RawSettings> for Settings {
             },
             taskbar_widget_font_weight: raw.taskbar_widget_font_weight.normalized(),
             menu_font_weight: normalize_taskbar_widget_font_weight(raw.menu_font_weight),
+            menu_font_family: if raw.menu_font_family.trim().is_empty() {
+                default_menu_font_family()
+            } else {
+                raw.menu_font_family
+            },
+            menu_font_size: raw.menu_font_size.clamp(10, 16),
             // Absent list: seed from whatever the old single-choice setting said,
             // so upgrading an existing install changes nothing on screen.
             taskbar_widget_entries: normalize_taskbar_entries(

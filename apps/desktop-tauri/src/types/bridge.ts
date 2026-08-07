@@ -338,6 +338,8 @@ export interface SettingsSnapshot {
   /** Stroke weight for the self-drawn right-click menu. Own axis value,
    *  independent of the taskbar strip's. */
   menuFontWeight: number;
+  menuFontFamily: string;
+  menuFontSize: number;
   taskbarWidgetContent: TaskbarWidgetContent;
   /**
    * Ordered strip entries. Order is itself a setting: the strip has room for
@@ -431,6 +433,8 @@ export interface SettingsUpdate {
   taskbarWidgetPosition?: TaskbarWidgetPosition;
   taskbarWidgetFontWeight?: TaskbarWidgetFontWeight;
   menuFontWeight?: number;
+  menuFontFamily?: string;
+  menuFontSize?: number;
   taskbarWidgetContent?: TaskbarWidgetContent;
   taskbarWidgetEntries?: TaskbarEntry[];
   taskbarWidgetFontFamily?: string;
