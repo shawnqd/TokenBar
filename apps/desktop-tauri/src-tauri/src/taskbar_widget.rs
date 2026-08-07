@@ -875,14 +875,14 @@ static MENU_COMMAND_IDS: Mutex<Vec<String>> = Mutex::new(Vec::new());
 /// the tray has no equivalent row, so it is handled before delegating.
 const STRIP_TOGGLE_ID: &str = "toggle_taskbar_strip";
 
-/// Flattens the tray menu tree into the flat row list the self-drawn menu
+/// Converts the tray menu tree into the flat row list the self-drawn menu
 /// draws, and records each row's id.
 ///
-/// The self-drawn menu has no submenus, so a submenu becomes a disabled header
-/// row followed by its children. That keeps the strip menu's *content*
-/// identical to the tray's — which is the point of sharing the builder — without
-/// the hover-open, second-window and keyboard-descent machinery a real submenu
-/// would need.
+/// **Submenu children are not expanded.** The row count has to match the tray
+/// icon's menu, and there a submenu is a single row — expanding 提供方 into a
+/// header plus one row per provider turned a nine-row menu into an arbitrarily
+/// long one. The parent stays one row; [`handle_context_command`] sends it
+/// somewhere that can show the children.
 fn flatten_menu_entries(
     entries: &[crate::tray_menu::TrayMenuEntry],
     items: &mut Vec<crate::taskbar_menu::MenuItem>,
@@ -897,20 +897,13 @@ fn flatten_menu_entries(
             continue;
         }
 
-        let id = entry.id.clone().unwrap_or_default();
         let mut item = MenuItem::action(ids.len() + 1, entry.label.clone());
         if let Some(checked) = entry.checked {
             item = item.checked(checked);
         }
-        // A submenu parent is a header, not a target: clicking it must do
-        // nothing, and it must not take the hover highlight.
-        item.disabled = entry.disabled || !entry.children.is_empty();
+        item.disabled = entry.disabled;
         items.push(item);
-        ids.push(id);
-
-        if !entry.children.is_empty() {
-            flatten_menu_entries(&entry.children, items, ids);
-        }
+        ids.push(entry.id.clone().unwrap_or_default());
     }
 }
 
@@ -982,6 +975,16 @@ fn handle_context_command(index: usize) {
         // reads "on", so the next click sends `false` against a setting that is
         // already false, and the strip looks impossible to turn back on.
         crate::events::emit_settings_changed(app);
+        return;
+    }
+
+    if id == "providers" {
+        // The tray menu opens a real submenu here. This menu has none, so the
+        // row goes to the page that owns the same toggles instead of being a
+        // dead end — building a nested flyout (hover-open timing, a second
+        // window, keyboard descent) is a larger piece of work than this row is
+        // worth, and is recorded in the backlog if it turns out to be wanted.
+        let _ = crate::shell::settings_window::open_or_focus(app, "providers");
         return;
     }
 
@@ -1654,19 +1657,22 @@ mod tests {
             }
         }
 
-        // The provider submenu survives as a disabled header plus its children,
-        // since the self-drawn menu has no submenus of its own.
-        let header = ids
-            .iter()
-            .position(|id| id == "providers")
-            .expect("providers header present");
-        assert!(items[header].disabled, "a submenu parent is not clickable");
-        let child = ids
-            .iter()
-            .position(|id| id == "toggle_provider:codex")
-            .expect("provider row present");
-        assert!(child > header, "children follow their header");
-        assert!(!items[child].disabled, "a provider row is clickable");
+        // The provider submenu stays ONE row. Expanding it is what made the
+        // menu balloon past the tray icon's own length, which is the shape
+        // this menu is supposed to match.
+        assert!(
+            ids.iter().any(|id| id == "providers"),
+            "the providers row is present"
+        );
+        assert!(
+            !ids.iter().any(|id| id.starts_with("toggle_provider:")),
+            "individual providers must NOT be expanded into rows"
+        );
+        assert_eq!(
+            items.len(),
+            spec.len(),
+            "one drawn row per top-level tray entry, no more"
+        );
 
         // Status rows come from the builder already disabled.
         let status = ids
