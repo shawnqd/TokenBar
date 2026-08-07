@@ -118,6 +118,20 @@ pub(crate) fn build_tray_menu_with(
         menu.push(TrayMenuEntry::separator());
     }
 
+    // Grouped by what an entry *does*, not by how it is implemented. Four
+    // groups after the status readouts:
+    //
+    //   1. act now       — refresh, open a surface
+    //   2. show / hide   — the surface visibility toggles
+    //   3. configure     — providers, settings, about
+    //   4. leave         — quit, alone, as every desktop menu does
+    //
+    // The visibility toggles are the group that earns its own separator: the
+    // float bar's toggle used to sit with the "open" verbs while the strip's
+    // sat below Quit, so the two controls that do the same kind of thing were
+    // as far apart as the menu allows. `taskbar_widget.rs` inserts the strip's
+    // toggle directly after the float bar's, which is why that one is last in
+    // its group here.
     menu.push(TrayMenuEntry::item(
         "refresh",
         text(LocaleKey::TrayRefreshAll),
@@ -130,6 +144,8 @@ pub(crate) fn build_tray_menu_with(
         "show_panel",
         text(LocaleKey::TrayOpenDashboard),
     ));
+    menu.push(TrayMenuEntry::separator());
+
     menu.push(TrayMenuEntry::check_item(
         "toggle_float_bar",
         text(LocaleKey::TrayShowMiniStatusBar),
@@ -153,9 +169,11 @@ pub(crate) fn build_tray_menu_with(
                 })
                 .collect(),
         ));
-        menu.push(TrayMenuEntry::separator());
     }
 
+    // Providers, Settings and About are one group: all three are "go somewhere
+    // and change or read how the app is set up". They used to be split by a
+    // separator that only existed because the submenu was rendered separately.
     menu.push(TrayMenuEntry::item(
         "settings",
         text(LocaleKey::TraySettings),

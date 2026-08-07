@@ -907,6 +907,36 @@ fn flatten_menu_entries(
     }
 }
 
+/// Places the strip's visibility toggle immediately after the floating bar's,
+/// and renumbers every row.
+///
+/// Not appended: the two toggles do the same kind of thing — show or hide one
+/// of the app's surfaces — and belong in the same group. Appending put this one
+/// below Quit, which is the grouping defect the user reported.
+///
+/// The renumbering is the part that matters. A row's id *is* its 1-based
+/// position, so inserting anywhere but the end invalidates every id after it.
+fn insert_strip_toggle(
+    items: &mut Vec<crate::taskbar_menu::MenuItem>,
+    ids: &mut Vec<String>,
+    label: String,
+    checked: bool,
+) {
+    let insert_at = ids
+        .iter()
+        .position(|id| id == "toggle_float_bar")
+        .map(|index| index + 1)
+        .unwrap_or(items.len());
+    items.insert(
+        insert_at,
+        crate::taskbar_menu::MenuItem::action(0, label).checked(checked),
+    );
+    ids.insert(insert_at, STRIP_TOGGLE_ID.to_string());
+    for (position, item) in items.iter_mut().enumerate() {
+        item.id = position + 1;
+    }
+}
+
 fn show_context_menu(hwnd: isize) {
     use crate::taskbar_menu::MenuItem;
     use codexbar::locale::{LocaleKey, get_text};
@@ -924,23 +954,22 @@ fn show_context_menu(hwnd: isize) {
     let mut ids: Vec<String> = Vec::new();
     flatten_menu_entries(&crate::tray_bridge::tray_menu_spec(app), &mut items, &mut ids);
 
-    // The strip's own visibility toggle has no tray equivalent, so it is
-    // appended rather than coming from the builder. Named with item 7's
-    // vocabulary (小型状态栏), not 任务栏: the strip lives *inside* the Windows
-    // taskbar but is not it.
-    items.push(MenuItem::separator());
-    ids.push(String::new());
-    items.push(
-        MenuItem::action(
-            ids.len() + 1,
-            get_text(
-                settings.ui_language,
-                LocaleKey::TaskbarContextMenuShowStrip,
-            ),
-        )
-        .checked(settings.taskbar_widget_enabled),
+    // The strip's own visibility toggle has no tray equivalent, so it is added
+    // here rather than coming from the builder — but it is *inserted next to
+    // the floating bar's toggle*, not appended. The two do the same kind of
+    // thing (show or hide one of the app's surfaces) and belong in the same
+    // group; appending put this one below Quit, which is the grouping defect
+    // the user reported. Named with item 7's vocabulary (小型状态栏), not
+    // 任务栏: the strip lives *inside* the Windows taskbar but is not it.
+    insert_strip_toggle(
+        &mut items,
+        &mut ids,
+        get_text(
+            settings.ui_language,
+            LocaleKey::TaskbarContextMenuShowStrip,
+        ),
+        settings.taskbar_widget_enabled,
     );
-    ids.push(STRIP_TOGGLE_ID.to_string());
 
     if let Ok(mut guard) = MENU_COMMAND_IDS.lock() {
         *guard = ids;
@@ -1685,5 +1714,51 @@ mod tests {
         assert!(ids.iter().any(|id| id == "show_panel"), "dashboard row");
         assert!(ids.iter().any(|id| id == "toggle_float_bar"), "float bar row");
         assert!(ids.iter().any(|id| id == "about"), "about row");
+    }
+
+    /// Inserting mid-list shifts every row after it, and a row's id *is* its
+    /// position — so if the renumber is ever dropped, clicking 设置 fires 关于.
+    #[test]
+    fn inserting_the_strip_toggle_renumbers_every_row() {
+        use crate::taskbar_menu::MenuItem;
+
+        let mut items = vec![
+            MenuItem::action(1, "Refresh".into()),
+            MenuItem::action(2, "Float bar".into()),
+            MenuItem::action(3, "Settings".into()),
+            MenuItem::action(4, "Quit".into()),
+        ];
+        let mut ids = vec![
+            "refresh".to_string(),
+            "toggle_float_bar".to_string(),
+            "settings".to_string(),
+            "quit".to_string(),
+        ];
+
+        insert_strip_toggle(&mut items, &mut ids, "Show strip".into(), true);
+
+        // Placed beside the other visibility toggle, not at the end.
+        assert_eq!(ids[2], STRIP_TOGGLE_ID);
+        assert_eq!(ids.last().map(String::as_str), Some("quit"));
+        assert!(items[2].checked);
+
+        assert_eq!(items.len(), ids.len());
+        for (position, item) in items.iter().enumerate() {
+            assert_eq!(item.id, position + 1, "row {position} carries a stale id");
+        }
+    }
+
+    /// With no floating-bar row to anchor to, the toggle still has to land
+    /// somewhere valid rather than being dropped.
+    #[test]
+    fn the_strip_toggle_falls_back_to_the_end() {
+        use crate::taskbar_menu::MenuItem;
+
+        let mut items = vec![MenuItem::action(1, "Quit".into())];
+        let mut ids = vec!["quit".to_string()];
+        insert_strip_toggle(&mut items, &mut ids, "Show strip".into(), false);
+
+        assert_eq!(ids.last().map(String::as_str), Some(STRIP_TOGGLE_ID));
+        assert_eq!(items.last().map(|item| item.id), Some(2));
     }
 }
