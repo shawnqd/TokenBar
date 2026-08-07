@@ -5898,12 +5898,15 @@ body:has(.settings-window-frame) #root {
      Providers, amplified into a visible whole-window stretch. Both of those
      root causes are gone now (window geometry is fixed and owned natively;
      every tab shares .settings-page at full width), but the fade alone reads
-     as no transition at all, which is what prompted this follow-up. Restored
-     the small vertical lift already used one rule below for
-     .settings-status (settings-status-in) and for .dropdown__panel /
-     .providers-sidebar__row--reveal elsewhere in this file — same 140ms
-     ease-out, same -4px amplitude, so this reuses the app's existing
-     entrance-motion vocabulary instead of inventing a new one. The `to`
+     as no transition at all, which is what prompted this follow-up. It was
+     briefly a small vertical lift; the user has since asked for the
+     horizontal slide back, so the panel now enters from whichever side the
+     new tab sits on — `data-slide` in Settings.tsx already carries that
+     direction, computed synchronously in `changeTab` so it is correct on the
+     very first animated frame. What made the original horizontal version bad
+     is gone and must stay gone: this panel and .settings-body both clip
+     (`overflow-x: hidden` / `overflow: hidden`), so a translateX can no
+     longer widen anything. The `to`
      keyframe below uses the literal `none` (not translateY(0)) so that once
      the animation ends, `transform` stops being set at all — translateY(0)
      is visually identical but would otherwise permanently turn this
@@ -5911,7 +5914,7 @@ body:has(.settings-window-frame) #root {
      descendant a tab renders later. transform/opacity are both
      compositor-only, so this never triggers layout/reflow (no CLS) and
      never blocks pointer interaction. */
-  animation: settings-tab-fade-in 140ms ease-out both;
+  animation: settings-tab-slide-in 160ms ease-out both;
 }
 
 .settings-tab-panel--providers {
@@ -6010,15 +6013,33 @@ body:has(.settings-window-frame) #root {
   min-height: 0;
 }
 
-@keyframes settings-tab-fade-in {
+/* Moving right along the tab bar: the incoming panel arrives from the right. */
+@keyframes settings-tab-slide-in {
   from {
     opacity: 0;
-    transform: translateY(-4px);
+    transform: translateX(14px);
   }
   to {
     opacity: 1;
     transform: none;
   }
+}
+
+/* ...and from the left when moving back. Only the name is swapped; duration,
+   easing and fill come from the base rule. */
+@keyframes settings-tab-slide-in-reverse {
+  from {
+    opacity: 0;
+    transform: translateX(-14px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.settings-tab-panel[data-slide="left"] {
+  animation-name: settings-tab-slide-in-reverse;
 }
 @media (prefers-reduced-motion: reduce) {
   .settings-tab-panel {

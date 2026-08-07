@@ -356,16 +356,53 @@ fn handle_menu_event(app: &AppHandle, id: &str) {
     }
 }
 
+/// The tray menu's content, as the `TrayMenuEntry` tree the native menu is
+/// built from.
+///
+/// Exposed so the taskbar strip's self-drawn menu can carry identical content
+/// instead of maintaining a second list that drifts. Ids are the same strings,
+/// which is what lets [`dispatch_menu_id`] serve both menus.
+pub(crate) fn tray_menu_spec(app: &AppHandle) -> Vec<crate::tray_menu::TrayMenuEntry> {
+    let catalog = crate::commands::get_provider_catalog();
+    let settings = Settings::load();
+    let status_labels = tray_status_labels(app, &settings);
+    build_tray_menu_with(
+        &catalog,
+        &status_labels,
+        &settings.enabled_providers,
+        settings.float_bar_enabled,
+        settings.ui_language,
+    )
+}
+
+/// Perform whatever a tray menu id means. The strip's menu posts the same ids,
+/// so both surfaces share one set of handlers.
+pub(crate) fn dispatch_menu_id(app: &AppHandle, id: &str) {
+    handle_menu_event(app, id);
+}
+
+/// Live status rows for the current provider cache, or none when the app state
+/// is not available yet.
+fn tray_status_labels(app: &AppHandle, settings: &Settings) -> Vec<(String, String)> {
+    let Some(state) = app.try_state::<Mutex<AppState>>() else {
+        return vec![];
+    };
+    // `try_lock`, not `lock`: this is reachable from a window procedure while
+    // another thread holds the state, and blocking the message loop there
+    // would freeze the strip and its menu.
+    match state.try_lock() {
+        Ok(guard) => {
+            status_labels_for_settings(settings, &guard.provider_cache, settings.ui_language)
+        }
+        Err(_) => vec![],
+    }
+}
+
 /// Rebuild the native tray menu from current provider + settings state.
 pub(crate) fn rebuild_tray_menu(app: &AppHandle) {
     let catalog = crate::commands::get_provider_catalog();
     let settings = Settings::load();
-    let status_labels = if let Some(st) = app.try_state::<Mutex<AppState>>() {
-        let guard = st.lock().unwrap();
-        status_labels_for_settings(&settings, &guard.provider_cache, settings.ui_language)
-    } else {
-        vec![]
-    };
+    let status_labels = tray_status_labels(app, &settings);
     if let Ok(menu) = build_native_tray_menu(app, &catalog, &status_labels)
         && let Some(tray) = app.tray_by_id("codexbar-main")
     {

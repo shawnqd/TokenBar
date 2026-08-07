@@ -112,13 +112,6 @@ const SWP_NOACTIVATE: u32 = 0x0010;
 const SWP_NOSIZE: u32 = 0x0001;
 const SWP_NOMOVE: u32 = 0x0002;
 const LWA_COLORKEY: u32 = 0x0000_0001;
-const ID_OPEN_PANEL: usize = 1;
-const ID_REFRESH: usize = 2;
-const ID_SETTINGS: usize = 3;
-const ID_QUIT: usize = 4;
-/// TASK-021 new user report: "显示任务栏" — toggles `taskbar_widget_enabled`
-/// from the strip's own right-click menu. See `handle_context_command`.
-const ID_SHOW_STRIP: usize = 5;
 const DT_SINGLELINE: u32 = 0x0020;
 const DT_VCENTER: u32 = 0x0004;
 const DT_LEFT: u32 = 0x0000;
@@ -868,106 +861,131 @@ fn reassert(hwnd: isize) {
 /// `WM_COMMAND`, exactly the shape `TPM_RETURNCMD` used to deliver, so
 /// `handle_context_command` needs no change. Unlike `TrackPopupMenu` the call
 /// returns immediately rather than running a modal loop.
+/// The string ids of the rows in the menu currently on screen, in order.
+///
+/// The self-drawn menu posts a `usize` back through `WM_COMMAND`, but the
+/// actions are identified by the same string ids the notification-area tray
+/// menu uses (`"refresh"`, `"toggle_provider:codex"`, …) so both menus share
+/// one set of handlers. This is the translation table: a row's 1-based index
+/// is what travels, and it is resolved here. Index 0 is never used, because
+/// `WM_COMMAND` wparam 0 is indistinguishable from "no selection".
+static MENU_COMMAND_IDS: Mutex<Vec<String>> = Mutex::new(Vec::new());
+
+/// Local-only id for the strip's own visibility toggle. Not a tray menu id —
+/// the tray has no equivalent row, so it is handled before delegating.
+const STRIP_TOGGLE_ID: &str = "toggle_taskbar_strip";
+
+/// Flattens the tray menu tree into the flat row list the self-drawn menu
+/// draws, and records each row's id.
+///
+/// The self-drawn menu has no submenus, so a submenu becomes a disabled header
+/// row followed by its children. That keeps the strip menu's *content*
+/// identical to the tray's — which is the point of sharing the builder — without
+/// the hover-open, second-window and keyboard-descent machinery a real submenu
+/// would need.
+fn flatten_menu_entries(
+    entries: &[crate::tray_menu::TrayMenuEntry],
+    items: &mut Vec<crate::taskbar_menu::MenuItem>,
+    ids: &mut Vec<String>,
+) {
+    use crate::taskbar_menu::MenuItem;
+
+    for entry in entries {
+        if entry.is_separator {
+            items.push(MenuItem::separator());
+            ids.push(String::new());
+            continue;
+        }
+
+        let id = entry.id.clone().unwrap_or_default();
+        let mut item = MenuItem::action(ids.len() + 1, entry.label.clone());
+        if let Some(checked) = entry.checked {
+            item = item.checked(checked);
+        }
+        // A submenu parent is a header, not a target: clicking it must do
+        // nothing, and it must not take the hover highlight.
+        item.disabled = entry.disabled || !entry.children.is_empty();
+        items.push(item);
+        ids.push(id);
+
+        if !entry.children.is_empty() {
+            flatten_menu_entries(&entry.children, items, ids);
+        }
+    }
+}
+
 fn show_context_menu(hwnd: isize) {
     use crate::taskbar_menu::MenuItem;
     use codexbar::locale::{LocaleKey, get_text};
 
-    // TASK-021 item 8: actions and order come from settings; labels are localized.
-    let settings = codexbar::settings::Settings::load();
-    let lang = settings.ui_language;
-    let actions = codexbar::settings::normalize_taskbar_context_menu_actions(
-        &settings.taskbar_context_menu_actions,
-    );
-
-    // Quit is pulled out and re-appended last (behind its own separator) so
-    // the "show strip" toggle lands next to the other app-state entries rather
-    // than after Quit, regardless of the user's configured order.
-    let mut items: Vec<MenuItem> = Vec::new();
-    let mut quit_item: Option<MenuItem> = None;
-    for action in actions {
-        let entry = match action.as_str() {
-            "open_panel" => Some(MenuItem::action(
-                ID_OPEN_PANEL,
-                get_text(lang, LocaleKey::TrayOpenPanel),
-            )),
-            "refresh" => Some(MenuItem::action(
-                ID_REFRESH,
-                get_text(lang, LocaleKey::ActionRefresh),
-            )),
-            "settings" => Some(MenuItem::action(
-                ID_SETTINGS,
-                get_text(lang, LocaleKey::MenuSettings),
-            )),
-            "quit" => Some(MenuItem::action(
-                ID_QUIT,
-                get_text(lang, LocaleKey::MenuQuit),
-            )),
-            _ => None,
-        };
-        let Some(entry) = entry else { continue };
-        if entry.id == ID_QUIT {
-            quit_item = Some(entry);
-        } else {
-            items.push(entry);
-        }
-    }
-
-    // Named with item 7's vocabulary (小型状态栏), not 任务栏: the strip lives
-    // *inside* the Windows taskbar but is not it. `TrayShowMiniStatusBar` used
-    // to carry that same wording for `float_bar_enabled`; it was renamed to the
-    // floating bar's own word (悬浮栏) so the two toggles stay distinguishable.
-    items.push(
-        MenuItem::action(
-            ID_SHOW_STRIP,
-            get_text(lang, LocaleKey::TaskbarContextMenuShowStrip),
-        )
-        .checked(settings.taskbar_widget_enabled),
-    );
-
-    if let Some(quit) = quit_item {
-        items.push(MenuItem::separator());
-        items.push(quit);
-    }
-
-    crate::taskbar_menu::show(hwnd, items);
-}
-
-fn handle_context_command(id: usize) {
     let Some(app) = APP_HANDLE.get() else {
         return;
     };
-    match id {
-        ID_OPEN_PANEL => {
-            let _ = crate::shell::flyout_window::open_or_focus(app, None);
-        }
-        ID_REFRESH => {
-            let handle = app.clone();
-            tauri::async_runtime::spawn(async move {
-                let _ = crate::commands::do_refresh_providers(&handle).await;
-            });
-        }
-        ID_SETTINGS => {
-            let _ = crate::shell::settings_window::open_or_focus(app, "general");
-        }
-        ID_SHOW_STRIP => {
-            // Same read-modify-save-apply pattern `commands/settings.rs`
-            // uses for this exact setting (`taskbar_widget_enabled`).
-            let mut settings = codexbar::settings::Settings::load();
-            let next = !settings.taskbar_widget_enabled;
-            settings.taskbar_widget_enabled = next;
-            let _ = settings.save();
-            set_enabled(next);
-            // Every other writer of this setting goes through
-            // `update_settings`, which broadcasts afterwards. Without the same
-            // broadcast here the Settings window keeps rendering its stale
-            // snapshot — its toggle still reads "on", so the next click sends
-            // `false` against a setting that is already false, and the strip
-            // looks impossible to turn back on.
-            crate::events::emit_settings_changed(app);
-        }
-        ID_QUIT => app.exit(0),
-        _ => {}
+    let settings = codexbar::settings::Settings::load();
+
+    // Content comes from `build_tray_menu`, the same builder the
+    // notification-area menu uses, so the two can no longer drift apart. The
+    // strip's `taskbar_context_menu_actions` setting no longer selects rows —
+    // it described a four-entry menu that this replaces.
+    let mut items: Vec<MenuItem> = Vec::new();
+    let mut ids: Vec<String> = Vec::new();
+    flatten_menu_entries(&crate::tray_bridge::tray_menu_spec(app), &mut items, &mut ids);
+
+    // The strip's own visibility toggle has no tray equivalent, so it is
+    // appended rather than coming from the builder. Named with item 7's
+    // vocabulary (小型状态栏), not 任务栏: the strip lives *inside* the Windows
+    // taskbar but is not it.
+    items.push(MenuItem::separator());
+    ids.push(String::new());
+    items.push(
+        MenuItem::action(
+            ids.len() + 1,
+            get_text(
+                settings.ui_language,
+                LocaleKey::TaskbarContextMenuShowStrip,
+            ),
+        )
+        .checked(settings.taskbar_widget_enabled),
+    );
+    ids.push(STRIP_TOGGLE_ID.to_string());
+
+    if let Ok(mut guard) = MENU_COMMAND_IDS.lock() {
+        *guard = ids;
     }
+    crate::taskbar_menu::show(hwnd, items);
+}
+
+fn handle_context_command(index: usize) {
+    let Some(app) = APP_HANDLE.get() else {
+        return;
+    };
+    let id = MENU_COMMAND_IDS
+        .lock()
+        .ok()
+        .and_then(|ids| ids.get(index.wrapping_sub(1)).cloned())
+        .unwrap_or_default();
+    if id.is_empty() {
+        return;
+    }
+
+    if id == STRIP_TOGGLE_ID {
+        // Same read-modify-save-apply pattern `commands/settings.rs` uses for
+        // this exact setting (`taskbar_widget_enabled`).
+        let mut settings = codexbar::settings::Settings::load();
+        let next = !settings.taskbar_widget_enabled;
+        settings.taskbar_widget_enabled = next;
+        let _ = settings.save();
+        set_enabled(next);
+        // Every other writer of this setting goes through `update_settings`,
+        // which broadcasts afterwards. Without the same broadcast here the
+        // Settings window keeps rendering its stale snapshot — its toggle still
+        // reads "on", so the next click sends `false` against a setting that is
+        // already false, and the strip looks impossible to turn back on.
+        crate::events::emit_settings_changed(app);
+        return;
+    }
+
+    crate::tray_bridge::dispatch_menu_id(app, &id);
 }
 
 fn taskbar_background_color(light: bool) -> u32 {
@@ -1600,4 +1618,66 @@ mod tests {
         }
     }
 
+
+    /// The flattened list is what the menu draws; `ids` is what a click
+    /// resolves through. They must stay index-aligned, because the row's
+    /// 1-based position is the only thing that travels back in `WM_COMMAND`.
+    #[test]
+    fn flattening_keeps_rows_and_ids_aligned() {
+        use crate::tray_menu::build_tray_menu_with;
+        use codexbar::settings::Language;
+
+        let catalog = vec![crate::commands::ProviderCatalogEntry {
+            id: "codex".into(),
+            display_name: "Codex".into(),
+            cookie_domain: None,
+        }];
+        let enabled = ["codex".to_string()].into_iter().collect();
+        let spec = build_tray_menu_with(
+            &catalog,
+            &[("codex".to_string(), "Codex 30%".to_string())],
+            &enabled,
+            true,
+            Language::English,
+        );
+
+        let mut items = Vec::new();
+        let mut ids = Vec::new();
+        flatten_menu_entries(&spec, &mut items, &mut ids);
+
+        assert_eq!(items.len(), ids.len(), "one id per drawn row");
+        for (position, item) in items.iter().enumerate() {
+            if item.separator {
+                assert!(ids[position].is_empty(), "separators carry no action");
+            } else {
+                assert_eq!(item.id, position + 1, "ids are 1-based row positions");
+            }
+        }
+
+        // The provider submenu survives as a disabled header plus its children,
+        // since the self-drawn menu has no submenus of its own.
+        let header = ids
+            .iter()
+            .position(|id| id == "providers")
+            .expect("providers header present");
+        assert!(items[header].disabled, "a submenu parent is not clickable");
+        let child = ids
+            .iter()
+            .position(|id| id == "toggle_provider:codex")
+            .expect("provider row present");
+        assert!(child > header, "children follow their header");
+        assert!(!items[child].disabled, "a provider row is clickable");
+
+        // Status rows come from the builder already disabled.
+        let status = ids
+            .iter()
+            .position(|id| id == "status_codex")
+            .expect("status row present");
+        assert!(items[status].disabled);
+
+        // Nothing from the old fixed list survives.
+        assert!(ids.iter().any(|id| id == "show_panel"), "dashboard row");
+        assert!(ids.iter().any(|id| id == "toggle_float_bar"), "float bar row");
+        assert!(ids.iter().any(|id| id == "about"), "about row");
+    }
 }

@@ -120,23 +120,33 @@ const CHECK_GLYPH_DIP: i32 = 13;
 const TEXT_GAP_DIP: i32 = 2;
 const TEXT_PAD_RIGHT_DIP: i32 = 26;
 const FONT_SIZE_DIP: i32 = 12;
+/// Label weight. 400 is "regular" and read as too heavy against the Windows
+/// flyouts, whose CJK stack is lighter; 300 selects the real "Microsoft YaHei
+/// UI Light" face rather than synthesising a thinner one, so it stays crisp.
+const FONT_WEIGHT: i32 = 300;
 /// Deliberately modest: a wide floor leaves short labels stranded against the
 /// left column and makes the whole card read as left-heavy.
 const MIN_CARD_WIDTH_DIP: i32 = 148;
 /// Gap between the card's bottom edge and the top of the taskbar.
 const TASKBAR_GAP_DIP: i32 = 6;
 
-/// Open animation: a circular reveal expanding from the card's bottom-left
-/// corner.
+/// Open animation: the card slides up into place while fading in, matching the
+/// Windows flyouts.
 ///
-/// The first attempt scaled the whole bitmap up from 0.86, which distorted the
-/// glyphs while it ran and read as wrong. The reference does not scale its
-/// content at all — the card is full size from the first frame and is simply
-/// uncovered, so this masks instead of transforms.
-const ANIM_DURATION_MS: u128 = 160;
+/// Two earlier attempts are worth not repeating. Scaling the bitmap up from
+/// 0.86 resampled every glyph each frame and visibly warped the text. A
+/// circular reveal from the bottom-left corner kept the glyphs crisp but was
+/// the wrong gesture — Windows' own flyouts do not uncover, they arrive.
+///
+/// This version transforms nothing: the card is composed once at full size and
+/// the *window* is moved, via `UpdateLayeredWindow`'s destination point, from
+/// `ANIM_TRAVEL_DIP` below its resting place up to it. Fading is the layered
+/// window's constant alpha. Both are free — no per-frame pixel work at all.
+const ANIM_DURATION_MS: u128 = 180;
 const ANIM_TICK_MS: u32 = 10;
-/// Width of the soft edge on the expanding circle, in DIPs.
-const ANIM_FEATHER_DIP: i32 = 20;
+/// How far below its resting place the card starts. The window overlaps the
+/// taskbar for the first frames, which is what the reference does too.
+const ANIM_TRAVEL_DIP: i32 = 22;
 /// Deactivation arriving within this window of the menu appearing is ignored —
 /// the activation change that *shows* the menu can itself produce one.
 const ACTIVATE_GRACE_MS: u128 = 150;
@@ -388,7 +398,7 @@ struct Metrics {
     hover_radius: i32,
     check_col: i32,
     check_glyph: i32,
-    feather: i32,
+    travel: i32,
     text_gap: i32,
     pad_right: i32,
     font_px: i32,
@@ -411,7 +421,7 @@ impl Metrics {
             hover_radius: s(HOVER_RADIUS_DIP),
             check_col: s(CHECK_COLUMN_DIP),
             check_glyph: s(CHECK_GLYPH_DIP),
-            feather: s(ANIM_FEATHER_DIP),
+            travel: s(ANIM_TRAVEL_DIP),
             text_gap: s(TEXT_GAP_DIP),
             pad_right: s(TEXT_PAD_RIGHT_DIP),
             font_px: s(FONT_SIZE_DIP),
@@ -428,16 +438,22 @@ struct Row {
     height: i32,
 }
 
-/// Colours: (card background, hover highlight, text, icon, separator).
+/// Colours: (card background, hover highlight, text, muted text, icon,
+/// separator).
+///
+/// "Muted" is what disabled rows draw in — the live status readouts at the top
+/// and the header a flattened submenu leaves behind. They must read as labels
+/// rather than as targets you failed to click.
 ///
 /// The light pair matches the tray panel's own surface so the menu reads as
 /// part of the app rather than a system popup.
-fn theme_colors(light: bool) -> (u32, u32, u32, u32, u32) {
+fn theme_colors(light: bool) -> (u32, u32, u32, u32, u32, u32) {
     if light {
         (
             0x00FF_FFFF,
             0x00EF_F1F0,
             0x0026_2626,
+            0x0091_9191,
             0x005A_5A5A,
             0x00E4_E6E5,
         )
@@ -446,6 +462,7 @@ fn theme_colors(light: bool) -> (u32, u32, u32, u32, u32) {
             0x0028_2828,
             0x003A_3A3A,
             0x00F2_F2F2,
+            0x0085_8585,
             0x00C4_C4C4,
             0x0040_4040,
         )
@@ -476,7 +493,7 @@ fn measure_text_width(text: &str, font_px: i32, family: &str) -> i32 {
             0,
             0,
             0,
-            400,
+            FONT_WEIGHT,
             0,
             0,
             0,
@@ -774,8 +791,9 @@ struct MenuState {
     base: Vec<u8>,
     alpha: Vec<u8>,
     canvas: Dib,
-    /// Scratch surface the animation scales into.
-    frame: Dib,
+    /// Where the window rests once the open animation finishes. The animation
+    /// moves the window, so this is the only record of its real position.
+    origin: Point,
     hovered: Option<usize>,
     shown_at: Instant,
     animating: bool,
@@ -875,11 +893,6 @@ pub fn show(owner: isize, items: Vec<MenuItem>) {
     let Some(canvas) = Dib::new(size.cx, size.cy) else {
         return;
     };
-    let Some(frame) = Dib::new(size.cx, size.cy) else {
-        canvas.destroy();
-        return;
-    };
-
     let (x, y) = anchor_position(size, &metrics);
     let instance = unsafe { GetModuleHandleW(std::ptr::null()) };
     let class_name = wide(CLASS_NAME);
@@ -902,7 +915,6 @@ pub fn show(owner: isize, items: Vec<MenuItem>) {
     };
     if hwnd == 0 {
         canvas.destroy();
-        frame.destroy();
         return;
     }
 
@@ -918,7 +930,7 @@ pub fn show(owner: isize, items: Vec<MenuItem>) {
         base,
         alpha,
         canvas,
-        frame,
+        origin: Point { x, y },
         hovered: None,
         shown_at: Instant::now(),
         animating: true,
@@ -983,7 +995,7 @@ fn render_card() {
     let Ok(mut guard) = MENU.lock() else { return };
     let Some(state) = guard.as_mut() else { return };
 
-    let (_, hover, text_color, icon_color, sep_color) = theme_colors(state.light);
+    let (_, hover, text_color, muted_color, icon_color, sep_color) = theme_colors(state.light);
     let m = state.metrics;
     let w = state.size.cx;
     let h = state.size.cy;
@@ -1022,7 +1034,7 @@ fn render_card() {
     // over the antialiased edge where alpha is fractional.
     unsafe { SetBkMode(state.canvas.hdc, TRANSPARENT_BK) };
     let check_font = create_font(m.check_glyph, 400, "Segoe MDL2 Assets");
-    let text_font = create_font(m.font_px, 400, &state.family);
+    let text_font = create_font(m.font_px, FONT_WEIGHT, &state.family);
 
     for row in &state.rows {
         if row.item.separator {
@@ -1051,7 +1063,12 @@ fn render_card() {
             bottom,
         };
         let previous = unsafe { SelectObject(state.canvas.hdc, text_font) };
-        unsafe { SetTextColor(state.canvas.hdc, text_color) };
+        let colour = if row.item.disabled {
+            muted_color
+        } else {
+            text_color
+        };
+        unsafe { SetTextColor(state.canvas.hdc, colour) };
         let label = wide(&row.item.label);
         unsafe {
             DrawTextW(
@@ -1114,69 +1131,53 @@ fn draw_glyph(hdc: isize, font: isize, rect: &mut Rect, glyph: char, color: u32)
     }
 }
 
-/// Coverage of the reveal circle at `(x, y)`, given its centre, radius and the
-/// width of its soft edge. 1 inside, 0 outside, feathered in between.
-fn reveal_coverage(x: i32, y: i32, centre: (f32, f32), radius: f32, feather: f32) -> f32 {
-    let dx = x as f32 + 0.5 - centre.0;
-    let dy = y as f32 + 0.5 - centre.1;
-    let distance = dx.hypot(dy);
-    ((radius - distance) / feather.max(1.0)).clamp(0.0, 1.0)
+/// Where the window sits and how opaque it is at a given point in the open
+/// animation. `progress` is already eased. Returns `(y offset below the resting
+/// place, constant alpha)`.
+///
+/// Split out from [`present`] so the curve can be tested without a window.
+fn slide_frame(progress: f32, travel: i32) -> (i32, u8) {
+    let remaining = (1.0 - progress).clamp(0.0, 1.0);
+    // Opacity leads the movement — the card should be readable by the time it
+    // is most of the way up, not still fading in as it settles.
+    let opacity = (progress * 1.6).clamp(0.0, 1.0);
+    ((remaining * travel as f32).round() as i32, (opacity * 255.0) as u8)
 }
 
-/// Pushes `canvas` to the screen, uncovered by a circle expanding from the
-/// card's bottom-left corner. `progress >= 1.0` presents the canvas untouched.
-///
-/// Masking rather than scaling: the pixels are premultiplied, so multiplying
-/// all four channels by the coverage is a correct partial composite, and the
-/// glyphs keep their exact rendered size throughout instead of being resampled
-/// frame by frame.
+/// Pushes `canvas` to the screen. Below `progress` 1.0 the window is placed
+/// short of its resting position and drawn at reduced opacity, which is the
+/// whole open animation: the bitmap itself is never touched.
 fn present(progress: f32) {
     let Ok(guard) = MENU.lock() else { return };
     let Some(state) = guard.as_ref() else { return };
 
+    let (drop, alpha) = if progress >= 1.0 {
+        (0, 255)
+    } else {
+        slide_frame(progress, state.metrics.travel)
+    };
     let blend = BlendFunction {
         blend_op: AC_SRC_OVER,
         blend_flags: 0,
-        source_constant_alpha: 255,
+        source_constant_alpha: alpha,
         alpha_format: AC_SRC_ALPHA,
     };
-    let origin = Point::default();
-    let source_dc = if progress >= 1.0 {
-        state.canvas.hdc
-    } else {
-        let w = state.size.cx;
-        let h = state.size.cy;
-        let m = &state.metrics;
-        let card_h = h - m.margin * 2;
-        let centre = (m.margin as f32, (m.margin + card_h) as f32);
-        let feather = m.feather as f32;
-        // Reach past the far corner by a feather's width so the last frame is
-        // genuinely complete rather than a hair short of it.
-        let full = (state.card_w as f32).hypot(card_h as f32) + feather;
-        let radius = full * progress;
-
-        let source = state.canvas.slice();
-        let frame = state.frame.slice();
-        for y in 0..h {
-            for x in 0..w {
-                let idx = ((y * w + x) * 4) as usize;
-                let c = reveal_coverage(x, y, centre, radius, feather);
-                for offset in 0..4 {
-                    frame[idx + offset] = (source[idx + offset] as f32 * c) as u8;
-                }
-            }
-        }
-        state.frame.hdc
+    // `UpdateLayeredWindow` moves the window when given a destination point,
+    // so the slide costs one field rather than a `SetWindowPos` per frame.
+    let destination = Point {
+        x: state.origin.x,
+        y: state.origin.y + drop,
     };
+    let source_origin = Point::default();
 
     unsafe {
         UpdateLayeredWindow(
             state.hwnd,
             0,
-            std::ptr::null(),
+            &raw const destination,
             &raw const state.size,
-            source_dc,
-            &raw const origin,
+            state.canvas.hdc,
+            &raw const source_origin,
             0,
             &raw const blend,
             ULW_ALPHA,
@@ -1306,7 +1307,6 @@ fn release_state() {
     let state = MENU.lock().ok().and_then(|mut guard| guard.take());
     if let Some(state) = state {
         state.canvas.destroy();
-        state.frame.destroy();
     }
 }
 
@@ -1511,24 +1511,20 @@ mod tests {
         assert_eq!(plain_w, checked_w);
     }
 
-    /// The reveal circle starts at the card's bottom-left corner and has to
-    /// cover the opposite corner by the time it finishes, or the last frame
-    /// would pop the remaining sliver into place.
+    /// The card must start below its resting place and end exactly on it —
+    /// an off-by-one here leaves the menu permanently a pixel low, which is
+    /// invisible in a screenshot and obvious in motion.
     #[test]
-    fn the_reveal_circle_covers_the_card_by_the_final_frame() {
-        let centre = (0.0f32, 100.0f32);
-        let feather = 20.0;
-        let full = (160.0f32).hypot(100.0) + feather;
-        // Start: nothing but the corner itself is uncovered.
-        assert_eq!(reveal_coverage(80, 50, centre, 0.0, feather), 0.0);
-        assert_eq!(reveal_coverage(159, 0, centre, 0.0, feather), 0.0);
-        // Midway: near the corner is open, the far side is not.
-        assert!(reveal_coverage(4, 96, centre, full * 0.5, feather) > 0.0);
-        assert_eq!(reveal_coverage(159, 0, centre, full * 0.5, feather), 0.0);
-        // End: every corner of the card is fully uncovered.
-        for (x, y) in [(0, 0), (159, 0), (0, 99), (159, 99)] {
-            assert_eq!(reveal_coverage(x, y, centre, full, feather), 1.0);
-        }
+    fn the_slide_lands_exactly_on_the_resting_position() {
+        let travel = 27;
+        assert_eq!(slide_frame(0.0, travel), (travel, 0));
+        let (drop, alpha) = slide_frame(0.5, travel);
+        assert!(drop > 0 && drop < travel);
+        assert!(alpha > 0);
+        assert_eq!(slide_frame(1.0, travel).0, 0);
+        // Opacity leads the movement: fully opaque before the card settles.
+        assert_eq!(slide_frame(0.7, travel).1, 255);
+        assert!(slide_frame(0.7, travel).0 > 0);
     }
 
     #[test]
@@ -1584,7 +1580,7 @@ mod tests {
     #[test]
     fn each_theme_is_legible_and_hover_is_visible() {
         for light in [true, false] {
-            let (bg, hover, text, icon, separator) = theme_colors(light);
+            let (bg, hover, text, muted, icon, separator) = theme_colors(light);
             let bg_l = luminance(bg);
             assert_eq!(bg_l > 0.5, light, "background must follow the theme");
             assert!(
@@ -1596,6 +1592,15 @@ mod tests {
                 "icon must contrast with the card"
             );
             assert_ne!(bg, hover, "a hovered row must be distinguishable");
+            // Disabled rows (status readouts, flattened submenu headers) have
+            // to be readable but visibly weaker than a row you can click, or
+            // they invite clicks that do nothing.
+            let muted_contrast = (luminance(muted) - bg_l).abs();
+            assert!(muted_contrast > 0.15, "muted text must stay readable");
+            assert!(
+                muted_contrast < (luminance(text) - bg_l).abs(),
+                "muted text must be weaker than an actionable label"
+            );
             assert!(
                 (luminance(separator) - bg_l).abs() > 0.005,
                 "separator must be visible against the card"

@@ -376,55 +376,13 @@ export default function TaskbarTab({ settings, set, saving }: TabProps) {
         </div>
       </section>
 
-      {/* TASK-021 item 8 — configurable right-click menu (app-owned only). */}
-      <section className="settings-section">
-        <h3 className="settings-section__title">{t("TaskbarContextMenuSection")}</h3>
-        <p className="settings-section__hint">{t("TaskbarContextMenuHelper")}</p>
-        <div className="settings-section__group">
-          {(
-            [
-              { id: "open_panel", label: t("TrayOpenPanel") },
-              { id: "refresh", label: t("ActionRefresh") },
-              { id: "settings", label: t("MenuSettings") },
-              { id: "quit", label: t("MenuQuit") },
-            ] as const
-          ).map((action) => {
-            const selected = (
-              settings.taskbarContextMenuActions ?? [
-                "open_panel",
-                "refresh",
-                "settings",
-                "quit",
-              ]
-            ).includes(action.id);
-            return (
-              <Field key={action.id} label={action.label}>
-                <Toggle
-                  checked={selected}
-                  disabled={saving || !enabled}
-                  onChange={(value) => {
-                    const current = settings.taskbarContextMenuActions ?? [
-                      "open_panel",
-                      "refresh",
-                      "settings",
-                      "quit",
-                    ];
-                    const next = value
-                      ? [...current.filter((id) => id !== action.id), action.id]
-                      : current.filter((id) => id !== action.id);
-                    set({
-                      taskbarContextMenuActions:
-                        next.length > 0
-                          ? next
-                          : ["open_panel", "refresh", "settings", "quit"],
-                    });
-                  }}
-                />
-              </Field>
-            );
-          })}
-        </div>
-      </section>
+      {/* The right-click menu used to be configurable here: four toggles
+          picking which of open-panel / refresh / settings / quit appeared. That
+          menu is gone — the strip now shows the same content as the
+          notification-area tray menu, built from `build_tray_menu`, so there is
+          no per-row list to choose from any more. The control was removed
+          rather than left inert; `taskbar_context_menu_actions` is still
+          persisted and still normalised, it simply no longer drives anything. */}
 
       {/* TASK-021 item 9 — hover fields independent of strip painting. */}
       <section className="settings-section">
