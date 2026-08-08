@@ -110,3 +110,42 @@ describe("resolvePrimaryAuth", () => {
     );
   });
 });
+
+describe("resolveAuthEntries methods list", () => {
+  it("offers Codex exactly one method, so no picker is warranted", () => {
+    const { methods, primary } = resolveAuthEntries({
+      providerId: "codex",
+      cookieDomain: "chatgpt.com",
+      dashboardUrl: "https://chatgpt.com",
+      capabilities: OAUTH_ONLY,
+      isBespoke: false,
+    });
+    expect(methods).toEqual(["signIn"]);
+    expect(primary).toBe("signIn");
+  });
+
+  it("leads with the primary and lists the rest in preference order", () => {
+    const { methods, primary } = resolveAuthEntries({
+      providerId: "cursor",
+      cookieDomain: "cursor.com",
+      dashboardUrl: "https://cursor.com",
+      capabilities: { supportsOAuth: true, supportsCli: false, supportsApiKey: true },
+      isBespoke: false,
+    });
+    expect(methods[0]).toBe(primary);
+    expect(methods).toEqual(["cookie", "signIn", "apiKey"]);
+  });
+
+  it("never returns an empty list", () => {
+    // `resolvePrimaryAuth` falls back to `apiKey` even where the provider has
+    // none, so without a guard the zone would render nothing at all.
+    const { methods } = resolveAuthEntries({
+      providerId: "mystery",
+      cookieDomain: null,
+      dashboardUrl: null,
+      capabilities: { supportsOAuth: false, supportsCli: false, supportsApiKey: false },
+      isBespoke: false,
+    });
+    expect(methods).toEqual(["apiKey"]);
+  });
+});

@@ -713,7 +713,6 @@ ProviderLoginCapture = 로그인을 마쳤습니다
 ProviderLoginClose = 창 닫기
 ProviderLoginCaptured = 세션을 가져왔습니다.
 CredentialsSectionTitle = 자격 증명
-ProviderAuthOtherMethods = 기타 인증 방식
 OpenCodeGoWorkspaceTitle = OpenCode Go
 OpenCodeGoWorkspaceLabel = 워크스페이스 ID
 OpenCodeGoWorkspaceHelp = 선택 사항입니다. 자동 감지에 실패하면 워크스페이스 ID를 사용하세요.

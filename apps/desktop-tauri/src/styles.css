@@ -7061,56 +7061,25 @@ body:has(.settings-window-frame) #root {
   color: var(--text-secondary);
 }
 
-/* Auth zone: primary expanded, secondary collapsed */
+/* Auth zone: one method at a time, chosen with a segmented control.
+   Was "primary card expanded, the rest in a collapsed drawer", which implied a
+   hierarchy that does not exist — a provider authenticates exactly one way, so
+   the methods are alternatives, not a lead and its footnotes. */
 .provider-detail-auth-zone {
   display: flex;
   flex-direction: column;
   gap: var(--provider-workspace-gap);
   margin-bottom: var(--provider-workspace-gap);
 }
+/* The picker is a peer of the section heading, not of the cards below it, so
+   it sits tight under the helper text rather than a full gap away. */
+.provider-detail-auth-zone > .segmented-control {
+  margin-top: -4px;
+}
+/* The chosen method's own card supplies the padding; a second wrapper here is
+   what produced the card-inside-a-card look. */
 .provider-detail-auth-primary > .provider-detail-section {
   margin-bottom: 0;
-}
-.provider-detail-auth-more {
-  padding: 0;
-  overflow: hidden;
-}
-.provider-detail-auth-more__summary {
-  list-style: none;
-  cursor: pointer;
-  padding: var(--provider-workspace-padding);
-  font-size: var(--font-body);
-  font-weight: 650;
-  color: var(--text-primary);
-  user-select: none;
-}
-.provider-detail-auth-more__summary::-webkit-details-marker {
-  display: none;
-}
-.provider-detail-auth-more__summary::before {
-  content: "▸";
-  display: inline-block;
-  width: 1em;
-  margin-right: 6px;
-  color: var(--text-secondary);
-  transition: transform 0.15s ease;
-}
-.provider-detail-auth-more[open] > .provider-detail-auth-more__summary::before {
-  transform: rotate(90deg);
-}
-.provider-detail-auth-more__body {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  padding: 0 12px 14px;
-}
-.provider-detail-auth-more__body > .provider-detail-section,
-.provider-detail-auth-more__body > .token-accounts-inline {
-  margin: 0;
-  padding: 12px;
-  border-radius: var(--provider-workspace-radius-nested);
-  box-shadow: none;
-  background: var(--surface-elevated);
 }
 .provider-detail-display-zone {
   display: flex;

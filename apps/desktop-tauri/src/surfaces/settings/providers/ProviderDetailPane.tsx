@@ -11,6 +11,7 @@ import type {
   SettingsSnapshot,
   SettingsUpdate,
 } from "../../../types/bridge";
+import { SegmentedControl } from "../../../components/FormControls";
 import { resolveAuthEntries, type PrimaryAuthKind } from "./authEntries";
 import { useLocale } from "../../../hooks/useLocale";
 import {
@@ -506,8 +507,13 @@ function AuthWorkspace({
   const isBespoke = hasBespokeCredentials(providerId);
   const supportsOAuth = capabilities?.supportsOAuth ?? false;
   const supportsCli = capabilities?.supportsCli ?? false;
-  const { availability, primary, showApiKey, showCookieSource: codexAllowsSource } =
-    resolveAuthEntries({
+  const {
+    availability,
+    primary,
+    showApiKey,
+    methods,
+    showCookieSource: codexAllowsSource,
+  } = resolveAuthEntries({
       providerId,
       cookieDomain,
       dashboardUrl,
@@ -547,47 +553,31 @@ function AuthWorkspace({
     />
   );
 
-  const entries: { kind: Exclude<PrimaryAuthKind, "apiKey">; node: ReactNode; label: LocaleKey }[] = [
-    { kind: "bespoke", node: bespokeNode, label: "CredentialsSectionTitle" },
-    { kind: "cookie", node: cookieNode, label: "CredentialManualCookies" },
-    { kind: "signIn", node: signInNode, label: "OAuth" },
-  ];
+  // One method at a time. A provider is authenticated *one* way — cookies or a
+  // browser sign-in or a CLI or an API key — so these are mutually exclusive
+  // choices, and a segmented control is what a mutually exclusive choice looks
+  // like. The zone used to render a lead card plus a collapsed "其他认证方式"
+  // drawer, which implied a hierarchy that does not exist and hid a provider's
+  // only real option behind a disclosure triangle.
+  const nodeFor: Record<PrimaryAuthKind, ReactNode> = {
+    bespoke: bespokeNode,
+    cookie: cookieNode,
+    signIn: signInNode,
+    apiKey: apiKeyNode,
+  };
+  const labelFor: Record<PrimaryAuthKind, LocaleKey> = {
+    bespoke: "CredentialsSectionTitle",
+    cookie: "CredentialManualCookies",
+    signIn: "OAuth",
+    apiKey: "CredentialApiKeys",
+  };
 
-  const primaryNode: ReactNode =
-    primary === "apiKey"
-      ? apiKeyNode
-      : entries.find((entry) => entry.kind === primary)?.node ?? apiKeyNode;
-
-  const secondaryNodes: ReactNode[] = [];
-  const secondaryLabels: string[] = [];
-  for (const entry of entries) {
-    if (entry.kind === primary || !entry.node) continue;
-    secondaryNodes.push(entry.node);
-    secondaryLabels.push(t(entry.label));
-  }
-  if (primary !== "apiKey" && showApiKey) {
-    secondaryNodes.push(apiKeyNode);
-    secondaryLabels.push(t("CredentialApiKeys"));
-  }
-  if (hasTokenAccounts) {
-    secondaryNodes.push(
-      <TokenAccountsPanel
-        key={`token-${providerId}-${credentialRevision}`}
-        providerId={providerId}
-        compact
-      />,
-    );
-    secondaryLabels.push(t("CredentialTokenAccounts"));
-  }
-  secondaryNodes.push(
-    <CredentialStorageSection
-      key={`storage-${providerId}`}
-      status={credentialStatus}
-      busy={busy}
-      onRevoke={onRevoke}
-      t={t}
-    />,
-  );
+  // Reset to the provider's own default when the pane switches providers —
+  // "cookie" selected on one provider means nothing on the next, and may not
+  // even be offered there.
+  const [chosen, setChosen] = useState<PrimaryAuthKind>(primary);
+  useEffect(() => setChosen(primary), [primary, providerId]);
+  const method = methods.includes(chosen) ? chosen : primary;
 
   return (
     <div className="provider-detail-auth-zone" data-auth-sources="true">
@@ -599,9 +589,24 @@ function AuthWorkspace({
           {t("ProviderAuthSourcesHelper")}
         </p>
       </div>
+      {/* One option is not a choice. A single-method provider — Codex, whose
+          only route is a browser sign-in — gets its controls directly, with no
+          control that can only be set to what it already is. */}
+      {methods.length > 1 && (
+        <SegmentedControl
+          value={method}
+          options={methods.map((kind) => ({
+            value: kind,
+            label: t(labelFor[kind]),
+          }))}
+          onChange={(value) => setChosen(value as PrimaryAuthKind)}
+        />
+      )}
+      <div className="provider-detail-auth-primary">{nodeFor[method]}</div>
       {/* Preferred source mode (auto / web / cli / …) stays with credentials,
-          not under Display — TASK-021 item 2. */}
-      {showCookieSource && (
+          not under Display — TASK-021 item 2. Shown under the cookie method
+          because that is the only one it governs. */}
+      {showCookieSource && method === "cookie" && (
         <CookieSourceSection
           providerId={providerId}
           currentValue={cookieSource ?? null}
@@ -610,18 +615,22 @@ function AuthWorkspace({
           onChanged={onCookieSourceChanged}
         />
       )}
-      <div className="provider-detail-auth-primary">{primaryNode}</div>
-      {/* Named rather than a bare "other methods" label — TASK-021 item 2 —
-          since the entry count here (cookie / API key / token accounts / …)
-          is large enough on some providers that flattening would push the
-          identity + quota + stats content too far down the pane. */}
-      <details className="provider-detail-section provider-detail-auth-more">
-        <summary className="provider-detail-auth-more__summary">
-          {t("ProviderAuthOtherMethods")}
-          {secondaryLabels.length > 0 && ` (${secondaryLabels.join(" · ")})`}
-        </summary>
-        <div className="provider-detail-auth-more__body">{secondaryNodes}</div>
-      </details>
+      {/* Below the picker, not inside it: neither is an authentication
+          *method*. Token accounts are a roster the chosen method fills, and
+          credential storage is a status readout plus the revoke action. */}
+      {hasTokenAccounts && (
+        <TokenAccountsPanel
+          key={`token-${providerId}-${credentialRevision}`}
+          providerId={providerId}
+          compact
+        />
+      )}
+      <CredentialStorageSection
+        status={credentialStatus}
+        busy={busy}
+        onRevoke={onRevoke}
+        t={t}
+      />
     </div>
   );
 }

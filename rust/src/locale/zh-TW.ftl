@@ -713,7 +713,6 @@ ProviderLoginCapture = 我已登入完成
 ProviderLoginClose = 關閉視窗
 ProviderLoginCaptured = 工作階段已匯入。
 CredentialsSectionTitle = 憑據
-ProviderAuthOtherMethods = 其他認證方式
 OpenCodeGoWorkspaceTitle = OpenCode Go
 OpenCodeGoWorkspaceLabel = 工作區 ID
 OpenCodeGoWorkspaceHelp = 選用。自動偵測失敗時，請使用工作區 ID。

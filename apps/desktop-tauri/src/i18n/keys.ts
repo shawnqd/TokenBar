@@ -637,7 +637,6 @@ export const ALL_LOCALE_KEYS = [
   "ProviderLoginCaptured",
   // Phase 6d — credential detection
   "CredentialsSectionTitle",
-  "ProviderAuthOtherMethods",
   "ProviderAuthSourcesTitle",
   "ProviderAuthSourcesHelper",
   "ProviderIssueCategoryAuth",

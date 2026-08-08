@@ -713,7 +713,6 @@ ProviderLoginCapture = Ya inicié sesión
 ProviderLoginClose = Cerrar ventana
 ProviderLoginCaptured = Sesión importada.
 CredentialsSectionTitle = Credenciales
-ProviderAuthOtherMethods = Otros métodos de autenticación
 OpenCodeGoWorkspaceTitle = OpenCode Go
 OpenCodeGoWorkspaceLabel = ID del espacio de trabajo
 OpenCodeGoWorkspaceHelp = Opcional. Usa un ID de espacio de trabajo cuando falle la detección automática.

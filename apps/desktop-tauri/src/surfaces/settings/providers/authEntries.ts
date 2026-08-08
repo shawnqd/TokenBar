@@ -40,6 +40,17 @@ export interface AuthEntryDecision {
   primary: PrimaryAuthKind;
   showApiKey: boolean;
   showCookieSource: boolean;
+  /**
+   * Every method this provider can actually be authenticated with, in the
+   * order they should be offered. `primary` is always the first.
+   *
+   * A provider is authenticated **one way at a time**, so these are mutually
+   * exclusive choices rather than a lead card plus an "other methods" drawer.
+   * The zone used to render them as the latter, which read as a hierarchy that
+   * does not exist and buried a provider's only real option — Codex's sign-in
+   * sat behind a collapsed row on a page whose visible card said "CLI".
+   */
+  methods: PrimaryAuthKind[];
 }
 
 /**
@@ -86,12 +97,22 @@ export function resolveAuthEntries(input: AuthEntryInput): AuthEntryDecision {
   const signIn = !isBespoke && (supportsOAuth || supportsCli) && dashboardUrl !== null;
 
   const availability: AuthEntryAvailability = { bespoke: isBespoke, cookie, signIn };
-  return {
-    availability,
-    primary: resolvePrimaryAuth(availability),
-    // `null` capabilities — not loaded yet, or the command is not registered —
-    // falls back to the old universal behaviour rather than hiding the entry.
-    showApiKey: capabilities ? capabilities.supportsApiKey : true,
-    showCookieSource: providerId !== "codex",
-  };
+  const primary = resolvePrimaryAuth(availability);
+  // `null` capabilities — not loaded yet, or the command is not registered —
+  // falls back to the old universal behaviour rather than hiding the entry.
+  const showApiKey = capabilities ? capabilities.supportsApiKey : true;
+
+  // Preference order, filtered to what exists. `primary` leads by construction
+  // because `resolvePrimaryAuth` walks this same order.
+  const methods: PrimaryAuthKind[] = [];
+  if (availability.bespoke) methods.push("bespoke");
+  if (availability.cookie) methods.push("cookie");
+  if (availability.signIn) methods.push("signIn");
+  if (showApiKey) methods.push("apiKey");
+  // `resolvePrimaryAuth` returns `apiKey` as its last resort even where the
+  // provider has none, so the list would otherwise come back empty and the
+  // zone would render nothing at all.
+  if (methods.length === 0) methods.push(primary);
+
+  return { availability, primary, showApiKey, showCookieSource: providerId !== "codex", methods };
 }

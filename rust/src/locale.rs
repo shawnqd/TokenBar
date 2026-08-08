@@ -924,7 +924,6 @@ locale_keys! {
 
     // Tauri desktop shell — Phase 6d credential detection UIs
     CredentialsSectionTitle,
-    ProviderAuthOtherMethods,
     // TASK-021 surface naming / auth / taskbar interaction keys live near
     // Taskbar* and Provider* sections above.
     CredsStatusAuthenticated,

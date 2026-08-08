@@ -713,7 +713,6 @@ ProviderLoginCapture = I Am Signed In
 ProviderLoginClose = Close Window
 ProviderLoginCaptured = Session imported.
 CredentialsSectionTitle = Credentials
-ProviderAuthOtherMethods = その他の認証方法
 OpenCodeGoWorkspaceTitle = OpenCode Go
 OpenCodeGoWorkspaceLabel = Workspace ID
 OpenCodeGoWorkspaceHelp = Optional. Use a workspace ID when automatic detection fails.
