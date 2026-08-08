@@ -62,7 +62,14 @@
   --about-icon-radius: 16px;
   /* Shared outer-window geometry. The tray flyout and detached Settings
      window intentionally use one radius so their silhouettes cannot drift. */
-  --window-radius: 24px;
+  /* One corner radius for every window the app draws: the tray flyout, the
+     dashboard and the Settings frame all derive from this, and the self-drawn
+     context menu uses the same 8 (`CORNER_RADIUS_DIP` in `taskbar_menu.rs`).
+     8 is also what DWM itself rounds to — `DWMWA_WINDOW_CORNER_PREFERENCE` is a
+     fixed ~8px — so a window we round ourselves and one Windows rounds for us
+     now agree. It was 24px, which read as a different design language from the
+     menu sitting right next to it. */
+  --window-radius: 8px;
 
   /* ── General surfaces / text ───────────────────────────────────── */
   --app-bg: #1c1c1e;
@@ -7504,12 +7511,22 @@ body:has(.tray-panel-reveal) {
   filter: none;
 }
 
-[data-theme="light"] .menu-surface--tray {
+/* The light-theme card colours belong to every surface, for the same reason the
+   dark defaults above do.
+   Scoping these to the tray while the *defaults* were shared is what put black
+   cards in a white dashboard: broadening a selector is safe for whoever already
+   matched it, but the new matcher may need different values, and the tray never
+   needed this override to be found because its own chrome is dark either way. */
+[data-theme="light"] .menu-surface {
   --flyout-zone-bg: #ffffff;
   --flyout-zone-hairline: rgba(0, 0, 0, 0.07);
   --flyout-zone-shadow: 0 0 0 1px var(--flyout-zone-hairline),
     0 1px 2px rgba(0, 0, 0, 0.05),
     0 4px 12px rgba(0, 0, 0, 0.04);
+}
+
+/* The tray's own panel fill stays tray-only — that is chrome, not card. */
+[data-theme="light"] .menu-surface--tray {
   background: #fbfbfc;
   color: var(--text-primary);
 }
