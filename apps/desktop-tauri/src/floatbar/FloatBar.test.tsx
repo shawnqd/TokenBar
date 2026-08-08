@@ -160,7 +160,6 @@ function settings(overrides: Partial<SettingsSnapshot> = {}): SettingsSnapshot {
     dashboardProviderIds: [],
     taskbarShowAsUsed: true,
     taskbarResetTimeRelative: true,
-    taskbarContextMenuActions: ["open_panel", "refresh", "settings", "quit"],
     taskbarTooltipEntries: [],
     ...overrides,
   };
@@ -280,7 +279,6 @@ describe("FloatBar", () => {
       floatBarShowAsUsed: true,
       dashboardShowAsUsed: false,
       taskbarShowAsUsed: false,
-    taskbarContextMenuActions: ["open_panel", "refresh", "settings", "quit"],
     taskbarTooltipEntries: [],
     };
     tauriMocks.getSettingsSnapshot.mockResolvedValue(settings(overrides));

@@ -383,7 +383,6 @@ export interface SettingsSnapshot {
    * Ordered right-click actions for the mini status bar.
    * Known ids: open_panel | refresh | settings | quit.
    */
-  taskbarContextMenuActions: string[];
   /**
    * Hover/tooltip entries for the mini status bar (and tray tooltip when set),
    * independent of the painted strip entries. Empty reuses strip entries.
@@ -457,7 +456,6 @@ export interface SettingsUpdate {
   dashboardProviderIds?: string[];
   taskbarShowAsUsed?: boolean;
   taskbarResetTimeRelative?: boolean;
-  taskbarContextMenuActions?: string[];
   taskbarTooltipEntries?: TaskbarEntry[];
 }
 

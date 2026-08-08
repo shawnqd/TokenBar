@@ -875,6 +875,27 @@ static MENU_COMMAND_IDS: Mutex<Vec<String>> = Mutex::new(Vec::new());
 /// the tray has no equivalent row, so it is handled before delegating.
 const STRIP_TOGGLE_ID: &str = "toggle_taskbar_strip";
 
+/// Strip the leading status readouts, and the separator that trailed them.
+///
+/// `build_tray_menu_with` emits the rows as a block at the very top followed by
+/// one separator, so removing them means dropping the run of disabled rows from
+/// the front and then the separator they left behind — otherwise the menu opens
+/// with a rule above its first action.
+fn drop_status_rows(spec: &mut Vec<crate::tray_menu::TrayMenuEntry>) {
+    let status_rows = spec
+        .iter()
+        .take_while(|entry| entry.disabled && !entry.is_separator)
+        .count();
+    if status_rows == 0 {
+        return;
+    }
+    let trailing_separator = usize::from(
+        spec.get(status_rows)
+            .is_some_and(|entry| entry.is_separator),
+    );
+    spec.drain(..status_rows + trailing_separator);
+}
+
 /// Converts the tray menu tree into the flat row list the self-drawn menu
 /// draws, and records each row's id.
 ///
@@ -937,12 +958,41 @@ fn insert_strip_toggle(
     }
 }
 
+/// Which surface a context menu was opened from.
+///
+/// The two menus carry the same *actions* — that is M2, and it must stay true —
+/// but they do not need the same *readouts*, and since M3 each surface can say
+/// so for itself.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum MenuSurface {
+    /// The taskbar strip, which is already painting the numbers.
+    Strip,
+    /// The notification-area icon, a 16 px glyph that is painting nothing.
+    TrayIcon,
+}
+
+impl MenuSurface {
+    /// Whether this surface's menu should carry the live status readouts.
+    ///
+    /// The strip does not: it is a status bar, so its own rows already show
+    /// what the readout would repeat, and that readout was the widest element
+    /// in the menu — one non-clickable line made the card roughly twice as wide
+    /// as its actions needed (B5). The tray icon does: a 16 px icon shows no
+    /// numbers at all, so dropping the rows there would cost real information.
+    ///
+    /// This is exactly the decision B5 had to defer until M3 landed, because
+    /// before that both menus came from one builder with no way to differ.
+    fn wants_status_rows(self) -> bool {
+        matches!(self, Self::TrayIcon)
+    }
+}
+
 /// Build the shared context menu and show it owned by `hwnd`.
 ///
-/// `pub(crate)` because the notification-area tray icon shows the *same* menu,
+/// `pub(crate)` because the notification-area tray icon shows the same menu,
 /// owned by `menu_host`'s message-only window instead of the strip. That is the
 /// whole of M3: one builder, one dispatcher, two owners.
-pub(crate) fn show_context_menu(hwnd: isize) {
+pub(crate) fn show_context_menu(hwnd: isize, surface: MenuSurface) {
     use crate::taskbar_menu::MenuItem;
     use codexbar::locale::{LocaleKey, get_text};
 
@@ -952,12 +1002,14 @@ pub(crate) fn show_context_menu(hwnd: isize) {
     let settings = codexbar::settings::Settings::load();
 
     // Content comes from `build_tray_menu`, the same builder the
-    // notification-area menu uses, so the two can no longer drift apart. The
-    // strip's `taskbar_context_menu_actions` setting no longer selects rows —
-    // it described a four-entry menu that this replaces.
+    // notification-area menu uses, so the two can no longer drift apart.
+    let mut spec = crate::tray_bridge::tray_menu_spec(app);
+    if !surface.wants_status_rows() {
+        drop_status_rows(&mut spec);
+    }
     let mut items: Vec<MenuItem> = Vec::new();
     let mut ids: Vec<String> = Vec::new();
-    flatten_menu_entries(&crate::tray_bridge::tray_menu_spec(app), &mut items, &mut ids);
+    flatten_menu_entries(&spec, &mut items, &mut ids);
 
     // The strip's own visibility toggle has no tray equivalent, so it is added
     // here rather than coming from the builder — but it is *inserted next to
@@ -1080,7 +1132,7 @@ unsafe extern "system" fn wnd_proc(hwnd: isize, msg: u32, wparam: usize, lparam:
         WM_NCHITTEST => HTCLIENT,
         WM_MOUSEACTIVATE => MA_NOACTIVATE,
         WM_RBUTTONUP => {
-            show_context_menu(hwnd);
+            show_context_menu(hwnd, MenuSurface::Strip);
             0
         }
         WM_COMMAND => {
@@ -1124,7 +1176,7 @@ unsafe extern "system" fn hit_proxy_proc(
         WM_NCHITTEST => HTCLIENT,
         WM_MOUSEACTIVATE => MA_NOACTIVATE,
         WM_RBUTTONUP => {
-            show_context_menu(hwnd);
+            show_context_menu(hwnd, MenuSurface::Strip);
             0
         }
         WM_COMMAND => {
@@ -1660,6 +1712,78 @@ mod tests {
 
 
     /// The flattened list is what the menu draws; `ids` is what a click
+    /// B5's deferred decision, now that M3 lets each surface answer it: the
+    /// strip's menu drops the status readouts, the tray icon's keeps them.
+    ///
+    /// The actions must be **identical** either way — that is M2, and dropping
+    /// a readout must never drop something clickable with it.
+    #[test]
+    fn strip_menu_drops_status_rows_but_keeps_every_action() {
+        use crate::tray_menu::build_tray_menu_with;
+        use codexbar::settings::Language;
+
+        let catalog = vec![crate::commands::ProviderCatalogEntry {
+            id: "codex".into(),
+            display_name: "Codex".into(),
+            cookie_domain: None,
+        }];
+        let enabled = ["codex".to_string()].into_iter().collect();
+        let build = || {
+            build_tray_menu_with(
+                &catalog,
+                &[("codex".to_string(), "Codex 30%".to_string())],
+                &enabled,
+                true,
+                Language::English,
+            )
+        };
+
+        let tray = build();
+        let mut strip = build();
+        drop_status_rows(&mut strip);
+
+        assert!(
+            tray.iter().any(|entry| entry.disabled && !entry.is_separator),
+            "the fixture has a status row to drop, or this test proves nothing"
+        );
+        assert!(
+            !strip
+                .iter()
+                .any(|entry| entry.disabled && !entry.is_separator),
+            "no status readout survives on the strip"
+        );
+        assert!(
+            !strip.first().is_some_and(|entry| entry.is_separator),
+            "the separator the rows left behind goes with them"
+        );
+
+        let actions = |spec: &[crate::tray_menu::TrayMenuEntry]| {
+            spec.iter()
+                .filter(|entry| !entry.is_separator && !entry.disabled)
+                .filter_map(|entry| entry.id.clone())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            actions(&strip),
+            actions(&tray),
+            "the two menus differ in readouts only, never in what they can do"
+        );
+    }
+
+    /// Dropping nothing must not corrupt the menu: a provider set with no live
+    /// usage produces no status rows, and the first real row must survive.
+    #[test]
+    fn dropping_status_rows_is_a_no_op_when_there_are_none() {
+        use crate::tray_menu::build_tray_menu_with;
+        use codexbar::settings::Language;
+
+        let enabled = std::collections::HashSet::new();
+        let mut spec = build_tray_menu_with(&[], &[], &enabled, true, Language::English);
+        let before = spec.len();
+        drop_status_rows(&mut spec);
+        assert_eq!(spec.len(), before, "nothing to drop, nothing dropped");
+    }
+
     /// resolves through. They must stay index-aligned, because the row's
     /// 1-based position is the only thing that travels back in `WM_COMMAND`.
     #[test]

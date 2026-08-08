@@ -329,7 +329,14 @@ pub fn setup(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
                     // callback runs on the main thread, which is where that
                     // window must be created — see `menu_host`.
                     if let Some(owner) = crate::menu_host::hwnd() {
-                        crate::taskbar_widget::show_context_menu(owner);
+                        crate::taskbar_widget::show_context_menu(
+                            owner,
+                            // Keeps the status readouts: a 16 px icon shows no
+                            // numbers, so this menu is the only place they
+                            // appear. The strip drops them — it is already a
+                            // status bar. See `MenuSurface`.
+                            crate::taskbar_widget::MenuSurface::TrayIcon,
+                        );
                     }
                 }
             }

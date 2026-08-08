@@ -36,7 +36,6 @@ const settings = {
   dashboardProviderIds: [],
   taskbarShowAsUsed: true,
   taskbarResetTimeRelative: true,
-    taskbarContextMenuActions: ["open_panel", "refresh", "settings", "quit"],
     taskbarTooltipEntries: [],
   taskbarWidgetEnabled: true,
   menuFontWeight: 300,

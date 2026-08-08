@@ -77,7 +77,6 @@ pub struct SettingsUpdate {
     pub dashboard_provider_ids: Option<Vec<String>>,
     pub taskbar_show_as_used: Option<bool>,
     pub taskbar_reset_time_relative: Option<bool>,
-    pub taskbar_context_menu_actions: Option<Vec<String>>,
     pub taskbar_tooltip_entries: Option<Vec<TaskbarEntryBridge>>,
 }
 
@@ -123,7 +122,6 @@ impl SettingsUpdate {
             || self.taskbar_widget_text_align.is_some()
             || self.taskbar_widget_position.is_some()
             || self.taskbar_widget_enabled.is_some()
-            || self.taskbar_context_menu_actions.is_some()
             || self.taskbar_tooltip_entries.is_some()
     }
 
@@ -243,10 +241,6 @@ impl SettingsUpdate {
         }
         if let Some(v) = self.taskbar_show_as_used {
             settings.taskbar_show_as_used = v;
-        }
-        if let Some(ref actions) = self.taskbar_context_menu_actions {
-            settings.taskbar_context_menu_actions =
-                codexbar::settings::normalize_taskbar_context_menu_actions(actions);
         }
         if let Some(ref entries) = self.taskbar_tooltip_entries {
             let requested: Vec<codexbar::settings::TaskbarEntry> =

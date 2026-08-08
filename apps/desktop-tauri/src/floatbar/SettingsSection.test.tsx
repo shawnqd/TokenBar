@@ -37,7 +37,6 @@ const settings = {
   dashboardProviderIds: [],
   taskbarShowAsUsed: true,
   taskbarResetTimeRelative: true,
-    taskbarContextMenuActions: ["open_panel", "refresh", "settings", "quit"],
     taskbarTooltipEntries: [],
   floatBarDarkText: false,
   floatBarClickThrough: false,

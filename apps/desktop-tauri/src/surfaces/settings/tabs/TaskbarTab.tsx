@@ -378,11 +378,10 @@ export default function TaskbarTab({ settings, set, saving }: TabProps) {
 
       {/* The right-click menu used to be configurable here: four toggles
           picking which of open-panel / refresh / settings / quit appeared. That
-          menu is gone — the strip now shows the same content as the
+          menu is gone — the strip now shows the same actions as the
           notification-area tray menu, built from `build_tray_menu`, so there is
-          no per-row list to choose from any more. The control was removed
-          rather than left inert; `taskbar_context_menu_actions` is still
-          persisted and still normalised, it simply no longer drives anything. */}
+          no per-row list to choose from any more. The control went first and
+          `taskbar_context_menu_actions` followed it out of the settings file. */}
 
       {/* TASK-021 item 9 — hover fields independent of strip painting. */}
       <section className="settings-section">

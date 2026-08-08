@@ -77,7 +77,6 @@ const settings: SettingsSnapshot = {
   dashboardProviderIds: [],
   taskbarShowAsUsed: true,
   taskbarResetTimeRelative: true,
-    taskbarContextMenuActions: ["open_panel", "refresh", "settings", "quit"],
     taskbarTooltipEntries: [],
 };
 

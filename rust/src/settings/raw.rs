@@ -214,8 +214,6 @@ pub(super) struct RawSettings {
     #[serde(default)]
     taskbar_reset_time_relative: Option<bool>,
     #[serde(default)]
-    taskbar_context_menu_actions: Option<Vec<String>>,
-    #[serde(default)]
     taskbar_tooltip_entries: Option<Vec<TaskbarEntry>>,
 }
 
@@ -360,7 +358,6 @@ impl Default for RawSettings {
             dashboard_provider_ids: s.dashboard_provider_ids,
             taskbar_show_as_used: Some(s.taskbar_show_as_used),
             taskbar_reset_time_relative: Some(s.taskbar_reset_time_relative),
-            taskbar_context_menu_actions: Some(s.taskbar_context_menu_actions.clone()),
             taskbar_tooltip_entries: Some(s.taskbar_tooltip_entries.clone()),
         }
     }
@@ -679,11 +676,6 @@ impl From<RawSettings> for Settings {
             taskbar_reset_time_relative: raw
                 .taskbar_reset_time_relative
                 .unwrap_or(raw.reset_time_relative),
-            taskbar_context_menu_actions: crate::settings::normalize_taskbar_context_menu_actions(
-                raw.taskbar_context_menu_actions
-                    .as_deref()
-                    .unwrap_or(&[]),
-            ),
             // Empty / absent → empty list; the tooltip builder falls back to
             // strip entries at read time so upgrading does not invent a second
             // configuration the user never set.

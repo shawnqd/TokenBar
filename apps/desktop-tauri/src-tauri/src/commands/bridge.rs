@@ -570,7 +570,6 @@ pub struct SettingsSnapshot {
     dashboard_provider_ids: Vec<String>,
     taskbar_show_as_used: bool,
     taskbar_reset_time_relative: bool,
-    taskbar_context_menu_actions: Vec<String>,
     taskbar_tooltip_entries: Vec<TaskbarEntryBridge>,
 }
 
@@ -680,7 +679,6 @@ impl From<Settings> for SettingsSnapshot {
             dashboard_provider_ids: settings.dashboard_provider_ids.clone(),
             taskbar_show_as_used: settings.taskbar_show_as_used,
             taskbar_reset_time_relative: settings.taskbar_reset_time_relative,
-            taskbar_context_menu_actions: settings.taskbar_context_menu_actions.clone(),
             taskbar_tooltip_entries: settings
                 .taskbar_tooltip_entries
                 .iter()

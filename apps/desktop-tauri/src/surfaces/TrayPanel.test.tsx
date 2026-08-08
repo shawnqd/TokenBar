@@ -182,7 +182,6 @@ function settings(overrides: Partial<SettingsSnapshot> = {}): SettingsSnapshot {
     dashboardProviderIds: [],
     taskbarShowAsUsed: true,
     taskbarResetTimeRelative: true,
-    taskbarContextMenuActions: ["open_panel", "refresh", "settings", "quit"],
     taskbarTooltipEntries: [],
     ...overrides,
   };
@@ -767,7 +766,6 @@ describe("TrayPanel provider grid", () => {
       dashboardShowAsUsed: true,
       floatBarShowAsUsed: false,
       taskbarShowAsUsed: false,
-    taskbarContextMenuActions: ["open_panel", "refresh", "settings", "quit"],
     taskbarTooltipEntries: [],
     });
 
