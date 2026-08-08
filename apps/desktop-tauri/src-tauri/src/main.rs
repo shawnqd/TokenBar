@@ -287,6 +287,17 @@ fn main() {
             boot::stage_infallible("provider chart cache", || {
                 commands::restore_provider_chart_cache()
             });
+            // Model prices, refreshed at most once a day from the network.
+            // Background and fire-and-forget: nothing on screen waits for it,
+            // and a failure leaves the previous cache — or the built-in table —
+            // in place. Without this the built-in table is frozen at build
+            // time, which is the wrong behaviour for an app that is not
+            // re-released often.
+            boot::stage_infallible("model pricing refresh", || {
+                tauri::async_runtime::spawn(async {
+                    codexbar::core::refresh_pricing_if_stale().await;
+                });
+            });
 
             // Local cost/token summaries are expensive because they aggregate
             // up to 30 days of Codex and Claude JSONL logs. Warm them after the

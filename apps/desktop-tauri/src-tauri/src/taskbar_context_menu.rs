@@ -256,7 +256,6 @@ pub(crate) fn handle_command(index: usize) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tray_menu::TrayMenuEntry;
 
     #[test]
     fn strip_menu_drops_status_rows_but_keeps_every_action() {

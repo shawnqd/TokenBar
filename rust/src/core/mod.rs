@@ -6,6 +6,13 @@ mod credentials;
 mod http;
 mod jsonl_scanner;
 mod models_dev_pricing;
+
+/// Refresh the model price catalog if the cached copy has aged out.
+///
+/// Re-exported because the desktop shell has to be able to trigger it at
+/// startup — the module itself stays private so nothing else can reach into
+/// the cache format.
+pub use models_dev_pricing::refresh_if_stale as refresh_pricing_if_stale;
 mod openai_dashboard;
 mod provider;
 mod provider_factory;

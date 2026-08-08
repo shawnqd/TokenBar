@@ -1,12 +1,89 @@
-// Kept for the on-disk cache format; see the note below on the deleted
-// refresh path.
-#![allow(dead_code)]
-
 #[cfg(test)]
 mod tests {
-    use super::{ModelsDevCache, ModelsDevCacheArtifact, ModelsDevCatalog};
+    use super::{
+        ModelsDevCache, ModelsDevCacheArtifact, ModelsDevCatalog, ModelsDevRefreshCoordinator,
+        PRICING_SOURCES,
+    };
     use std::path::PathBuf;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::time::{Duration, UNIX_EPOCH};
+
+    /// LiteLLM publishes per-**token** rates; models.dev publishes per-million.
+    /// Getting this wrong makes every cost 1,000,000x too small, which reads as
+    /// a believable "¥0.00" rather than as an obvious bug — so it is pinned.
+    #[test]
+    fn litellm_rates_are_converted_to_the_per_million_unit() {
+        let catalog = ModelsDevCatalog::decode_litellm(
+            r#"{
+                "gpt-x": {
+                    "litellm_provider": "openai",
+                    "input_cost_per_token": 0.00000125,
+                    "output_cost_per_token": 0.00001
+                }
+            }"#,
+        )
+        .expect("decodes");
+        // Stored per million, handed out per token — `lookup` converts back,
+        // so a correct round trip returns exactly what LiteLLM published.
+        let pricing = catalog.lookup("openai", "gpt-x").expect("priced");
+        assert!((pricing.input_cost_per_token - 0.00000125).abs() < 1e-15);
+        assert!((pricing.output_cost_per_token - 0.00001).abs() < 1e-15);
+    }
+
+    /// The file also carries embeddings, rerankers and placeholder rows with no
+    /// per-token price. Those must be skipped, not stored as zero — a stored
+    /// zero would price real usage at nothing.
+    #[test]
+    fn litellm_entries_without_a_usable_rate_are_skipped() {
+        let catalog = ModelsDevCatalog::decode_litellm(
+            r#"{
+                "embed-1": { "litellm_provider": "openai" },
+                "no-provider": { "input_cost_per_token": 1.0, "output_cost_per_token": 2.0 },
+                "real": {
+                    "litellm_provider": "openai",
+                    "input_cost_per_token": 0.000002,
+                    "output_cost_per_token": 0.000004
+                }
+            }"#,
+        )
+        .expect("decodes");
+        assert!(catalog.lookup("openai", "embed-1").is_none());
+        assert!(catalog.lookup("openai", "no-provider").is_none());
+        assert!(catalog.lookup("openai", "real").is_some());
+    }
+
+    /// A source that decodes but carries no usable prices must lose to the next
+    /// one rather than overwrite a good cache. This is the check that decides
+    /// that, so it has to reject an empty payload.
+    #[test]
+    fn a_source_with_no_priceable_models_is_not_plausible() {
+        let empty = ModelsDevCatalog::decode_litellm(r#"{ "x": {} }"#);
+        assert!(empty.is_none(), "nothing priceable means nothing to trust");
+
+        let partial = ModelsDevCatalog::decode_litellm(
+            r#"{ "m": { "litellm_provider": "openai",
+                        "input_cost_per_token": 1e-6,
+                        "output_cost_per_token": 2e-6 } }"#,
+        )
+        .expect("decodes");
+        assert!(
+            !partial.is_plausible_refresh(),
+            "openai alone is not enough — anthropic is required too"
+        );
+    }
+
+    /// Every configured source URL must survive the whitespace-stripping the
+    /// fetch does, and must still be a URL afterwards.
+    #[test]
+    fn every_pricing_source_url_is_well_formed() {
+        assert!(!PRICING_SOURCES.is_empty(), "a fallback list of one is not a fallback");
+        for source in PRICING_SOURCES {
+            let url: String = source.url.split_whitespace().collect();
+            assert!(url.starts_with("https://"), "{}: {url}", source.name);
+            assert!(!url.contains(' '), "{}: {url}", source.name);
+        }
+    }
 
     #[test]
     fn decodes_top_level_provider_map_and_converts_million_token_rates() {
@@ -126,6 +203,47 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn concurrent_refreshes_for_one_cache_path_share_one_operation() {
+        let coordinator = ModelsDevRefreshCoordinator::default();
+        let calls = Arc::new(AtomicUsize::new(0));
+        let first_calls = Arc::clone(&calls);
+        let path = PathBuf::from("pricing.json");
+        let now = UNIX_EPOCH + Duration::from_secs(1_000_000);
+
+        let first = coordinator.refresh(path.clone(), now, async move {
+            first_calls.fetch_add(1, Ordering::SeqCst);
+            tokio::time::sleep(Duration::from_millis(10)).await;
+            true
+        });
+        let second = coordinator.refresh(path, now, async {
+            panic!("the second caller must await the first operation");
+        });
+
+        assert!(tokio::join!(first, second).0);
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn failed_refresh_is_not_retried_within_the_attempt_window() {
+        let coordinator = ModelsDevRefreshCoordinator::default();
+        let path = PathBuf::from("pricing.json");
+        let now = UNIX_EPOCH + Duration::from_secs(1_000_000);
+
+        assert!(
+            !coordinator
+                .refresh(path.clone(), now, async { false })
+                .await
+        );
+        assert!(
+            !coordinator
+                .refresh(path, now + Duration::from_secs(60), async {
+                    panic!("the 15-minute bound must suppress this attempt");
+                })
+                .await
+        );
+    }
+
     #[test]
     fn cache_path_uses_the_existing_per_user_cache_root() {
         let cache_root = ModelsDevCache::default_cache_root().expect("per-user cache root");
@@ -139,30 +257,63 @@ mod tests {
 use serde::{Deserialize, Deserializer, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::fs;
+use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, LazyLock, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use tokio::sync::{Mutex as AsyncMutex, watch};
 
-// ── The refresh half of this module is gone ────────────────────────────────
-//
-// `lookup` reads a models.dev pricing cache off disk. **Nothing in this binary
-// writes that cache.** The coordinator, the HTTP fetch and `ModelsDevCache::save`
-// were only ever reachable from `refresh_unknown_models_if_needed`, which no
-// caller ever had, so the whole refresh path was dead and is now deleted.
-//
-// What that means in practice: `lookup` returns pricing only if a cache file
-// left by some earlier build happens to be present and fresh, and otherwise
-// returns `None` and `cost_pricing` falls back to its static table. That was
-// already true before this deletion — removing dead code did not change it —
-// but it was invisible, and it is a product decision rather than a cleanup one:
-// either wire the refresh back up, or drop the dynamic path and keep the static
-// table. **Do not "fix" this by re-adding a caller without deciding which.**
-//
-// The items below are what survives for the read path plus a few that the
-// deleted half used. They are kept rather than cut because they describe the
-// on-disk format, and whichever way the decision above goes, the format is what
-// a future refresh would have to write.
-const MODELS_DEV_URL: &str = "https://models.dev/api.json";
+/// Where pricing comes from, in the order it is tried.
+///
+/// **Multiple sources, because a single one is a single point of failure for a
+/// number the user reads as money.** If models.dev is down, has moved, or ships
+/// a bad payload, the next source answers instead. A source only counts if what
+/// it returns survives [`ModelsDevCatalog::is_plausible_refresh`], so a 200
+/// response full of nulls loses to the one behind it rather than overwriting
+/// good cached prices with junk.
+///
+/// The two formats are genuinely different, which is the point — they are
+/// independent publishers, not two mirrors of one file, so a mistake upstream
+/// is unlikely to appear in both.
+const PRICING_SOURCES: &[PricingSource] = &[
+    PricingSource {
+        name: "models.dev",
+        url: "https://models.dev/api.json",
+        format: SourceFormat::ModelsDev,
+    },
+    PricingSource {
+        name: "litellm",
+        url: "https://raw.githubusercontent.com/BerriAI/litellm/main/               model_prices_and_context_window.json",
+        format: SourceFormat::LiteLlm,
+    },
+];
+
+#[derive(Clone, Copy)]
+struct PricingSource {
+    name: &'static str,
+    url: &'static str,
+    format: SourceFormat,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum SourceFormat {
+    /// `{ "openai": { "models": { "gpt-x": { "cost": { "input": 1.25 } } } } }`
+    /// — rates per **million** tokens.
+    ModelsDev,
+    /// `{ "gpt-x": { "litellm_provider": "openai",
+    ///               "input_cost_per_token": 1.25e-6 } }` — a flat map, rates
+    /// per **single** token, provider carried on each entry.
+    LiteLlm,
+}
+
+impl SourceFormat {
+    fn decode(self, json: &str) -> Option<ModelsDevCatalog> {
+        match self {
+            Self::ModelsDev => ModelsDevCatalog::decode(json),
+            Self::LiteLlm => ModelsDevCatalog::decode_litellm(json),
+        }
+    }
+}
 const CACHE_TTL: Duration = Duration::from_secs(24 * 60 * 60);
 const REFRESH_ATTEMPT_WINDOW: Duration = Duration::from_secs(15 * 60);
 
@@ -180,7 +331,7 @@ pub struct DynamicModelPricing {
     pub cache_write_input_cost_per_token_above_threshold: Option<f64>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Default, Serialize)]
 struct ModelsDevCatalog {
     providers: HashMap<String, ModelsDevProvider>,
 }
@@ -218,9 +369,79 @@ impl<'de> Deserialize<'de> for ModelsDevCatalog {
 }
 
 impl ModelsDevCatalog {
-    #[cfg(test)]
     fn decode(json: &str) -> Option<Self> {
         serde_json::from_str(json).ok()
+    }
+
+    /// Read LiteLLM's flat price map into the same shape.
+    ///
+    /// Two differences from models.dev, both easy to get wrong:
+    ///
+    /// - **Rates are per single token, not per million.** Storing them
+    ///   unconverted would make every cost 1,000,000x too small, which reads as
+    ///   a plausible "¥0.00" rather than as an obvious error — so the
+    ///   multiplication happens here, at the boundary, and everything
+    ///   downstream keeps one unit.
+    /// - **The provider is a field on each entry**, not the key of an outer
+    ///   map, so entries are grouped rather than nested.
+    ///
+    /// Entries with no provider or no usable input/output rate are skipped: the
+    /// file also carries embeddings, rerankers and placeholder rows that have
+    /// no per-token price at all.
+    fn decode_litellm(json: &str) -> Option<Self> {
+        #[derive(Deserialize)]
+        struct Entry {
+            litellm_provider: Option<String>,
+            input_cost_per_token: Option<f64>,
+            output_cost_per_token: Option<f64>,
+            cache_read_input_token_cost: Option<f64>,
+            cache_creation_input_token_cost: Option<f64>,
+        }
+
+        let raw: HashMap<String, serde_json::Value> = serde_json::from_str(json).ok()?;
+        let mut catalog = ModelsDevCatalog::default();
+        for (model_id, value) in raw {
+            let Ok(entry) = serde_json::from_value::<Entry>(value) else {
+                continue;
+            };
+            let (Some(provider_id), Some(input), Some(output)) = (
+                entry.litellm_provider,
+                entry.input_cost_per_token,
+                entry.output_cost_per_token,
+            ) else {
+                continue;
+            };
+            if !valid_number(&input) || !valid_number(&output) {
+                continue;
+            }
+            const PER_MILLION: f64 = 1_000_000.0;
+            let provider = catalog
+                .providers
+                .entry(normalize_provider_id(&provider_id))
+                .or_insert_with(|| ModelsDevProvider {
+                    id: Some(provider_id.clone()),
+                    models: HashMap::new(),
+                });
+            let key = normalize_model_id(&model_id);
+            provider.models.insert(
+                key,
+                ModelsDevModel {
+                    id: model_id,
+                    cost: Some(ModelsDevCost {
+                        input: Some(input * PER_MILLION),
+                        output: Some(output * PER_MILLION),
+                        cache_read: entry
+                            .cache_read_input_token_cost
+                            .map(|rate| rate * PER_MILLION),
+                        cache_write: entry
+                            .cache_creation_input_token_cost
+                            .map(|rate| rate * PER_MILLION),
+                        context_over_200k: None,
+                    }),
+                },
+            );
+        }
+        (!catalog.providers.is_empty()).then_some(catalog)
     }
 
     fn lookup(&self, provider_id: &str, model_id: &str) -> Option<DynamicModelPricing> {
@@ -624,10 +845,183 @@ impl ModelsDevCache {
     }
 }
 
+#[derive(Default)]
+struct ModelsDevRefreshCoordinator {
+    state: Arc<AsyncMutex<ModelsDevRefreshState>>,
+}
+
+#[derive(Default)]
+struct ModelsDevRefreshState {
+    in_flight: HashMap<PathBuf, watch::Receiver<Option<bool>>>,
+    last_attempt: HashMap<PathBuf, SystemTime>,
+}
+
+impl ModelsDevRefreshCoordinator {
+    async fn refresh<F>(&self, cache_path: PathBuf, now: SystemTime, operation: F) -> bool
+    where
+        F: Future<Output = bool> + Send + 'static,
+    {
+        let cache_path = standardized_cache_path(&cache_path);
+        let mut state = self.state.lock().await;
+        if let Some(in_flight) = state.in_flight.get(&cache_path) {
+            let receiver = in_flight.clone();
+            drop(state);
+            return wait_for_refresh(receiver).await;
+        }
+        if state
+            .last_attempt
+            .get(&cache_path)
+            .is_some_and(|last_attempt| {
+                now.duration_since(*last_attempt).unwrap_or_default() < REFRESH_ATTEMPT_WINDOW
+            })
+        {
+            return false;
+        }
+
+        state.last_attempt.insert(cache_path.clone(), now);
+        let (sender, receiver) = watch::channel(None);
+        state.in_flight.insert(cache_path.clone(), receiver.clone());
+        drop(state);
+
+        let state = Arc::clone(&self.state);
+        tokio::spawn(async move {
+            let result = operation.await;
+            let _ = sender.send(Some(result));
+            state
+                .lock()
+                .await
+                .in_flight
+                .retain(|path, _| path != &cache_path);
+        });
+        wait_for_refresh(receiver).await
+    }
+}
+
+async fn wait_for_refresh(mut receiver: watch::Receiver<Option<bool>>) -> bool {
+    loop {
+        if let Some(result) = *receiver.borrow() {
+            return result;
+        }
+        if receiver.changed().await.is_err() {
+            return false;
+        }
+    }
+}
+
+static REFRESH_COORDINATOR: LazyLock<ModelsDevRefreshCoordinator> =
+    LazyLock::new(ModelsDevRefreshCoordinator::default);
+
+/// Looks up a cached models.dev price for a provider/model pair.
 pub fn lookup(provider_id: &str, model_id: &str) -> Option<DynamicModelPricing> {
     let load = ModelsDevCache::load(SystemTime::now(), None);
     (!load.is_stale)
         .then_some(load.artifact)
         .flatten()
         .and_then(|artifact| artifact.catalog.lookup(provider_id, model_id))
+}
+
+/// Refresh the pricing catalog if the cached copy has aged out.
+///
+/// The only trigger. A per-model variant used to exist beside this one, firing
+/// whenever a cost scan met a model the cache could not price; it is gone,
+/// because it also had no caller and two triggers where one is wired is worse
+/// than one that plainly is. The cost: a model released today is priced from
+/// the built-in table until the daily refresh picks it up.
+///
+/// **This is the caller the whole refresh path was missing.** Every piece below
+/// it — the sources, the coordinator, the cache writer — existed and worked and
+/// was reachable from nothing, so the cache was read but never written and
+/// `cost_pricing` silently fell back to its built-in table forever.
+///
+/// Called once per launch, in the background. That cadence is chosen for a tool
+/// that is *not* frequently re-released: the built-in table is only as fresh as
+/// the build, so without this a long-lived install slowly stops being able to
+/// price new models. One check a day (the cache TTL) against the network is the
+/// smallest thing that fixes that.
+///
+/// Cheap when there is nothing to do: a stale check is a file timestamp, and a
+/// fresh cache returns without touching the network.
+pub async fn refresh_if_stale() {
+    refresh_if_stale_at(SystemTime::now(), None).await
+}
+
+async fn refresh_if_stale_at(now: SystemTime, cache_root: Option<&Path>) {
+    if !ModelsDevCache::load(now, cache_root).is_stale {
+        return;
+    }
+    let cache_path = ModelsDevCache::cache_path(cache_root);
+    if cache_path.as_os_str().is_empty() {
+        return;
+    }
+    // Through the coordinator, so this and any other trigger cannot fetch the
+    // same catalog twice concurrently, and a failure is not retried on a tight
+    // loop.
+    // The coordinator needs a `'static` future, so the borrowed root is owned
+    // before it crosses that boundary — same shape as the other caller below.
+    let owned_root = cache_root.map(Path::to_path_buf);
+    REFRESH_COORDINATOR
+        .refresh(cache_path, now, async move {
+            refresh_catalog(now, owned_root.as_deref()).await
+        })
+        .await;
+}
+
+/// Try each source in turn and cache the first plausible answer.
+///
+/// A source is skipped, not fatal, when it fails to connect, answers non-2xx,
+/// returns something its decoder cannot read, or returns a catalog that does
+/// not pass the plausibility check. Only after all of them have failed does
+/// this give up — and giving up leaves the previous cache alone, so a bad day
+/// upstream degrades to yesterday's prices rather than to none.
+async fn refresh_catalog(now: SystemTime, cache_root: Option<&Path>) -> bool {
+    let Ok(client) = reqwest::Client::builder()
+        .timeout(Duration::from_secs(20))
+        .build()
+    else {
+        return false;
+    };
+
+    for source in PRICING_SOURCES {
+        // The URL constant is written across two lines for readability, so the
+        // continuation's indentation has to come back out before use.
+        let url: String = source.url.split_whitespace().collect();
+        let Ok(response) = client.get(&url).send().await else {
+            tracing::debug!(source = source.name, "pricing: source unreachable");
+            continue;
+        };
+        if !response.status().is_success() {
+            tracing::debug!(
+                source = source.name,
+                status = response.status().as_u16(),
+                "pricing: source refused"
+            );
+            continue;
+        }
+        let Ok(body) = response.text().await else {
+            continue;
+        };
+        let Some(mut catalog) = source.format.decode(&body) else {
+            tracing::warn!(source = source.name, "pricing: source did not decode");
+            continue;
+        };
+        if !catalog.is_plausible_refresh() {
+            tracing::warn!(
+                source = source.name,
+                "pricing: source decoded but looks wrong; trying the next one"
+            );
+            continue;
+        }
+        // Keep prices the new payload dropped. A source narrowing its coverage
+        // must not silently un-price a model the user is still running.
+        if let Some(cached) = ModelsDevCache::load(now, cache_root).artifact {
+            catalog.merge_priceable_entries_from(&cached.catalog);
+        }
+        if ModelsDevCache::save(catalog, now, cache_root) {
+            tracing::info!(source = source.name, "pricing: catalog refreshed");
+            return true;
+        }
+    }
+
+    tracing::warn!("pricing: every source failed; keeping the existing cache");
+    false
 }
