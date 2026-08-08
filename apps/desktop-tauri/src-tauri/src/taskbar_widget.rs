@@ -741,6 +741,62 @@ fn add_tooltip_tool(tooltip: isize, target: isize, instance: isize) {
     unsafe { SendMessageW(tooltip, TTM_ADDTOOLW, 0, &raw mut info as isize) };
 }
 
+/// A hidden top-level window, created solely to own the tooltip.
+///
+/// **This is the fix for "the tooltip never appears".** `CreateWindowExW`'s
+/// ninth argument is the *owner* for a `WS_POPUP` window, and an owner has to
+/// be a top-level window. The strip's HWND is not one: it is a child inside
+/// **Explorer's** taskbar window tree, so Windows resolves the owner by walking
+/// up to its top-level ancestor — a window belonging to another process. A
+/// tooltip owned across a process boundary like that does not show.
+///
+/// Deliberately **not** `menu_host`'s window: that one is `HWND_MESSAGE`, and a
+/// message-only window is not a valid owner for a visible popup either. It is
+/// also part of M3, which has not been seen on screen yet, and a fix for one
+/// unverified thing should not be able to break another.
+///
+/// `WS_EX_TOOLWINDOW` and never shown, so it stays out of Alt-Tab and off the
+/// taskbar. Zero-sized because nothing ever paints it.
+fn tooltip_owner() -> isize {
+    static OWNER: Mutex<isize> = Mutex::new(0);
+    let Ok(mut guard) = OWNER.lock() else {
+        return 0;
+    };
+    if *guard != 0 && unsafe { IsWindow(*guard) } != 0 {
+        return *guard;
+    }
+    let instance = unsafe { GetModuleHandleW(std::ptr::null()) };
+    // `static` is the class comctl32 guarantees is registered; the window is
+    // never shown, so its class behaviour is irrelevant beyond existing.
+    let class = wide("static");
+    let title = wide("");
+    let owner = unsafe {
+        CreateWindowExW(
+            WS_EX_TOOLWINDOW,
+            class.as_ptr(),
+            title.as_ptr(),
+            WS_POPUP,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            instance,
+            std::ptr::null_mut(),
+        )
+    };
+    if owner == 0 {
+        tracing::warn!(
+            error = %std::io::Error::last_os_error(),
+            "taskbar widget: hidden tooltip owner creation failed"
+        );
+        return 0;
+    }
+    *guard = owner;
+    owner
+}
+
 /// Creates the strip's own hover tooltip and attaches it to both the painter
 /// window and the hit proxy. Called once per `start()`, mirroring how
 /// `WIDGET_HWND`/`HIT_PROXY_HWND` are themselves created once per `start()`.
@@ -765,19 +821,35 @@ fn create_tooltip(hwnd: isize, proxy: isize) {
             CW_USEDEFAULT,
             CW_USEDEFAULT,
             CW_USEDEFAULT,
-            hwnd,
+            // The hidden top-level owner, NOT `hwnd` — see `tooltip_owner`.
+            tooltip_owner(),
             0,
             instance,
             std::ptr::null_mut(),
         )
     };
     if tooltip == 0 {
-        tracing::warn!("taskbar widget: tooltip window creation failed");
+        tracing::warn!(
+            error = %std::io::Error::last_os_error(),
+            "taskbar widget: tooltip window creation failed"
+        );
         return;
     }
 
     add_tooltip_tool(tooltip, proxy, instance);
     add_tooltip_tool(tooltip, hwnd, instance);
+    // The tooltip has never once been seen on screen, and everything cheap has
+    // already been ruled out, so log enough to tell the difference between "not
+    // created", "created but no tools" and "created, tools registered, still
+    // invisible" without another build.
+    tracing::info!(
+        tooltip = format!("{tooltip:#x}"),
+        owner = format!("{:#x}", tooltip_owner()),
+        strip = format!("{hwnd:#x}"),
+        proxy = format!("{proxy:#x}"),
+        chars = compose_tooltip_text().chars().count(),
+        "taskbar widget: hover tooltip created"
+    );
     unsafe {
         // Enables word-wrap sizing and, with it, honors the "\n" line breaks
         // `build_tooltip` joins its rows with — a plain tooltip otherwise
