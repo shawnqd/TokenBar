@@ -7,6 +7,8 @@ mod commands;
 mod events;
 mod floatbar;
 mod geometry_store;
+#[cfg(windows)]
+mod menu_host;
 mod proof_harness;
 mod shell;
 mod shortcut_bridge;

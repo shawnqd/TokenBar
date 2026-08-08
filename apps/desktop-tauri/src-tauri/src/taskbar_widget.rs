@@ -937,7 +937,12 @@ fn insert_strip_toggle(
     }
 }
 
-fn show_context_menu(hwnd: isize) {
+/// Build the shared context menu and show it owned by `hwnd`.
+///
+/// `pub(crate)` because the notification-area tray icon shows the *same* menu,
+/// owned by `menu_host`'s message-only window instead of the strip. That is the
+/// whole of M3: one builder, one dispatcher, two owners.
+pub(crate) fn show_context_menu(hwnd: isize) {
     use crate::taskbar_menu::MenuItem;
     use codexbar::locale::{LocaleKey, get_text};
 
@@ -977,7 +982,10 @@ fn show_context_menu(hwnd: isize) {
     crate::taskbar_menu::show(hwnd, items);
 }
 
-fn handle_context_command(index: usize) {
+/// Resolve a picked row's 1-based position back to its tray menu id and run it.
+///
+/// Shared with the tray icon's menu — see [`show_context_menu`].
+pub(crate) fn handle_context_command(index: usize) {
     let Some(app) = APP_HANDLE.get() else {
         return;
     };

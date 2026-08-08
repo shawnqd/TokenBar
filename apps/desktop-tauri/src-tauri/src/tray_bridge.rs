@@ -1,11 +1,25 @@
-//! System tray icon setup: left-click opens the tray panel, right-click native menu.
+//! System tray icon setup: left-click opens the tray panel, right-click opens
+//! the context menu.
+//!
+//! On Windows that menu is the **self-drawn** one in [`crate::taskbar_menu`],
+//! the same popup the taskbar strip shows, owned by [`crate::menu_host`]'s
+//! message-only window (M3). Tauri offers no owner-draw hook for a native
+//! `#32768` menu, which is why the strip stopped using one; the tray icon now
+//! follows. Every other platform keeps its retained native menu.
 
 use std::sync::Mutex;
 
+// Native-menu construction only. Windows builds no retained tray menu since M3
+// — it shows the self-drawn popup from `taskbar_menu` — so these are dead there.
+// `test` is in the list because the tests below build catalog fixtures on every
+// platform, and `cargo check` alone does not compile them: gating this on
+// `not(windows)` alone passes a check and fails the test build.
+#[cfg(any(not(windows), test))]
 use crate::commands::ProviderCatalogEntry;
 use codexbar::core::ProviderId;
 use codexbar::settings::{MetricPreference, Settings, TrayIconMode};
 use tauri::image::Image;
+#[cfg(not(windows))]
 use tauri::menu::{CheckMenuItemBuilder, IsMenuItem, Menu, MenuItem, PredefinedMenuItem, Submenu};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{AppHandle, Manager};
@@ -121,6 +135,9 @@ fn resolve_tray_anchor(
     }
 }
 
+/// Only the non-Windows tray uses a retained native menu; Windows shows the
+/// self-drawn popup from `taskbar_menu` instead (M3).
+#[cfg(not(windows))]
 fn build_native_tray_menu(
     app: &AppHandle,
     providers: &[ProviderCatalogEntry],
@@ -245,18 +262,38 @@ fn store_anchor(app: &AppHandle, rect: &tauri::Rect, click_position: tauri::Phys
 /// - **Left-click** toggles the custom tray panel via the surface state machine.
 /// - **Right-click** opens the native context menu with shell actions.
 pub fn setup(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
-    let menu = build_native_tray_menu(app.handle(), &crate::commands::get_provider_catalog(), &[])?;
-
     // Use the branded three-rail TokenBar mark even before the first provider
     // refresh. Its rail lengths become live usage data after refresh.
     let (rgba, width, height) = render_bar_icon_rgba(0.0, None, false);
     let icon = Image::new_owned(rgba, width, height);
 
-    let _tray = TrayIconBuilder::with_id("codexbar-main")
+    // **No `.menu()` on Windows.** Attaching one makes tray-icon show the
+    // native `#32768` popup on right-click, and that is the menu M3 replaces:
+    // Tauri exposes no owner-draw hook for it, so five of the six style defects
+    // the user reported are unreachable there. Right-click is handled below
+    // instead, showing the same self-drawn menu the taskbar strip shows.
+    //
+    // Removing it also retires the rebuild-on-every-refresh path: a native menu
+    // is a retained object that has to be reconstructed whenever a status label
+    // or a provider toggle changes, whereas the self-drawn one is built from
+    // `tray_menu_spec` at the moment it opens and is therefore never stale.
+    // Held across `build` so the borrow below stays valid. Windows never builds
+    // one; every other platform still uses its own native tray menu, and the
+    // macOS line is out of scope for this task.
+    #[cfg(not(windows))]
+    let native_menu =
+        build_native_tray_menu(app.handle(), &crate::commands::get_provider_catalog(), &[])?;
+
+    let builder = TrayIconBuilder::with_id("codexbar-main")
         .icon(icon)
         .tooltip("CodexBar Desktop")
-        .menu(&menu)
-        .show_menu_on_left_click(false)
+        .show_menu_on_left_click(false);
+    #[cfg(not(windows))]
+    let builder = builder
+        .menu(&native_menu)
+        .on_menu_event(|app, event| handle_menu_event(app, event.id().as_ref()));
+
+    let _tray = builder
         .on_tray_icon_event(|tray, event| {
             if let TrayIconEvent::Click {
                 button,
@@ -284,10 +321,18 @@ pub fn setup(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
                     // commands*, not native event-loop callbacks.
                     shell::flyout_window::toggle_with_blur_consume(app, None);
                 }
+                #[cfg(windows)]
+                if button == MouseButton::Right && button_state == MouseButtonState::Up {
+                    // The owner is the message-only window, not the strip: the
+                    // strip's HWND does not exist while the strip is switched
+                    // off, and the tray menu has to work either way. This
+                    // callback runs on the main thread, which is where that
+                    // window must be created — see `menu_host`.
+                    if let Some(owner) = crate::menu_host::hwnd() {
+                        crate::taskbar_widget::show_context_menu(owner);
+                    }
+                }
             }
-        })
-        .on_menu_event(|app, event| {
-            handle_menu_event(app, event.id().as_ref());
         })
         .build(app)?;
 
@@ -399,30 +444,49 @@ fn tray_status_labels(app: &AppHandle, settings: &Settings) -> Vec<(String, Stri
 }
 
 /// Rebuild the native tray menu from current provider + settings state.
+/// Push a freshly built native tray menu after a setting changed.
+///
+/// **No-op on Windows.** There is no retained menu there since M3: the
+/// self-drawn popup is built from [`tray_menu_spec`] at the moment it opens, so
+/// it always reflects current settings and cannot go stale. The callers are
+/// left in place rather than made conditional — "make sure the tray menu is
+/// current" is still the right thing for them to ask for, and it is this
+/// function's business how much work that takes on a given platform.
+#[allow(unused_variables)]
 pub(crate) fn rebuild_tray_menu(app: &AppHandle) {
-    let catalog = crate::commands::get_provider_catalog();
-    let settings = Settings::load();
-    let status_labels = tray_status_labels(app, &settings);
-    if let Ok(menu) = build_native_tray_menu(app, &catalog, &status_labels)
-        && let Some(tray) = app.tray_by_id("codexbar-main")
+    #[cfg(not(windows))]
     {
-        let _ = tray.set_menu(Some(menu));
+        let catalog = crate::commands::get_provider_catalog();
+        let settings = Settings::load();
+        let status_labels = tray_status_labels(app, &settings);
+        if let Ok(menu) = build_native_tray_menu(app, &catalog, &status_labels)
+            && let Some(tray) = app.tray_by_id("codexbar-main")
+        {
+            let _ = tray.set_menu(Some(menu));
+        }
     }
 }
 
 /// Rebuild the tray menu with current provider status labels after a refresh cycle.
+///
+/// No-op on Windows, for the same reason as [`rebuild_tray_menu`] — and this is
+/// the one that used to run after *every* refresh cycle.
+#[allow(unused_variables)]
 pub fn update_tray_status_items(
     app: &AppHandle,
     snapshots: &[crate::commands::ProviderUsageSnapshot],
 ) {
-    let catalog = crate::commands::get_provider_catalog();
-    let settings = Settings::load();
-    let status_labels = status_labels_for_settings(&settings, snapshots, settings.ui_language);
-
-    if let Ok(menu) = build_native_tray_menu(app, &catalog, &status_labels)
-        && let Some(tray) = app.tray_by_id("codexbar-main")
+    #[cfg(not(windows))]
     {
-        let _ = tray.set_menu(Some(menu));
+        let catalog = crate::commands::get_provider_catalog();
+        let settings = Settings::load();
+        let status_labels = status_labels_for_settings(&settings, snapshots, settings.ui_language);
+
+        if let Ok(menu) = build_native_tray_menu(app, &catalog, &status_labels)
+            && let Some(tray) = app.tray_by_id("codexbar-main")
+        {
+            let _ = tray.set_menu(Some(menu));
+        }
     }
 }
 
@@ -904,6 +968,9 @@ fn menu_contains(menu: &[TrayMenuEntry], id: &str) -> bool {
     })
 }
 
+/// Only the non-Windows tray uses a retained native menu; Windows shows the
+/// self-drawn popup from `taskbar_menu` instead (M3).
+#[cfg(not(windows))]
 enum NativeMenuEntry {
     Item(MenuItem<tauri::Wry>),
     CheckItem(tauri::menu::CheckMenuItem<tauri::Wry>),
@@ -911,6 +978,7 @@ enum NativeMenuEntry {
     Separator(PredefinedMenuItem<tauri::Wry>),
 }
 
+#[cfg(not(windows))]
 impl NativeMenuEntry {
     fn as_item(&self) -> &dyn IsMenuItem<tauri::Wry> {
         match self {
@@ -922,6 +990,9 @@ impl NativeMenuEntry {
     }
 }
 
+/// Only the non-Windows tray uses a retained native menu; Windows shows the
+/// self-drawn popup from `taskbar_menu` instead (M3).
+#[cfg(not(windows))]
 fn build_native_menu_entry(
     app: &AppHandle,
     entry: &TrayMenuEntry,
