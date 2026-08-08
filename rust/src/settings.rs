@@ -349,6 +349,17 @@ pub struct Settings {
     #[serde(default)]
     pub dashboard_provider_ids: Vec<String>,
 
+    /// Which quota-window cycles the dashboard cards render. Empty = all,
+    /// which is what they did before this key existed.
+    ///
+    /// Item H's "额度窗口" for the dashboard. The vocabulary is the cycle kinds
+    /// (`session`, `daily`, `weekly`, `monthly`) the strip's entries and the
+    /// bar's reset windows already use, so one word means one thing on every
+    /// surface. A window with no cycle — a prepaid balance, an API-key status —
+    /// is never filtered out by this; see `dashboardShowsQuotaWindow`.
+    #[serde(default)]
+    pub dashboard_quota_windows: Vec<String>,
+
     /// Windows taskbar strip and notification-area icon: show quota as used
     /// (`true`) or remaining (`false`). Consumed by
     /// `tray_bridge::selected_tray_percents`, which feeds both.
@@ -780,6 +791,7 @@ impl Default for Settings {
             dashboard_show_as_used: true,
             dashboard_reset_time_relative: true,
             dashboard_provider_ids: Vec::new(),
+            dashboard_quota_windows: Vec::new(),
             taskbar_show_as_used: true,
             taskbar_reset_time_relative: true,
             taskbar_tooltip_entries: Vec::new(),

@@ -158,6 +158,7 @@ function settings(overrides: Partial<SettingsSnapshot> = {}): SettingsSnapshot {
     dashboardShowAsUsed: true,
     dashboardResetTimeRelative: true,
     dashboardProviderIds: [],
+    dashboardQuotaWindows: [],
     taskbarShowAsUsed: true,
     taskbarResetTimeRelative: true,
     taskbarTooltipEntries: [],
@@ -632,6 +633,7 @@ describe("FloatBar", () => {
         dashboardShowAsUsed: false,
         dashboardResetTimeRelative: false,
         dashboardProviderIds: [],
+        dashboardQuotaWindows: [],
       });
       expect(title).toContain("71% used");
       expect(title).toMatch(/Resets in \d+h \d+m/);

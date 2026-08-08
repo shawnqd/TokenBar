@@ -568,6 +568,7 @@ pub struct SettingsSnapshot {
     dashboard_show_as_used: bool,
     dashboard_reset_time_relative: bool,
     dashboard_provider_ids: Vec<String>,
+    dashboard_quota_windows: Vec<String>,
     taskbar_show_as_used: bool,
     taskbar_reset_time_relative: bool,
     taskbar_tooltip_entries: Vec<TaskbarEntryBridge>,
@@ -677,6 +678,7 @@ impl From<Settings> for SettingsSnapshot {
             dashboard_show_as_used: settings.dashboard_show_as_used,
             dashboard_reset_time_relative: settings.dashboard_reset_time_relative,
             dashboard_provider_ids: settings.dashboard_provider_ids.clone(),
+            dashboard_quota_windows: settings.dashboard_quota_windows.clone(),
             taskbar_show_as_used: settings.taskbar_show_as_used,
             taskbar_reset_time_relative: settings.taskbar_reset_time_relative,
             taskbar_tooltip_entries: settings

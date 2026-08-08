@@ -28,6 +28,7 @@ import { paceCategory } from "../surfaces/tray/paceCategory";
 import { SimpleBarChart, StackedBarChart } from "./MiniBarChart";
 import { providerSupportsChartData } from "../lib/providerCharts";
 import { getPaceEstimate } from "../lib/paceBudget";
+import { dashboardShowsQuotaWindow } from "../lib/dashboardProviders";
 import { getProviderBalance } from "../lib/providerBalance";
 import { ProviderBalanceBlock } from "./ProviderBalanceBlock";
 import { ProviderIcon } from "./providers/ProviderIcon";
@@ -172,6 +173,17 @@ interface MenuCardProps {
    * must not change when this prop is introduced.
    */
   densityMode?: MenuBarDisplayMode;
+  /**
+   * Which quota-window cycles to render, from the owning surface's settings.
+   * Undefined or empty shows every window, which is what the card did before
+   * this prop existed.
+   *
+   * Passed only by the two dashboard surfaces. The Settings preview card and
+   * the provider detail pane deliberately do not filter: they are there to show
+   * what a provider *reports*, and hiding half of it behind the dashboard's
+   * display preference would make them useless for diagnosis.
+   */
+  quotaWindows?: string[];
 }
 
 const SPARK_W = 68;
@@ -880,6 +892,7 @@ export default function MenuCard({
   hideLocalUsage = false,
   showProviderIcon = true,
   densityMode,
+  quotaWindows,
 }: MenuCardProps) {
   const { t, language } = useLocale();
   const [chartData, setChartData] = useState<ProviderChartData | null>(null);
@@ -979,9 +992,25 @@ export default function MenuCard({
       snap: extra.window,
     });
   }
+  // The surface's own quota-window filter (item H). Applied before the compact
+  // slice so "compact shows the first window" means the first window the user
+  // asked to see, not the first one the provider happens to publish.
+  //
+  // Never allowed to empty the card: a filter that matches nothing here leaves
+  // a provider with a name, a plan badge and no readings at all, and nothing on
+  // the card explains why. Falling back to the unfiltered list is the same
+  // choice `resolveDashboardProviderIds` makes for the same reason.
+  const filteredMetrics = (() => {
+    const kept = metrics.filter((metric) =>
+      dashboardShowsQuotaWindow(metric.snap.kind, quotaWindows),
+    );
+    return kept.length > 0 ? kept : metrics;
+  })();
   // Compact is deliberately a summary row, not a nearly-identical detailed
   // card. Keep only the primary quota and omit secondary diagnostics below.
-  const visibleMetrics = compactMetrics ? metrics.slice(0, 1) : metrics;
+  const visibleMetrics = compactMetrics
+    ? filteredMetrics.slice(0, 1)
+    : filteredMetrics;
 
   // Which visible row owns the weekly forecast (item A). `provider.pace` is
   // computed by the bridge against the weekly window specifically, so the
@@ -990,7 +1019,9 @@ export default function MenuCard({
   // its weekly pace. Compact rows are a summary and get no forecast at all.
   const weeklyMetricId = compactMetrics
     ? null
-    : (metrics.find((m) => isWeeklyWindow(m.snap))?.id ?? null);
+    // `filteredMetrics`, not `metrics`: the forecast has to attach to a row
+    // that is actually drawn, and the weekly window may have been filtered out.
+    : (filteredMetrics.find((m) => isWeeklyWindow(m.snap))?.id ?? null);
 
   const hasCostHistory =
     !compactMetrics &&
@@ -1321,7 +1352,7 @@ export default function MenuCard({
   const densityOrphanForecast = (() => {
     if (!densityMode || densityMode === "detailed") return null;
     if (!weeklyMetricId || densityForecastRowId) return null;
-    const weekly = metrics.find((m) => m.id === weeklyMetricId);
+    const weekly = filteredMetrics.find((m) => m.id === weeklyMetricId);
     if (!weekly || weekly.snap.isInformational || weekly.snap.isExhausted) return null;
     const namedAbove = densityMode === "minimal" && secondaryMetric?.id === weeklyMetricId;
     return (

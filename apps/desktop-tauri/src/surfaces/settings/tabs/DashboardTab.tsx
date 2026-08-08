@@ -19,6 +19,24 @@ import ProviderFilterField from "../ProviderFilterField";
  * how the dashboard reads a quota must not silently change the taskbar.
  */
 
+/**
+ * The dated cycles a card can show, in increasing length.
+ *
+ * Deliberately only the cycles — a window with no cycle (a prepaid balance, an
+ * API-key status) is never filtered by this control, so offering a chip for it
+ * would promise something the filter does not do. See
+ * `dashboardShowsQuotaWindow`.
+ */
+const QUOTA_WINDOW_KINDS = ["session", "daily", "weekly", "monthly"] as const;
+
+/** Reuses the strip composer's labels so one cycle reads the same everywhere. */
+const QUOTA_WINDOW_LABEL_KEYS = {
+  session: "TaskbarWindowSession",
+  daily: "TaskbarWindowDaily",
+  weekly: "TaskbarWindowWeekly",
+  monthly: "TaskbarWindowMonthly",
+} as const;
+
 function clampWindowScalePercent(value: number): number {
   return Math.min(250, Math.max(100, Number.isFinite(value) ? value : 100));
 }
@@ -32,6 +50,7 @@ const DASHBOARD_DEFAULTS = {
   // Empty is "every enabled provider", so restoring defaults widens the
   // dashboard back out rather than pinning today's roster.
   dashboardProviderIds: [] as string[],
+  dashboardQuotaWindows: [] as string[],
   localUsagePeriod: "today" as LocalUsagePeriod,
   windowScalePercent: 100,
   trayScalePercent: 100,
@@ -89,6 +108,49 @@ export default function DashboardTab({ settings, set, saving }: TabProps) {
             disabled={saving}
             onChange={(next) => set({ dashboardProviderIds: next })}
           />
+          {/* Item H's other dashboard list: which reset cycles the cards show.
+              Same chip control and same "empty means all" encoding as the
+              provider filter above. */}
+          <Field
+            label={t("DashboardQuotaWindowsLabel")}
+            description={t("DashboardQuotaWindowsHelper")}
+          >
+            <div className="option-chips" role="group">
+              {QUOTA_WINDOW_KINDS.map((kind) => {
+                const selected = settings.dashboardQuotaWindows ?? [];
+                const active = selected.length === 0 || selected.includes(kind);
+                // Same rule as the provider chips: the last active one cannot
+                // be unpressed, because an empty list reads as "all" on the
+                // next load and the control would undo itself.
+                const activeCount =
+                  selected.length === 0 ? QUOTA_WINDOW_KINDS.length : selected.length;
+                return (
+                  <button
+                    key={kind}
+                    type="button"
+                    className="option-chips__chip"
+                    aria-pressed={active}
+                    disabled={saving || (active && activeCount <= 1)}
+                    onClick={() => {
+                      const base = selected.length === 0 ? QUOTA_WINDOW_KINDS : selected;
+                      const next = active
+                        ? base.filter((value) => value !== kind)
+                        : [...base, kind];
+                      const ordered = QUOTA_WINDOW_KINDS.filter((value) =>
+                        next.includes(value),
+                      );
+                      set({
+                        dashboardQuotaWindows:
+                          ordered.length === QUOTA_WINDOW_KINDS.length ? [] : ordered,
+                      });
+                    }}
+                  >
+                    {t(QUOTA_WINDOW_LABEL_KEYS[kind])}
+                  </button>
+                );
+              })}
+            </div>
+          </Field>
           <Field label={t("DisplayModeLabel")} description={t("DisplayModeHelper")}>
             <SegmentedControl
               value={settings.menuBarDisplayMode}

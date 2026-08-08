@@ -279,6 +279,7 @@ export default function PopOutPanel({
                 localUsagePeriod={settings.localUsagePeriod}
                 showProviderIcon={settings.switcherShowsIcons}
                 densityMode={densityMode}
+                quotaWindows={settings.dashboardQuotaWindows}
                 outputSpeed={
                   (() => {
                     const speedId = outputSpeedProviderId(p.providerId);

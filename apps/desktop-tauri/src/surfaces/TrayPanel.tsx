@@ -294,6 +294,7 @@ export default function TrayPanel({ state }: { state: BootstrapState }) {
           localUsagePeriod={settings.localUsagePeriod}
           showProviderIcon={settings.switcherShowsIcons}
           densityMode={densityMode}
+          quotaWindows={settings.dashboardQuotaWindows}
         />
       </div>
     );

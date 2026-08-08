@@ -664,6 +664,8 @@ export const ALL_LOCALE_KEYS = [
   "DashboardProvidersHelper",
   "FloatBarProvidersLabel",
   "FloatBarProvidersHelper",
+  "DashboardQuotaWindowsLabel",
+  "DashboardQuotaWindowsHelper",
   "CredsStatusAuthenticated",
   "CredsStatusNotSignedIn",
   "CredsStatusDetected",

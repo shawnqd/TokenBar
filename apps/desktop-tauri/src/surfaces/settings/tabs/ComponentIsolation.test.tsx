@@ -34,6 +34,7 @@ const settings = {
   dashboardShowAsUsed: true,
   dashboardResetTimeRelative: true,
   dashboardProviderIds: [],
+  dashboardQuotaWindows: [],
   taskbarShowAsUsed: true,
   taskbarResetTimeRelative: true,
     taskbarTooltipEntries: [],

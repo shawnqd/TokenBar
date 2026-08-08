@@ -371,6 +371,11 @@ export interface SettingsSnapshot {
    */
   dashboardProviderIds: string[];
   /**
+   * Which quota-window cycles the dashboard cards render. Empty = all.
+   * Vocabulary is `QuotaCycleKind`; a window with no cycle is never hidden.
+   */
+  dashboardQuotaWindows: string[];
+  /**
    * Windows taskbar strip and notification-area icon: `true` shows used,
    * `false` shows remaining. There is no `taskbarResetTimeRelative` companion —
    * the native strip renders no reset text, so such a setting would be inert.
@@ -454,6 +459,7 @@ export interface SettingsUpdate {
   dashboardShowAsUsed?: boolean;
   dashboardResetTimeRelative?: boolean;
   dashboardProviderIds?: string[];
+  dashboardQuotaWindows?: string[];
   taskbarShowAsUsed?: boolean;
   taskbarResetTimeRelative?: boolean;
   taskbarTooltipEntries?: TaskbarEntry[];

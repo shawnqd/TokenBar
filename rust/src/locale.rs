@@ -691,6 +691,8 @@ locale_keys! {
     DashboardProvidersHelper,
     FloatBarProvidersLabel,
     FloatBarProvidersHelper,
+    DashboardQuotaWindowsLabel,
+    DashboardQuotaWindowsHelper,
     ProviderAuthSourcesTitle,
     ProviderAuthSourcesHelper,
     ProviderIssueCategoryAuth,

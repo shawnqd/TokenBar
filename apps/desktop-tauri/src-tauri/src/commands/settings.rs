@@ -75,6 +75,8 @@ pub struct SettingsUpdate {
     /// Which providers the tray flyout and pop-out panel show. Empty = all
     /// enabled, the counterpart of `float_bar_provider_ids`.
     pub dashboard_provider_ids: Option<Vec<String>>,
+    /// Which quota-window cycles the dashboard cards render. Empty = all.
+    pub dashboard_quota_windows: Option<Vec<String>>,
     pub taskbar_show_as_used: Option<bool>,
     pub taskbar_reset_time_relative: Option<bool>,
     pub taskbar_tooltip_entries: Option<Vec<TaskbarEntryBridge>>,
@@ -102,6 +104,7 @@ impl SettingsUpdate {
             || self.dashboard_show_as_used.is_some()
             || self.dashboard_reset_time_relative.is_some()
             || self.dashboard_provider_ids.is_some()
+            || self.dashboard_quota_windows.is_some()
             || self.taskbar_show_as_used.is_some()
             || self.taskbar_reset_time_relative.is_some()
             || self.menu_bar_display_mode.is_some()
@@ -235,6 +238,9 @@ impl SettingsUpdate {
         }
         if let Some(ref ids) = self.dashboard_provider_ids {
             settings.dashboard_provider_ids = ids.clone();
+        }
+        if let Some(ref windows) = self.dashboard_quota_windows {
+            settings.dashboard_quota_windows = windows.clone();
         }
         if let Some(v) = self.taskbar_reset_time_relative {
             settings.taskbar_reset_time_relative = v;

@@ -37,3 +37,30 @@ export function resolveDashboardProviderIds(
   const kept = candidateIds.filter((id) => allowed.has(id));
   return kept.length > 0 ? kept : candidateIds;
 }
+
+/**
+ * Whether a dashboard card should render a quota window of this cycle.
+ *
+ * The other half of item H's dashboard settings: which **额度窗口** the cards
+ * show. The filter's vocabulary is the cycle kinds — session, daily, weekly,
+ * monthly — the same ones the strip's entries and the bar's reset windows use,
+ * so one word means one thing across all three surfaces.
+ *
+ * Two rules that are easy to get wrong:
+ *
+ * - **Empty means all**, matching every other filter in the app and matching
+ *   what the cards did before this key existed.
+ * - **A window with no cycle is never hidden.** `kind` is `null` for readings
+ *   that are not dated cycles at all — a prepaid balance, an API-key status, a
+ *   credits count — and a filter phrased in cycles has nothing to say about
+ *   them. Hiding a balance because the user unticked "weekly" would be a
+ *   non-sequitur, and for a balance-type provider it would empty the card.
+ */
+export function dashboardShowsQuotaWindow(
+  kind: string | null | undefined,
+  filter: string[] | undefined | null,
+): boolean {
+  if (!filter || filter.length === 0) return true;
+  if (kind == null) return true;
+  return filter.includes(kind);
+}

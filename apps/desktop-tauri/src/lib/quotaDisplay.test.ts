@@ -63,6 +63,7 @@ describe("quotaDisplayContext", () => {
     dashboardShowAsUsed: true,
     dashboardResetTimeRelative: false,
     dashboardProviderIds: [],
+    dashboardQuotaWindows: [],
     taskbarShowAsUsed: false,
     taskbarResetTimeRelative: true,
     taskbarTooltipEntries: [],

@@ -180,6 +180,7 @@ function settings(overrides: Partial<SettingsSnapshot> = {}): SettingsSnapshot {
     dashboardShowAsUsed: true,
     dashboardResetTimeRelative: true,
     dashboardProviderIds: [],
+    dashboardQuotaWindows: [],
     taskbarShowAsUsed: true,
     taskbarResetTimeRelative: true,
     taskbarTooltipEntries: [],
@@ -977,6 +978,7 @@ kind: "session",
       const { container, unmount } = renderTrayPanel([providerWithReset()], {
         dashboardResetTimeRelative: relative,
         dashboardProviderIds: [],
+        dashboardQuotaWindows: [],
       });
       await waitFor(() => {
         expect(container.querySelector(".provider-quota__reset")).not.toBeNull();
