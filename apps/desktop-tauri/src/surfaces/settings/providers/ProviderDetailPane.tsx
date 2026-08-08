@@ -11,6 +11,7 @@ import type {
   SettingsSnapshot,
   SettingsUpdate,
 } from "../../../types/bridge";
+import { resolveAuthEntries, type PrimaryAuthKind } from "./authEntries";
 import { useLocale } from "../../../hooks/useLocale";
 import {
   getCredentialStorageStatus,
@@ -443,37 +444,6 @@ export function ProviderDetailPane({
   );
 }
 
-type PrimaryAuthKind = "bespoke" | "cookie" | "signIn" | "apiKey";
-
-/** Which real UI methods this provider currently offers, decided once so
- *  both the primary pick and the "other methods" list agree on it. */
-interface AuthEntryAvailability {
-  bespoke: boolean;
-  cookie: boolean;
-  signIn: boolean;
-}
-
-/**
- * Pick the auth surface that should stay expanded for this provider family:
- * the first entry that is actually available, in a fixed preference order.
- * `apiKey` is the guaranteed last resort — `ApiKeySection` self-hides when a
- * provider has no API-key entry, exactly as it did before this list existed.
- *
- * Preference order: a hand-built credentials UI beats the generic entries;
- * a cookie-domain provider keeps its existing cookie-primary behaviour
- * (unchanged for every provider that had one before); only then does a
- * bare OAuth/CLI sign-in — the button that used to live only in the quick
- * actions toolbar — become the lead entry (this is what fills Codex's and
- * GitHub Copilot's auth block, since neither has a cookie domain it should
- * use as primary and Codex now has no bespoke entry at all).
- */
-function resolvePrimaryAuth(availability: AuthEntryAvailability): PrimaryAuthKind {
-  if (availability.bespoke) return "bespoke";
-  if (availability.cookie) return "cookie";
-  if (availability.signIn) return "signIn";
-  return "apiKey";
-}
-
 /**
  * Provider ids with a hand-built credentials component (see
  * `CredentialsDispatcher`). This is a frontend routing table, not a
@@ -531,33 +501,24 @@ function AuthWorkspace({
   onSignIn: () => void;
   t: ReturnType<typeof useLocale>["t"];
 }) {
-  // Codex keeps its long-standing carve-out: its own auto/manual/off cookie
-  // *source* picker (`CookieSourceSection` below) already covers cookies for
-  // this provider, so a second, plain cookie-paste card would be redundant —
-  // unchanged from before TASK-021.
-  const showCookie = cookieDomain !== null && providerId !== "codex";
-  const showCookieSource = providerId !== "codex" && cookieOptions.length > 0;
+  // Every branch of this decision lives in `authEntries.ts` so it can be
+  // tested — this zone is the whole of item 2 and had no coverage at all.
   const isBespoke = hasBespokeCredentials(providerId);
   const supportsOAuth = capabilities?.supportsOAuth ?? false;
   const supportsCli = capabilities?.supportsCli ?? false;
-  // `triggerProviderLogin` (reused, unmodified) only has a real destination
-  // when the provider advertises one, exactly like the existing "切换账号"
-  // quick-action button already gates itself — see `QuickActionsSection`.
-  // Bespoke components (ClaudeCreds, GeminiCliCreds, …) already tell their
-  // own OAuth/CLI story, so this only appears where nothing else would.
-  const showSignIn =
-    !isBespoke && (supportsOAuth || supportsCli) && dashboardUrl !== null;
-  // `null` (capabilities not loaded yet, or the backend command is not
-  // registered) falls back to the old universal behaviour: always show it
-  // and let `ApiKeySection` self-hide when the provider has no entry.
-  const showApiKey = capabilities ? capabilities.supportsApiKey : true;
-
-  const availability: AuthEntryAvailability = {
-    bespoke: isBespoke,
-    cookie: showCookie,
-    signIn: showSignIn,
-  };
-  const primary = resolvePrimaryAuth(availability);
+  const { availability, primary, showApiKey, showCookieSource: codexAllowsSource } =
+    resolveAuthEntries({
+      providerId,
+      cookieDomain,
+      dashboardUrl,
+      capabilities,
+      isBespoke,
+    });
+  const showCookie = availability.cookie;
+  const showSignIn = availability.signIn;
+  // The options list is a runtime fact rather than a capability, so it stays
+  // here rather than moving into the pure decision.
+  const showCookieSource = codexAllowsSource && cookieOptions.length > 0;
 
   const bespokeNode = isBespoke ? (
     <CredentialsDispatcher key={`creds-${providerId}`} providerId={providerId} t={t} />
