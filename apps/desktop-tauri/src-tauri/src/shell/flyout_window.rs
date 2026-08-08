@@ -14,6 +14,8 @@
 //! pass, `WebviewUrl::App` with a `?window=` query marker).
 
 use std::sync::Mutex;
+#[cfg(windows)]
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 use tauri::{AppHandle, Manager, PhysicalPosition, WebviewUrl};
@@ -273,19 +275,114 @@ static WATCHED_APP: std::sync::OnceLock<AppHandle> = std::sync::OnceLock::new();
 #[cfg(windows)]
 static HOOK_HANDLE: Mutex<Option<isize>> = Mutex::new(None);
 
+/// How long a single hook callback may take before it is worth a log line.
+///
+/// Windows drops a low-level hook that overruns `LowLevelHooksTimeout`
+/// (default 300 ms) **silently** — the hook simply stops being called, and the
+/// only symptom is that outside-click dismissal quietly stops working. This
+/// budget is far below that so a callback that is merely *heading* that way
+/// shows up long before it is evicted.
+///
+/// It is also the only way to see this class of fault at all: the expensive
+/// part of [`handle_global_click`] is waiting on Tauri's window and state
+/// locks, and a blocked thread consumes **no CPU**, so a profiler or a CPU
+/// sampler reports zero while the whole desktop's mouse input stalls.
+#[cfg(windows)]
+const HOOK_BUDGET: std::time::Duration = std::time::Duration::from_millis(20);
+
+/// Whether the hook has run at all this session. See its single use below.
+#[cfg(windows)]
+static HOOK_SEEN_FIRST_CLICK: AtomicBool = AtomicBool::new(false);
+
+/// Every hook invocation, not only the button-downs that do work.
+///
+/// This is the number that matters for perceived mouse smoothness. Windows
+/// delivers **every** mouse message to a `WH_MOUSE_LL` hook — moves included,
+/// at whatever rate the mouse reports, commonly 125–1000 Hz — and blocks the
+/// input pipeline until the callback returns. The hook belongs to the thread
+/// that installed it, and that is the Tauri event-loop thread (`prewarm` runs
+/// inside `setup`), so a busy main thread makes the pointer stutter
+/// *system-wide*, not just inside this app.
+///
+/// Only the button-down path was timed at first, which measured the rare case
+/// and missed the constant one entirely.
+#[cfg(windows)]
+static HOOK_CALLS: AtomicU64 = AtomicU64::new(0);
+/// Worst invocation seen since the last summary, in microseconds.
+#[cfg(windows)]
+static HOOK_MAX_US: AtomicU64 = AtomicU64::new(0);
+/// How many invocations between summary lines. At a 1000 Hz mouse this is a
+/// line every few seconds of continuous movement, and nothing at all while the
+/// pointer is still.
+#[cfg(windows)]
+const HOOK_SUMMARY_EVERY: u64 = 5_000;
+
 #[cfg(windows)]
 unsafe extern "system" fn click_outside_hook_proc(
     code: i32,
     wparam: usize,
     lparam: isize,
 ) -> isize {
+    // Timed from the top, around *every* message: the whole point is that
+    // Windows waits on this callback for mouse moves too, and a move that
+    // merely falls through the `matches!` below still costs a cross-process
+    // dispatch onto whatever thread installed the hook.
+    let entered = Instant::now();
     if code >= 0
         && matches!(wparam, WM_LBUTTONDOWN | WM_RBUTTONDOWN)
         && let Some(app) = WATCHED_APP.get()
     {
         let info = unsafe { &*(lparam as *const MsllHookStruct) };
-        handle_global_click(app, info.pt.x, info.pt.y);
+        let started = Instant::now();
+        let exit = handle_global_click(app, info.pt.x, info.pt.y);
+        let elapsed = started.elapsed();
+        // Proof of life, once. Silence from the warning below is only evidence
+        // that the hook is *fast* if we also know it is *running* — an evicted
+        // or never-installed hook is equally silent, and that is the failure we
+        // most want to catch. One INFO line settles which it is without
+        // logging on every click for the rest of the session.
+        if HOOK_SEEN_FIRST_CLICK
+            .compare_exchange(false, true, Ordering::Relaxed, Ordering::Relaxed)
+            .is_ok()
+        {
+            tracing::info!(
+                elapsed_us = elapsed.as_micros() as u64,
+                exit,
+                "flyout: click-outside hook is live; timing its first callback"
+            );
+        }
+        if elapsed >= HOOK_BUDGET {
+            tracing::warn!(
+                elapsed_ms = elapsed.as_millis() as u64,
+                budget_ms = HOOK_BUDGET.as_millis() as u64,
+                // Which step it got to. `no_window` and `not_visible` are the
+                // path every click takes while the flyout is closed, so a slow
+                // one there is the worst case — it is paid constantly, not
+                // only while the panel is up.
+                exit,
+                "flyout: click-outside hook overran its budget; every mouse \
+                 button-down on the desktop waits this long"
+            );
+        }
     }
+
+    // Every invocation, moves included. Reported as a periodic max rather than
+    // per event: at a 1000 Hz mouse a line per event would be 1000 lines a
+    // second, and the max is the number that corresponds to what a person
+    // actually notices — one 40 ms stall is felt, a thousand 30 µs ones are not.
+    let total_us = entered.elapsed().as_micros() as u64;
+    HOOK_MAX_US.fetch_max(total_us, Ordering::Relaxed);
+    let calls = HOOK_CALLS.fetch_add(1, Ordering::Relaxed) + 1;
+    if calls.is_multiple_of(HOOK_SUMMARY_EVERY) {
+        let worst = HOOK_MAX_US.swap(0, Ordering::Relaxed);
+        tracing::info!(
+            calls,
+            worst_us = worst,
+            "flyout: mouse hook throughput; worst single callback since the last \
+             summary — every mouse event on the desktop waits this long"
+        );
+    }
+
     unsafe { CallNextHookEx(0, code, wparam, lparam) }
 }
 
@@ -307,19 +404,25 @@ fn guard_state(app: &AppHandle, read: impl FnOnce(&AppState) -> bool) -> bool {
 /// Gather live window/state into a [`ClickOutsideContext`] and apply
 /// [`should_dismiss_for_click`]. No-op whenever the flyout is not the
 /// visible window (most clicks, most of the time).
+///
+/// Returns the step it exited at, purely so the caller's over-budget warning
+/// can say *where* the time went. Naming the step matters more than it looks:
+/// `not_visible` is the path taken by every click on the desktop while the
+/// panel is closed, so slowness there is paid all day, whereas slowness in the
+/// later steps is only paid while the panel is actually up.
 #[cfg(windows)]
-fn handle_global_click(app: &AppHandle, x: i32, y: i32) {
+fn handle_global_click(app: &AppHandle, x: i32, y: i32) -> &'static str {
     let Some(window) = app.get_webview_window(FLYOUT_LABEL) else {
-        return;
+        return "no_window";
     };
     if !window.is_visible().unwrap_or(false) {
-        return;
+        return "not_visible";
     }
     let Ok(position) = window.outer_position() else {
-        return;
+        return "no_position";
     };
     let Ok(size) = window.outer_size() else {
-        return;
+        return "no_size";
     };
 
     let ctx = ClickOutsideContext {
@@ -348,7 +451,7 @@ fn handle_global_click(app: &AppHandle, x: i32, y: i32) {
     };
 
     if !should_dismiss_for_click(&ctx, x, y) {
-        return;
+        return "kept_open";
     }
 
     if hide(app).is_ok()
@@ -356,6 +459,7 @@ fn handle_global_click(app: &AppHandle, x: i32, y: i32) {
     {
         st.lock().unwrap().mark_blur_dismissed(Instant::now());
     }
+    "dismissed"
 }
 
 /// Install the global low-level mouse hook once, for the process lifetime.
@@ -371,6 +475,10 @@ fn install_click_outside_watcher(app: &AppHandle) {
     }
     let hmod = unsafe { GetModuleHandleW(std::ptr::null()) };
     let handle = unsafe { SetWindowsHookExW(WH_MOUSE_LL, Some(click_outside_hook_proc), hmod, 0) };
+    tracing::info!(
+        installed = handle != 0,
+        "flyout: click-outside mouse hook installation"
+    );
     if handle == 0 {
         tracing::warn!(
             error = %std::io::Error::last_os_error(),
