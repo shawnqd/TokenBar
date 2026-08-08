@@ -409,3 +409,53 @@ fn resource_key_names(resource: &str) -> HashSet<&str> {
         .filter(|name| !name.is_empty())
         .collect()
 }
+
+/// Every key resolves, in every language.
+///
+/// This exists because a malformed `.ftl` gets past everything else. The
+/// bundle is built by `static_loader!`, which is **lazy**: a syntax error does
+/// not fail the build, it panics the first time a string is looked up — at
+/// startup, in `main`, as an abort inside a non-unwinding frame. `cargo build`
+/// succeeds, `cargo test` succeeds if nothing happens to resolve a string, the
+/// key-drift script succeeds because it compares names and never parses, and
+/// the first thing that notices is the user launching an app that dies.
+///
+/// That is exactly what a bare `{}` placeholder did: Fluent reads `{` as
+/// opening a placeable and wants an expression inside it, so the literal has to
+/// be written `{ "{}" }`. Six files, one missing escape, no signal until launch.
+///
+/// Asks the bundle directly rather than comparing `get_text`'s output to the
+/// key name. `get_text` falls back to the name on a miss, but plenty of English
+/// strings — "Remove", "Save", "Token" — legitimately *are* their key name, so
+/// that comparison reports failures that are not.
+#[test]
+fn every_locale_key_resolves_in_every_language() {
+    use crate::locale::LocaleKey;
+    use crate::settings::Language;
+    use fluent_templates::Loader;
+
+    const LANGUAGES: &[Language] = &[
+        Language::English,
+        Language::Chinese,
+        Language::ChineseTraditional,
+        Language::Japanese,
+        Language::Korean,
+        Language::Spanish,
+    ];
+
+    let mut missing = Vec::new();
+    for language in LANGUAGES {
+        let id = crate::locale::language_id(*language);
+        for (_, name) in LocaleKey::ALL {
+            if super::LOCALES.try_lookup(id, name).is_none() {
+                missing.push(format!("{name} ({language:?})"));
+            }
+        }
+    }
+    assert!(
+        missing.is_empty(),
+        "{} locale lookups failed — a key is absent from its .ftl, or the file          did not parse: {}",
+        missing.len(),
+        missing.join(", ")
+    );
+}

@@ -43,7 +43,7 @@ pub fn format_locale(lang: Language, key: LocaleKey, args: &[&str]) -> String {
     format_template(&get_text(lang, key), args)
 }
 
-fn language_id(lang: Language) -> &'static LanguageIdentifier {
+pub(crate) fn language_id(lang: Language) -> &'static LanguageIdentifier {
     static EN_US: LazyLock<LanguageIdentifier> = LazyLock::new(|| "en-US".parse().unwrap());
     static ZH_CN: LazyLock<LanguageIdentifier> = LazyLock::new(|| "zh-CN".parse().unwrap());
     static ZH_TW: LazyLock<LanguageIdentifier> = LazyLock::new(|| "zh-TW".parse().unwrap());
