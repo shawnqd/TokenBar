@@ -7452,12 +7452,19 @@ body:has(.tray-panel-reveal) {
   max-height: 100%;
 }
 
-.menu-surface--tray {
-  /* One number scales the whole card. Every size below is written as
-     `calc(N * var(--flyout-u))`, where N is the value the reference
-     adaptation derived at scale 1. See the block header above for why this
-     is 1.2 and not 1. Changing this one value re-scales the card without
-     disturbing a single proportion. */
+/* The card's design system, shared by every surface that renders a MenuCard.
+   These were declared on `.menu-surface--tray` alone, and the 112 card rules
+   that consume them were scoped to the tray too — so the dashboard rendered the
+   same component with none of them and fell through to an untuned base layer.
+   Same markup, two visual systems, one of them nobody had designed. That is
+   what "the dashboard looks bad" was.
+   Declared here so both surfaces get the unit; each may still override the
+   scale below. */
+.menu-surface {
+  /* One number scales the whole card. Every size in the card rules is written
+     as `calc(N * var(--flyout-u))`, where N is the value the reference
+     adaptation derived at scale 1. Changing this one value re-scales the card
+     without disturbing a single proportion. */
   --flyout-scale: 1.2;
   --flyout-u: calc(var(--flyout-scale) * 1px);
   /* Window corner. Fixed, NOT scaled by --flyout-scale: it is the shape of
@@ -7469,6 +7476,9 @@ body:has(.tray-panel-reveal) {
   --flyout-zone-shadow: 0 0 0 1px var(--flyout-zone-hairline),
     inset 0 1px 0 rgba(255, 255, 255, 0.05),
     0 4px 14px rgba(0, 0, 0, 0.4);
+}
+
+.menu-surface--tray {
   min-height: 0;
   width: 100%;
   height: 100%;
@@ -7625,7 +7635,7 @@ body:has(.tray-panel-reveal) {
   margin-top: calc(2 * var(--flyout-u));
 }
 
-.menu-surface--tray .menu-card {
+.menu-surface .menu-card {
   --menu-card-x: calc(12 * var(--flyout-u));
   gap: calc(6 * var(--flyout-u));
   width: 100%;
@@ -7635,12 +7645,12 @@ body:has(.tray-panel-reveal) {
   overflow: visible;
 }
 
-.menu-surface--tray .menu-card--with-details {
+.menu-surface .menu-card--with-details {
   padding-top: var(--menu-card-section-y);
   padding-bottom: var(--menu-card-section-y);
 }
 
-.menu-surface--tray .menu-card__name-group {
+.menu-surface .menu-card__name-group {
   flex-direction: row;
   align-items: baseline;
   justify-content: space-between;
@@ -7648,44 +7658,44 @@ body:has(.tray-panel-reveal) {
   width: 100%;
 }
 
-.menu-surface--tray .menu-card__subtitle,
-.menu-surface--tray .menu-card__error-text {
+.menu-surface .menu-card__subtitle,
+.menu-surface .menu-card__error-text {
   font-size: calc(10 * var(--flyout-u));
   line-height: normal;
 }
 
-.menu-surface--tray .menu-card__subtitle {
+.menu-surface .menu-card__subtitle {
   color: var(--text-secondary);
 }
 
-.menu-surface--tray .menu-card__content {
+.menu-surface .menu-card__content {
   display: flex;
   flex-direction: column;
   gap: calc(10 * var(--flyout-u));
   min-width: 0;
 }
 
-.menu-surface--tray .menu-card__charts,
-.menu-surface--tray .menu-card__local-chart,
-.menu-surface--tray .menu-card__cost,
-.menu-surface--tray .menu-card__content > .menu-card__divider:has(+ .menu-card__cost) {
+.menu-surface .menu-card__charts,
+.menu-surface .menu-card__local-chart,
+.menu-surface .menu-card__cost,
+.menu-surface .menu-card__content > .menu-card__divider:has(+ .menu-card__cost) {
   display: none;
 }
 
-.menu-surface--tray .menu-card__local-usage {
+.menu-surface .menu-card__local-usage {
   padding: calc(12 * var(--flyout-u)) calc(14 * var(--flyout-u));
 }
 
-.menu-surface--tray .menu-card__local-token-value strong {
+.menu-surface .menu-card__local-token-value strong {
   font-size: clamp(calc(24 * var(--flyout-u)), 8vw, calc(30 * var(--flyout-u)));
 }
 
-.menu-surface--tray .menu-card__local-equivalent {
+.menu-surface .menu-card__local-equivalent {
   font-size: calc(11 * var(--flyout-u));
   letter-spacing: -0.01em;
 }
 
-.menu-surface--tray .menu-card__local-note {
+.menu-surface .menu-card__local-note {
   font-size: calc(10 * var(--flyout-u));
   line-height: 1.25;
 }
@@ -7762,7 +7772,7 @@ body:has(.tray-panel-reveal) {
   background: color-mix(in srgb, var(--accent) 10%, #ffffff);
 }
 
-.menu-surface--tray .menu-card__zone {
+.menu-surface .menu-card__zone {
   position: relative;
   overflow: hidden;
   border-radius: calc(12 * var(--flyout-u));
@@ -7771,19 +7781,19 @@ body:has(.tray-panel-reveal) {
   box-shadow: var(--flyout-zone-shadow);
 }
 
-.menu-surface--tray .menu-card__zone--insights {
+.menu-surface .menu-card__zone--insights {
   display: flex;
   flex-direction: column;
   gap: 0;
 }
 
-.menu-surface--tray .menu-card__divider {
+.menu-surface .menu-card__divider {
   height: 1px;
   flex-shrink: 0;
   background: var(--flyout-zone-hairline);
 }
 
-.menu-surface--tray .menu-card__compact-secondary {
+.menu-surface .menu-card__compact-secondary {
   display: grid;
   gap: calc(5 * var(--flyout-u));
   margin-top: calc(9 * var(--flyout-u));
@@ -7791,7 +7801,7 @@ body:has(.tray-panel-reveal) {
   border-top: 0;
 }
 
-.menu-surface--tray .menu-card__compact-secondary-header {
+.menu-surface .menu-card__compact-secondary-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -7800,25 +7810,25 @@ body:has(.tray-panel-reveal) {
   font-weight: 400;
 }
 
-.menu-surface--tray .menu-card__compact-secondary-header span:first-child {
+.menu-surface .menu-card__compact-secondary-header span:first-child {
   color: var(--text-secondary);
 }
 
-.menu-surface--tray .menu-card__compact-secondary-header strong {
+.menu-surface .menu-card__compact-secondary-header strong {
   color: var(--text-primary);
   font-size: calc(10 * var(--flyout-u));
   font-weight: 700;
   font-variant-numeric: tabular-nums;
 }
 
-.menu-surface--tray .menu-card__compact-secondary-track {
+.menu-surface .menu-card__compact-secondary-track {
   height: calc(4 * var(--flyout-u));
   overflow: hidden;
   border-radius: 999px;
   background: var(--usage-bar-track);
 }
 
-.menu-surface--tray .menu-card__compact-secondary-track span {
+.menu-surface .menu-card__compact-secondary-track span {
   display: block;
   height: 100%;
   border-radius: inherit;
@@ -7829,27 +7839,27 @@ body:has(.tray-panel-reveal) {
 /* The compact and minimal forecast rows used to be listed here as well, so the
    markup TASK-021 item 4 added for them rendered and was then hidden. All three
    tiers now show the same forecast row; only the surrounding density differs. */
-.menu-surface--tray .menu-card--detailed .provider-quota__fill-label,
-.menu-surface--tray .menu-card--detailed .provider-quota__fill-label-clip,
-.menu-surface--tray .menu-card--detailed .provider-quota__sub-pct-suffix,
-.menu-surface--tray .menu-card--minimal .provider-quota__reset {
+.menu-surface .menu-card--detailed .provider-quota__fill-label,
+.menu-surface .menu-card--detailed .provider-quota__fill-label-clip,
+.menu-surface .menu-card--detailed .provider-quota__sub-pct-suffix,
+.menu-surface .menu-card--minimal .provider-quota__reset {
   display: none;
 }
 
-.menu-surface--tray .menu-card__insight-block {
+.menu-surface .menu-card__insight-block {
   display: flex;
   flex-direction: column;
   gap: calc(7 * var(--flyout-u));
 }
 
-.menu-surface--tray .menu-card__insight-row {
+.menu-surface .menu-card__insight-row {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: calc(6 * var(--flyout-u));
 }
 
-.menu-surface--tray .menu-card__insight-label {
+.menu-surface .menu-card__insight-label {
   display: inline-flex;
   align-items: center;
   gap: calc(5 * var(--flyout-u));
@@ -7862,14 +7872,14 @@ body:has(.tray-panel-reveal) {
   text-overflow: ellipsis;
 }
 
-.menu-surface--tray .menu-card__insight-label svg {
+.menu-surface .menu-card__insight-label svg {
   flex: none;
   width: calc(13 * var(--flyout-u));
   height: calc(13 * var(--flyout-u));
   opacity: 0.85;
 }
 
-.menu-surface--tray .menu-card__insight-value {
+.menu-surface .menu-card__insight-value {
   flex: none;
   color: var(--text-primary);
   font-size: calc(15 * var(--flyout-u));
@@ -7879,19 +7889,19 @@ body:has(.tray-panel-reveal) {
   text-align: right;
 }
 
-.menu-surface--tray .menu-card__insight-unit,
-.menu-surface--tray .menu-card__insight-approx {
+.menu-surface .menu-card__insight-unit,
+.menu-surface .menu-card__insight-approx {
   color: var(--text-secondary);
   font-size: calc(11 * var(--flyout-u));
   font-weight: 500;
 }
 
-.menu-surface--tray .menu-card__chip-row {
+.menu-surface .menu-card__chip-row {
   display: flex;
   gap: calc(5 * var(--flyout-u));
 }
 
-.menu-surface--tray .menu-card__chip {
+.menu-surface .menu-card__chip {
   display: flex;
   flex: 1 1 0;
   min-width: 0;
@@ -7905,7 +7915,7 @@ body:has(.tray-panel-reveal) {
   text-align: center;
 }
 
-.menu-surface--tray .menu-card__chip-value {
+.menu-surface .menu-card__chip-value {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -7920,13 +7930,13 @@ body:has(.tray-panel-reveal) {
   text-overflow: ellipsis;
 }
 
-.menu-surface--tray .menu-card__chip-value svg {
+.menu-surface .menu-card__chip-value svg {
   flex: none;
   width: calc(12 * var(--flyout-u));
   height: calc(12 * var(--flyout-u));
 }
 
-.menu-surface--tray .menu-card__chip-caption {
+.menu-surface .menu-card__chip-caption {
   max-width: 100%;
   overflow: hidden;
   color: var(--text-secondary);
@@ -7936,7 +7946,7 @@ body:has(.tray-panel-reveal) {
   text-overflow: ellipsis;
 }
 
-.menu-surface--tray .menu-card__minimal-line {
+.menu-surface .menu-card__minimal-line {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -7946,7 +7956,7 @@ body:has(.tray-panel-reveal) {
   font-weight: 400;
 }
 
-.menu-surface--tray .menu-card__minimal-segment {
+.menu-surface .menu-card__minimal-segment {
   display: inline-flex;
   align-items: center;
   gap: calc(3 * var(--flyout-u));
@@ -7957,7 +7967,7 @@ body:has(.tray-panel-reveal) {
   text-overflow: ellipsis;
 }
 
-.menu-surface--tray .menu-card__minimal-segment svg {
+.menu-surface .menu-card__minimal-segment svg {
   flex: none;
   width: calc(10 * var(--flyout-u));
   height: calc(10 * var(--flyout-u));
@@ -7981,15 +7991,15 @@ body:has(.tray-panel-reveal) {
    value keeps the quota panel, the insight panel and the action buttons on
    the same left/right edge; previously the buttons ran the full body width
    and sat 14px proud of the panels above them on each side. */
-.menu-surface--tray .menu-card--detailed {
+.menu-surface .menu-card--detailed {
   --menu-card-x: var(--flyout-detail-x);
   gap: calc(12 * var(--flyout-u));
 }
-.menu-surface--tray .menu-card--compact {
+.menu-surface .menu-card--compact {
   --menu-card-x: calc(12 * var(--flyout-u));
   gap: calc(9 * var(--flyout-u));
 }
-.menu-surface--tray .menu-card--minimal {
+.menu-surface .menu-card--minimal {
   --menu-card-x: calc(13 * var(--flyout-u));
   gap: calc(11 * var(--flyout-u));
 }
@@ -8011,13 +8021,13 @@ body:has(.tray-panel-reveal) {
    `!important` because ProviderIcon sets width/height as an inline style from
    its `size` prop, which is a JS number and cannot see --flyout-scale. Same
    approach the switcher grid already uses for .provider-grid__item. */
-.menu-surface--tray .menu-card--detailed .menu-card__provider-icon {
+.menu-surface .menu-card--detailed .menu-card__provider-icon {
   width: calc(15 * var(--flyout-u)) !important;
   height: calc(15 * var(--flyout-u)) !important;
 }
 
 /* type: ref .provider-name 25 / 21 / 22 → 15 / 12 / 13, weight 700 */
-.menu-surface--tray .menu-card--detailed .menu-card__name {
+.menu-surface .menu-card--detailed .menu-card__name {
   font-size: calc(15 * var(--flyout-u));
   font-weight: 700;
   letter-spacing: -0.04em;
@@ -8028,19 +8038,19 @@ body:has(.tray-panel-reveal) {
      padding gives that bearing back without moving the text. */
   padding-inline-end: 0.08em;
 }
-.menu-surface--tray .menu-card--compact .menu-card__name {
+.menu-surface .menu-card--compact .menu-card__name {
   font-size: calc(12 * var(--flyout-u));
   font-weight: 700;
   letter-spacing: -0.04em;
 }
-.menu-surface--tray .menu-card--minimal .menu-card__name {
+.menu-surface .menu-card--minimal .menu-card__name {
   font-size: calc(13 * var(--flyout-u));
   font-weight: 700;
   letter-spacing: -0.04em;
 }
 
 /* type: ref .updated 18 / 16 → 11 / 10, normal weight */
-.menu-surface--tray .menu-card--detailed .menu-card__updated {
+.menu-surface .menu-card--detailed .menu-card__updated {
   font-size: calc(11 * var(--flyout-u));
   font-weight: 400;
 }
@@ -8053,10 +8063,10 @@ body:has(.tray-panel-reveal) {
 
 /* ── Quota panel — ref .quota-panel ──────────────────────────────────── */
 /* The shared zone owns the 12px radius; density changes only the inner spacing. */
-.menu-surface--tray .menu-card--detailed .menu-card__zone--quota {
+.menu-surface .menu-card--detailed .menu-card__zone--quota {
   padding: calc(12 * var(--flyout-u)) calc(12 * var(--flyout-u)) calc(11 * var(--flyout-u));
 }
-.menu-surface--tray .menu-card--compact .menu-card__zone--quota {
+.menu-surface .menu-card--compact .menu-card__zone--quota {
   padding: calc(10 * var(--flyout-u));
 }
 
@@ -8072,36 +8082,36 @@ body:has(.tray-panel-reveal) {
 /* type: ref .quota-label / .reset 18 → 11 (compact 16 → 10, minimal 17 → 10).
    The reference sets no font-weight on these, i.e. normal — NOT the 500 the
    base tray rules use. */
-.menu-surface--tray .menu-card--detailed
+.menu-surface .menu-card--detailed
   :is(.provider-quota__hero-label, .provider-quota__title, .provider-quota__reset) {
   font-size: calc(11 * var(--flyout-u));
   font-weight: 400;
 }
-.menu-surface--tray .menu-card--compact
+.menu-surface .menu-card--compact
   :is(.provider-quota__hero-label, .provider-quota__title, .provider-quota__reset) {
   font-size: calc(10 * var(--flyout-u));
   font-weight: 400;
 }
-.menu-surface--tray .menu-card--minimal .provider-quota__hero-label {
+.menu-surface .menu-card--minimal .provider-quota__hero-label {
   font-size: calc(10 * var(--flyout-u));
   font-weight: 400;
 }
 
 /* type: ref .percentage 54 / 44 / 55 → 32 / 26 / 32, weight 760
    geo:  ref margin 16 0 13 → 8 0 6 (compact 13 0 11 → 6 0 5) */
-.menu-surface--tray .menu-card--detailed .provider-quota__hero-pct {
+.menu-surface .menu-card--detailed .provider-quota__hero-pct {
   font-size: calc(32 * var(--flyout-u));
   font-weight: 760;
   margin: calc(8 * var(--flyout-u)) 0 calc(6 * var(--flyout-u));
   letter-spacing: -0.065em;
 }
-.menu-surface--tray .menu-card--compact .provider-quota__hero-pct {
+.menu-surface .menu-card--compact .provider-quota__hero-pct {
   font-size: calc(26 * var(--flyout-u));
   font-weight: 760;
   margin: calc(6 * var(--flyout-u)) 0 calc(5 * var(--flyout-u));
   letter-spacing: -0.065em;
 }
-.menu-surface--tray .menu-card--minimal .provider-quota__hero-pct {
+.menu-surface .menu-card--minimal .provider-quota__hero-pct {
   font-size: calc(32 * var(--flyout-u));
   font-weight: 760;
   margin: calc(6 * var(--flyout-u)) 0;
@@ -8109,23 +8119,23 @@ body:has(.tray-panel-reveal) {
 }
 
 /* geo: ref .bar height 12 / 9 / 10 → 6 / 4 / 5 */
-.menu-surface--tray .menu-card--detailed .provider-quota__track,
-.menu-surface--tray .menu-card--detailed .provider-quota--hero .provider-quota__track {
+.menu-surface .menu-card--detailed .provider-quota__track,
+.menu-surface .menu-card--detailed .provider-quota--hero .provider-quota__track {
   height: calc(6 * var(--flyout-u));
 }
-.menu-surface--tray .menu-card--compact .provider-quota--hero .provider-quota__track {
+.menu-surface .menu-card--compact .provider-quota--hero .provider-quota__track {
   height: calc(4 * var(--flyout-u));
 }
-.menu-surface--tray .menu-card--minimal .provider-quota--hero .provider-quota__track {
+.menu-surface .menu-card--minimal .provider-quota--hero .provider-quota__track {
   height: calc(5 * var(--flyout-u));
 }
 
 /* type: ref .weekly-value 31 → 18, weight 730
    geo:  ref margin 8 0 12 → 4 0 6 */
-.menu-surface--tray .menu-card--detailed .provider-quota__sub-pct {
+.menu-surface .menu-card--detailed .provider-quota__sub-pct {
   margin: calc(4 * var(--flyout-u)) 0 calc(6 * var(--flyout-u));
 }
-.menu-surface--tray .menu-card--detailed .provider-quota__sub-pct-num {
+.menu-surface .menu-card--detailed .provider-quota__sub-pct-num {
   font-size: calc(18 * var(--flyout-u));
   font-weight: 730;
   letter-spacing: -0.05em;
@@ -8133,19 +8143,19 @@ body:has(.tray-panel-reveal) {
 
 /* geo: ref .divider height 2 → 1, margin 22 → 11 — between quota windows,
    and above the reset-credits pill (MenuCard renders that hairline). */
-.menu-surface--tray .menu-card--detailed
+.menu-surface .menu-card--detailed
   .menu-card__metrics .provider-quota + .provider-quota {
   margin-top: calc(11 * var(--flyout-u));
   padding-top: calc(11 * var(--flyout-u));
 }
-.menu-surface--tray .menu-card--detailed
+.menu-surface .menu-card--detailed
   .menu-card__zone--quota .menu-card__divider {
   margin: calc(11 * var(--flyout-u)) 0;
 }
 
 /* geo: ref .reset-credits margin-top 4 → 2, padding 14 16 → 7 8, radius 14 → 7
    type: span 18 → 11 normal, strong 20 → 12 weight 720 */
-.menu-surface--tray .menu-card--detailed .menu-card__reset-credits {
+.menu-surface .menu-card--detailed .menu-card__reset-credits {
   margin-top: calc(2 * var(--flyout-u));
   padding: calc(7 * var(--flyout-u)) calc(8 * var(--flyout-u));
   border-radius: calc(7 * var(--flyout-u));
@@ -8154,10 +8164,10 @@ body:has(.tray-panel-reveal) {
   font-size: calc(11 * var(--flyout-u));
   font-weight: 400;
 }
-[data-theme="light"] .menu-surface--tray .menu-card--detailed .menu-card__reset-credits {
+[data-theme="light"] .menu-surface .menu-card--detailed .menu-card__reset-credits {
   background: rgba(0, 0, 0, 0.04);
 }
-.menu-surface--tray .menu-card--detailed .menu-card__reset-credits strong {
+.menu-surface .menu-card--detailed .menu-card__reset-credits strong {
   font-size: calc(12 * var(--flyout-u));
   font-weight: 720;
   letter-spacing: -0.02em;
@@ -8167,21 +8177,21 @@ body:has(.tray-panel-reveal) {
 /* The reference separates this row from the hero bar with whitespace only
    (margin-top 19 → 9) — no hairline, unlike the detailed tier. Its label and
    value inherit the card font (16 → 10); only the value is bold. */
-.menu-surface--tray .menu-card--compact .menu-card__compact-secondary {
+.menu-surface .menu-card--compact .menu-card__compact-secondary {
   margin-top: calc(9 * var(--flyout-u));
   padding-top: 0;
   border-top: none;
   gap: calc(5 * var(--flyout-u));
 }
-.menu-surface--tray .menu-card--compact .menu-card__compact-secondary-header {
+.menu-surface .menu-card--compact .menu-card__compact-secondary-header {
   font-size: calc(10 * var(--flyout-u));
   font-weight: 400;
 }
-.menu-surface--tray .menu-card--compact .menu-card__compact-secondary-header strong {
+.menu-surface .menu-card--compact .menu-card__compact-secondary-header strong {
   font-size: calc(10 * var(--flyout-u));
   font-weight: 700;
 }
-.menu-surface--tray .menu-card--compact .menu-card__compact-secondary-track {
+.menu-surface .menu-card--compact .menu-card__compact-secondary-track {
   height: calc(4 * var(--flyout-u));
 }
 
@@ -8191,7 +8201,7 @@ body:has(.tray-panel-reveal) {
    `--font-caption`, so compact and minimal do too. Scaling it by `--flyout-u`
    like the text around it is what would break the parity this row exists for.
    Only the spacing that separates it from its quota row is tier-specific. */
-.menu-surface--tray .menu-card--compact .menu-card__compact-secondary .menu-metric__forecast {
+.menu-surface .menu-card--compact .menu-card__compact-secondary .menu-metric__forecast {
   margin-top: calc(5 * var(--flyout-u));
 }
 
@@ -8217,18 +8227,18 @@ body:has(.tray-panel-reveal) {
 
 /* ── Insights panel (detailed) — ref .usage-panel ─────────────────────── */
 /* geo: ref .usage-panel margin-top 20 → 10 (the gap between the two zones) */
-.menu-surface--tray .menu-card--detailed .menu-card__content {
+.menu-surface .menu-card--detailed .menu-card__content {
   gap: calc(10 * var(--flyout-u));
 }
 
 /* The shared zone owns the 12px radius; the reference only changes padding here. */
-.menu-surface--tray .menu-card--detailed .menu-card__zone--insights {
+.menu-surface .menu-card--detailed .menu-card__zone--insights {
   padding: calc(12 * var(--flyout-u)) calc(12 * var(--flyout-u)) calc(11 * var(--flyout-u));
   /* Separation comes entirely from the dividers below (ref 22 + 2 + 22), so
      the flex gap must not add a second, competing gutter. */
   gap: 0;
 }
-.menu-surface--tray .menu-card--detailed
+.menu-surface .menu-card--detailed
   .menu-card__zone--insights .menu-card__divider {
   margin: calc(11 * var(--flyout-u)) 0;
 }
@@ -8242,30 +8252,30 @@ body:has(.tray-panel-reveal) {
    ref .usage-row's grid gap 9 lands at ~4 under k_geo, but that applied to
    every child equally and left the pace bar glued to the text on both
    sides. */
-.menu-surface--tray .menu-card--detailed .menu-card__insight-block {
+.menu-surface .menu-card--detailed .menu-card__insight-block {
   gap: calc(7 * var(--flyout-u));
 }
-.menu-surface--tray .menu-card--detailed .menu-card__insight-row {
+.menu-surface .menu-card--detailed .menu-card__insight-row {
   gap: calc(6 * var(--flyout-u));
 }
 
 /* type: ref .usage-title 19 → 11, normal weight; .usage-icon 23 → 13 */
-.menu-surface--tray .menu-card--detailed .menu-card__insight-label {
+.menu-surface .menu-card--detailed .menu-card__insight-label {
   font-size: calc(11 * var(--flyout-u));
   font-weight: 400;
   gap: calc(5 * var(--flyout-u));
 }
-.menu-surface--tray .menu-card--detailed .menu-card__insight-label svg {
+.menu-surface .menu-card--detailed .menu-card__insight-label svg {
   width: calc(13 * var(--flyout-u));
   height: calc(13 * var(--flyout-u));
 }
 
 /* type: ref .usage-value 26 → 15 weight 720, with small 18 → 11 weight 500 */
-.menu-surface--tray .menu-card--detailed .menu-card__insight-value {
+.menu-surface .menu-card--detailed .menu-card__insight-value {
   font-size: calc(15 * var(--flyout-u));
   font-weight: 720;
 }
-.menu-surface--tray .menu-card--detailed
+.menu-surface .menu-card--detailed
   :is(.menu-card__insight-unit, .menu-card__insight-approx) {
   font-size: calc(11 * var(--flyout-u));
   font-weight: 500;
@@ -8275,34 +8285,34 @@ body:has(.tray-panel-reveal) {
    The equivalent-value line keeps the block's 7px gap from the value row it
    describes; the top-model line pulls back to 3px so the two sub-lines read
    as one continued thought rather than two separate facts. */
-.menu-surface--tray .menu-card--detailed .menu-card__local-equivalent,
-.menu-surface--tray .menu-card--detailed .menu-card__local-note {
+.menu-surface .menu-card--detailed .menu-card__local-equivalent,
+.menu-surface .menu-card--detailed .menu-card__local-note {
   font-size: calc(10 * var(--flyout-u));
   font-weight: 400;
   line-height: 1.3;
 }
-.menu-surface--tray .menu-card--detailed .menu-card__local-note {
+.menu-surface .menu-card--detailed .menu-card__local-note {
   margin-top: calc(-4 * var(--flyout-u));
 }
 
 /* type: ref .forecast-copy 19 → 11 (its strong is 700), .forecast-value 18 → 11
    geo:  ref .forecast-track .bar 12 → 6 */
-.menu-surface--tray .menu-card--detailed .menu-card__pace-summary-text,
-.menu-surface--tray .menu-card--detailed .menu-card__pace-runway-status,
-.menu-surface--tray .menu-card--detailed .menu-card__pace-runway-value {
+.menu-surface .menu-card--detailed .menu-card__pace-summary-text,
+.menu-surface .menu-card--detailed .menu-card__pace-runway-status,
+.menu-surface .menu-card--detailed .menu-card__pace-runway-value {
   font-size: calc(11 * var(--flyout-u));
 }
-.menu-surface--tray .menu-card--detailed .menu-card__pace-track {
+.menu-surface .menu-card--detailed .menu-card__pace-track {
   height: calc(6 * var(--flyout-u));
 }
 
 /* The runway line ("够用到重置") is a calm status, not an emphasis: normal
    weight, and its icon takes the quota bar's healthy blue so the whole card
    stays within the bar's own two hues instead of adding a third (green). */
-.menu-surface--tray .menu-card--detailed .menu-card__pace-runway-status {
+.menu-surface .menu-card--detailed .menu-card__pace-runway-status {
   font-weight: 400;
 }
-.menu-surface--tray .menu-card--detailed
+.menu-surface .menu-card--detailed
   .menu-card__pace-runway[data-state="ok"] .menu-card__pace-runway-status svg {
   color: var(--pace-behind-fg);
 }
@@ -8312,16 +8322,16 @@ body:has(.tray-panel-reveal) {
    entire text — icon, label and numbers — carries the pace colour. The
    default insight row instead pushes a grey label away from a right-aligned
    value, which both loses that colour and ellipsized the label. */
-.menu-surface--tray .menu-card--detailed
+.menu-surface .menu-card--detailed
   .menu-card__insight-row[data-pace-direction] {
   justify-content: flex-start;
 }
-.menu-surface--tray .menu-card--detailed
+.menu-surface .menu-card--detailed
   .menu-card__insight-row[data-pace-direction] .menu-card__insight-label {
   overflow: visible;
   font-weight: 700;
 }
-.menu-surface--tray .menu-card--detailed .menu-card__pace-summary-text {
+.menu-surface .menu-card--detailed .menu-card__pace-summary-text {
   flex: 1 1 auto;
   text-align: left;
   white-space: normal;
@@ -8331,54 +8341,54 @@ body:has(.tray-panel-reveal) {
    state worth noticing, so it takes the bar's warning yellow, while having
    slack ("behind") takes the bar's healthy blue. The previous green/orange
    pair implied the opposite — green for burning quota fastest. */
-.menu-surface--tray .menu-card--detailed
+.menu-surface .menu-card--detailed
   .menu-card__insight-row[data-pace-direction="ahead"]
   :is(.menu-card__insight-label, .menu-card__pace-summary-text) {
   color: var(--pace-ahead-fg);
 }
-.menu-surface--tray .menu-card--detailed
+.menu-surface .menu-card--detailed
   .menu-card__insight-row[data-pace-direction="behind"]
   :is(.menu-card__insight-label, .menu-card__pace-summary-text) {
   color: var(--pace-behind-fg);
 }
 /* The "预期…" clause carries its own colour, so it needs the same remap —
    otherwise it would stay green/orange inside an otherwise yellow line. */
-.menu-surface--tray .menu-card__pace-summary-highlight[data-pace-direction="ahead"],
-.menu-surface--tray .menu-card__chip-value[data-pace-direction="ahead"],
-.menu-surface--tray .menu-card__minimal-segment[data-pace-direction="ahead"] {
+.menu-surface .menu-card__pace-summary-highlight[data-pace-direction="ahead"],
+.menu-surface .menu-card__chip-value[data-pace-direction="ahead"],
+.menu-surface .menu-card__minimal-segment[data-pace-direction="ahead"] {
   color: var(--pace-ahead-fg);
 }
-.menu-surface--tray .menu-card__pace-summary-highlight[data-pace-direction="behind"],
-.menu-surface--tray .menu-card__chip-value[data-pace-direction="behind"],
-.menu-surface--tray .menu-card__minimal-segment[data-pace-direction="behind"] {
+.menu-surface .menu-card__pace-summary-highlight[data-pace-direction="behind"],
+.menu-surface .menu-card__chip-value[data-pace-direction="behind"],
+.menu-surface .menu-card__minimal-segment[data-pace-direction="behind"] {
   color: var(--pace-behind-fg);
 }
 
 /* ── Compact metric chips — ref .compact-card .usage-panel / .metric ──── */
 /* geo: ref .usage-panel margin-top 14 → 7 (the content gap), grid gap 11 → 5 */
-.menu-surface--tray .menu-card--compact .menu-card__content {
+.menu-surface .menu-card--compact .menu-card__content {
   gap: calc(7 * var(--flyout-u));
 }
-.menu-surface--tray .menu-card--compact .menu-card__chip-row {
+.menu-surface .menu-card--compact .menu-card__chip-row {
   gap: calc(5 * var(--flyout-u));
 }
 /* geo: ref .metric radius 15 → 7, padding 17 8 14 → 8 4 7 */
-.menu-surface--tray .menu-card--compact .menu-card__chip {
+.menu-surface .menu-card--compact .menu-card__chip {
   border-radius: calc(7 * var(--flyout-u));
   padding: calc(8 * var(--flyout-u)) calc(4 * var(--flyout-u)) calc(7 * var(--flyout-u));
   gap: calc(2 * var(--flyout-u));
 }
 /* type: ref .metric-value 23 → 14 weight 720, small 15 → 9 weight 450,
    .metric-icon 20 → 12 */
-.menu-surface--tray .menu-card--compact .menu-card__chip-value {
+.menu-surface .menu-card--compact .menu-card__chip-value {
   font-size: calc(14 * var(--flyout-u));
   font-weight: 720;
 }
-.menu-surface--tray .menu-card--compact .menu-card__chip-value svg {
+.menu-surface .menu-card--compact .menu-card__chip-value svg {
   width: calc(12 * var(--flyout-u));
   height: calc(12 * var(--flyout-u));
 }
-.menu-surface--tray .menu-card--compact .menu-card__chip-caption {
+.menu-surface .menu-card--compact .menu-card__chip-caption {
   font-size: calc(9 * var(--flyout-u));
   font-weight: 450;
 }
@@ -8386,14 +8396,14 @@ body:has(.tray-panel-reveal) {
 /* ── Minimal summary line — ref .minimal-card .weekly-line ────────────── */
 /* geo: ref margin-top 18 → 9 | type: ref font-size 17 → 10,
    .metric-icon 17 → 10 */
-.menu-surface--tray .menu-card--minimal .menu-card__content {
+.menu-surface .menu-card--minimal .menu-card__content {
   gap: calc(9 * var(--flyout-u));
 }
-.menu-surface--tray .menu-card--minimal .menu-card__minimal-line {
+.menu-surface .menu-card--minimal .menu-card__minimal-line {
   font-size: calc(10 * var(--flyout-u));
   font-weight: 400;
 }
-.menu-surface--tray .menu-card--minimal .menu-card__minimal-segment svg {
+.menu-surface .menu-card--minimal .menu-card__minimal-segment svg {
   width: calc(10 * var(--flyout-u));
   height: calc(10 * var(--flyout-u));
 }
