@@ -128,6 +128,7 @@ function settings(overrides: Partial<SettingsSnapshot> = {}): SettingsSnapshot {
     floatBarResetTimeRelative: true,
     dashboardShowAsUsed: true,
     dashboardResetTimeRelative: true,
+    dashboardProviderIds: [],
     taskbarShowAsUsed: true,
     taskbarResetTimeRelative: true,
     taskbarContextMenuActions: ["open_panel", "refresh", "settings", "quit"],

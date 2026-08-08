@@ -8,6 +8,7 @@ import type {
 } from "../../../types/bridge";
 import type { TabProps } from "../../Settings";
 import BinaryChoiceField from "../BinaryChoiceField";
+import ProviderFilterField from "../ProviderFilterField";
 
 /**
  * Dashboard settings — the tray flyout and the pop-out panel.
@@ -28,6 +29,9 @@ const DASHBOARD_DEFAULTS = {
   dashboardShowAsUsed: true,
   dashboardResetTimeRelative: true,
   showAllTokenAccountsInMenu: false,
+  // Empty is "every enabled provider", so restoring defaults widens the
+  // dashboard back out rather than pinning today's roster.
+  dashboardProviderIds: [] as string[],
   localUsagePeriod: "today" as LocalUsagePeriod,
   windowScalePercent: 100,
   trayScalePercent: 100,
@@ -74,6 +78,17 @@ export default function DashboardTab({ settings, set, saving }: TabProps) {
           </button>
         </div>
         <div className="settings-section__group">
+          {/* Leads the group: which providers appear is a bigger question than
+              how each one is phrased, and the rows below all describe cards
+              that this list decides the existence of. */}
+          <ProviderFilterField
+            label={t("DashboardProvidersLabel")}
+            description={t("DashboardProvidersHelper")}
+            enabledProviderIds={settings.enabledProviders ?? []}
+            value={settings.dashboardProviderIds ?? []}
+            disabled={saving}
+            onChange={(next) => set({ dashboardProviderIds: next })}
+          />
           <Field label={t("DisplayModeLabel")} description={t("DisplayModeHelper")}>
             <SegmentedControl
               value={settings.menuBarDisplayMode}

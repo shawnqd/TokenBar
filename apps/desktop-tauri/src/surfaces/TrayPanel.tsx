@@ -27,6 +27,7 @@ import MenuSurface, {
 import ProviderGrid, { prioritizeProviders } from "../components/ProviderGrid";
 import { openProviderDashboard, openProviderStatusPage } from "../lib/tauri";
 import { orderProviderSnapshots } from "../lib/providerOrder";
+import { resolveDashboardProviderIds } from "../lib/dashboardProviders";
 import { quotaDisplayContext } from "../lib/quotaDisplay";
 import { outputSpeedProviderId } from "../lib/outputSpeed";
 import {
@@ -86,12 +87,23 @@ export default function TrayPanel({ state }: { state: BootstrapState }) {
     () => quotaDisplayContext(settings, "dashboard"),
     [settings],
   );
+  // The dashboard's own provider filter (item H). Everything below reads this
+  // rather than `settings.enabledProviders`, so the dense-overview threshold
+  // and the slot list count the providers actually on screen.
+  const shownProviderIds = useMemo(
+    () =>
+      resolveDashboardProviderIds(
+        settings.enabledProviders,
+        settings.dashboardProviderIds,
+      ),
+    [settings.dashboardProviderIds, settings.enabledProviders],
+  );
   // The cache is deliberately retained when a provider is disabled so the
   // Settings page can still describe its last result.  A tray flyout is a
   // live view, though: it must only render currently enabled providers.
   const enabledSnapshots = useMemo(
-    () => providers.filter((provider) => settings.enabledProviders.includes(provider.providerId)),
-    [providers, settings.enabledProviders],
+    () => providers.filter((provider) => shownProviderIds.includes(provider.providerId)),
+    [providers, shownProviderIds],
   );
 
   const sorted = useMemo(
@@ -99,7 +111,7 @@ export default function TrayPanel({ state }: { state: BootstrapState }) {
       const ordered = orderProviderSnapshots(
         enabledSnapshots,
         state.providers,
-        settings.enabledProviders,
+        shownProviderIds,
         settings.providerOrder,
       );
       if (!settings.menuBarShowsHighestUsage) return ordered;
@@ -109,7 +121,7 @@ export default function TrayPanel({ state }: { state: BootstrapState }) {
     },
     [
       enabledSnapshots,
-      settings.enabledProviders,
+      shownProviderIds,
       settings.menuBarShowsHighestUsage,
       settings.providerOrder,
       state.providers,
@@ -119,11 +131,11 @@ export default function TrayPanel({ state }: { state: BootstrapState }) {
     () =>
       orderedEnabledProviderSlots(
         state.providers,
-        settings.enabledProviders,
+        shownProviderIds,
         sorted,
         settings.providerOrder,
       ),
-    [settings.enabledProviders, settings.providerOrder, sorted, state.providers],
+    [shownProviderIds, settings.providerOrder, sorted, state.providers],
   );
   const providersById = useMemo(
     () => new Map(sorted.map((provider) => [provider.providerId, provider])),
@@ -140,7 +152,7 @@ export default function TrayPanel({ state }: { state: BootstrapState }) {
   const expectsDenseOverview =
     selectedProviderId === null &&
     !gridExpanded &&
-    settings.enabledProviders.length + 1 > DENSE_OVERVIEW_THRESHOLD;
+    shownProviderIds.length + 1 > DENSE_OVERVIEW_THRESHOLD;
   const denseTrayProviders = useMemo(() => {
     if (!expectsDenseOverview) return sorted;
     return hydrateProviderSlots(denseProviderSlots, providersById);

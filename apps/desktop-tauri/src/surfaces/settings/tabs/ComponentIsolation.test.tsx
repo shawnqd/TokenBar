@@ -33,6 +33,7 @@ const settings = {
   floatBarResetTimeRelative: true,
   dashboardShowAsUsed: true,
   dashboardResetTimeRelative: true,
+  dashboardProviderIds: [],
   taskbarShowAsUsed: true,
   taskbarResetTimeRelative: true,
     taskbarContextMenuActions: ["open_panel", "refresh", "settings", "quit"],
@@ -49,7 +50,12 @@ const settings = {
   taskbarWidgetFontSize: 12,
   taskbarWidgetWidth: 132,
   taskbarWidgetTextAlign: "left",
-  enabledProviders: ["codex"],
+  floatBarEnabled: true,
+  floatBarProviderIds: [],
+  // Two, not one: the provider-filter chips refuse to unpress the last active
+  // one, so a single-provider fixture would render a control this suite cannot
+  // click and the pages' filters would go unexercised.
+  enabledProviders: ["codex", "claude"],
 } as unknown as SettingsSnapshot;
 
 /**
@@ -79,9 +85,11 @@ describe("settings component isolation", () => {
       // choice between two named things (used/remaining, countdown/exact time)
       // stopped being switches, and without this the FloatBar page had no
       // clickable control left and the assertion below passed vacuously.
+      // `aria-pressed` covers the chip groups — the provider filters and the
+      // bar's reset-window picker.
       container
         .querySelectorAll(
-          'input[type="checkbox"], button[role="switch"], button[role="radio"]',
+          'input[type="checkbox"], button[role="switch"], button[role="radio"], button[aria-pressed]',
         )
         .forEach((el) => fireEvent.click(el));
 

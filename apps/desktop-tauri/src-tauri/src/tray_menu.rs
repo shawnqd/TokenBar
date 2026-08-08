@@ -148,7 +148,7 @@ pub(crate) fn build_tray_menu_with(
 
     menu.push(TrayMenuEntry::check_item(
         "toggle_float_bar",
-        text(LocaleKey::TrayShowMiniStatusBar),
+        text(LocaleKey::TrayShowFloatBar),
         float_bar_enabled,
     ));
     menu.push(TrayMenuEntry::separator());

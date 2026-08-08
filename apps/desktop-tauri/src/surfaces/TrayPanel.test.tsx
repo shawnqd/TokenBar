@@ -179,6 +179,7 @@ function settings(overrides: Partial<SettingsSnapshot> = {}): SettingsSnapshot {
     floatBarResetTimeRelative: true,
     dashboardShowAsUsed: true,
     dashboardResetTimeRelative: true,
+    dashboardProviderIds: [],
     taskbarShowAsUsed: true,
     taskbarResetTimeRelative: true,
     taskbarContextMenuActions: ["open_panel", "refresh", "settings", "quit"],
@@ -977,6 +978,7 @@ kind: "session",
     async function resetTextWith(relative: boolean): Promise<string> {
       const { container, unmount } = renderTrayPanel([providerWithReset()], {
         dashboardResetTimeRelative: relative,
+        dashboardProviderIds: [],
       });
       await waitFor(() => {
         expect(container.querySelector(".provider-quota__reset")).not.toBeNull();

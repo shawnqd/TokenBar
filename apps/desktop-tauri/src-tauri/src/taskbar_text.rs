@@ -49,7 +49,7 @@ use windows::Win32::Graphics::DirectWrite::{
     DWRITE_FACTORY_TYPE_SHARED, DWRITE_FONT_AXIS_TAG_WEIGHT, DWRITE_FONT_AXIS_VALUE,
     DWRITE_FONT_STRETCH_NORMAL, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_WEIGHT,
     DWRITE_PARAGRAPH_ALIGNMENT_CENTER, DWRITE_TEXT_ALIGNMENT, DWRITE_TEXT_ALIGNMENT_CENTER,
-    DWRITE_TRIMMING, DWRITE_TRIMMING_GRANULARITY_CHARACTER,
+    DWRITE_TEXT_METRICS, DWRITE_TRIMMING, DWRITE_TRIMMING_GRANULARITY_CHARACTER,
     DWRITE_TEXT_ALIGNMENT_LEADING, DWRITE_TEXT_ALIGNMENT_TRAILING, DWRITE_WORD_WRAPPING_NO_WRAP,
     DWriteCreateFactory, IDWriteFactory, IDWriteFontCollection, IDWriteFontFace5,
     IDWriteFontFamily2, IDWriteTextFormat, IDWriteTextFormat3,
@@ -206,6 +206,53 @@ pub fn reset_renderer() {
     RENDERER.with(|cell| {
         *cell.borrow_mut() = None;
     });
+}
+
+// A DirectWrite factory kept for measurement alone. Deliberately *not*
+// `RENDERER`: measuring must not depend on Direct2D being available, and a
+// caller that only measures (the popup menu, sizing its card before it has a
+// DC) should not pay for a render target it never binds.
+thread_local! {
+    static MEASURER: RefCell<Option<IDWriteFactory>> = const { RefCell::new(None) };
+}
+
+/// Layout width, in device pixels, of `text` under the same font, weight and em
+/// size [`draw_lines`] would use. `None` when DirectWrite is unavailable, which
+/// is the caller's cue to fall back to whatever it uses for drawing too.
+///
+/// This exists because measuring with GDI and drawing with DirectWrite is a
+/// mismatch: GDI has to collapse a `wght` axis value onto an installed static
+/// face, so a light or a variable family measures at one weight and draws at
+/// another. The card sized from those numbers is then slightly too wide (dead
+/// space on the right) or slightly too narrow (the ellipsis appears on text
+/// that would have fit).
+pub fn measure_width(text: &str, style: &TextStyle<'_>) -> Option<f32> {
+    if text.is_empty() {
+        return Some(0.0);
+    }
+    MEASURER.with(|cell| {
+        let mut slot = cell.borrow_mut();
+        if slot.is_none() {
+            match unsafe { DWriteCreateFactory::<IDWriteFactory>(DWRITE_FACTORY_TYPE_SHARED) } {
+                Ok(factory) => *slot = Some(factory),
+                Err(err) => {
+                    tracing::warn!("taskbar text: DirectWrite unavailable for measurement: {err}");
+                    return None;
+                }
+            }
+        }
+        let dwrite = slot.as_ref()?;
+        let format = unsafe { create_format(dwrite, style) }.ok()?;
+        let utf16: Vec<u16> = text.encode_utf16().collect();
+        // A layout box far wider than any surface here, so the format's ellipsis
+        // trimming never engages and the reported width is the natural one. Not
+        // `f32::MAX` — DirectWrite does arithmetic on this, and an infinity
+        // propagates into the metrics.
+        let layout = unsafe { dwrite.CreateTextLayout(&utf16, &format, 1.0e6, 1.0e6) }.ok()?;
+        let mut metrics = DWRITE_TEXT_METRICS::default();
+        unsafe { layout.GetMetrics(&mut metrics) }.ok()?;
+        Some(metrics.width)
+    })
 }
 
 unsafe fn draw_with(

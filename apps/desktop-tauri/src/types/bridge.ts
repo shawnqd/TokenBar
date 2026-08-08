@@ -365,6 +365,12 @@ export interface SettingsSnapshot {
   /** Tray flyout + PopOut panel: countdown (`true`) or absolute time. */
   dashboardResetTimeRelative: boolean;
   /**
+   * Which providers the tray flyout and pop-out panel show. Empty = every
+   * enabled provider, the behaviour before this key existed. Filtering here
+   * never enables a provider — `enabledProviders` still decides that.
+   */
+  dashboardProviderIds: string[];
+  /**
    * Windows taskbar strip and notification-area icon: `true` shows used,
    * `false` shows remaining. There is no `taskbarResetTimeRelative` companion —
    * the native strip renders no reset text, so such a setting would be inert.
@@ -448,6 +454,7 @@ export interface SettingsUpdate {
   floatBarResetTimeRelative?: boolean;
   dashboardShowAsUsed?: boolean;
   dashboardResetTimeRelative?: boolean;
+  dashboardProviderIds?: string[];
   taskbarShowAsUsed?: boolean;
   taskbarResetTimeRelative?: boolean;
   taskbarContextMenuActions?: string[];

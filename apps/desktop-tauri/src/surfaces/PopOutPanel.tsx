@@ -18,6 +18,7 @@ import MenuSurface, {
 } from "../components/MenuSurface";
 import ProviderGrid, { prioritizeProviders } from "../components/ProviderGrid";
 import { orderProviderSnapshots } from "../lib/providerOrder";
+import { resolveDashboardProviderIds } from "../lib/dashboardProviders";
 import { quotaDisplayContext } from "../lib/quotaDisplay";
 import { outputSpeedProviderId } from "../lib/outputSpeed";
 
@@ -51,14 +52,34 @@ export default function PopOutPanel({
     settings.outputSpeedEnabled !== false,
   );
 
+  // Same provider filter as the tray flyout — the two share the "dashboard"
+  // component, so a provider hidden from one is hidden from the other.
+  //
+  // The candidates are the snapshots themselves, *not* `enabledProviders`:
+  // unlike the tray flyout this surface has never applied the enabled filter,
+  // and making it do so here would be a behaviour change nobody asked for.
+  const shownProviderIds = useMemo(
+    () =>
+      resolveDashboardProviderIds(
+        providers.map((provider) => provider.providerId),
+        settings.dashboardProviderIds,
+      ),
+    [providers, settings.dashboardProviderIds],
+  );
   const sorted = useMemo(() => {
     return orderProviderSnapshots(
-      providers,
+      providers.filter((provider) => shownProviderIds.includes(provider.providerId)),
       state.providers,
       settings.enabledProviders,
       settings.providerOrder,
     );
-  }, [providers, settings.enabledProviders, settings.providerOrder, state.providers]);
+  }, [
+    providers,
+    shownProviderIds,
+    settings.enabledProviders,
+    settings.providerOrder,
+    state.providers,
+  ]);
   const [selectedProviderId, setSelectedProviderId] = useState<string | null>(
     providerId ?? null,
   );

@@ -3,6 +3,7 @@ import { Field, Toggle } from "../../../components/FormControls";
 import { FloatBarSettingsSection } from "../../../floatbar";
 import type { TabProps } from "../../Settings";
 import BinaryChoiceField from "../BinaryChoiceField";
+import ProviderFilterField from "../ProviderFilterField";
 
 /**
  * Floating bar settings.
@@ -17,6 +18,7 @@ import BinaryChoiceField from "../BinaryChoiceField";
 const FLOAT_BAR_DEFAULTS = {
   floatBarShowAsUsed: true,
   floatBarResetTimeRelative: true,
+  floatBarProviderIds: [] as string[],
   floatBarOpacity: 80,
   floatBarScale: 100,
   floatBarOrientation: "horizontal" as const,
@@ -62,6 +64,17 @@ export default function FloatBarTab({ settings, set, saving }: TabProps) {
           </button>
         </div>
         <div className="settings-section__group">
+          {/* `floatBarProviderIds` has been persisted and consumed by
+              `FloatBar.tsx` since long before this control existed — the bar
+              filtered on it, but nothing on any settings page could set it. */}
+          <ProviderFilterField
+            label={t("FloatBarProvidersLabel")}
+            description={t("FloatBarProvidersHelper")}
+            enabledProviderIds={settings.enabledProviders ?? []}
+            value={settings.floatBarProviderIds ?? []}
+            disabled={saving || !settings.floatBarEnabled}
+            onChange={(next) => set({ floatBarProviderIds: next })}
+          />
           <BinaryChoiceField
             label={t("ShowAsUsedLabel")}
             description={t("ShowAsUsedHelper")}

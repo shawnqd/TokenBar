@@ -948,6 +948,48 @@ fn taskbar_reset_time_mode_round_trips() {
     assert!(restored.float_bar_reset_time_relative);
 }
 
+/// Item H's provider selection for the dashboard, the counterpart of
+/// `float_bar_provider_ids`.
+///
+/// The default must stay **empty**, and empty must keep meaning "every enabled
+/// provider". Seeding it with today's roster instead would freeze the tray
+/// flyout at the providers that happened to be on when the file was written: a
+/// provider enabled later would poll, appear in the strip and the floating bar,
+/// and silently never show up on the dashboard.
+#[test]
+fn dashboard_provider_filter_round_trips_and_defaults_to_all() {
+    let mut settings = Settings::default();
+    assert!(
+        settings.dashboard_provider_ids.is_empty(),
+        "empty means every enabled provider"
+    );
+
+    settings.dashboard_provider_ids = vec!["claude".into(), "codex".into()];
+    let json = serde_json::to_string(&settings).unwrap();
+    let restored: Settings = serde_json::from_str(&json).unwrap();
+    assert_eq!(restored.dashboard_provider_ids, vec!["claude", "codex"]);
+
+    // Each component filters for itself; the dashboard's pick must not move the
+    // floating bar's.
+    assert!(restored.float_bar_provider_ids.is_empty());
+}
+
+/// A settings file written before this key existed loads with the filter empty,
+/// i.e. the dashboard keeps showing everything it showed yesterday.
+#[test]
+fn dashboard_provider_filter_absent_from_older_files_means_all() {
+    let json = r#"{
+            "enabled_providers": ["claude"],
+            "refresh_interval_secs": 300,
+            "start_minimized": false,
+            "start_at_login": false,
+            "show_notifications": true,
+            "sound_enabled": true
+        }"#;
+    let settings: Settings = serde_json::from_str(json).expect("deserialize");
+    assert!(settings.dashboard_provider_ids.is_empty());
+}
+
 /// Fresh installs show usage as "used" with relative reset times on every
 /// component, matching the pre-split default behavior.
 #[test]

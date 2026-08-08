@@ -335,6 +335,20 @@ pub struct Settings {
     #[serde(default = "default_true")]
     pub dashboard_reset_time_relative: bool,
 
+    /// Provider ids the dashboard surfaces (tray flyout and pop-out panel)
+    /// display. Empty = every enabled provider, which is what they did before
+    /// this key existed, so an upgrade changes nothing.
+    ///
+    /// The counterpart of [`float_bar_provider_ids`], and item H's "仪表盘自己的
+    /// 服务商筛选": the global `enabled_providers` list decides which providers
+    /// the app *polls*, and that is not the same question as which ones a given
+    /// surface should be crowded with. Filtering here never enables a provider —
+    /// an id absent from `enabled_providers` stays hidden regardless.
+    ///
+    /// [`float_bar_provider_ids`]: Settings::float_bar_provider_ids
+    #[serde(default)]
+    pub dashboard_provider_ids: Vec<String>,
+
     /// Windows taskbar strip and notification-area icon: show quota as used
     /// (`true`) or remaining (`false`). Consumed by
     /// `tray_bridge::selected_tray_percents`, which feeds both.
@@ -796,6 +810,7 @@ impl Default for Settings {
             float_bar_reset_time_relative: true,
             dashboard_show_as_used: true,
             dashboard_reset_time_relative: true,
+            dashboard_provider_ids: Vec::new(),
             taskbar_show_as_used: true,
             taskbar_reset_time_relative: true,
             taskbar_context_menu_actions: default_taskbar_context_menu_actions(),

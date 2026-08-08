@@ -489,7 +489,29 @@ fn surface_is_light() -> bool {
     }
 }
 
+/// Width of one label, measured the way it will be drawn.
+///
+/// DirectWrite first, because that is what [`paint`] draws with. GDI is the
+/// fallback, and only correct when the GDI fallback path is what ends up
+/// drawing: GDI collapses the `wght` axis onto an installed static face, so on
+/// a light or variable family it measures a different typeface than DirectWrite
+/// renders. Sizing the card from GDI numbers left the menu slightly too wide or
+/// ellipsized text that would have fit.
 fn measure_text_width(text: &str, font_px: i32, family: &str, weight: i32) -> i32 {
+    let style = crate::taskbar_text::TextStyle {
+        family,
+        weight: weight as f32,
+        size_px: font_px as f32,
+        align: crate::taskbar_text::TextAlign::Left,
+        color_rgb: 0,
+    };
+    if let Some(width) = crate::taskbar_text::measure_width(text, &style) {
+        return width.ceil() as i32;
+    }
+    measure_text_width_gdi(text, font_px, family, weight)
+}
+
+fn measure_text_width_gdi(text: &str, font_px: i32, family: &str, weight: i32) -> i32 {
     let hdc = unsafe { GetDC(0) };
     if hdc == 0 {
         return text.chars().count() as i32 * font_px;

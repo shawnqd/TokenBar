@@ -208,6 +208,8 @@ pub(super) struct RawSettings {
     #[serde(default)]
     dashboard_reset_time_relative: Option<bool>,
     #[serde(default)]
+    dashboard_provider_ids: Vec<String>,
+    #[serde(default)]
     taskbar_show_as_used: Option<bool>,
     #[serde(default)]
     taskbar_reset_time_relative: Option<bool>,
@@ -355,6 +357,7 @@ impl Default for RawSettings {
             float_bar_reset_time_relative: Some(s.float_bar_reset_time_relative),
             dashboard_show_as_used: Some(s.dashboard_show_as_used),
             dashboard_reset_time_relative: Some(s.dashboard_reset_time_relative),
+            dashboard_provider_ids: s.dashboard_provider_ids,
             taskbar_show_as_used: Some(s.taskbar_show_as_used),
             taskbar_reset_time_relative: Some(s.taskbar_reset_time_relative),
             taskbar_context_menu_actions: Some(s.taskbar_context_menu_actions.clone()),
@@ -667,6 +670,9 @@ impl From<RawSettings> for Settings {
             dashboard_reset_time_relative: raw
                 .dashboard_reset_time_relative
                 .unwrap_or(raw.reset_time_relative),
+            // No legacy global to migrate from: the dashboard has always shown
+            // every enabled provider, and empty means exactly that.
+            dashboard_provider_ids: raw.dashboard_provider_ids,
             taskbar_show_as_used: raw.taskbar_show_as_used.unwrap_or(raw.show_as_used),
             // Absent key falls back to the legacy global, matching how
             // `taskbar_show_as_used` migrates.

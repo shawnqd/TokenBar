@@ -72,6 +72,9 @@ pub struct SettingsUpdate {
     pub float_bar_reset_time_relative: Option<bool>,
     pub dashboard_show_as_used: Option<bool>,
     pub dashboard_reset_time_relative: Option<bool>,
+    /// Which providers the tray flyout and pop-out panel show. Empty = all
+    /// enabled, the counterpart of `float_bar_provider_ids`.
+    pub dashboard_provider_ids: Option<Vec<String>>,
     pub taskbar_show_as_used: Option<bool>,
     pub taskbar_reset_time_relative: Option<bool>,
     pub taskbar_context_menu_actions: Option<Vec<String>>,
@@ -99,6 +102,7 @@ impl SettingsUpdate {
             || self.menu_bar_shows_highest_usage.is_some()
             || self.dashboard_show_as_used.is_some()
             || self.dashboard_reset_time_relative.is_some()
+            || self.dashboard_provider_ids.is_some()
             || self.taskbar_show_as_used.is_some()
             || self.taskbar_reset_time_relative.is_some()
             || self.menu_bar_display_mode.is_some()
@@ -230,6 +234,9 @@ impl SettingsUpdate {
         }
         if let Some(v) = self.dashboard_reset_time_relative {
             settings.dashboard_reset_time_relative = v;
+        }
+        if let Some(ref ids) = self.dashboard_provider_ids {
+            settings.dashboard_provider_ids = ids.clone();
         }
         if let Some(v) = self.taskbar_reset_time_relative {
             settings.taskbar_reset_time_relative = v;
