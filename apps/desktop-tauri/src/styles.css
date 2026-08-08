@@ -7071,10 +7071,24 @@ body:has(.settings-window-frame) #root {
   gap: var(--provider-workspace-gap);
   margin-bottom: var(--provider-workspace-gap);
 }
-/* The picker is a peer of the section heading, not of the cards below it, so
-   it sits tight under the helper text rather than a full gap away. */
+/* Tighter than the workspace rhythm on purpose. That rhythm is for *sections*,
+   and applying it between a heading, its one-line explanation, a picker and one
+   card spread four closely-related things across a screenful — the loose look
+   in the report. These belong to each other, so they sit closer together than
+   they do to the next section. */
+.provider-detail-auth-zone {
+  gap: 8px;
+}
+.provider-detail-auth-zone__header {
+  margin-bottom: 0;
+}
+.provider-detail-auth-zone__helper {
+  margin: 2px 0 0;
+  line-height: 1.45;
+}
+/* The picker belongs to the heading above it, not to the card below. */
 .provider-detail-auth-zone > .segmented-control {
-  margin-top: -4px;
+  margin-top: 2px;
 }
 /* The chosen method's own card supplies the padding; a second wrapper here is
    what produced the card-inside-a-card look. */

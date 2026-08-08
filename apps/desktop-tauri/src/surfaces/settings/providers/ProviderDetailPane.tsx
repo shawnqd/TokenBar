@@ -418,12 +418,14 @@ export function ProviderDetailPane({
         />
       )}
 
-      {/* 5. Display settings (tray metric + region only; auth sources live above).
-          Its own heading keeps these display-only controls from reading as
-          part of the auth zone above — TASK-021 item 2. */}
+      {/* 5. The provider's remaining per-provider settings: which quota metric
+          its tray icon shows, and its region. Titled 其他相关设置 rather than
+          显示 — "显示" is a *tab* name, and a section sharing it read as though
+          the whole Display page had been embedded here. Neither control has a
+          home on the per-component pages: both are per-provider. */}
       {detail && (
         <div className="provider-detail-display-zone settings-section">
-          <h3 className="settings-section__title">{t("TabDisplay")}</h3>
+          <h3 className="settings-section__title">{t("ProviderOtherSettings")}</h3>
           <MenuBarMetricSection
             provider={detail}
             providerMetrics={providerMetrics}
@@ -568,7 +570,9 @@ function AuthWorkspace({
   const labelFor: Record<PrimaryAuthKind, LocaleKey> = {
     bespoke: "CredentialsSectionTitle",
     cookie: "CredentialManualCookies",
-    signIn: "OAuth",
+    // Not the bare "OAuth": the entry covers a browser sign-in *and* a CLI
+    // login, and "OAuth" names a protocol rather than the thing the user does.
+    signIn: "ProviderAuthMethodSignIn",
     apiKey: "CredentialApiKeys",
   };
 
@@ -585,13 +589,21 @@ function AuthWorkspace({
         <h3 className="provider-detail-auth-zone__title">
           {t("ProviderAuthSourcesTitle")}
         </h3>
+        {/* Says what is true of *this* provider rather than listing every
+            method the app knows about. The old helper — "supports Cookie,
+            browser login, CLI, API Key and Token Plan; only supported ones are
+            shown" — named five things without saying which applied here, so it
+            answered nothing and still had to be read. */}
         <p className="provider-detail-auth-zone__helper">
-          {t("ProviderAuthSourcesHelper")}
+          {methods.length > 1
+            ? t("ProviderAuthPickMethod")
+            : t("ProviderAuthUsingMethod").replace("{}", t(labelFor[method]))}
         </p>
       </div>
       {/* One option is not a choice. A single-method provider — Codex, whose
           only route is a browser sign-in — gets its controls directly, with no
-          control that can only be set to what it already is. */}
+          control that can only be set to what it already is; the line above
+          has already named the method. */}
       {methods.length > 1 && (
         <SegmentedControl
           value={method}
