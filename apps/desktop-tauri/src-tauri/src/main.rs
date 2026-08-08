@@ -3,6 +3,7 @@
 use std::time::Duration;
 
 mod auto_refresh;
+mod boot;
 mod commands;
 mod events;
 mod floatbar;
@@ -247,29 +248,43 @@ fn main() {
             floatbar::set_float_bar_orientation,
         ])
         .setup(move |app| {
-            if let Some(window) = app.get_webview_window("main") {
+            // Every line below is a `boot::stage`, and none of them use `?`.
+            // These features are independent from the user's point of view —
+            // no floating bar still leaves a tray icon — and they are now
+            // independent from the process's too. See `boot` for what one
+            // unescaped character in a translation file used to cost.
+            boot::stage("main window chrome", || {
+                let window = app
+                    .get_webview_window("main")
+                    .ok_or("the main window is missing")?;
                 shell::dwm::force_dark_caption(&window);
-                window.hide()?;
-            }
-            tray_bridge::setup(app)?;
+                window.hide().map_err(|e| e.to_string())
+            });
+            boot::stage("tray icon", || tray_bridge::setup(app));
             // Preload the two tray-driven WebViews while keeping them hidden.
             // Their frontend-ready handshakes prevent blank native surfaces,
             // and the first user click no longer pays WebView2 creation cost.
-            if let Err(error) = shell::settings_window::prewarm(app.handle()) {
-                tracing::warn!("settings prewarm failed: {error}");
-            }
-            if let Err(error) = shell::flyout_window::prewarm(app.handle()) {
-                tracing::warn!("flyout prewarm failed: {error}");
-            }
+            boot::stage("settings window prewarm", || {
+                shell::settings_window::prewarm(app.handle())
+            });
+            boot::stage("tray panel prewarm", || {
+                shell::flyout_window::prewarm(app.handle())
+            });
             #[cfg(windows)]
-            {
+            boot::stage_infallible("taskbar strip", || {
                 taskbar_widget::set_app_handle(app.handle());
                 taskbar_widget::install();
-            }
-            shortcut_bridge::register(app.handle());
-            floatbar::install(app.handle());
-            auto_refresh::install(app.handle().clone());
-            commands::restore_provider_chart_cache();
+            });
+            boot::stage_infallible("global shortcut", || {
+                shortcut_bridge::register(app.handle())
+            });
+            boot::stage_infallible("floating bar", || floatbar::install(app.handle()));
+            boot::stage_infallible("auto refresh", || {
+                auto_refresh::install(app.handle().clone())
+            });
+            boot::stage_infallible("provider chart cache", || {
+                commands::restore_provider_chart_cache()
+            });
 
             // Local cost/token summaries are expensive because they aggregate
             // up to 30 days of Codex and Claude JSONL logs. Warm them after the

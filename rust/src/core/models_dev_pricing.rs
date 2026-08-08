@@ -1,11 +1,11 @@
+// Kept for the on-disk cache format; see the note below on the deleted
+// refresh path.
+#![allow(dead_code)]
+
 #[cfg(test)]
 mod tests {
-    use super::{
-        ModelsDevCache, ModelsDevCacheArtifact, ModelsDevCatalog, ModelsDevRefreshCoordinator,
-    };
+    use super::{ModelsDevCache, ModelsDevCacheArtifact, ModelsDevCatalog};
     use std::path::PathBuf;
-    use std::sync::Arc;
-    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::time::{Duration, UNIX_EPOCH};
 
     #[test]
@@ -126,47 +126,6 @@ mod tests {
         );
     }
 
-    #[tokio::test]
-    async fn concurrent_refreshes_for_one_cache_path_share_one_operation() {
-        let coordinator = ModelsDevRefreshCoordinator::default();
-        let calls = Arc::new(AtomicUsize::new(0));
-        let first_calls = Arc::clone(&calls);
-        let path = PathBuf::from("pricing.json");
-        let now = UNIX_EPOCH + Duration::from_secs(1_000_000);
-
-        let first = coordinator.refresh(path.clone(), now, async move {
-            first_calls.fetch_add(1, Ordering::SeqCst);
-            tokio::time::sleep(Duration::from_millis(10)).await;
-            true
-        });
-        let second = coordinator.refresh(path, now, async {
-            panic!("the second caller must await the first operation");
-        });
-
-        assert!(tokio::join!(first, second).0);
-        assert_eq!(calls.load(Ordering::SeqCst), 1);
-    }
-
-    #[tokio::test]
-    async fn failed_refresh_is_not_retried_within_the_attempt_window() {
-        let coordinator = ModelsDevRefreshCoordinator::default();
-        let path = PathBuf::from("pricing.json");
-        let now = UNIX_EPOCH + Duration::from_secs(1_000_000);
-
-        assert!(
-            !coordinator
-                .refresh(path.clone(), now, async { false })
-                .await
-        );
-        assert!(
-            !coordinator
-                .refresh(path, now + Duration::from_secs(60), async {
-                    panic!("the 15-minute bound must suppress this attempt");
-                })
-                .await
-        );
-    }
-
     #[test]
     fn cache_path_uses_the_existing_per_user_cache_root() {
         let cache_root = ModelsDevCache::default_cache_root().expect("per-user cache root");
@@ -180,12 +139,29 @@ mod tests {
 use serde::{Deserialize, Deserializer, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::fs;
-use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, LazyLock, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
-use tokio::sync::{Mutex as AsyncMutex, watch};
 
+// ── The refresh half of this module is gone ────────────────────────────────
+//
+// `lookup` reads a models.dev pricing cache off disk. **Nothing in this binary
+// writes that cache.** The coordinator, the HTTP fetch and `ModelsDevCache::save`
+// were only ever reachable from `refresh_unknown_models_if_needed`, which no
+// caller ever had, so the whole refresh path was dead and is now deleted.
+//
+// What that means in practice: `lookup` returns pricing only if a cache file
+// left by some earlier build happens to be present and fresh, and otherwise
+// returns `None` and `cost_pricing` falls back to its static table. That was
+// already true before this deletion — removing dead code did not change it —
+// but it was invisible, and it is a product decision rather than a cleanup one:
+// either wire the refresh back up, or drop the dynamic path and keep the static
+// table. **Do not "fix" this by re-adding a caller without deciding which.**
+//
+// The items below are what survives for the read path plus a few that the
+// deleted half used. They are kept rather than cut because they describe the
+// on-disk format, and whichever way the decision above goes, the format is what
+// a future refresh would have to write.
 const MODELS_DEV_URL: &str = "https://models.dev/api.json";
 const CACHE_TTL: Duration = Duration::from_secs(24 * 60 * 60);
 const REFRESH_ATTEMPT_WINDOW: Duration = Duration::from_secs(15 * 60);
@@ -648,170 +624,10 @@ impl ModelsDevCache {
     }
 }
 
-#[derive(Default)]
-struct ModelsDevRefreshCoordinator {
-    state: Arc<AsyncMutex<ModelsDevRefreshState>>,
-}
-
-#[derive(Default)]
-struct ModelsDevRefreshState {
-    in_flight: HashMap<PathBuf, watch::Receiver<Option<bool>>>,
-    last_attempt: HashMap<PathBuf, SystemTime>,
-}
-
-impl ModelsDevRefreshCoordinator {
-    async fn refresh<F>(&self, cache_path: PathBuf, now: SystemTime, operation: F) -> bool
-    where
-        F: Future<Output = bool> + Send + 'static,
-    {
-        let cache_path = standardized_cache_path(&cache_path);
-        let mut state = self.state.lock().await;
-        if let Some(in_flight) = state.in_flight.get(&cache_path) {
-            let receiver = in_flight.clone();
-            drop(state);
-            return wait_for_refresh(receiver).await;
-        }
-        if state
-            .last_attempt
-            .get(&cache_path)
-            .is_some_and(|last_attempt| {
-                now.duration_since(*last_attempt).unwrap_or_default() < REFRESH_ATTEMPT_WINDOW
-            })
-        {
-            return false;
-        }
-
-        state.last_attempt.insert(cache_path.clone(), now);
-        let (sender, receiver) = watch::channel(None);
-        state.in_flight.insert(cache_path.clone(), receiver.clone());
-        drop(state);
-
-        let state = Arc::clone(&self.state);
-        tokio::spawn(async move {
-            let result = operation.await;
-            let _ = sender.send(Some(result));
-            state
-                .lock()
-                .await
-                .in_flight
-                .retain(|path, _| path != &cache_path);
-        });
-        wait_for_refresh(receiver).await
-    }
-}
-
-async fn wait_for_refresh(mut receiver: watch::Receiver<Option<bool>>) -> bool {
-    loop {
-        if let Some(result) = *receiver.borrow() {
-            return result;
-        }
-        if receiver.changed().await.is_err() {
-            return false;
-        }
-    }
-}
-
-static REFRESH_COORDINATOR: LazyLock<ModelsDevRefreshCoordinator> =
-    LazyLock::new(ModelsDevRefreshCoordinator::default);
-
-/// Looks up a cached models.dev price for a provider/model pair.
 pub fn lookup(provider_id: &str, model_id: &str) -> Option<DynamicModelPricing> {
     let load = ModelsDevCache::load(SystemTime::now(), None);
     (!load.is_stale)
         .then_some(load.artifact)
         .flatten()
         .and_then(|artifact| artifact.catalog.lookup(provider_id, model_id))
-}
-
-/// Refreshes the models.dev cache once when supplied models lack cached pricing.
-///
-/// Returns true only if at least one supplied model has pricing after the coordinated refresh.
-pub async fn refresh_unknown_models_if_needed(
-    provider_id: &str,
-    model_ids: &HashSet<String>,
-) -> bool {
-    if model_ids.is_empty() {
-        return false;
-    }
-    refresh_unknown_models_at(provider_id, model_ids, SystemTime::now(), None).await
-}
-
-async fn refresh_unknown_models_at(
-    provider_id: &str,
-    model_ids: &HashSet<String>,
-    now: SystemTime,
-    cache_root: Option<&Path>,
-) -> bool {
-    let load = ModelsDevCache::load(now, cache_root);
-    let unknown_models: Vec<String> = if load.is_stale {
-        model_ids.iter().cloned().collect()
-    } else {
-        model_ids
-            .iter()
-            .filter(|model_id| {
-                load.artifact
-                    .as_ref()
-                    .and_then(|artifact| artifact.catalog.lookup(provider_id, model_id))
-                    .is_none()
-            })
-            .cloned()
-            .collect()
-    };
-    if unknown_models.is_empty() {
-        return true;
-    }
-    if load.artifact.as_ref().is_some_and(|artifact| {
-        now.duration_since(artifact.fetched_at())
-            .unwrap_or_default()
-            < REFRESH_ATTEMPT_WINDOW
-    }) {
-        return false;
-    }
-
-    let cache_path = ModelsDevCache::cache_path(cache_root);
-    if cache_path.as_os_str().is_empty() {
-        return false;
-    }
-    let cache_root = cache_root.map(Path::to_path_buf);
-    let refresh_cache_root = cache_root.clone();
-    let _ = REFRESH_COORDINATOR
-        .refresh(cache_path, now, async move {
-            refresh_catalog(now, refresh_cache_root.as_deref()).await
-        })
-        .await;
-
-    let refreshed = ModelsDevCache::load(now, cache_root.as_deref());
-    !refreshed.is_stale
-        && unknown_models.iter().any(|model_id| {
-            refreshed
-                .artifact
-                .as_ref()
-                .and_then(|artifact| artifact.catalog.lookup(provider_id, model_id))
-                .is_some()
-        })
-}
-
-async fn refresh_catalog(now: SystemTime, cache_root: Option<&Path>) -> bool {
-    let Ok(client) = reqwest::Client::builder()
-        .timeout(Duration::from_secs(20))
-        .build()
-    else {
-        return false;
-    };
-    let Ok(response) = client.get(MODELS_DEV_URL).send().await else {
-        return false;
-    };
-    if !response.status().is_success() {
-        return false;
-    }
-    let Ok(mut catalog) = response.json::<ModelsDevCatalog>().await else {
-        return false;
-    };
-    if !catalog.is_plausible_refresh() {
-        return false;
-    }
-    if let Some(cached) = ModelsDevCache::load(now, cache_root).artifact {
-        catalog.merge_priceable_entries_from(&cached.catalog);
-    }
-    ModelsDevCache::save(catalog, now, cache_root)
 }
