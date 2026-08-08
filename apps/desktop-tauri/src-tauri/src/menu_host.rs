@@ -95,7 +95,7 @@ unsafe extern "system" fn host_wnd_proc(
         // position, resolved back to a tray menu id. Sharing the resolver is
         // the point — both menus are built from one spec, so they must also be
         // dispatched by one handler.
-        crate::taskbar_widget::handle_context_command(wparam & 0xffff);
+        crate::taskbar_context_menu::handle_command(wparam & 0xffff);
         return 0;
     }
     unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }

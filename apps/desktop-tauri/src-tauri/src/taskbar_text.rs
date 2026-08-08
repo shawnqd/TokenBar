@@ -18,9 +18,9 @@
 //! Continuity is a property of the *font*, not of DirectWrite. `Segoe UI
 //! Variable` ships with Windows 11 and has a real `wght` axis; `Microsoft YaHei
 //! UI` does not — it is a family of static faces, so DirectWrite can only pick
-//! the nearest installed one there too. [`font_family_axis_support`] reports
-//! which is which so the settings UI can tell the truth instead of offering a
-//! slider that silently snaps.
+//! the nearest installed one there too. [`FontFamilyInfo::variable_weight`]
+//! reports which is which so the settings UI can tell the truth instead of
+//! offering a slider that silently snaps.
 //!
 //! # Why Direct2D and not a custom IDWriteTextRenderer
 //!
@@ -201,7 +201,9 @@ pub fn draw_lines(hdc: isize, bounds: RECT, lines: &[TextLine<'_>], style: &Text
 /// still alive. Binding a cached target to a new DC after the old one was
 /// destroyed was observed to hang, so any caller that destroys the DC it drew
 /// onto must reset first. The taskbar strip reuses one window DC and never hits
-/// this; the offscreen tests create and delete a DC per render and do.
+/// this; the offscreen tests create and delete a DC per render and do —
+/// which is why this is `cfg(test)`: it has never had a production caller.
+#[cfg(test)]
 pub fn reset_renderer() {
     RENDERER.with(|cell| {
         *cell.borrow_mut() = None;
@@ -642,16 +644,6 @@ unsafe fn font_has_weight_axis(
 
 /// Whether a specific family name supports a continuous weight axis.
 ///
-/// Used by the settings bridge so the UI can label the weight control honestly
-/// for whichever family is selected.
-pub fn font_family_axis_support(name: &str) -> bool {
-    font_families()
-        .iter()
-        .find(|family| family.name.eq_ignore_ascii_case(name))
-        .map(|family| family.variable_weight)
-        .unwrap_or(false)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -861,30 +853,6 @@ mod tests {
             red_with > 0,
             "a red mark beside blue text rendered no red at all — it was either skipped \
              or drawn with the text brush"
-        );
-    }
-
-    /// The settings UI labels the weight control per family, so this mapping has
-    /// to be real. Microsoft YaHei UI is the current default and is a static
-    /// family on every Windows build tested, which is precisely why the old
-    /// GDI-era slider had to be cut down to three stops.
-    #[test]
-    fn font_family_axis_support_distinguishes_static_from_variable() {
-        let families = font_families();
-        if families.is_empty() {
-            return;
-        }
-        for family in families {
-            assert_eq!(
-                font_family_axis_support(&family.name),
-                family.variable_weight,
-                "{} reported inconsistent axis support",
-                family.name
-            );
-        }
-        assert!(
-            !font_family_axis_support("__no_such_font_family__"),
-            "an uninstalled family must never be reported as variable"
         );
     }
 

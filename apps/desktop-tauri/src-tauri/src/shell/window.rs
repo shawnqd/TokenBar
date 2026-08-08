@@ -59,10 +59,11 @@ pub fn apply_window_layout(
             // Transparent, not the solid-brush variant. `main` is the only
             // window this function lays out, and PopOut (the dashboard) is its
             // only borderless *resizable* mode — Settings keeps native
-            // decorations and Hidden is never shown. The solid dark brush
-            // `force_dark_caption_resizable` installs paints the corner regions
-            // the frontend clips away with `border-radius` + `clip-path`, so the
-            // dashboard rendered square corners no matter what the CSS said.
+            // decorations and Hidden is never shown. The solid-brush variant
+            // this replaced painted the corner regions the frontend clips away
+            // with `border-radius` + `clip-path`, so the dashboard rendered
+            // square corners no matter what the CSS said. (That function is
+            // gone; nothing called it once this branch stopped.)
             // This is the same treatment the detached Settings window already
             // uses, which is the rounding the user asked the dashboard to match.
             // Requires `"transparent": true` on `main` in `tauri.conf.json`.

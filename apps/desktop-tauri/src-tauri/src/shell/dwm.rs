@@ -274,12 +274,6 @@ pub fn force_dark_caption(win: &tauri::WebviewWindow) {
     force_dark_caption_inner(win, false, false);
 }
 
-/// Same as [`force_dark_caption`] but keeps the resize frame.
-#[cfg(windows)]
-pub fn force_dark_caption_resizable(win: &tauri::WebviewWindow) {
-    force_dark_caption_inner(win, true, false);
-}
-
 /// Transparent treatment for a resizable frontend-owned window shell.
 ///
 /// Settings keeps `WS_THICKFRAME` for edge resizing, but disables native
@@ -444,9 +438,6 @@ fn force_dark_caption_inner(win: &tauri::WebviewWindow, keep_resize: bool, trans
 
 #[cfg(not(windows))]
 pub fn force_dark_caption(_win: &tauri::WebviewWindow) {}
-
-#[cfg(not(windows))]
-pub fn force_dark_caption_resizable(_win: &tauri::WebviewWindow) {}
 
 #[cfg(not(windows))]
 pub fn force_borderless_transparent_resizable(_win: &tauri::WebviewWindow) {}

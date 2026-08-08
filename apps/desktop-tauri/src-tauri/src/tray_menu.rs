@@ -86,6 +86,12 @@ impl TrayMenuEntry {
     }
 }
 
+/// `build_tray_menu_with` with the boring arguments filled in.
+///
+/// Test-only, and marked so rather than left looking like an entry point:
+/// production builds the menu through `tray_bridge::tray_menu_spec`, which
+/// needs the float-bar flag and the real language.
+#[cfg(test)]
 pub(crate) fn build_tray_menu(
     providers: &[ProviderCatalogEntry],
     status_labels: &[(String, String)],

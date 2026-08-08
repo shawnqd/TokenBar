@@ -30,8 +30,6 @@ use crate::shell;
 use crate::state::{AppState, TrayAnchor};
 use crate::surface::SurfaceMode;
 use crate::surface_target::SurfaceTarget;
-#[cfg(test)]
-use crate::tray_menu::build_tray_menu;
 use crate::tray_menu::{TrayMenuEntry, build_tray_menu_with};
 
 #[derive(Debug, Clone, Copy)]
@@ -251,8 +249,14 @@ fn store_anchor(app: &AppHandle, rect: &tauri::Rect, click_position: tauri::Phys
         return;
     };
 
-    if let Some(st) = app.try_state::<Mutex<AppState>>() {
-        let mut guard = st.lock().unwrap();
+    // A poisoned lock means some other thread panicked while holding the state.
+    // Losing this anchor costs the next tray panel its click position — it falls
+    // back to the default placement. Taking the whole app down over that would
+    // be the worse trade, and the panic that poisoned the lock has already been
+    // reported by whoever caused it.
+    if let Some(st) = app.try_state::<Mutex<AppState>>()
+        && let Ok(mut guard) = st.lock()
+    {
         guard.tray_anchor = Some(anchor);
     }
 }
@@ -329,13 +333,13 @@ pub fn setup(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
                     // callback runs on the main thread, which is where that
                     // window must be created — see `menu_host`.
                     if let Some(owner) = crate::menu_host::hwnd() {
-                        crate::taskbar_widget::show_context_menu(
+                        crate::taskbar_context_menu::show(
                             owner,
                             // Keeps the status readouts: a 16 px icon shows no
                             // numbers, so this menu is the only place they
                             // appear. The strip drops them — it is already a
                             // status bar. See `MenuSurface`.
-                            crate::taskbar_widget::MenuSurface::TrayIcon,
+                            crate::taskbar_context_menu::MenuSurface::TrayIcon,
                         );
                     }
                 }
@@ -499,9 +503,13 @@ pub fn update_tray_status_items(
 
 /// Refresh every native tray surface that depends on settings and cached provider data.
 pub(crate) fn refresh_tray_presentation(app: &AppHandle) {
+    // Same reasoning as `tray_anchor` above: an unreadable cache redraws the
+    // tray from an empty snapshot list, which is what a fresh launch shows
+    // anyway. `unwrap_or_default` already handled "no state at all"; this
+    // extends it to "state exists but is poisoned".
     let snapshots = app
         .try_state::<Mutex<AppState>>()
-        .map(|st| st.lock().unwrap().provider_cache.clone())
+        .and_then(|st| st.lock().ok().map(|guard| guard.provider_cache.clone()))
         .unwrap_or_default();
 
     update_tray_status_items(app, &snapshots);
@@ -1066,6 +1074,8 @@ mod tests {
             },
         ]
     }
+
+    use crate::tray_menu::build_tray_menu;
 
     #[test]
     fn tray_menu_includes_about_and_provider_entries() {

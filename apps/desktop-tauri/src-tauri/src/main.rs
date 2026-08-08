@@ -20,6 +20,8 @@ mod surface;
 mod surface_target;
 mod taskbar_entries;
 #[cfg(windows)]
+mod taskbar_context_menu;
+#[cfg(windows)]
 mod taskbar_menu;
 #[cfg(windows)]
 mod taskbar_text;
