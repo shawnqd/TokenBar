@@ -359,6 +359,17 @@ unsafe extern "system" {
     ) -> isize;
     fn SelectObject(hdc: isize, obj: isize) -> isize;
     fn DeleteObject(obj: isize) -> i32;
+    fn BitBlt(
+        dst: isize,
+        x: i32,
+        y: i32,
+        w: i32,
+        h: i32,
+        src: isize,
+        src_x: i32,
+        src_y: i32,
+        rop: u32,
+    ) -> i32;
     fn SetTextColor(hdc: isize, color: u32) -> u32;
     fn SetBkMode(hdc: isize, mode: i32) -> i32;
     fn CreateFontW(
@@ -646,14 +657,115 @@ fn blur_mask(mask: &mut Vec<f32>, w: i32, h: i32, radius: i32) {
     }
 }
 
+/// Radius of the backdrop blur, in device-independent pixels.
+///
+/// Large on purpose. A backdrop blurred too little reads as a smeared
+/// screenshot rather than as frosted glass, and the text over it stays busy.
+const BACKDROP_BLUR_DIP: i32 = 14;
+
+/// How much of the card is its own colour rather than the blurred backdrop.
+///
+/// This is the readability control, and it is the reason the value is this
+/// high: menu labels are 12 px, and a backdrop that shows through too strongly
+/// puts arbitrary desktop contrast directly behind them. Windows' own acrylic
+/// sits in the same range for the same reason.
+fn backdrop_tint(light: bool) -> f32 {
+    if light { 0.82 } else { 0.78 }
+}
+
+/// The desktop pixels the card will cover, blurred, as linear `[b, g, r]` per
+/// pixel.
+///
+/// `None` whenever anything at all goes wrong, and the caller then paints the
+/// flat theme colour — the pre-B2 look. That fallback is not defensive
+/// boilerplate: `BitBlt` from the screen DC is **not** guaranteed to capture
+/// hardware-composited content, and on some drivers it returns pure black. A
+/// black backdrop behind a menu is far worse than no backdrop, so an
+/// all-black-or-near-black capture is rejected as a failure too.
+///
+/// Captured once, at open time, which is the trade this approach makes: the
+/// backdrop is frozen while the menu is up. The alternative — a live backdrop —
+/// needs `WS_EX_NOREDIRECTIONBITMAP` plus DirectComposition, and that is a
+/// larger change than this whole module.
+fn capture_backdrop(origin: &Point, w: i32, h: i32) -> Option<Vec<f32>> {
+    const SRCCOPY: u32 = 0x00CC_0020;
+
+    let screen = unsafe { GetDC(0) };
+    if screen == 0 {
+        return None;
+    }
+    let dib = Dib::new(w, h);
+    let result = (|| {
+        let dib = dib.as_ref()?;
+        let copied =
+            unsafe { BitBlt(dib.hdc, 0, 0, w, h, screen, origin.x, origin.y, SRCCOPY) };
+        if copied == 0 {
+            return None;
+        }
+        let src = dib.slice();
+        let mut out = vec![0.0f32; (w * h * 3) as usize];
+        let mut sum = 0.0f64;
+        for index in 0..(w * h) as usize {
+            for channel in 0..3 {
+                let value = src[index * 4 + channel] as f32;
+                out[index * 3 + channel] = value;
+                sum += value as f64;
+            }
+        }
+        // Mean below this and the "capture" is a black rectangle, which is what
+        // a failed hardware-surface read looks like. A genuinely near-black
+        // desktop loses its blur here and gets the flat colour, which is a fair
+        // trade for never painting a black slab over a bright screen.
+        let mean = sum / (w * h * 3) as f64;
+        if mean < 4.0 {
+            return None;
+        }
+        Some(out)
+    })();
+    if let Some(dib) = dib.as_ref() {
+        dib.destroy();
+    }
+    unsafe { ReleaseDC(0, screen) };
+    result
+}
+
+/// Blur the captured backdrop in place, one channel at a time.
+///
+/// [`blur_mask`] operates on a single-channel plane, so the interleaved capture
+/// is split, blurred and re-interleaved rather than given its own blur.
+fn blur_backdrop(backdrop: &mut [f32], w: i32, h: i32, radius: i32) {
+    let count = (w * h) as usize;
+    let mut plane = vec![0.0f32; count];
+    for channel in 0..3 {
+        for index in 0..count {
+            plane[index] = backdrop[index * 3 + channel];
+        }
+        blur_mask(&mut plane, w, h, radius);
+        for index in 0..count {
+            backdrop[index * 3 + channel] = plane[index];
+        }
+    }
+}
+
 /// Builds the premultiplied BGRA bytes for the card and its shadow, plus the
 /// alpha channel on its own so [`restore_alpha`] can put it back after GDI has
 /// trampled it.
-fn compose_base(w: i32, h: i32, card: (f32, f32, f32, f32), m: &Metrics, light: bool) -> (Vec<u8>, Vec<u8>) {
+///
+/// `backdrop` is the blurred desktop behind the card, or `None` for the flat
+/// theme colour.
+fn compose_base(
+    w: i32,
+    h: i32,
+    card: (f32, f32, f32, f32),
+    m: &Metrics,
+    light: bool,
+    backdrop: Option<&[f32]>,
+) -> (Vec<u8>, Vec<u8>) {
     let (bg, ..) = theme_colors(light);
     let bg_r = ((bg >> 16) & 0xFF) as f32;
     let bg_g = ((bg >> 8) & 0xFF) as f32;
     let bg_b = (bg & 0xFF) as f32;
+    let tint = backdrop_tint(light);
 
     // The shadow is the card silhouette, nudged down, blurred wide and kept
     // faint. Black, so its premultiplied colour contribution is zero and only
@@ -683,10 +795,24 @@ fn compose_base(w: i32, h: i32, card: (f32, f32, f32, f32), m: &Metrics, light: 
             let c = coverage(x, y, card, m.radius as f32);
             let s = (shadow[idx] * strength).clamp(0.0, 1.0);
             let a = c + s * (1.0 - c);
+            // The card's own colour, over the blurred desktop behind it. With
+            // no capture this collapses to the flat theme colour, which is
+            // exactly the pre-B2 output.
+            let (fill_b, fill_g, fill_r) = match backdrop {
+                Some(back) => {
+                    let base = idx * 3;
+                    (
+                        back[base] + (bg_b - back[base]) * tint,
+                        back[base + 1] + (bg_g - back[base + 1]) * tint,
+                        back[base + 2] + (bg_r - back[base + 2]) * tint,
+                    )
+                }
+                None => (bg_b, bg_g, bg_r),
+            };
             let out = idx * 4;
-            pixels[out] = (bg_b * c) as u8;
-            pixels[out + 1] = (bg_g * c) as u8;
-            pixels[out + 2] = (bg_r * c) as u8;
+            pixels[out] = (fill_b * c) as u8;
+            pixels[out + 1] = (fill_g * c) as u8;
+            pixels[out + 2] = (fill_r * c) as u8;
             pixels[out + 3] = (a * 255.0) as u8;
             alpha[idx] = (a * 255.0) as u8;
         }
@@ -936,12 +1062,37 @@ pub fn show(owner: isize, items: Vec<MenuItem>) {
         (metrics.margin + card_w) as f32,
         (metrics.margin + card_h) as f32,
     );
-    let (base, alpha) = compose_base(size.cx, size.cy, card, &metrics, light);
+    // Position first: the backdrop has to be sampled from where the card will
+    // come to rest. Captured before the window exists, so nothing of our own is
+    // in the shot.
+    //
+    // The resting position, not the animated one — during the slide the frozen
+    // backdrop is offset from what is actually behind the card by up to
+    // `ANIM_TRAVEL_DIP`. Over 180 ms of a moving, fading card that is not
+    // visible, and re-capturing per frame would cost a screen blit and a blur
+    // every 10 ms.
+    let (x, y) = anchor_position(size, &metrics);
+    let backdrop = capture_backdrop(&Point { x, y }, size.cx, size.cy).map(|mut pixels| {
+        blur_backdrop(
+            &mut pixels,
+            size.cx,
+            size.cy,
+            ((BACKDROP_BLUR_DIP * dpi) / 96).max(1),
+        );
+        pixels
+    });
+    let (base, alpha) = compose_base(
+        size.cx,
+        size.cy,
+        card,
+        &metrics,
+        light,
+        backdrop.as_deref(),
+    );
 
     let Some(canvas) = Dib::new(size.cx, size.cy) else {
         return;
     };
-    let (x, y) = anchor_position(size, &metrics);
     let instance = unsafe { GetModuleHandleW(std::ptr::null()) };
     let class_name = wide(CLASS_NAME);
     let empty_title = wide("");
@@ -1613,6 +1764,62 @@ mod tests {
         let (_, plain_w, _) = lay_out(unchecked, &m, "Segoe UI", 400);
         let (_, checked_w, _) = lay_out(checked, &m, "Segoe UI", 400);
         assert_eq!(plain_w, checked_w);
+    }
+
+    /// With no backdrop capture the card must paint exactly the flat theme
+    /// colour it painted before B2.
+    ///
+    /// This is the path taken whenever `BitBlt` cannot read the desktop, which
+    /// is a real possibility on hardware-composited content — so it is the
+    /// path most likely to be the one users actually see, and the one a
+    /// refactor is most likely to break unnoticed.
+    #[test]
+    fn without_a_backdrop_the_card_is_the_flat_theme_colour() {
+        let m = Metrics::new(96, FALLBACK_FONT_SIZE_DIP);
+        let (w, h) = (80, 60);
+        let card = (20.0, 20.0, 60.0, 40.0);
+        let (pixels, _) = compose_base(w, h, card, &m, true, None);
+
+        let (bg, ..) = theme_colors(true);
+        let centre = ((30 * w + 40) * 4) as usize;
+        assert_eq!(pixels[centre + 2] as u32, (bg >> 16) & 0xFF, "red");
+        assert_eq!(pixels[centre + 1] as u32, (bg >> 8) & 0xFF, "green");
+        assert_eq!(pixels[centre] as u32, bg & 0xFF, "blue");
+        assert_eq!(pixels[centre + 3], 255, "opaque inside the card");
+    }
+
+    /// A backdrop must show through, and must never show through so far that
+    /// the card stops being a surface. The tint is the readability control.
+    ///
+    /// Tested in both directions, because each theme can only move one way:
+    /// the light card is pure white and nothing can brighten it, the dark card
+    /// is near-black and nothing can darken it. A single-theme test would pass
+    /// on a tint of 1.0 in one of them.
+    #[test]
+    fn a_backdrop_shows_through_but_the_tint_still_dominates() {
+        let m = Metrics::new(96, FALLBACK_FONT_SIZE_DIP);
+        let (w, h) = (80, 60);
+        let card = (20.0, 20.0, 60.0, 40.0);
+        let centre = ((30 * w + 40) * 4) as usize;
+
+        for (light, backdrop_level) in [(false, 255.0f32), (true, 0.0f32)] {
+            let backdrop = vec![backdrop_level; (w * h * 3) as usize];
+            let (with_back, _) = compose_base(w, h, card, &m, light, Some(&backdrop));
+            let (flat, _) = compose_base(w, h, card, &m, light, None);
+            let (bg, ..) = theme_colors(light);
+            let bg_r = ((bg >> 16) & 0xFF) as i32;
+            let shown = with_back[centre + 2] as i32;
+
+            assert_ne!(
+                shown, flat[centre + 2] as i32,
+                "the desktop must reach the card at all (light={light})"
+            );
+            assert!(
+                (shown - bg_r).abs() < (backdrop_level as i32 - bg_r).abs() / 2,
+                "the card still reads as its own colour, not as the desktop \
+                 (light={light}, shown={shown}, theme={bg_r})"
+            );
+        }
     }
 
     /// The card must start below its resting place and end exactly on it —
