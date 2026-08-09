@@ -340,7 +340,7 @@ export function ProvidersSidebar({
                 title={t(STATUS_TO_KEY[p.status])}
                 aria-label={t(STATUS_TO_KEY[p.status])}
               />
-              <ProviderIcon providerId={p.id} size={32} />
+              <ProviderIcon providerId={p.id} size={24} />
               <div className="providers-sidebar__text">
                 <span className="providers-sidebar__name">{p.displayName}</span>
                 <span className="providers-sidebar__subtitle">

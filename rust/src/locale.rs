@@ -904,7 +904,6 @@ locale_keys! {
     CredentialManualCookies,
     CredentialTokenAccounts,
     CredentialProtectedPrefix,
-    CredentialStorageNothingStored,
     CredentialStatusNotCreated,
     CredentialStatusPlaintext,
     CredentialStatusUnavailable,
