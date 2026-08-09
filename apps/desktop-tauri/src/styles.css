@@ -4647,18 +4647,6 @@ body:has(.menu-surface--popout) .popout-scale-shell,
   line-height: 1.25;
   color: var(--text-primary);
 }
-.menu-card__local-chart {
-  display: flex;
-  align-items: flex-end;
-  gap: 5px;
-  height: 68px;
-  margin-top: 2px;
-}
-.menu-card__local-chart span {
-  width: 8px;
-  border-radius: 2px 2px 0 0;
-  background: #bf8337;
-}
 .menu-card__local-note strong {
   font-size: 11px;
   color: var(--text-secondary);
@@ -6873,16 +6861,7 @@ body:has(.settings-window-frame) #root {
     gap: 7px 20px;
   }
 
-  .menu-surface--popout .menu-card__local-chart {
-    height: 46px;
-  }
-
-  .menu-surface--popout .menu-surface__footer-row {
-    padding-top: 3px;
-    padding-bottom: 3px;
-  }
-}
-
+  .menu-surface--popout 
 /* ── Unified provider workspace (controls, auth, overview) ──────────
    Continues the single authority layer started at `.provider-detail`.
    Nested cards use --provider-workspace-radius-nested (11px). */
@@ -7706,7 +7685,11 @@ body:has(.tray-panel-reveal) {
 }
 
 .menu-surface .menu-card__charts,
-.menu-surface .menu-card__local-chart,
+/* The local-usage history chart. Was `.menu-card__local-chart`, a hand-rolled
+   element that no longer exists now that this uses the shared `BarChart`; the
+   *behaviour* it carried has to survive the swap, because a 90px chart is for
+   the Settings detail pane and would crowd out a tray card. */
+.menu-surface .menu-card__local-usage .chart,
 .menu-surface .menu-card__cost,
 .menu-surface .menu-card__content > .menu-card__divider:has(+ .menu-card__cost) {
   display: none;

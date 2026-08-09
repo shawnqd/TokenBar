@@ -11,6 +11,7 @@ import type {
   ProviderUsageSnapshot,
   RateWindowSnapshot,
 } from "../types/bridge";
+import { BarChart } from "./charts/BarChart";
 import { getProviderChartData } from "../lib/tauri";
 import { useLocale } from "../hooks/useLocale";
 import { useFormattedResetTime } from "../hooks/useFormattedResetTime";
@@ -452,12 +453,10 @@ export function LocalUsageBlock({
   period?: LocalUsagePeriod;
 }) {
   const { t, language } = useLocale();
-  const isCodex = providerId === "codex";
   const historyDays = period === "today" ? 1 : period === "7d" ? 7 : 30;
   const visibleHistory = costHistory
     .slice(-historyDays)
     .filter((point) => point.value > 0);
-  const maxCost = Math.max(...visibleHistory.map((point) => point.value), 0);
 
   // The flyout follows the selected range literally: one choice, one block.
   const lead = resolveLocalUsageLead(period, summary, t);
@@ -487,18 +486,24 @@ export function LocalUsageBlock({
         )}
       </div>
 
-      {isCodex && visibleHistory.length > 0 && (
-        <div className="menu-card__local-chart" aria-label={t("PanelThirtyDayCostHistogram")}>
-          {visibleHistory.map((point, index) => (
-            <span
-              key={`${point.date}-${index}`}
-              style={{
-                height: `${Math.max(4, Math.round((point.value / maxCost) * 64))}px`,
-              }}
-              title={`${point.date}: ${formatCurrency(point.value, "USD")}`}
-            />
-          ))}
-        </div>
+      {/* The same `BarChart` the 最近输出速度 and 费用 tabs use.
+          This was a hand-rolled row of `<span>` blocks with a hardcoded orange
+          and a fixed 8px width, so the three tabs of one panel were three
+          different charts — and it was gated on `isCodex`, which is why every
+          other provider's 用量 tab had no chart at all rather than a small one.
+          Availability is decided by whether there is history to draw, which is
+          the only thing that should decide it. */}
+      {visibleHistory.length > 0 && (
+        <BarChart
+          data={visibleHistory.map((point) => ({
+            label: point.date,
+            value: point.value,
+          }))}
+          height={90}
+          color="var(--accent)"
+          valueFormatter={(value) => formatCurrency(value, "USD")}
+          ariaLabel={t("PanelThirtyDayCostHistogram")}
+        />
       )}
 
       {lead.topModel && (
