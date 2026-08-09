@@ -3090,10 +3090,22 @@ html {
      leaving the old 6-track template here left an empty trailing column,
      which crowded the handle and toggle together instead of pushing the
      toggle back out to the row's true right edge. */
-  grid-template-columns: 8px 24px 1fr auto auto;
+  /* There used to be a second `.providers-sidebar__row` rule further down the
+     file with its own `grid-template-columns`. Equal specificity, later in
+     source, so **it** was the one in effect — and an edit up here did nothing.
+     That is how a 32px icon ended up in a 20px track, overflowing onto the
+     text. The duplicate is merged in here; keep it that way.
+
+     The icon track is as tall as the two text lines beside it, so the three
+     line up as one block instead of the icon hanging at their midpoint.
+
+     `minmax(0, 1fr)`, not `1fr`: a bare `1fr` has an *automatic* minimum — the
+     width of its content — so it refuses to shrink and pushes the row wide
+     instead of letting the ellipsis inside it do its job. */
+  grid-template-columns: 12px 32px minmax(0, 1fr) auto auto;
   align-items: center;
   gap: 8px;
-  padding: 8px 16px 8px 10px;
+  padding: 6px 8px;
   border-radius: 8px;
   cursor: pointer;
   user-select: none;
@@ -3116,16 +3128,10 @@ html {
   border-color: var(--provider-row-border-selected);
 }
 
-.providers-sidebar__row--selected::before {
-  content: "";
-  position: absolute;
-  left: 2px;
-  top: 10px;
-  bottom: 10px;
-  width: 2px;
-  border-radius: 2px;
-  background: var(--provider-row-accent-selected);
-}
+/* No left accent bar. Selection is already carried by the row's background and
+   border, and a third marker in a list this narrow was one signal too many —
+   it also sat outside the row's padding, so it read as belonging to the list
+   rather than to the row. */
 
 .providers-sidebar__row--disabled .providers-sidebar__name,
 .providers-sidebar__row--disabled .providers-sidebar__subtitle {
@@ -3189,6 +3195,15 @@ html {
   50%      { opacity: 1; }
 }
 
+/* Fixed box, so the grid can neither squash it nor let it push the row wide. */
+.providers-sidebar__row > svg,
+.providers-sidebar__row > img,
+.providers-sidebar__row > .provider-icon {
+  width: 32px;
+  height: 32px;
+  flex: none;
+}
+
 .providers-sidebar__text {
   display: flex;
   flex-direction: column;
@@ -3205,13 +3220,19 @@ html {
   white-space: nowrap;
 }
 
+/* One line, not two. The auth source and the usage percentage are both short
+   and both secondary, so stacking them made a three-line row whose height no
+   longer matched the icon beside it — the row read as taller than it had
+   content for, and the icon floated in the middle of it. */
 .providers-sidebar__subtitle {
   display: flex;
-  flex-direction: column;
-  gap: 0;
+  flex-direction: row;
+  align-items: baseline;
+  gap: 6px;
   font-size: 0.72rem;
   color: var(--provider-row-text-secondary);
   line-height: 1.25;
+  min-width: 0;
 }
 
 .providers-sidebar__subtitle-primary {
@@ -6492,14 +6513,6 @@ body:has(.settings-window-frame) #root {
 }
 [data-theme="light"] .providers-sidebar::-webkit-scrollbar-thumb:hover {
   background: rgba(0, 0, 0, 0.4);
-}
-.providers-sidebar__row {
-  /* This later rule (equal specificity, wins on source order) was still
-     carrying the old 6-track template from before the up/down reorder
-     buttons were removed — see the base rule above for why that leaves an
-     orphaned column and crowds the handle against the toggle. */
-  grid-template-columns: 12px var(--icon-sidebar) 1fr auto auto;
-  padding: 6px 8px;
 }
 .providers-sidebar__name {
   font-size: var(--font-body);

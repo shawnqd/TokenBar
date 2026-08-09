@@ -601,6 +601,7 @@ export const ALL_LOCALE_KEYS = [
   "ProviderIssueNeedsSignIn",
   "ProviderIssueFetchNeedsAttention",
   "ProviderIssueNetworkRequestFailed",
+  "ProviderIssueNetworkTimeout",
   "ProviderIssueNetworkConnectionFailed",
   "ProviderIssueSignInRequired",
   "ProviderIssueCopy",

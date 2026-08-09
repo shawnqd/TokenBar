@@ -1025,7 +1025,19 @@ fn register_class() -> bool {
 /// which is the same shape the old `TPM_RETURNCMD` path posted, so command
 /// handlers need no change.
 pub fn show(owner: isize, items: Vec<MenuItem>) {
-    if items.is_empty() || !register_class() {
+    // Split, because these two failed silently as one condition and they mean
+    // opposite things: "we built no rows" is a bug in the caller, "the class
+    // would not register" is a bug here. Silence looked the same as the click
+    // never arriving, which is a third cause again.
+    if items.is_empty() {
+        tracing::warn!("menu: nothing to draw; the caller built no rows");
+        return;
+    }
+    if !register_class() {
+        tracing::warn!(
+            error = %std::io::Error::last_os_error(),
+            "menu: window class registration failed"
+        );
         return;
     }
     close();

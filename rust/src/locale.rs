@@ -891,6 +891,7 @@ locale_keys! {
     ProviderIssueNeedsSignIn,
     ProviderIssueFetchNeedsAttention,
     ProviderIssueNetworkRequestFailed,
+    ProviderIssueNetworkTimeout,
     ProviderIssueNetworkConnectionFailed,
     ProviderIssueSignInRequired,
     ProviderIssueCopy,

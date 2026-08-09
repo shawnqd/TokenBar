@@ -487,6 +487,42 @@ pub struct ProviderMetadata {
     pub status_page_url: Option<&'static str>,
 }
 
+/// Turn a `reqwest::Error` into something that says *why*.
+///
+/// `reqwest::Error`'s own `Display` stops at
+/// `error sending request for url (…)`. The reason — timed out, DNS failure,
+/// connection reset, TLS rejected — is in the `source()` chain and is never
+/// printed. So an intermittent failure surfaced to the user as a bare URL and
+/// nothing else, which is exactly the case where the reason is the only useful
+/// part: a timeout says "retry", a DNS error says "check the network", a 
+/// certificate error says something is intercepting the connection.
+///
+/// A leading classifier is emitted for the two cases worth acting on, so the
+/// UI can localize them without parsing English prose, followed by the chain
+/// itself for everything else.
+fn describe_network_error(error: &reqwest::Error) -> String {
+    let mut chain = Vec::new();
+    let mut source: Option<&(dyn std::error::Error + 'static)> = Some(error);
+    while let Some(current) = source {
+        let text = current.to_string();
+        // reqwest repeats itself down the chain often enough to be worth
+        // filtering; duplicates add length without adding information.
+        if !chain.contains(&text) {
+            chain.push(text);
+        }
+        source = current.source();
+    }
+
+    let classifier = if error.is_timeout() {
+        "timeout: "
+    } else if error.is_connect() {
+        "connect: "
+    } else {
+        ""
+    };
+    format!("{classifier}{}", chain.join(" — "))
+}
+
 /// Errors that can occur when fetching provider data
 #[derive(Debug, Error)]
 pub enum ProviderError {
@@ -502,7 +538,7 @@ pub enum ProviderError {
     #[error("Parse error: {0}")]
     Parse(String),
 
-    #[error("Network error: {0}")]
+    #[error("Network error: {}", describe_network_error(.0))]
     Network(#[from] reqwest::Error),
 
     #[error("Timeout")]

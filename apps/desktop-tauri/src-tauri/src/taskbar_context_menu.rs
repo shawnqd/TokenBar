@@ -169,7 +169,13 @@ pub(crate) fn show(hwnd: isize, surface: MenuSurface) {
     use crate::taskbar_menu::MenuItem;
     use codexbar::locale::{LocaleKey, get_text};
 
+    // Whether the right-click reaches us at all is the first fact to establish.
+    // The strip is a child inside Explorer's window tree, so "our menu is
+    // broken" and "Explorer handled the click and ours never ran" look
+    // identical from outside and need opposite fixes.
+    tracing::info!(?surface, "strip menu: right-click received");
     let Some(app) = APP_HANDLE.get() else {
+        tracing::warn!("strip menu: no app handle; nothing will open");
         return;
     };
     let settings = codexbar::settings::Settings::load();
@@ -204,6 +210,7 @@ pub(crate) fn show(hwnd: isize, surface: MenuSurface) {
     if let Ok(mut guard) = MENU_COMMAND_IDS.lock() {
         *guard = ids;
     }
+    tracing::info!(rows = items.len(), "strip menu: handing rows to the renderer");
     crate::taskbar_menu::show(hwnd, items);
 }
 

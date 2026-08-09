@@ -253,11 +253,23 @@ function OutputSpeedHighlight({
  */
 function localizeProviderError(message: string, t: (key: LocaleKey) => string): string {
   const lower = message.toLowerCase();
-  const requestUrl = message.match(
-    /^network error:\s*error sending request for url\s*\((https?:\/\/[^\s)]+)\)\s*$/i,
-  );
-  if (requestUrl) {
-    return t("ProviderIssueNetworkRequestFailed") + "：" + requestUrl[1];
+  // Say *why*, not *where*. This used to print the failed URL and nothing
+  // else, which was the least useful half of the error and — on Claude — put
+  // the account's organization id on screen. The reason now survives from Rust
+  // (see `describe_network_error`), and a timeout or a refused connection is
+  // what actually tells the user whether to retry or to check the network.
+  const network = message.match(/^network error:\s*(.+)$/is);
+  if (network) {
+    const detail = network[1].trim();
+    if (/^timeout:/i.test(detail)) return t("ProviderIssueNetworkTimeout");
+    if (/^connect:/i.test(detail)) return t("ProviderIssueNetworkConnectionFailed");
+    // Anything else: name it as a request failure and append the cause chain
+    // with the URL stripped, so the message stays diagnostic without carrying
+    // an account identifier. The unedited original is still on the Copy button.
+    const withoutUrl = detail.replace(/\s*\(https?:\/\/[^\s)]+\)/g, "").trim();
+    return withoutUrl
+      ? t("ProviderIssueNetworkRequestFailed") + "：" + withoutUrl
+      : t("ProviderIssueNetworkRequestFailed");
   }
   if (lower.startsWith("network error:")) {
     return t("ProviderIssueNetworkConnectionFailed");

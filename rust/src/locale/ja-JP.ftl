@@ -39,6 +39,7 @@ PanelResetCreditsRemaining = Remaining
 PanelResetCreditsUnit = credits
 FloatBarSevenDayShort = 7d
 ProviderIssueNetworkRequestFailed = The provider request failed
+ProviderIssueNetworkTimeout = プロバイダーが時間内に応答しませんでした。多くは一時的です。更新で再試行できます。
 ProviderIssueNetworkConnectionFailed = Unable to connect to the provider
 ProviderIssueSignInRequired = Sign-in is required
 ProviderCookieAutoHelp = Automatically use browser sign-in data when available.
