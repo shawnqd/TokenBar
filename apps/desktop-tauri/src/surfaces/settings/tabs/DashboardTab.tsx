@@ -8,7 +8,7 @@ import type {
 } from "../../../types/bridge";
 import type { TabProps } from "../../Settings";
 import BinaryChoiceField from "../BinaryChoiceField";
-import ProviderFilterField from "../ProviderFilterField";
+import MultiSelectField from "../MultiSelectField";
 
 /**
  * Dashboard settings — the tray flyout and the pop-out panel.
@@ -100,57 +100,32 @@ export default function DashboardTab({ settings, set, saving }: TabProps) {
           {/* Leads the group: which providers appear is a bigger question than
               how each one is phrased, and the rows below all describe cards
               that this list decides the existence of. */}
-          <ProviderFilterField
+          <MultiSelectField
             label={t("DashboardProvidersLabel")}
             description={t("DashboardProvidersHelper")}
-            enabledProviderIds={settings.enabledProviders ?? []}
+            options={(settings.enabledProviders ?? []).map((id) => ({
+              value: id,
+              label: id,
+            }))}
             value={settings.dashboardProviderIds ?? []}
+            allLabel={t("DashboardFilterAll")}
             disabled={saving}
             onChange={(next) => set({ dashboardProviderIds: next })}
           />
           {/* Item H's other dashboard list: which reset cycles the cards show.
-              Same chip control and same "empty means all" encoding as the
-              provider filter above. */}
-          <Field
+              Same control and the same "empty means all" encoding. */}
+          <MultiSelectField
             label={t("DashboardQuotaWindowsLabel")}
             description={t("DashboardQuotaWindowsHelper")}
-          >
-            <div className="option-chips" role="group">
-              {QUOTA_WINDOW_KINDS.map((kind) => {
-                const selected = settings.dashboardQuotaWindows ?? [];
-                const active = selected.length === 0 || selected.includes(kind);
-                // Same rule as the provider chips: the last active one cannot
-                // be unpressed, because an empty list reads as "all" on the
-                // next load and the control would undo itself.
-                const activeCount =
-                  selected.length === 0 ? QUOTA_WINDOW_KINDS.length : selected.length;
-                return (
-                  <button
-                    key={kind}
-                    type="button"
-                    className="option-chips__chip"
-                    aria-pressed={active}
-                    disabled={saving || (active && activeCount <= 1)}
-                    onClick={() => {
-                      const base = selected.length === 0 ? QUOTA_WINDOW_KINDS : selected;
-                      const next = active
-                        ? base.filter((value) => value !== kind)
-                        : [...base, kind];
-                      const ordered = QUOTA_WINDOW_KINDS.filter((value) =>
-                        next.includes(value),
-                      );
-                      set({
-                        dashboardQuotaWindows:
-                          ordered.length === QUOTA_WINDOW_KINDS.length ? [] : ordered,
-                      });
-                    }}
-                  >
-                    {t(QUOTA_WINDOW_LABEL_KEYS[kind])}
-                  </button>
-                );
-              })}
-            </div>
-          </Field>
+            options={QUOTA_WINDOW_KINDS.map((kind) => ({
+              value: kind,
+              label: t(QUOTA_WINDOW_LABEL_KEYS[kind]),
+            }))}
+            value={settings.dashboardQuotaWindows ?? []}
+            allLabel={t("DashboardFilterAll")}
+            disabled={saving}
+            onChange={(next) => set({ dashboardQuotaWindows: next })}
+          />
           <Field label={t("DisplayModeLabel")} description={t("DisplayModeHelper")}>
             <SegmentedControl
               value={settings.menuBarDisplayMode}

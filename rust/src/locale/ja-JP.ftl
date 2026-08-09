@@ -539,6 +539,7 @@ FloatBarProvidersLabel = 表示するプロバイダー
 FloatBarProvidersHelper = フローティングバーにピルを表示するプロバイダーです。ここで絞り込まない限りすべて表示されます。完全に無効にするには「プロバイダー」ページを使います。
 DashboardQuotaWindowsLabel = 表示する期間
 DashboardQuotaWindowsHelper = カードに並べるリセット周期です。ここで絞り込まない限りすべて表示されます。周期ではない値（残高や API キーの状態）は常に表示されます。
+DashboardFilterAll = すべて
 ProviderAuthUsingMethod = { "{}" } でサインイン済みです。
 ProviderAuthPickMethod = このプロバイダーは複数の方式に対応しています。使う方式を選んでください。同時に有効なのは 1 つだけです。
 ProviderAuthMethodSignIn = ブラウザーサインイン / CLI

@@ -539,6 +539,7 @@ FloatBarProvidersLabel = 표시할 제공자
 FloatBarProvidersHelper = 플로팅 바에 알약을 표시할 제공자입니다. 여기서 좁히지 않으면 모두 표시됩니다. 완전히 끄려면 제공자 페이지를 사용하세요.
 DashboardQuotaWindowsLabel = 표시할 할당량 주기
 DashboardQuotaWindowsHelper = 카드에 나열할 초기화 주기입니다. 여기서 좁히지 않으면 모두 표시됩니다. 주기가 아닌 값(선불 잔액, API 키 상태)은 항상 표시됩니다.
+DashboardFilterAll = 전체
 ProviderAuthUsingMethod = { "{}" }(으)로 로그인되어 있습니다.
 ProviderAuthPickMethod = 이 제공자는 여러 방식을 지원합니다. 사용할 방식을 고르세요. 한 번에 하나만 활성화됩니다.
 ProviderAuthMethodSignIn = 브라우저 로그인 / CLI

@@ -539,6 +539,7 @@ FloatBarProvidersLabel = Proveedores mostrados
 FloatBarProvidersHelper = Qué proveedores reciben una pastilla en la barra flotante. Todos, salvo que los limites aquí; para desactivar un proveedor por completo usa la página Proveedores.
 DashboardQuotaWindowsLabel = Ventanas de cuota mostradas
 DashboardQuotaWindowsHelper = Qué ciclos de reinicio listan las tarjetas. Todos, salvo que los limites aquí. Las lecturas que no son ciclos — un saldo prepago, el estado de una clave API — siempre siguen visibles.
+DashboardFilterAll = Todos
 ProviderAuthUsingMethod = Sesión iniciada con { "{}" }.
 ProviderAuthPickMethod = Este proveedor acepta más de un método. Elige cuál usar; solo uno está activo a la vez.
 ProviderAuthMethodSignIn = Inicio en navegador / CLI

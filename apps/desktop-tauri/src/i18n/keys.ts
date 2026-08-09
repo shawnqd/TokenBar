@@ -667,6 +667,7 @@ export const ALL_LOCALE_KEYS = [
   "FloatBarProvidersHelper",
   "DashboardQuotaWindowsLabel",
   "DashboardQuotaWindowsHelper",
+  "DashboardFilterAll",
   "ProviderAuthUsingMethod",
   "ProviderAuthPickMethod",
   "ProviderAuthMethodSignIn",

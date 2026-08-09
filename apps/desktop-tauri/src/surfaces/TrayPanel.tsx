@@ -220,10 +220,22 @@ export default function TrayPanel({ state }: { state: BootstrapState }) {
   }, []);
 
   const footerRows: MenuFooterRow[] = [
-    { icon: "⧉", label: t("TrayOpenDashboard"), onClick: openDashboard },
-    { icon: "↻", label: t("ActionRefresh"), shortcut: "Ctrl+R", onClick: refresh },
+    // Glyphs chosen for what the row *does*. `⧉` (overlapping squares — the
+    // duplicate/clone mark) said nothing about a dashboard, and `⌧` is a
+    // cancel box, not quitting; `⊞` reads as a panel of tiles and `⏻` is the
+    // standard power mark.
+    { icon: "⊞", label: t("TrayOpenDashboard"), onClick: openDashboard },
+    {
+      icon: "↻",
+      label: t("ActionRefresh"),
+      shortcut: "Ctrl+R",
+      onClick: refresh,
+      // Clicking refresh used to give no sign it had registered; the numbers
+      // simply changed a second or two later, or did not.
+      spinning: isRefreshing,
+    },
     { icon: "⚙", label: t("MenuSettings"), shortcut: "Ctrl+,", onClick: openSettings },
-    { icon: "⌧", label: t("MenuQuit"), shortcut: "Ctrl+Q", onClick: quitApp },
+    { icon: "⏻", label: t("MenuQuit"), shortcut: "Ctrl+Q", onClick: quitApp },
   ];
 
   // Keyboard shortcuts

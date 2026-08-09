@@ -1093,6 +1093,12 @@ html {
 }
 
 .credential-btn {
+  /* Inline-flex so a button may carry a leading glyph beside its label —
+     the refresh button's spinner — without the two sitting on separate lines
+     or the glyph shifting the text baseline. */
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
   padding: 5px 12px;
   border: 1px solid rgba(255, 255, 255, 0.1);
   border-radius: 6px;
@@ -3213,6 +3219,13 @@ html {
 .providers-sidebar__text {
   display: flex;
   flex-direction: column;
+  /* `align-self: stretch` first, then centre *inside* that.
+     The grid centres its items, which makes this block exactly as tall as its
+     own two lines — and a `justify-content` on a box with no spare height does
+     nothing at all. Stretching it to the row gives the centring something to
+     work with, so the pair lines up with the icon's middle instead of riding
+     above it. */
+  align-self: stretch;
   justify-content: center;
   min-width: 0;
   gap: 1px;
@@ -7800,7 +7813,11 @@ body:has(.tray-panel-reveal) {
 .menu-surface .menu-card__zone {
   position: relative;
   overflow: hidden;
-  border-radius: calc(12 * var(--flyout-u));
+  /* The window's radius, not a scaled card value. At `--flyout-u: 1.2` the old
+     `calc(12 * ...)` came out at 14.4px inside an 8px window — an inner corner
+     rounder than the outer one it sits in, which reads as a mistake however
+     carefully each was chosen alone. */
+  border-radius: var(--window-radius);
   padding: calc(12 * var(--flyout-u));
   background: var(--flyout-zone-bg);
   box-shadow: var(--flyout-zone-shadow);
@@ -8598,6 +8615,94 @@ body:has(.tray-panel-reveal) {
    Used where a setting takes several values at once and a `Select` cannot say
    so — the floating bar's reset windows, for one. `aria-pressed` carries the
    state, so it stays a real toggle for assistive tech. */
+/* Multi-select dropdown — see `MultiSelectField`. A `<details>` rather than a
+   bespoke popup: click and Enter open it, Escape closes it, and it is keyboard
+   reachable without a focus trap of our own. */
+.multi-select {
+  position: relative;
+}
+
+.multi-select__summary {
+  list-style: none;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 150px;
+  max-width: 260px;
+  padding: 5px 10px;
+  border: 1px solid var(--control-border, rgba(255, 255, 255, 0.12));
+  border-radius: 6px;
+  background: var(--control-bg, rgba(255, 255, 255, 0.06));
+  color: var(--text-primary);
+  font-size: 0.78rem;
+}
+
+.multi-select__summary::-webkit-details-marker {
+  display: none;
+}
+
+/* The disclosure arrow, drawn here so the summary keeps one flex child for the
+   value and one for the marker regardless of how long the value is. */
+.multi-select__summary::after {
+  content: "⌄";
+  flex: none;
+  margin-top: -3px;
+  color: var(--text-secondary);
+}
+
+.multi-select__value {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.multi-select[open] > .multi-select__summary {
+  border-color: var(--accent);
+}
+
+/* Absolute, so opening the menu does not push the settings rows below it down
+   — the reason the chip row was replaced. */
+.multi-select__menu {
+  position: absolute;
+  right: 0;
+  z-index: 20;
+  min-width: 100%;
+  max-height: 240px;
+  overflow-y: auto;
+  margin-top: 4px;
+  padding: 4px;
+  border: 1px solid var(--control-border, rgba(255, 255, 255, 0.12));
+  border-radius: 8px;
+  background: var(--surface-elevated);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.28);
+}
+
+.multi-select__option {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 8px;
+  border-radius: 5px;
+  font-size: 0.78rem;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.multi-select__option:hover {
+  background: var(--provider-row-bg-hover, rgba(255, 255, 255, 0.06));
+}
+
+.multi-select__option input:disabled {
+  cursor: not-allowed;
+}
+
+.multi-select[aria-disabled="true"] {
+  opacity: 0.5;
+  pointer-events: none;
+}
+
 .option-chips {
   display: inline-flex;
   flex-wrap: wrap;

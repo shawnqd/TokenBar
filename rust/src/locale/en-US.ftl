@@ -539,6 +539,7 @@ FloatBarProvidersLabel = Providers shown
 FloatBarProvidersHelper = Which providers get a pill on the floating bar. All of them unless you narrow it here; turning a provider off entirely is done on the Providers page.
 DashboardQuotaWindowsLabel = Quota windows shown
 DashboardQuotaWindowsHelper = Which reset cycles the cards list. All of them unless you narrow it here. Readings that are not cycles — a prepaid balance, an API-key status — always stay visible.
+DashboardFilterAll = All
 ProviderAuthUsingMethod = Signed in with { "{}" }.
 ProviderAuthPickMethod = This provider accepts more than one method. Pick the one to use — only one is active at a time.
 ProviderAuthMethodSignIn = Browser sign-in / CLI

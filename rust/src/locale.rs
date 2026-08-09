@@ -693,6 +693,7 @@ locale_keys! {
     FloatBarProvidersHelper,
     DashboardQuotaWindowsLabel,
     DashboardQuotaWindowsHelper,
+    DashboardFilterAll,
     ProviderAuthUsingMethod,
     ProviderAuthPickMethod,
     ProviderAuthMethodSignIn,

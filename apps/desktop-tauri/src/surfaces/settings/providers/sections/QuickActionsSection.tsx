@@ -45,6 +45,12 @@ export function QuickActionsSection({
           onClick={onRefresh}
           disabled={busy}
         >
+          {/* Clicking this used to give no sign it had registered: the button
+              greys out, but a disabled button is also what a broken one looks
+              like. The glyph turns while the fetch is in flight. */}
+          <span className={busy ? "spin" : undefined} aria-hidden>
+            ↻
+          </span>
           {t("ActionRefresh")}
         </button>
         {provider.dashboardUrl && (

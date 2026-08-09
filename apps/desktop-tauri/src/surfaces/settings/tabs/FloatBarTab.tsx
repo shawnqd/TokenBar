@@ -3,7 +3,7 @@ import { Field, Toggle } from "../../../components/FormControls";
 import { FloatBarSettingsSection } from "../../../floatbar";
 import type { TabProps } from "../../Settings";
 import BinaryChoiceField from "../BinaryChoiceField";
-import ProviderFilterField from "../ProviderFilterField";
+import MultiSelectField from "../MultiSelectField";
 
 /**
  * Floating bar settings.
@@ -67,10 +67,14 @@ export default function FloatBarTab({ settings, set, saving }: TabProps) {
           {/* `floatBarProviderIds` has been persisted and consumed by
               `FloatBar.tsx` since long before this control existed — the bar
               filtered on it, but nothing on any settings page could set it. */}
-          <ProviderFilterField
+          <MultiSelectField
             label={t("FloatBarProvidersLabel")}
             description={t("FloatBarProvidersHelper")}
-            enabledProviderIds={settings.enabledProviders ?? []}
+            options={(settings.enabledProviders ?? []).map((id) => ({
+              value: id,
+              label: id,
+            }))}
+            allLabel={t("DashboardFilterAll")}
             value={settings.floatBarProviderIds ?? []}
             disabled={saving || !settings.floatBarEnabled}
             onChange={(next) => set({ floatBarProviderIds: next })}

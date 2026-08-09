@@ -12,6 +12,8 @@ export interface MenuFooterRow {
   label: string;
   shortcut?: string;
   onClick: () => void;
+  /** Spin the icon — the row has started work that has not finished yet. */
+  spinning?: boolean;
 }
 
 interface MenuSurfaceProps {
@@ -72,7 +74,10 @@ export default function MenuSurface({
               onClick={row.onClick}
             >
               {row.icon && (
-                <span className="menu-surface__footer-icon" aria-hidden>
+                <span
+                  className={`menu-surface__footer-icon${row.spinning ? " spin" : ""}`}
+                  aria-hidden
+                >
                   {row.icon}
                 </span>
               )}
