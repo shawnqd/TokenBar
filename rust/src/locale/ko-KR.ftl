@@ -695,6 +695,7 @@ CredentialApiKeys = API 키
 CredentialManualCookies = 수동 쿠키
 CredentialTokenAccounts = 토큰 계정
 CredentialProtectedPrefix = 보호됨
+CredentialStorageNothingStored = 이 제공자에 저장된 항목이 아직 없습니다.
 CredentialStatusNotCreated = 생성되지 않음
 CredentialStatusPlaintext = 일반 텍스트
 CredentialStatusUnavailable = 사용할 수 없음

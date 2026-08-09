@@ -811,6 +811,23 @@ function CredentialStorageSection({
 }) {
   if (!status) return null;
 
+  // One line, not a three-row table.
+  //
+  // The table restated the credential *kinds* the picker above already names,
+  // and then printed the same backend string against each of them — the only
+  // fact it carried, three times over. What is worth saying is what protects
+  // the secrets and how to get rid of them; which kinds exist is the picker's
+  // job.
+  //
+  // The backends are read from whichever slots are in use rather than assumed
+  // to agree: they normally do, but a settings file carried across machines can
+  // hold one slot encrypted by a backend the current machine cannot read, and
+  // silently claiming otherwise would be worse than saying nothing.
+  const backends = [status.apiKeys, status.manualCookies, status.tokenAccounts]
+    .filter((value) => value.startsWith("protected:"))
+    .map((value) => value.slice("protected:".length));
+  const unique = [...new Set(backends)];
+
   return (
     <section className="provider-detail-section provider-detail-credential-storage provider-detail-section--nested">
       <div className="provider-detail-section__header">
@@ -823,37 +840,13 @@ function CredentialStorageSection({
           {t("CredentialRevokeStored")}
         </button>
       </div>
-      <dl className="provider-detail-grid provider-detail-grid--storage">
-        <dt>{t("CredentialApiKeys")}</dt>
-        <dd>{storageLabel(status.apiKeys, t)}</dd>
-        <dt>{t("CredentialManualCookies")}</dt>
-        <dd>{storageLabel(status.manualCookies, t)}</dd>
-        <dt>{t("CredentialTokenAccounts")}</dt>
-        <dd>{storageLabel(status.tokenAccounts, t)}</dd>
-      </dl>
+      <p className="provider-detail-credential-storage__summary">
+        {unique.length > 0
+          ? `${t("CredentialProtectedPrefix")} (${unique.join(", ")})`
+          : t("CredentialStorageNothingStored")}
+      </p>
     </section>
   );
-}
-
-function storageLabel(
-  value: string,
-  t: ReturnType<typeof useLocale>["t"],
-): string {
-  if (value.startsWith("protected:")) {
-    return `${t("CredentialProtectedPrefix")} (${value.slice("protected:".length)})`;
-  }
-  switch (value) {
-    case "missing":
-      return t("CredentialStatusNotCreated");
-    case "plaintext":
-      return t("CredentialStatusPlaintext");
-    case "unavailable":
-      return t("CredentialStatusUnavailable");
-    case "unreadable":
-      return t("CredentialStatusUnreadable");
-    default:
-      return value;
-  }
 }
 
 function buildSubtitle(

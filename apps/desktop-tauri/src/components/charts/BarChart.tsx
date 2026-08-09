@@ -35,6 +35,14 @@ export interface BarChartProps {
 
 const DEFAULT_COLOR = "var(--chart-cost)";
 const BAR_GAP = 2;
+/** Widest a single bar may get.
+ *
+ * Without a cap, the width was the full plot divided by the point count, so the
+ * same component drew 26px slabs for a ten-point series and 7px slivers for a
+ * thirty-point one. Four charts sharing one component looked like four
+ * different charts, purely because they carry different amounts of history.
+ * A short series is now centred at this width instead of stretched to fill. */
+const MAX_BAR_WIDTH = 14;
 const SVG_WIDTH = 280;
 const CAP_HEIGHT = 5;
 
@@ -80,9 +88,9 @@ export function BarChart({
     );
   }
 
-  const barWidth = Math.max(
-    1,
-    Math.floor((SVG_WIDTH - (data.length - 1) * BAR_GAP) / data.length),
+  const barWidth = Math.min(
+    MAX_BAR_WIDTH,
+    Math.max(1, Math.floor((SVG_WIDTH - (data.length - 1) * BAR_GAP) / data.length)),
   );
   const actualWidth = data.length * barWidth + (data.length - 1) * BAR_GAP;
   const plotHeight = Math.max(1, height - 4);

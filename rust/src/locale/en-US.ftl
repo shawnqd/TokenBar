@@ -695,6 +695,7 @@ CredentialApiKeys = API keys
 CredentialManualCookies = Manual cookies
 CredentialTokenAccounts = Token accounts
 CredentialProtectedPrefix = Protected
+CredentialStorageNothingStored = Nothing stored for this provider yet.
 CredentialStatusNotCreated = Not created
 CredentialStatusPlaintext = Plaintext
 CredentialStatusUnavailable = Unavailable

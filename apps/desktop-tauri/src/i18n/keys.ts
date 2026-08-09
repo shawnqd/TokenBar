@@ -614,6 +614,7 @@ export const ALL_LOCALE_KEYS = [
   "CredentialManualCookies",
   "CredentialTokenAccounts",
   "CredentialProtectedPrefix",
+  "CredentialStorageNothingStored",
   "CredentialStatusNotCreated",
   "CredentialStatusPlaintext",
   "CredentialStatusUnavailable",
