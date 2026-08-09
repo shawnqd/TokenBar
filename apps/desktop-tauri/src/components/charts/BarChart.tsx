@@ -92,7 +92,15 @@ export function BarChart({
     MAX_BAR_WIDTH,
     Math.max(1, Math.floor((SVG_WIDTH - (data.length - 1) * BAR_GAP) / data.length)),
   );
-  const actualWidth = data.length * barWidth + (data.length - 1) * BAR_GAP;
+  // The bars' own width, and the offset that centres them.
+  //
+  // **The viewBox stays `SVG_WIDTH` regardless.** `.chart__svg` is
+  // `width: 100%; height: auto`, so the viewBox width is what sets the scale
+  // factor — narrowing it to fit the bars magnifies the entire drawing,
+  // height included. Capping the bar width without pinning the viewBox is what
+  // turned a ten-point chart into two enormous blocks overflowing the panel.
+  const barsWidth = data.length * barWidth + (data.length - 1) * BAR_GAP;
+  const groupOffset = Math.max(0, Math.round((SVG_WIDTH - barsWidth) / 2));
   const plotHeight = Math.max(1, height - 4);
 
   const onMove = (e: React.MouseEvent<SVGRectElement>, i: number) => {
@@ -106,9 +114,9 @@ export function BarChart({
   return (
     <div className="chart chart--bar" ref={containerRef}>
       <svg
-        width={actualWidth}
+        width={SVG_WIDTH}
         height={height}
-        viewBox={`0 0 ${actualWidth} ${height}`}
+        viewBox={`0 0 ${SVG_WIDTH} ${height}`}
         className="chart__svg"
         role="img"
         aria-label={ariaLabel}
@@ -116,7 +124,7 @@ export function BarChart({
         {referenceValue != null && referenceValue > 0 && (
           <line
             x1={0}
-            x2={actualWidth}
+            x2={SVG_WIDTH}
             y1={height - (referenceValue / max) * plotHeight}
             y2={height - (referenceValue / max) * plotHeight}
             className="chart__reference-line"
@@ -130,7 +138,7 @@ export function BarChart({
           const base = p.value === 0 ? 1 : Math.max(3, (p.value / max) * plotHeight);
           const eased = anim.barProgress(i);
           const barH = base * eased;
-          const x = i * (barWidth + BAR_GAP);
+          const x = groupOffset + i * (barWidth + BAR_GAP);
           const y = height - barH;
           const isPeak = i === peakIndex && barH > CAP_HEIGHT;
           const bodyH = isPeak ? Math.max(0, barH - CAP_HEIGHT) : barH;
