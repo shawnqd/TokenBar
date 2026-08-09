@@ -695,6 +695,7 @@ CredentialApiKeys = API 金鑰
 CredentialManualCookies = 手動 Cookie
 CredentialTokenAccounts = 權杖帳戶
 CredentialProtectedPrefix = 已加密保護
+CredentialStorageNothingStored = 此服務商尚未儲存任何憑證。
 CredentialStatusNotCreated = 未建立
 CredentialStatusPlaintext = 明文儲存
 CredentialStatusUnavailable = 不可用
