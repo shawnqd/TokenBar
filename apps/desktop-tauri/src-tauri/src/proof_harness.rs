@@ -201,7 +201,7 @@ impl ProofCommand {
 /// shared `main` window. `main` cannot show the tray panel at all anymore —
 /// `commands::set_surface_mode` rejects a `trayPanel` request outright, and
 /// every real tray-icon click opens the flyout window directly
-/// (`flyout_window::toggle_with_blur_consume`) — so routing proof mode's
+/// (`flyout_window::toggle`) — so routing proof mode's
 /// `trayPanel` target through `main` would either fail outright or exercise a
 /// dead code path, producing a visibly different window (size/position/
 /// resize behavior all come from `flyout_window.rs`'s own independent logic,

@@ -540,5 +540,5 @@ pub(super) fn apply_transition(
 // `should_hide_tray_panel_on_toggle` trio (tray-icon left-click handling for
 // the shared `main` window's TrayPanel state) was removed here: the flyout is
 // now its own dedicated window, and the tray-icon left-click handler in
-// `tray_bridge.rs` calls `shell::flyout_window::toggle_with_blur_consume`
+// `tray_bridge.rs` calls `shell::flyout_window::toggle`
 // directly instead of going through the `main`-window surface machine.

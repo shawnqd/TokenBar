@@ -51,7 +51,7 @@ fn conditional_hide_to_tray_leaves_non_matching_surface_alone() {
 // exercised `should_hide_tray_panel_on_toggle`) was removed here along with
 // its subject function: the tray-icon left-click toggle for the shared
 // `main` window's TrayPanel state no longer exists — the flyout is its own
-// dedicated window now (see `shell::flyout_window::toggle_with_blur_consume`
+// dedicated window now (see `shell::flyout_window::toggle`
 // and its own test module in flyout_window.rs).
 
 #[test]

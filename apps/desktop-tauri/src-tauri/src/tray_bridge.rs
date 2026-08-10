@@ -330,7 +330,7 @@ pub fn setup(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
                     // synchronously — the WebviewWindowBuilder deadlock only
                     // affects builds invoked from *synchronous Tauri IPC
                     // commands*, not native event-loop callbacks.
-                    shell::flyout_window::toggle_with_blur_consume(app, None);
+                    shell::flyout_window::toggle(app, None);
                 }
                 #[cfg(windows)]
                 if button == MouseButton::Right && button_state == MouseButtonState::Up {

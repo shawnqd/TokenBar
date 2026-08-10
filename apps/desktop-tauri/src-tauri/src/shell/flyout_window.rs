@@ -8,8 +8,8 @@
 //! Outside clicks are classified by the global mouse hook against the native
 //! window rectangle and then handled on the Tauri main thread.
 
-use std::sync::Mutex;
-use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering};
+use std::sync::{Mutex, OnceLock};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use tauri::{AppHandle, Emitter, Manager, PhysicalPosition, WebviewUrl};
@@ -23,47 +23,124 @@ pub const TRAY_PANEL_CLOSING_EVENT: &str = "tray-panel-closing";
 pub const TRAY_PANEL_HIDDEN_EVENT: &str = "tray-panel-hidden";
 
 const CLOSE_ANIMATION_DURATION: Duration = Duration::from_millis(180);
-const STATE_HIDDEN: u8 = 0;
-const STATE_SHOWING: u8 = 1;
-const STATE_VISIBLE: u8 = 2;
-const STATE_CLOSING: u8 = 3;
-
-static FLYOUT_STATE: AtomicU8 = AtomicU8::new(STATE_HIDDEN);
-static CLOSE_GENERATION: AtomicU64 = AtomicU64::new(0);
-// Every global mouse-hook task captures the input generation at the moment
-// Windows delivers the button-down event.  A later tray toggle or window
-// transition advances this generation, making an older queued outside-close
-// task harmless instead of letting it close a panel that has already reopened.
-static INPUT_GENERATION: AtomicU64 = AtomicU64::new(0);
 static HOOK_INSTALLED: AtomicBool = AtomicBool::new(false);
 
-fn set_state(state: u8) {
-    FLYOUT_STATE.store(state, Ordering::SeqCst);
+/// The native lifecycle is deliberately kept in one small controller.  The
+/// tray callback, the mouse hook and Tauri window events may arrive from
+/// different threads, so several unrelated atomics made it possible for an
+/// old callback to observe a new phase.  A single lock gives every transition
+/// one ordering and keeps the animation generation beside the visible phase.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FlyoutPhase {
+    Hidden,
+    Showing,
+    Visible,
+    Closing,
 }
 
-fn state_is(state: u8) -> bool {
-    FLYOUT_STATE.load(Ordering::SeqCst) == state
+#[derive(Debug, Clone, Copy)]
+struct FlyoutController {
+    phase: FlyoutPhase,
+    close_generation: u64,
+    input_generation: u64,
+}
+
+impl Default for FlyoutController {
+    fn default() -> Self {
+        Self {
+            phase: FlyoutPhase::Hidden,
+            close_generation: 0,
+            input_generation: 0,
+        }
+    }
+}
+
+impl FlyoutController {
+    fn set_phase(&mut self, phase: FlyoutPhase) {
+        self.phase = phase;
+    }
+
+    fn phase_is(&self, phase: FlyoutPhase) -> bool {
+        self.phase == phase
+    }
+
+    fn cancel_pending_close(&mut self) -> bool {
+        if self.phase != FlyoutPhase::Closing {
+            return false;
+        }
+        self.close_generation = self.close_generation.wrapping_add(1);
+        self.phase = FlyoutPhase::Visible;
+        true
+    }
+
+    fn next_input_generation(&mut self) -> u64 {
+        self.input_generation = self.input_generation.wrapping_add(1);
+        self.input_generation
+    }
+
+    fn invalidate_pending_input(&mut self) {
+        let _ = self.next_input_generation();
+    }
+
+    fn input_generation_is_current(&self, generation: u64) -> bool {
+        self.input_generation == generation
+    }
+
+    fn begin_close(&mut self) -> Option<u64> {
+        if self.phase == FlyoutPhase::Closing {
+            return None;
+        }
+        self.phase = FlyoutPhase::Closing;
+        self.close_generation = self.close_generation.wrapping_add(1);
+        Some(self.close_generation)
+    }
+
+    fn close_is_current(&self, generation: u64) -> bool {
+        self.phase == FlyoutPhase::Closing && self.close_generation == generation
+    }
+}
+
+static FLYOUT_CONTROLLER: OnceLock<Mutex<FlyoutController>> = OnceLock::new();
+
+fn controller() -> &'static Mutex<FlyoutController> {
+    FLYOUT_CONTROLLER.get_or_init(|| Mutex::new(FlyoutController::default()))
+}
+
+fn with_controller<T>(operation: impl FnOnce(&mut FlyoutController) -> T) -> T {
+    let mut guard = controller().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    operation(&mut guard)
+}
+
+fn set_phase(phase: FlyoutPhase) {
+    with_controller(|controller| controller.set_phase(phase));
+}
+
+fn phase_is(phase: FlyoutPhase) -> bool {
+    with_controller(|controller| controller.phase_is(phase))
 }
 
 fn cancel_pending_close() -> bool {
-    if !state_is(STATE_CLOSING) {
-        return false;
-    }
-    CLOSE_GENERATION.fetch_add(1, Ordering::SeqCst);
-    set_state(STATE_VISIBLE);
-    true
+    with_controller(FlyoutController::cancel_pending_close)
 }
 
 fn next_input_generation() -> u64 {
-    INPUT_GENERATION.fetch_add(1, Ordering::AcqRel) + 1
+    with_controller(FlyoutController::next_input_generation)
 }
 
 fn invalidate_pending_input() {
-    let _ = next_input_generation();
+    with_controller(FlyoutController::invalidate_pending_input);
 }
 
 fn input_generation_is_current(generation: u64) -> bool {
-    INPUT_GENERATION.load(Ordering::Acquire) == generation
+    with_controller(|controller| controller.input_generation_is_current(generation))
+}
+
+fn begin_close_transition() -> Option<u64> {
+    with_controller(FlyoutController::begin_close)
+}
+
+fn close_transition_is_current(generation: u64) -> bool {
+    with_controller(|controller| controller.close_is_current(generation))
 }
 
 fn remembered_size(props: &crate::surface::WindowProperties) -> (f64, f64) {
@@ -313,13 +390,36 @@ unsafe extern "system" fn mouse_hook_proc(code: i32, wparam: usize, lparam: isiz
             // top-level HWND rectangle instead.
             let generation = next_input_generation();
             tracing::debug!(x, y, generation, "flyout: global mouse button queued");
-            let posted = app.clone();
-            let _ = app.run_on_main_thread(move || {
-                close_if_outside(&posted, x, y, generation)
-            });
+            post_input_event(app, FlyoutInputEvent::MouseDown { x, y, generation });
         }
     }
     unsafe { CallNextHookEx(0, code, wparam, lparam) }
+}
+
+#[derive(Debug, Clone, Copy)]
+enum FlyoutInputEvent {
+    MouseDown { x: i32, y: i32, generation: u64 },
+}
+
+/// Serialize native input with tray toggles and window transitions.  The hook
+/// thread only posts a value; all lifecycle decisions happen on Tauri's main
+/// thread, through this one dispatcher.
+fn post_input_event(app: &AppHandle, event: FlyoutInputEvent) {
+    let posted = app.clone();
+    if app
+        .run_on_main_thread(move || dispatch_input_event(&posted, event))
+        .is_err()
+    {
+        tracing::debug!(?event, "flyout: input event dropped while shutting down");
+    }
+}
+
+fn dispatch_input_event(app: &AppHandle, event: FlyoutInputEvent) {
+    match event {
+        FlyoutInputEvent::MouseDown { x, y, generation } => {
+            close_if_outside(app, x, y, generation)
+        }
+    }
 }
 
 #[cfg(windows)]
@@ -433,12 +533,21 @@ fn show_window(app: &AppHandle, window: &tauri::WebviewWindow) -> Result<(), Str
     invalidate_pending_input();
     let was_visible = window.is_visible().unwrap_or(false);
     let was_closing = cancel_pending_close();
-    set_state(STATE_SHOWING);
+    set_phase(FlyoutPhase::Showing);
     super::dwm::force_borderless_transparent_resizable(window);
-    window.show().map_err(|error| error.to_string())?;
+    if let Err(error) = window.show() {
+        set_phase(FlyoutPhase::Hidden);
+        return Err(error.to_string());
+    }
     super::dwm::force_borderless_transparent_resizable(window);
-    window.set_focus().map_err(|error| error.to_string())?;
-    set_state(STATE_VISIBLE);
+    if let Err(error) = window.set_focus() {
+        // The native window is already visible. Keep the controller honest so
+        // the next tray click can close/reopen it instead of being trapped in
+        // a permanent SHOWING phase.
+        set_phase(FlyoutPhase::Visible);
+        return Err(error.to_string());
+    }
+    set_phase(FlyoutPhase::Visible);
     publish_flyout_geometry(app);
     if !was_visible || was_closing {
         app.emit_to(FLYOUT_LABEL, TRAY_PANEL_REVEALED_EVENT, ())
@@ -536,7 +645,7 @@ fn open_or_focus_inner(
     if let Some((x, y)) = target {
         let _ = window.set_position(PhysicalPosition::new(x, y));
     }
-    set_state(STATE_HIDDEN);
+    set_phase(FlyoutPhase::Hidden);
     if reveal_when_ready {
         arm_reveal(app)?;
     }
@@ -548,11 +657,13 @@ pub fn prewarm(app: &AppHandle) -> Result<(), String> {
     open_or_focus_inner(app, None, false)
 }
 
-/// Toggle only has two meanings: tray click while visible means close, and
-/// tray click while hidden means open.  It no longer consumes a blur marker or
-/// guesses which event won a same-click race.
-pub fn toggle_with_blur_consume(app: &AppHandle, position: Option<(i32, i32)>) {
-    if state_is(STATE_CLOSING) {
+/// Toggle is the only tray-panel visibility entry point: a click while the
+/// panel is visible starts the close animation, and a click while it is hidden
+/// opens the existing prewarmed window.  The controller invalidates queued
+/// mouse-hook events at each transition, so a click can never be handled by
+/// both the outside-dismiss path and this toggle path.
+pub fn toggle(app: &AppHandle, position: Option<(i32, i32)>) {
+    if phase_is(FlyoutPhase::Closing) {
         let _ = open_or_focus(app, position);
         return;
     }
@@ -570,44 +681,44 @@ pub fn request_close(app: &AppHandle) -> Result<(), String> {
     tracing::debug!("flyout: request_close entered");
     invalidate_pending_input();
     let Some(window) = app.get_webview_window(FLYOUT_LABEL) else {
-        set_state(STATE_HIDDEN);
+        set_phase(FlyoutPhase::Hidden);
         return Ok(());
     };
-    if !window.is_visible().unwrap_or(false) || state_is(STATE_CLOSING) {
+    if !window.is_visible().unwrap_or(false) || phase_is(FlyoutPhase::Closing) {
         return Ok(());
     }
-    set_state(STATE_CLOSING);
-    let generation = CLOSE_GENERATION.fetch_add(1, Ordering::SeqCst) + 1;
+    let Some(generation) = begin_close_transition() else {
+        return Ok(());
+    };
     app.emit_to(FLYOUT_LABEL, TRAY_PANEL_CLOSING_EVENT, ())
         .map_err(|error| {
-            set_state(STATE_VISIBLE);
+            set_phase(FlyoutPhase::Visible);
             error.to_string()
         })?;
 
     let handle = app.clone();
     tauri::async_runtime::spawn(async move {
         tokio::time::sleep(CLOSE_ANIMATION_DURATION).await;
-        if !state_is(STATE_CLOSING) || CLOSE_GENERATION.load(Ordering::SeqCst) != generation {
+        if !close_transition_is_current(generation) {
             return;
         }
         let main_handle = handle.clone();
         if handle
             .run_on_main_thread(move || {
-                if !state_is(STATE_CLOSING) || CLOSE_GENERATION.load(Ordering::SeqCst) != generation
-                {
+                if !close_transition_is_current(generation) {
                     return;
                 }
                 let Some(window) = main_handle.get_webview_window(FLYOUT_LABEL) else {
-                    set_state(STATE_HIDDEN);
+                    set_phase(FlyoutPhase::Hidden);
                     return;
                 };
                 remember_geometry(&window);
                 if window.hide().is_ok() {
-                    set_state(STATE_HIDDEN);
+                    set_phase(FlyoutPhase::Hidden);
                     published::set_hidden();
                     let _ = main_handle.emit_to(FLYOUT_LABEL, TRAY_PANEL_HIDDEN_EVENT, ());
                 } else {
-                    set_state(STATE_VISIBLE);
+                    set_phase(FlyoutPhase::Visible);
                     let _ = main_handle.emit_to(FLYOUT_LABEL, TRAY_PANEL_REVEALED_EVENT, ());
                     publish_flyout_geometry(&main_handle);
                 }
@@ -618,7 +729,7 @@ pub fn request_close(app: &AppHandle) -> Result<(), String> {
             // lifecycle latch in CLOSING forever.  A later tray click must be
             // able to reopen the panel instead of being swallowed by a stale
             // transition.
-            set_state(STATE_VISIBLE);
+            set_phase(FlyoutPhase::Visible);
         }
     });
     Ok(())
@@ -756,14 +867,30 @@ mod tests {
 
     #[test]
     fn queued_outside_check_is_invalidated_by_a_later_transition() {
-        let queued = next_input_generation();
-        assert!(input_generation_is_current(queued));
+        let mut controller = FlyoutController::default();
+        let queued = controller.next_input_generation();
+        assert!(controller.input_generation_is_current(queued));
 
         // Opening or closing the flyout advances the generation. A callback
         // queued for the previous click must not act on the newly transitioned
         // window state.
-        invalidate_pending_input();
-        assert!(!input_generation_is_current(queued));
+        controller.invalidate_pending_input();
+        assert!(!controller.input_generation_is_current(queued));
+    }
+
+    #[test]
+    fn controller_serializes_close_and_reopen_transitions() {
+        let mut controller = FlyoutController {
+            phase: FlyoutPhase::Visible,
+            ..FlyoutController::default()
+        };
+        let generation = controller.begin_close().expect("visible panel closes");
+        assert_eq!(controller.phase, FlyoutPhase::Closing);
+        assert!(controller.close_is_current(generation));
+        assert!(controller.cancel_pending_close());
+        assert_eq!(controller.phase, FlyoutPhase::Visible);
+        assert!(!controller.close_is_current(generation));
+        assert!(controller.begin_close().is_some());
     }
 
     #[test]
