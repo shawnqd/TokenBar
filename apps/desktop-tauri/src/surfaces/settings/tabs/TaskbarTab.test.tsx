@@ -14,7 +14,8 @@ const tauriMocks = vi.hoisted(() => ({
       name: "Microsoft YaHei UI",
       variableWeight: false,
       hasCjk: true,
-      recommended: true,
+      // Static multi-face families are never recommended now.
+      recommended: false,
     },
     { name: "Wingdings", variableWeight: false, hasCjk: false, recommended: false },
   ]),
@@ -104,14 +105,14 @@ describe("TaskbarTab", () => {
       "rgb(77, 107, 254)",
     ]);
 
-    // Three entries fill the left column first, then start a second — the
-    // column-major order `taskbar_widget::cell_rects` lays cells out in.
-    const columns = Array.from(
-      preview.querySelectorAll(".taskbar-preview__column"),
+    // Three entries → 2×2 grid, column-major: cells land at (1,1) (1,2) (2,1).
+    // Matches `taskbar_widget::cell_rects` (third entry top-right, not centred).
+    const lines = Array.from(
+      preview.querySelectorAll<HTMLElement>(".taskbar-preview__line"),
     );
-    expect(
-      columns.map((c) => c.querySelectorAll(".taskbar-preview__line").length),
-    ).toEqual([2, 1]);
+    expect(lines).toHaveLength(3);
+    expect(lines.map((el) => el.style.gridColumn)).toEqual(["1", "1", "2"]);
+    expect(lines.map((el) => el.style.gridRow)).toEqual(["1", "2", "1"]);
 
     const sizeInput = screen.getAllByRole("spinbutton")[0];
     fireEvent.change(sizeInput, { target: { value: "14" } });
@@ -148,9 +149,10 @@ describe("TaskbarTab", () => {
     expect(set).toHaveBeenCalledWith({ taskbarWidgetFontFamily: "Bahnschrift" });
   });
 
-  /// The complaint that produced the curated list: a raw ~400-family dropdown
-  /// buried the handful of fonts that are actually usable in a 12px strip.
-  it("hides uncurated families until 'show all' is switched on", async () => {
+  /// The picker only offers fonts with a genuine continuous `wght` axis.
+  /// Static multi-face families (Wingdings, Microsoft YaHei as a non-selected
+  /// option) must not appear — the weight slider is a lie on those faces.
+  it("lists only true continuous-weight families", async () => {
     const set = vi.fn();
     render(<TaskbarTab settings={settings} set={set} saving={false} />);
 
@@ -162,22 +164,12 @@ describe("TaskbarTab", () => {
       name: /Microsoft YaHei UI/,
     });
     fireEvent.click(trigger);
-    expect(screen.queryByText(/Wingdings/)).toBeNull();
-    // Continuous-weight families are labelled as such, because whether the
-    // weight slider does anything depends entirely on the font.
+    // Current (static) selection stays so the control does not rewrite itself.
+    expect(screen.getByRole("option", { name: /Microsoft YaHei UI/ })).toBeTruthy();
+    // Real variable face is offered and tagged.
     expect(screen.getByText(/Bahnschrift · TaskbarFontVariableTag/)).toBeTruthy();
-    fireEvent.click(trigger);
-
-    // `Toggle` renders a bare checkbox; the visible name lives in the sibling
-    // `Field` label, so the switch is reached through its row.
-    const showAllRow = screen
-      .getByText("TaskbarFontShowAll")
-      .closest(".settings-field");
-    fireEvent.click(
-      showAllRow!.querySelector('input[type="checkbox"]') as HTMLElement,
-    );
-    fireEvent.click(trigger);
-    expect(await screen.findByText(/Wingdings/)).toBeTruthy();
+    // Symbol / static faces never enter the continuous list.
+    expect(screen.queryByText(/Wingdings/)).toBeNull();
   });
 
   it("restores the taskbar appearance defaults as one patch", async () => {

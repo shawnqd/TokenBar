@@ -1,4 +1,5 @@
-import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { listen } from "@tauri-apps/api/event";
 import type {
   BootstrapState,
   MenuBarDisplayMode,
@@ -16,7 +17,6 @@ import {
 import { useProviders } from "../hooks/useProviders";
 import { useSettings } from "../hooks/useSettings";
 import { useLocale } from "../hooks/useLocale";
-import { useSurfaceTarget } from "../hooks/useSurfaceMode";
 import { useTrayPanelLayout } from "../hooks/useTrayPanelLayout";
 import { useOutputSpeedSnapshot } from "../hooks/useOutputSpeedSnapshot";
 import MenuCard from "../components/MenuCard";
@@ -27,7 +27,6 @@ import MenuSurface, {
 import ProviderGrid, { prioritizeProviders } from "../components/ProviderGrid";
 import { openProviderDashboard, openProviderStatusPage } from "../lib/tauri";
 import { orderProviderSnapshots } from "../lib/providerOrder";
-import { resolveDashboardProviderIds } from "../lib/dashboardProviders";
 import { quotaDisplayContext } from "../lib/quotaDisplay";
 import { outputSpeedProviderId } from "../lib/outputSpeed";
 import {
@@ -57,6 +56,10 @@ const HAS_STATUS_PAGE = new Set([
 
 const TRAY_INITIAL_REFRESH_DELAY_MS = 250;
 const DENSE_OVERVIEW_THRESHOLD = 32;
+/** Matches shell::flyout_window's retained-window lifecycle events. */
+const TRAY_PANEL_REVEALED_EVENT = "tray-panel-revealed";
+const TRAY_PANEL_CLOSING_EVENT = "tray-panel-closing";
+const TRAY_PANEL_HIDDEN_EVENT = "tray-panel-hidden";
 
 /**
  * Tray popover surface — two modes like macOS CodexBar:
@@ -79,7 +82,6 @@ export default function TrayPanel({ state }: { state: BootstrapState }) {
   const outputSpeed = useOutputSpeedSnapshot(
     settings.outputSpeedEnabled !== false,
   );
-  const surfaceTarget = useSurfaceTarget("trayPanel");
   // The tray flyout and the PopOut dashboard share the "dashboard" component's
   // settings — they render the same cards from the same snapshot. Neither reads
   // the floating bar's or the taskbar strip's preference.
@@ -87,17 +89,9 @@ export default function TrayPanel({ state }: { state: BootstrapState }) {
     () => quotaDisplayContext(settings, "dashboard"),
     [settings],
   );
-  // The dashboard's own provider filter (item H). Everything below reads this
-  // rather than `settings.enabledProviders`, so the dense-overview threshold
-  // and the slot list count the providers actually on screen.
-  const shownProviderIds = useMemo(
-    () =>
-      resolveDashboardProviderIds(
-        settings.enabledProviders,
-        settings.dashboardProviderIds,
-      ),
-    [settings.dashboardProviderIds, settings.enabledProviders],
-  );
+  // Provider switches are the single source of truth for the dashboard. A
+  // stale legacy dashboard-only filter must not hide an enabled provider.
+  const shownProviderIds = settings.enabledProviders;
   // The cache is deliberately retained when a provider is disabled so the
   // Settings page can still describe its last result.  A tray flyout is a
   // live view, though: it must only render currently enabled providers.
@@ -141,14 +135,13 @@ export default function TrayPanel({ state }: { state: BootstrapState }) {
     () => new Map(sorted.map((provider) => [provider.providerId, provider])),
     [sorted],
   );
-  const initialProviderId =
-    surfaceTarget?.kind === "provider" ? surfaceTarget.providerId : null;
-
-  // null = overview (all providers), string = single provider detail
-  const [selectedProviderId, setSelectedProviderId] = useState<string | null>(
-    initialProviderId,
-  );
+  // This is a detached window, not a state of the main-window surface router.
+  // Selection is local to the retained flyout WebView, so a refresh or a
+  // surface-mode event in the main window cannot reset the provider card.
+  // null = overview (all providers), string = single provider detail.
+  const [selectedProviderId, setSelectedProviderId] = useState<string | null>(null);
   const [gridExpanded, setGridExpanded] = useState(false);
+  const revealRef = useRef<HTMLDivElement>(null);
   const expectsDenseOverview =
     selectedProviderId === null &&
     !gridExpanded &&
@@ -157,10 +150,6 @@ export default function TrayPanel({ state }: { state: BootstrapState }) {
     if (!expectsDenseOverview) return sorted;
     return hydrateProviderSlots(denseProviderSlots, providersById);
   }, [denseProviderSlots, expectsDenseOverview, providersById, sorted]);
-
-  useEffect(() => {
-    setSelectedProviderId(initialProviderId);
-  }, [initialProviderId]);
 
   // Cards to display based on mode
   // Overview: all providers in the grid — non-error first, then errors
@@ -198,6 +187,56 @@ export default function TrayPanel({ state }: { state: BootstrapState }) {
     // as blur-dismiss.
     canMeasure: true,
   });
+
+  useEffect(() => {
+    let disposed = false;
+    const unlisteners: Array<() => void> = [];
+
+    const replayReveal = () => {
+      const element = revealRef.current;
+      if (!element) return;
+      // The WebView is retained between opens. Restart the same two-part
+      // animation used by the native right-click menu on every hidden ->
+      // visible transition, rather than relying on a mount-time transition.
+      element.classList.remove("tray-panel-reveal--opening");
+      element.classList.remove("tray-panel-reveal--closing");
+      element.classList.remove("tray-panel-reveal--parked");
+      void element.offsetWidth;
+      element.classList.add("tray-panel-reveal--opening");
+    };
+    const replayClose = () => {
+      const element = revealRef.current;
+      if (!element) return;
+      // The native window remains visible for the animation duration. This is
+      // the exact reverse of the right-click menu's entrance gesture.
+      element.classList.remove("tray-panel-reveal--opening");
+      element.classList.remove("tray-panel-reveal--closing");
+      element.classList.remove("tray-panel-reveal--parked");
+      void element.offsetWidth;
+      element.classList.add("tray-panel-reveal--closing");
+    };
+    const parkReveal = () => {
+      const element = revealRef.current;
+      if (!element) return;
+      element.classList.remove("tray-panel-reveal--opening");
+      element.classList.remove("tray-panel-reveal--closing");
+      element.classList.add("tray-panel-reveal--parked");
+    };
+
+    void (async () => {
+      unlisteners.push(await listen(TRAY_PANEL_REVEALED_EVENT, replayReveal));
+      unlisteners.push(await listen(TRAY_PANEL_CLOSING_EVENT, replayClose));
+      unlisteners.push(await listen(TRAY_PANEL_HIDDEN_EVENT, parkReveal));
+      if (disposed) {
+        for (const unlisten of unlisteners) unlisten();
+      }
+    })();
+
+    return () => {
+      disposed = true;
+      for (const unlisten of unlisteners) unlisten();
+    };
+  }, []);
 
   const openSettings = useCallback(() => {
     // Keep the flyout visible as a live preview while Settings is open.
@@ -287,7 +326,17 @@ export default function TrayPanel({ state }: { state: BootstrapState }) {
   const handleGestureEnd = useCallback(() => {
     void endFlyoutGesture().catch(() => {});
   }, []);
-  const revealClassName = `tray-panel-reveal tray-panel-reveal--native-size${layoutReady ? " tray-panel-reveal--ready" : ""}${expectsDenseOverview ? " tray-panel-reveal--dense" : ""}${selectedProviderId !== null ? " tray-panel-reveal--detail" : ""}`;
+  // The WebView is prewarmed while the native flyout is hidden. Keep the
+  // retained DOM parked from its very first paint; otherwise the first native
+  // `show()` exposes the resting card for a frame before the reveal event can
+  // restart the entrance animation, which is the intermittent flash users
+  // see on opening.
+  // `--parked` is the pre-reveal state, not a permanent companion class. If
+  // both it and `--ready` are present, the later CSS rule wins and leaves the
+  // whole panel transparent when the one-shot native reveal event races the
+  // React listener. The ready state must be representable by the class string
+  // alone; native events still replay the animation on retained opens.
+  const revealClassName = `tray-panel-reveal tray-panel-reveal--native-size${layoutReady ? " tray-panel-reveal--ready" : " tray-panel-reveal--parked"}${expectsDenseOverview ? " tray-panel-reveal--dense" : ""}${selectedProviderId !== null ? " tray-panel-reveal--detail" : ""}`;
   const isDetailView = selectedProviderId !== null;
   const renderProviderCard = (p: ProviderUsageSnapshot) => {
     const isSelected =
@@ -306,7 +355,6 @@ export default function TrayPanel({ state }: { state: BootstrapState }) {
           localUsagePeriod={settings.localUsagePeriod}
           showProviderIcon={settings.switcherShowsIcons}
           densityMode={densityMode}
-          quotaWindows={settings.dashboardQuotaWindows}
         />
       </div>
     );
@@ -325,7 +373,7 @@ export default function TrayPanel({ state }: { state: BootstrapState }) {
 
   if (sorted.length === 0) {
     return (
-      <div className={revealClassName}>
+      <div ref={revealRef} className={revealClassName}>
         <MenuSurface
           variant="tray"
           onRefresh={refresh}
@@ -343,7 +391,7 @@ export default function TrayPanel({ state }: { state: BootstrapState }) {
   }
 
   return (
-    <div className={revealClassName}>
+    <div ref={revealRef} className={revealClassName}>
       <MenuSurface
         variant="tray"
         onRefresh={refresh}

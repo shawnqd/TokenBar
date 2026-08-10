@@ -1,12 +1,7 @@
-import { useMemo, useState, type CSSProperties } from "react";
-import {
-  primaryQuotaState,
-  quotaPercentDisplay,
-  type QuotaPercentContext,
-} from "../lib/quotaDisplay";
+import { useMemo, useState } from "react";
+import type { QuotaPercentContext } from "../lib/quotaDisplay";
 import type { ProviderUsageSnapshot } from "../types/bridge";
 import { ProviderIcon } from "./providers/ProviderIcon";
-import { getProviderIcon } from "./providers/providerIcons";
 import { useLocale } from "../hooks/useLocale";
 import { TokenBarIcon } from "./TokenBarIcon";
 
@@ -32,9 +27,9 @@ export default function ProviderGrid({
   onSelect: (providerId: string | null) => void;
   /** Persist a new provider order (list of provider IDs) after a drag-reorder. */
   onReorder?: (orderedIds: string[]) => void;
-  /** Called on mousedown of a draggable item, before a possible HTML5 drag starts. */
+  /** Called when an actual HTML5 drag starts (not for an ordinary click). */
   onGestureStart?: () => void;
-  /** Called on mouseup or dragend of a draggable item (drag finished or canceled). */
+  /** Called when an HTML5 drag ends or is canceled. */
   onGestureEnd?: () => void;
 }) {
   const { t } = useLocale();
@@ -63,10 +58,9 @@ export default function ProviderGrid({
     if (expanded === undefined) setUncontrolledExpanded(next);
     onExpandedChange?.(next);
   };
-  const gridPercent = (provider: ProviderUsageSnapshot) =>
-    quotaPercentDisplay(provider.primary, display).percent;
-  const quotaStateOf = (provider: ProviderUsageSnapshot) =>
-    primaryQuotaState(provider);
+  // Display context is for cards below the grid; the icon strip no longer
+  // paints per-tile quota bars (removed at user request).
+  void display;
   const totalItems = providers.length + 1;
   const shouldCollapse = totalItems > 32;
   const collapsedProviders = useMemo(
@@ -115,11 +109,14 @@ export default function ProviderGrid({
           onClick={() => onSelect(p.providerId)}
           aria-label={p.displayName}
           draggable={canReorder}
-          onMouseDown={canReorder ? () => onGestureStart?.() : undefined}
-          onMouseUp={canReorder ? () => onGestureEnd?.() : undefined}
           onDragStart={
             canReorder
               ? (e) => {
+                  // Do not arm the native blur guard on mousedown: a normal
+                  // provider click is not a drag, and the async IPC guard used
+                  // to race the WebView2 Focused(false) event. Only an actual
+                  // HTML5 drag gets the gesture guard.
+                  onGestureStart?.();
                   setDragId(p.providerId);
                   e.dataTransfer.effectAllowed = "move";
                 }
@@ -155,22 +152,6 @@ export default function ProviderGrid({
         >
           {showProviderIcons && <ProviderIcon providerId={p.providerId} size={16} />}
           <span className="provider-grid__label">{labelFor(p.displayName)}</span>
-          {/* Only a real percentage quota gets a track and a number. A provider
-              whose primary window is informational (a "Subscription active"
-              marker, or the synthetic 0% window a balance provider uses to carry
-              a prepaid amount) would otherwise render an honest-looking "0%",
-              which TASK-018 forbids. Those rows show a non-quota marker and
-              explain themselves on hover; the provider's card still shows the
-              real balance or status. */}
-          {quotaStateOf(p) === "quota" && (
-            <span
-              className="provider-grid__weekly-track"
-              style={{
-                "--weekly-pct": `${gridPercent(p)}%`,
-                "--weekly-color": getProviderIcon(p.providerId).brandColor,
-              } as CSSProperties}
-            />
-          )}
         </button>
       ))}
       {shouldCollapse && (

@@ -66,7 +66,7 @@ export function UsageSection({ provider, display, t }: Props) {
   if (provider.tertiary && isMeaningfulQuotaWindow(provider.tertiary)) {
     bars.push({
       key: "tertiary",
-      label: t("DetailWindowTertiary"),
+      label: quotaWindowLabel("monthly", provider.tertiary, t),
       rate: provider.tertiary,
     });
   }

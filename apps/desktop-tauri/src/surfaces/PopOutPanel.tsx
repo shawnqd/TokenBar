@@ -1,5 +1,4 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import type {
   BootstrapState,
   MenuBarDisplayMode,
@@ -18,7 +17,6 @@ import MenuSurface, {
 } from "../components/MenuSurface";
 import ProviderGrid, { prioritizeProviders } from "../components/ProviderGrid";
 import { orderProviderSnapshots } from "../lib/providerOrder";
-import { resolveDashboardProviderIds } from "../lib/dashboardProviders";
 import { quotaDisplayContext } from "../lib/quotaDisplay";
 import { outputSpeedProviderId } from "../lib/outputSpeed";
 
@@ -52,20 +50,10 @@ export default function PopOutPanel({
     settings.outputSpeedEnabled !== false,
   );
 
-  // Same provider filter as the tray flyout — the two share the "dashboard"
-  // component, so a provider hidden from one is hidden from the other.
-  //
-  // The candidates are the snapshots themselves, *not* `enabledProviders`:
-  // unlike the tray flyout this surface has never applied the enabled filter,
-  // and making it do so here would be a behaviour change nobody asked for.
-  const shownProviderIds = useMemo(
-    () =>
-      resolveDashboardProviderIds(
-        providers.map((provider) => provider.providerId),
-        settings.dashboardProviderIds,
-      ),
-    [providers, settings.dashboardProviderIds],
-  );
+  // Provider switches are the single source of truth for both dashboard
+  // surfaces. This also prevents a stale legacy dashboard-only filter from
+  // hiding an enabled provider.
+  const shownProviderIds = settings.enabledProviders;
   const sorted = useMemo(() => {
     return orderProviderSnapshots(
       providers.filter((provider) => shownProviderIds.includes(provider.providerId)),
@@ -89,25 +77,6 @@ export default function PopOutPanel({
     selectedProviderId !== null ? "detailed" : settings.menuBarDisplayMode;
   const [gridExpanded, setGridExpanded] = useState(false);
   const cardRefs = useRef(new Map<string, HTMLDivElement>());
-  const windowScale = useMemo(() => {
-    const scalePercent = Number(settings.windowScalePercent);
-    return (
-      Math.min(250, Math.max(100, Number.isFinite(scalePercent) ? scalePercent : 100)) / 100
-    );
-  }, [settings.windowScalePercent]);
-
-  // Scale the dashboard via the webview's native zoom (like a browser's Ctrl-+):
-  // it reflows content at the real window width, so the side-by-side cards keep
-  // filling the window at any scale — unlike CSS `zoom`, which overflows. The
-  // main window is shared with the tray surface, so reset zoom to 1 on unmount.
-  useEffect(() => {
-    const webview = getCurrentWebviewWindow();
-    void webview.setZoom(windowScale).catch(() => {});
-    return () => {
-      void webview.setZoom(1).catch(() => {});
-    };
-  }, [windowScale]);
-
   useEffect(() => {
     setSelectedProviderId(providerId ?? null);
   }, [providerId]);
@@ -279,7 +248,6 @@ export default function PopOutPanel({
                 localUsagePeriod={settings.localUsagePeriod}
                 showProviderIcon={settings.switcherShowsIcons}
                 densityMode={densityMode}
-                quotaWindows={settings.dashboardQuotaWindows}
                 outputSpeed={
                   (() => {
                     const speedId = outputSpeedProviderId(p.providerId);

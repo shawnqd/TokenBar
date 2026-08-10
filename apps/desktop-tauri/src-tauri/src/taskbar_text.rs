@@ -46,7 +46,8 @@ use windows::Win32::Graphics::Direct2D::{
     ID2D1DCRenderTarget, ID2D1Factory,
 };
 use windows::Win32::Graphics::DirectWrite::{
-    DWRITE_FACTORY_TYPE_SHARED, DWRITE_FONT_AXIS_TAG_WEIGHT, DWRITE_FONT_AXIS_VALUE,
+    DWRITE_FACTORY_TYPE_SHARED, DWRITE_FONT_AXIS_ATTRIBUTES_VARIABLE,
+    DWRITE_FONT_AXIS_RANGE, DWRITE_FONT_AXIS_TAG_WEIGHT, DWRITE_FONT_AXIS_VALUE,
     DWRITE_FONT_STRETCH_NORMAL, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_WEIGHT,
     DWRITE_PARAGRAPH_ALIGNMENT_CENTER, DWRITE_TEXT_ALIGNMENT, DWRITE_TEXT_ALIGNMENT_CENTER,
     DWRITE_TEXT_METRICS, DWRITE_TRIMMING, DWRITE_TRIMMING_GRANULARITY_CHARACTER,
@@ -443,48 +444,45 @@ pub struct FontFamilyInfo {
     pub recommended: bool,
 }
 
-/// Families worth offering even though they have no variation axis.
-///
-/// Deliberately short and hand-picked: these are UI faces that stay legible at
-/// 12px on a taskbar and ship enough static weights to be worth the slider.
-/// Names that are not installed simply never appear — the list is filtered
-/// against the live font collection, never rendered from this constant.
-const PREFERRED_FAMILIES: &[&str] = &[
-    // CJK-capable UI faces.
+/// Variable families that deserve a boost when several real `wght` fonts are
+/// installed. Static Microsoft faces (YaHei / Segoe UI) deliberately do *not*
+/// live here — they only have discrete installed weights, so the slider snaps
+/// and they must not appear in a "continuous weight" picker.
+const PREFERRED_VARIABLE_FAMILIES: &[&str] = &[
     "MiSans",
-    "Microsoft YaHei UI",
-    "Microsoft YaHei",
+    "MiSans VF",
     "HarmonyOS Sans SC",
     "Source Han Sans SC",
     "Noto Sans SC",
     "Alibaba PuHuiTi 3.0",
     "OPPOSans",
-    "DengXian",
-    // Latin UI faces.
-    "Segoe UI",
     "Inter",
-    "Cascadia Mono",
-    "Consolas",
+    "Segoe UI Variable",
+    "Bahnschrift",
 ];
 
-fn is_preferred_family(name: &str) -> bool {
-    PREFERRED_FAMILIES
+fn is_preferred_variable_family(name: &str) -> bool {
+    PREFERRED_VARIABLE_FAMILIES
         .iter()
         .any(|candidate| candidate.eq_ignore_ascii_case(name))
 }
 
 /// Ordering rank for the picker. Lower sorts first.
 ///
-/// Continuous weight comes before everything, because it is the one property
-/// the weight slider depends on; among equals, a family that can draw Chinese
-/// beats one that will fall back mid-line.
+/// Only families with a genuine continuous `wght` axis are recommended. Among
+/// those, CJK-capable and known UI faces sort first so the short list is
+/// useful on a Chinese taskbar strip.
 fn family_rank(info: &FontFamilyInfo) -> u8 {
-    match (info.variable_weight, info.has_cjk, is_preferred_family(&info.name)) {
-        (true, true, _) => 0,
-        (true, false, _) => 1,
-        (false, true, true) => 2,
-        (false, false, true) => 3,
-        _ => 4,
+    if !info.variable_weight {
+        // Static faces (Microsoft YaHei, regular Segoe UI, …) stay in the full
+        // enumeration for diagnostics but never enter the recommended set.
+        return 4;
+    }
+    match (info.has_cjk, is_preferred_variable_family(&info.name)) {
+        (true, true) => 0,
+        (true, false) => 1,
+        (false, true) => 2,
+        (false, false) => 3,
     }
 }
 
@@ -556,7 +554,10 @@ unsafe fn enumerate_families() -> windows::core::Result<Vec<FontFamilyInfo>> {
             has_cjk: traits.has_cjk,
             recommended: false,
         };
-        info.recommended = family_rank(&info) < 4;
+        // Recommended ≡ genuine continuous weight. The picker only offers
+        // those by default; static multi-face families look continuous on a
+        // stepped slider but are not (Microsoft YaHei, Segoe UI, …).
+        info.recommended = info.variable_weight;
         out.push(info);
     }
     Ok(out)
@@ -606,12 +607,15 @@ unsafe fn family_traits(
     traits
 }
 
-/// Whether one face reports a `wght` variation axis.
+/// Whether one face has a *variable* `wght` axis (min < max), not merely a
+/// derived static weight.
 ///
-/// `IDWriteFontFace5::HasVariations` alone is not enough: a font can vary on an
-/// axis we do not drive (optical size, for instance), and claiming continuous
-/// weight for it would be exactly the kind of unverified promise this task
-/// exists to remove.
+/// DirectWrite exposes `wght`/`wdth`/`ital`/`slnt` axis *values* for every
+/// font — static families included — by synthesising them from the face's
+/// weight/stretch/style. Checking `GetFontAxisValues` for a WEIGHT tag is
+/// therefore a false positive for Microsoft YaHei and friends. The resource
+/// side reports real axis ranges and the VARIABLE attribute; that is what
+/// separates MiSans-style continuous faces from stepped multi-face families.
 unsafe fn font_has_weight_axis(
     font: &windows::Win32::Graphics::DirectWrite::IDWriteFont3,
 ) -> bool {
@@ -624,22 +628,32 @@ unsafe fn font_has_weight_axis(
     if !unsafe { face5.HasVariations() }.as_bool() {
         return false;
     }
-    let axis_count = unsafe { face5.GetFontAxisValueCount() };
+    let Ok(resource) = (unsafe { face5.GetFontResource() }) else {
+        return false;
+    };
+    if !unsafe { resource.HasVariations() }.as_bool() {
+        return false;
+    }
+    let axis_count = unsafe { resource.GetFontAxisCount() };
     if axis_count == 0 {
         return false;
     }
-    let mut axes = vec![
-        DWRITE_FONT_AXIS_VALUE {
-            axisTag: DWRITE_FONT_AXIS_TAG_WEIGHT,
-            value: 0.0,
-        };
-        axis_count as usize
-    ];
-    if unsafe { face5.GetFontAxisValues(&mut axes) }.is_err() {
+    let mut ranges = vec![DWRITE_FONT_AXIS_RANGE::default(); axis_count as usize];
+    if unsafe { resource.GetFontAxisRanges(&mut ranges) }.is_err() {
         return false;
     }
-    axes.iter()
-        .any(|axis| axis.axisTag == DWRITE_FONT_AXIS_TAG_WEIGHT)
+    for (index, range) in ranges.iter().enumerate() {
+        if range.axisTag != DWRITE_FONT_AXIS_TAG_WEIGHT {
+            continue;
+        }
+        let attrs = unsafe { resource.GetFontAxisAttributes(index as u32) };
+        let is_variable = (attrs.0 & DWRITE_FONT_AXIS_ATTRIBUTES_VARIABLE.0) != 0;
+        // A real axis spans a range; equal min/max is a static synthesised tag.
+        if is_variable && range.maxValue > range.minValue {
+            return true;
+        }
+    }
+    false
 }
 
 /// Whether a specific family name supports a continuous weight axis.
@@ -904,7 +918,7 @@ mod tests {
     /// Ranking drives both the sort order and the default pick, so it is checked
     /// directly rather than only through whatever happens to be installed.
     #[test]
-    fn continuous_weight_outranks_a_merely_preferred_family() {
+    fn continuous_weight_outranks_statics_and_prefers_cjk() {
         let variable_cjk = FontFamilyInfo {
             name: "MiSans VF".into(),
             variable_weight: true,
@@ -917,11 +931,11 @@ mod tests {
             has_cjk: false,
             recommended: true,
         };
-        let static_preferred = FontFamilyInfo {
+        let static_microsoft = FontFamilyInfo {
             name: "Microsoft YaHei UI".into(),
             variable_weight: false,
             has_cjk: true,
-            recommended: true,
+            recommended: false,
         };
         let other = FontFamilyInfo {
             name: "Wingdings".into(),
@@ -931,9 +945,40 @@ mod tests {
         };
 
         assert!(family_rank(&variable_cjk) < family_rank(&variable_latin));
-        assert!(family_rank(&variable_latin) < family_rank(&static_preferred));
-        assert!(family_rank(&static_preferred) < family_rank(&other));
-        assert_eq!(family_rank(&other), 4, "unlisted families are not recommended");
+        assert!(family_rank(&variable_latin) < family_rank(&static_microsoft));
+        assert_eq!(
+            family_rank(&static_microsoft),
+            4,
+            "static multi-face families must not enter the continuous list"
+        );
+        assert_eq!(family_rank(&other), 4);
+    }
+
+    /// Microsoft YaHei / Segoe UI are the classic false-positive case: DirectWrite
+    /// synthesises a `wght` axis value for every static face. They must never
+    /// report `variable_weight = true` on a real Windows install that has them.
+    #[test]
+    fn microsoft_static_ui_faces_are_not_marked_variable() {
+        let families = font_families();
+        if families.is_empty() {
+            return;
+        }
+        for name in ["Microsoft YaHei UI", "Microsoft YaHei", "Segoe UI"] {
+            if let Some(info) = families
+                .iter()
+                .find(|f| f.name.eq_ignore_ascii_case(name))
+            {
+                assert!(
+                    !info.variable_weight,
+                    "{name} was marked variable_weight — the axis-range check \
+                     is treating a static multi-face family as continuous"
+                );
+                assert!(
+                    !info.recommended,
+                    "{name} must not appear in the recommended continuous list"
+                );
+            }
+        }
     }
 }
 

@@ -122,6 +122,80 @@ function CheckIcon() {
   );
 }
 
+type DropdownRect = {
+  top: number;
+  /** Distance from the viewport's right edge to the trigger's right edge. */
+  right: number;
+  width: number;
+};
+
+/** Shared open/close plumbing for the themed dropdown trigger + portaled panel. */
+function useDropdownPanel() {
+  const [open, setOpen] = useState(false);
+  const [rect, setRect] = useState<DropdownRect | null>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const panelRef = useRef<HTMLDivElement>(null);
+
+  const close = useCallback(() => setOpen(false), []);
+
+  const openPanel = useCallback(() => {
+    const r = triggerRef.current?.getBoundingClientRect();
+    if (r) {
+      // Pin the panel to the trigger's right edge via `right` (not left +
+      // translateX). Settings controls sit on the row's right, and an inline
+      // transform would fight the open animation's own transform keyframes.
+      setRect({
+        top: r.bottom + 4,
+        right: window.innerWidth - r.right,
+        width: r.width,
+      });
+    }
+    setOpen(true);
+  }, []);
+
+  useEffect(() => {
+    if (!open) return undefined;
+
+    const handlePointerDown = (e: PointerEvent) => {
+      const target = e.target as Node;
+      if (triggerRef.current?.contains(target) || panelRef.current?.contains(target)) {
+        return;
+      }
+      close();
+    };
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") close();
+    };
+    // Close when the *page* scrolls under the portaled panel, but not when the
+    // panel itself scrolls — font lists are long and `overflow-y: auto` on the
+    // panel would otherwise fire this capture listener and dismiss the menu
+    // on the first wheel tick.
+    const handleScroll = (e: Event) => {
+      const target = e.target;
+      if (
+        target instanceof Node &&
+        panelRef.current &&
+        (target === panelRef.current || panelRef.current.contains(target))
+      ) {
+        return;
+      }
+      close();
+    };
+    document.addEventListener("pointerdown", handlePointerDown, true);
+    document.addEventListener("keydown", handleKeyDown);
+    window.addEventListener("scroll", handleScroll, true);
+    window.addEventListener("resize", close);
+    return () => {
+      document.removeEventListener("pointerdown", handlePointerDown, true);
+      document.removeEventListener("keydown", handleKeyDown);
+      window.removeEventListener("scroll", handleScroll, true);
+      window.removeEventListener("resize", close);
+    };
+  }, [open, close]);
+
+  return { open, close, openPanel, rect, triggerRef, panelRef };
+}
+
 /**
  * Custom-styled dropdown replacing the native `<select>` — the OS-native
  * popup can't be themed (always renders with the platform's default white
@@ -140,50 +214,9 @@ export function Select({
   onChange: (v: string) => void;
   disabled?: boolean;
 }) {
-  const [open, setOpen] = useState(false);
-  const [rect, setRect] = useState<{ top: number; left: number; width: number } | null>(null);
-  const triggerRef = useRef<HTMLButtonElement>(null);
-  const panelRef = useRef<HTMLDivElement>(null);
+  const { open, close, openPanel, rect, triggerRef, panelRef } = useDropdownPanel();
 
   const selectedLabel = options.find((option) => option.value === value)?.label ?? value;
-
-  const close = useCallback(() => setOpen(false), []);
-
-  const openPanel = useCallback(() => {
-    const r = triggerRef.current?.getBoundingClientRect();
-    if (r) {
-      setRect({ top: r.bottom + 4, left: r.left, width: r.width });
-    }
-    setOpen(true);
-  }, []);
-
-  useEffect(() => {
-    if (!open) return undefined;
-
-    const handlePointerDown = (e: PointerEvent) => {
-      const target = e.target as Node;
-      if (triggerRef.current?.contains(target) || panelRef.current?.contains(target)) {
-        return;
-      }
-      close();
-    };
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === "Escape") close();
-    };
-    // Closing on scroll/resize avoids tracking the trigger's position
-    // continuously — the settings body and provider detail pane are both
-    // independently scrollable.
-    document.addEventListener("pointerdown", handlePointerDown, true);
-    document.addEventListener("keydown", handleKeyDown);
-    window.addEventListener("scroll", close, true);
-    window.addEventListener("resize", close);
-    return () => {
-      document.removeEventListener("pointerdown", handlePointerDown, true);
-      document.removeEventListener("keydown", handleKeyDown);
-      window.removeEventListener("scroll", close, true);
-      window.removeEventListener("resize", close);
-    };
-  }, [open, close]);
 
   return (
     <div className="dropdown">
@@ -206,7 +239,7 @@ export function Select({
             ref={panelRef}
             role="listbox"
             className="dropdown__panel"
-            style={{ top: rect.top, left: rect.left, minWidth: rect.width }}
+            style={{ top: rect.top, right: rect.right, minWidth: rect.width }}
           >
             {options.map((o) => (
               <button
@@ -231,11 +264,112 @@ export function Select({
   );
 }
 
+/**
+ * Multi-select sibling of `Select`. Same trigger, panel, option rows and check
+ * marks — only the commit semantics differ: options toggle without closing, and
+ * the last selected option cannot be cleared (callers that treat empty as "all"
+ * would otherwise see the control undo itself).
+ */
+export function MultiSelect({
+  values,
+  options,
+  onChange,
+  disabled,
+  summary,
+  "aria-label": ariaLabel,
+}: {
+  /** Currently selected values (already expanded — empty is not special here). */
+  values: string[];
+  options: { value: string; label: string }[];
+  onChange: (next: string[]) => void;
+  disabled?: boolean;
+  /** Closed-control label (e.g. "全部" or a joined list of names). */
+  summary: string;
+  "aria-label"?: string;
+}) {
+  const { open, close, openPanel, rect, triggerRef, panelRef } = useDropdownPanel();
+
+  const selected = new Set(values);
+
+  const toggle = (candidate: string) => {
+    const checked = selected.has(candidate);
+    if (checked && selected.size <= 1) return;
+    const next = checked
+      ? values.filter((other) => other !== candidate)
+      : [...values, candidate];
+    // Preserve the option order so the stored roster matches the control order.
+    const ordered = options
+      .map((option) => option.value)
+      .filter((value) => next.includes(value));
+    onChange(ordered);
+  };
+
+  return (
+    <div className="dropdown">
+      <button
+        type="button"
+        ref={triggerRef}
+        className={`dropdown__trigger${open ? " dropdown__trigger--open" : ""}`}
+        disabled={disabled}
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        aria-label={ariaLabel}
+        onClick={() => (open ? close() : openPanel())}
+      >
+        <span className="dropdown__value">{summary}</span>
+        <ChevronIcon />
+      </button>
+      {open &&
+        rect &&
+        createPortal(
+          <div
+            ref={panelRef}
+            role="listbox"
+            aria-multiselectable
+            aria-label={ariaLabel}
+            className="dropdown__panel"
+            style={{
+              top: rect.top,
+              right: rect.right,
+              minWidth: Math.max(rect.width, 160),
+            }}
+          >
+            {options.map((o) => {
+              const isSelected = selected.has(o.value);
+              const lastSelected = isSelected && selected.size <= 1;
+              return (
+                <button
+                  key={o.value}
+                  type="button"
+                  role="option"
+                  aria-selected={isSelected}
+                  disabled={disabled || lastSelected}
+                  className={`dropdown__option${isSelected ? " is-selected" : ""}`}
+                  onClick={() => toggle(o.value)}
+                >
+                  <span className="dropdown__option-label">{o.label}</span>
+                  {isSelected && <CheckIcon />}
+                </button>
+              );
+            })}
+          </div>,
+          document.body,
+        )}
+    </div>
+  );
+}
+
+/**
+ * Numeric field as `−  [value]  +`. Used for size, width, thresholds, volume —
+ * everywhere a bounded number is edited. The middle field stays free-type so
+ * multi-digit entry is not forced through single steps; blur/Enter clamps to
+ * min/max. Arrow keys and the side buttons nudge by `step`.
+ */
 export function NumberInput({
   value,
   min,
   max,
-  step,
+  step = 1,
   onChange,
   disabled,
 }: {
@@ -246,20 +380,113 @@ export function NumberInput({
   onChange: (v: number) => void;
   disabled?: boolean;
 }) {
+  const clamp = useCallback(
+    (n: number) => {
+      let next = n;
+      if (min !== undefined) next = Math.max(min, next);
+      if (max !== undefined) next = Math.min(max, next);
+      return next;
+    },
+    [min, max],
+  );
+
+  // Draft is a string so partial typing ("1", "") is not rounded away mid-edit.
+  const [draft, setDraft] = useState(() => String(value));
+  useEffect(() => {
+    setDraft(String(value));
+  }, [value]);
+
+  const commit = useCallback(
+    (raw: string) => {
+      const parsed = Number(raw);
+      if (!Number.isFinite(parsed)) {
+        setDraft(String(value));
+        return;
+      }
+      const next = clamp(parsed);
+      setDraft(String(next));
+      if (next !== value) onChange(next);
+    },
+    [clamp, onChange, value],
+  );
+
+  const nudge = useCallback(
+    (direction: -1 | 1) => {
+      const next = clamp(value + direction * step);
+      if (next !== value) onChange(next);
+    },
+    [clamp, onChange, step, value],
+  );
+
+  const atMin = min !== undefined && value <= min;
+  const atMax = max !== undefined && value >= max;
+
   return (
-    <input
-      type="number"
-      className="number-input"
-      value={value}
-      min={min}
-      max={max}
-      step={step}
-      disabled={disabled}
-      onChange={(e) => {
-        const n = Number(e.target.value);
-        if (!Number.isNaN(n)) onChange(n);
-      }}
-    />
+    <div
+      className={`number-stepper${disabled ? " number-stepper--disabled" : ""}`}
+    >
+      <button
+        type="button"
+        className="number-stepper__btn"
+        disabled={disabled || atMin}
+        aria-label="−"
+        tabIndex={-1}
+        onClick={() => nudge(-1)}
+      >
+        −
+      </button>
+      <input
+        type="text"
+        inputMode="decimal"
+        className="number-stepper__input"
+        role="spinbutton"
+        aria-valuenow={value}
+        aria-valuemin={min}
+        aria-valuemax={max}
+        value={draft}
+        disabled={disabled}
+        onChange={(e) => {
+          const raw = e.target.value;
+          setDraft(raw);
+          // Commit as soon as the field is a finite number so free-typing
+          // behaves like the old <input type="number"> (and tests that fire
+          // change without blur still see the write). Empty / partial strings
+          // wait for blur to snap back.
+          if (raw.trim() === "" || raw === "-" || raw === "." || raw === "-.") {
+            return;
+          }
+          const parsed = Number(raw);
+          if (Number.isFinite(parsed)) {
+            const next = clamp(parsed);
+            if (next !== value) onChange(next);
+          }
+        }}
+        onBlur={() => commit(draft)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") {
+            e.preventDefault();
+            commit(draft);
+            (e.target as HTMLInputElement).blur();
+          } else if (e.key === "ArrowUp") {
+            e.preventDefault();
+            nudge(1);
+          } else if (e.key === "ArrowDown") {
+            e.preventDefault();
+            nudge(-1);
+          }
+        }}
+      />
+      <button
+        type="button"
+        className="number-stepper__btn"
+        disabled={disabled || atMax}
+        aria-label="+"
+        tabIndex={-1}
+        onClick={() => nudge(1)}
+      >
+        +
+      </button>
+    </div>
   );
 }
 

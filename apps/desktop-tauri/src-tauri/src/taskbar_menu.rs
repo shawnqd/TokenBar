@@ -962,6 +962,9 @@ struct MenuState {
     /// capture, which sends `WM_CAPTURECHANGED`, whose handler calls `close`
     /// again — this flag is what stops that from recursing.
     closing: bool,
+    /// A row action is posted only after the reverse animation has destroyed
+    /// the menu, preserving the old TrackPopupMenu ordering guarantee.
+    pending_command: Option<(isize, usize)>,
     /// Whether the menu has actually taken the mouse capture yet. Until it
     /// has, a `WM_CAPTURECHANGED` is somebody else's capture changing hands
     /// and must not dismiss us.
@@ -1147,6 +1150,7 @@ pub fn show(owner: isize, items: Vec<MenuItem>) {
         shown_at: Instant::now(),
         animating: true,
         closing: false,
+        pending_command: None,
         captured: false,
     };
     if let Ok(mut guard) = MENU.lock() {
@@ -1411,14 +1415,27 @@ fn slide_frame(progress: f32, travel: i32) -> (i32, u8) {
     ((remaining * travel as f32).round() as i32, (opacity * 255.0) as u8)
 }
 
+/// The reverse of [`slide_frame`]: the card leaves from its resting position,
+/// moving down into the shadow margin while fading out. Keeping the same
+/// travel, duration and alpha lead makes the context menu and tray panel feel
+/// like one interaction system.
+fn reverse_slide_frame(progress: f32, travel: i32) -> (i32, u8) {
+    let progress = progress.clamp(0.0, 1.0);
+    let drop = (progress * travel as f32).round() as i32;
+    let opacity = ((1.0 - progress) * 1.6).clamp(0.0, 1.0);
+    (drop, (opacity * 255.0) as u8)
+}
+
 /// Pushes `canvas` to the screen. Below `progress` 1.0 the window is placed
 /// short of its resting position and drawn at reduced opacity, which is the
 /// whole open animation: the bitmap itself is never touched.
-fn present(progress: f32) {
+fn present_frame(progress: f32, closing: bool) {
     let Ok(guard) = MENU.lock() else { return };
     let Some(state) = guard.as_ref() else { return };
 
-    let (drop, alpha) = if progress >= 1.0 {
+    let (drop, alpha) = if closing {
+        reverse_slide_frame(progress, state.metrics.travel)
+    } else if progress >= 1.0 {
         (0, 255)
     } else {
         slide_frame(progress, state.metrics.travel)
@@ -1450,6 +1467,10 @@ fn present(progress: f32) {
             ULW_ALPHA,
         )
     };
+}
+
+fn present(progress: f32) {
+    present_frame(progress, false);
 }
 
 // ── Interaction ─────────────────────────────────────────────────────────────
@@ -1533,40 +1554,61 @@ fn commit(index: Option<usize>) {
     let selected = {
         let Ok(guard) = MENU.lock() else { return };
         let Some(state) = guard.as_ref() else { return };
+        if state.closing {
+            return;
+        }
         let id = index
             .and_then(|i| state.rows.get(i))
             .filter(|row| !row.item.separator && !row.item.disabled)
             .map(|row| row.item.id);
         id.map(|id| (state.owner, id))
     };
-    close();
     if let Some((owner, id)) = selected {
         if id != 0 {
-            unsafe { PostMessageW(owner, WM_COMMAND, id, 0) };
+            if let Ok(mut guard) = MENU.lock() {
+                if let Some(state) = guard.as_mut() {
+                    state.pending_command = Some((owner, id));
+                }
+            }
         }
     }
+    close();
 }
 
 /// Dismisses the menu if one is open. Safe to call when none is, and safe to
 /// re-enter — teardown itself provokes messages whose handlers call back here.
 pub fn close() {
-    let hwnd = match MENU.lock() {
+    let (hwnd, captured) = match MENU.lock() {
         Ok(mut guard) => match guard.as_mut() {
             Some(state) if !state.closing => {
                 state.closing = true;
-                state.hwnd
+                state.animating = true;
+                state.shown_at = Instant::now();
+                (state.hwnd, state.captured)
             }
             _ => return,
         },
         Err(_) => return,
     };
     if unsafe { IsWindow(hwnd) } != 0 {
-        unsafe { DestroyWindow(hwnd) };
+        // Release capture before the timer starts. WM_CAPTURECHANGED can call
+        // back into close(), but `closing` is already true so it is harmless.
+        if captured {
+            if let Ok(mut guard) = MENU.lock() {
+                if let Some(state) = guard.as_mut() {
+                    state.captured = false;
+                }
+            }
+            unsafe { ReleaseCapture() };
+        }
+        present_frame(0.0, true);
+        let timer = unsafe { SetTimer(hwnd, ANIM_TIMER_ID, ANIM_TICK_MS, std::ptr::null()) };
+        if timer == 0 {
+            unsafe { DestroyWindow(hwnd) };
+        }
+    } else {
+        release_state();
     }
-    // `WM_DESTROY` normally releases the state; do it unconditionally so a
-    // failed `DestroyWindow` cannot leave a stale entry that blocks the next
-    // `show`.
-    release_state();
 }
 
 /// Drops the live menu, freeing its GDI objects. Idempotent.
@@ -1574,17 +1616,28 @@ fn release_state() {
     let state = MENU.lock().ok().and_then(|mut guard| guard.take());
     if let Some(state) = state {
         state.canvas.destroy();
+        if let Some((owner, id)) = state.pending_command {
+            unsafe { PostMessageW(owner, WM_COMMAND, id, 0) };
+        }
     }
 }
 
 fn advance_animation() {
-    let (elapsed, hwnd) = {
+    let (elapsed, hwnd, closing) = {
         let Ok(guard) = MENU.lock() else { return };
         let Some(state) = guard.as_ref() else { return };
-        (state.shown_at.elapsed().as_millis(), state.hwnd)
+        (state.shown_at.elapsed().as_millis(), state.hwnd, state.closing)
     };
     if elapsed >= ANIM_DURATION_MS {
         unsafe { KillTimer(hwnd, ANIM_TIMER_ID) };
+        if closing {
+            if unsafe { IsWindow(hwnd) } != 0 {
+                unsafe { DestroyWindow(hwnd) };
+            } else {
+                release_state();
+            }
+            return;
+        }
         if let Ok(mut guard) = MENU.lock() {
             if let Some(state) = guard.as_mut() {
                 state.animating = false;
@@ -1595,8 +1648,10 @@ fn advance_animation() {
     }
     let p = elapsed as f32 / ANIM_DURATION_MS as f32;
     // Ease-out cubic: the circle sweeps out fast and settles, so the menu
-    // feels like it is already there rather than still arriving.
-    present(1.0 - (1.0 - p).powi(3));
+    // feels like it is already there rather than still arriving. The close
+    // track uses the same eased progress in reverse.
+    let eased = 1.0 - (1.0 - p).powi(3);
+    present_frame(eased, closing);
 }
 
 fn track_mouse_leave(hwnd: isize) {
@@ -1848,6 +1903,16 @@ mod tests {
         // Opacity leads the movement: fully opaque before the card settles.
         assert_eq!(slide_frame(0.7, travel).1, 255);
         assert!(slide_frame(0.7, travel).0 > 0);
+    }
+
+    #[test]
+    fn the_reverse_slide_returns_to_the_shadow_margin() {
+        let travel = 27;
+        assert_eq!(reverse_slide_frame(0.0, travel), (0, 255));
+        let (drop, alpha) = reverse_slide_frame(0.5, travel);
+        assert!(drop > 0 && drop < travel);
+        assert!(alpha > 0);
+        assert_eq!(reverse_slide_frame(1.0, travel), (travel, 0));
     }
 
     #[test]

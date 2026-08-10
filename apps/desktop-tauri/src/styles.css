@@ -77,6 +77,8 @@
   --app-bg-gradient-from: #1c1c1e;
   --app-bg-gradient-to: #1c1c1e;
   --panel-bg: rgba(44, 44, 46, 0.95);
+  /* Solid (no alpha) so portaled menus fully occlude rows behind them. */
+  --dropdown-panel-bg: #2c2c2e;
   --panel-border: rgba(255, 255, 255, 0.08);
   --panel-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
   --surface-elevated: rgba(255, 255, 255, 0.05);
@@ -179,6 +181,7 @@
   --app-bg-gradient-from: #1c1c1e;
   --app-bg-gradient-to: #1c1c1e;
   --panel-bg: rgba(44, 44, 46, 0.95);
+  --dropdown-panel-bg: #2c2c2e;
   --panel-border: rgba(255, 255, 255, 0.08);
   --panel-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
   --surface-elevated: rgba(255, 255, 255, 0.05);
@@ -256,6 +259,7 @@
   --app-bg-gradient-from: #f5f5f7;
   --app-bg-gradient-to: #f5f5f7;
   --panel-bg: rgba(255, 255, 255, 0.96);
+  --dropdown-panel-bg: #ffffff;
   --panel-border: rgba(0, 0, 0, 0.12);
   --panel-shadow: 0 8px 32px rgba(0, 0, 0, 0.08);
   --surface-elevated: rgba(0, 0, 0, 0.05);
@@ -752,19 +756,24 @@ html {
 
 /* Portaled panel — fixed positioning computed from the trigger's
    bounding rect (see FormControls.tsx `Select`), so it floats above any
-   scrollable ancestor instead of being clipped by it. */
+   scrollable ancestor instead of being clipped by it.
+   Solid --dropdown-panel-bg (not translucent --panel-bg / backdrop-filter):
+   a frosted panel over Settings rows was reading as "transparent" because
+   the rows underneath stayed fully visible. */
 .dropdown__panel {
   position: fixed;
   z-index: 1000;
   max-width: 320px;
-  max-height: 260px;
+  /* Tall enough for font lists; panel-internal scroll must not dismiss the
+     menu (see FormControls `handleScroll`). */
+  max-height: min(320px, 50vh);
   overflow-y: auto;
+  overscroll-behavior: contain;
   padding: 4px;
   border-radius: 10px;
-  background: var(--panel-bg);
+  background: var(--dropdown-panel-bg, #2c2c2e);
   border: 1px solid var(--panel-border);
   box-shadow: var(--panel-shadow);
-  backdrop-filter: blur(20px);
   transform-origin: top center;
   animation: dropdown-panel-in 120ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
 }
@@ -802,12 +811,17 @@ html {
   cursor: pointer;
 }
 
-.dropdown__option:hover {
+.dropdown__option:hover:not(:disabled) {
   background: rgba(255, 255, 255, 0.08);
 }
 
-[data-theme="light"] .dropdown__option:hover {
+[data-theme="light"] .dropdown__option:hover:not(:disabled) {
   background: rgba(0, 0, 0, 0.05);
+}
+
+.dropdown__option:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
 }
 
 .dropdown__option.is-selected {
@@ -894,7 +908,71 @@ html {
   cursor: not-allowed;
 }
 
-/* number input */
+/* number stepper: − [value] +  (see FormControls `NumberInput`) */
+.number-stepper {
+  display: inline-flex;
+  align-items: stretch;
+  height: 28px;
+  border: 1px solid var(--panel-border);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.06);
+  overflow: hidden;
+  vertical-align: middle;
+}
+
+.number-stepper__btn {
+  flex: 0 0 28px;
+  width: 28px;
+  border: 0;
+  background: transparent;
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: 1rem;
+  line-height: 1;
+  cursor: pointer;
+  transition: background 0.12s ease, color 0.12s ease;
+}
+
+.number-stepper__btn:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--text-primary);
+}
+
+.number-stepper__btn:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+.number-stepper__input {
+  width: 48px;
+  min-width: 0;
+  border: 0;
+  border-left: 1px solid var(--panel-border);
+  border-right: 1px solid var(--panel-border);
+  background: transparent;
+  color: var(--text-primary);
+  font: inherit;
+  font-size: var(--font-body);
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+  line-height: 26px;
+  padding: 0 4px;
+  outline: none;
+  appearance: textfield;
+  -moz-appearance: textfield;
+}
+
+.number-stepper__input:focus {
+  background: rgba(255, 255, 255, 0.06);
+  box-shadow: inset 0 0 0 1px var(--accent);
+}
+
+.number-stepper--disabled {
+  opacity: 0.5;
+  pointer-events: none;
+}
+
+/* Legacy class kept so any stray `.number-input` markup still reads. */
 .number-input {
   width: 52px;
   height: 24px;
@@ -3038,6 +3116,18 @@ html {
   padding: 0 30px 0 10px;
 }
 
+/* `type="search"` paints a native cancel glyph (WebView2 / Chromium). We
+   already ship a themed circular clear button (`.providers-sidebar-search__clear`);
+   leave only that one so the field does not show two × controls. */
+.providers-sidebar-search__input::-webkit-search-cancel-button,
+.providers-sidebar-search__input::-webkit-search-decoration,
+.providers-sidebar-search__input::-webkit-search-results-button,
+.providers-sidebar-search__input::-webkit-search-results-decoration {
+  -webkit-appearance: none;
+  appearance: none;
+  display: none;
+}
+
 .providers-sidebar-search__input:focus-visible {
   border-color: var(--provider-row-border-selected);
   box-shadow: 0 0 0 2px rgba(10, 132, 255, 0.22);
@@ -3083,8 +3173,17 @@ html {
      declarations for one property in one rule is the bug, not their order. */
   list-style: none;
   margin: 0;
-  padding: 4px 10px 20px 4px;
-  scroll-padding-bottom: 20px;
+  padding: 8px 10px 22px 6px;
+  scroll-padding-bottom: 22px;
+}
+
+/* A filtered/short provider list should not cling to the search box while
+   leaving a large unused area underneath. Full catalog lists keep the normal
+   top-to-bottom scroll layout. */
+.providers-sidebar--short {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
 }
 
 .providers-sidebar__empty {
@@ -3097,28 +3196,20 @@ html {
 .providers-sidebar__row {
   position: relative;
   display: grid;
-  /* status dot / icon / name+subtitle / drag handle / enable toggle — one
-     fewer track than before now that the up/down reorder buttons are gone;
-     leaving the old 6-track template here left an empty trailing column,
-     which crowded the handle and toggle together instead of pushing the
-     toggle back out to the row's true right edge. */
-  /* There used to be a second `.providers-sidebar__row` rule further down the
-     file with its own `grid-template-columns`. Equal specificity, later in
-     source, so **it** was the one in effect — and an edit up here did nothing.
-     That is how a 32px icon ended up in a 20px track, overflowing onto the
-     text. The duplicate is merged in here; keep it that way.
-
-     The icon track is as tall as the two text lines beside it, so the three
-     line up as one block instead of the icon hanging at their midpoint.
-
-     `minmax(0, 1fr)`, not `1fr`: a bare `1fr` has an *automatic* minimum — the
-     width of its content — so it refuses to shrink and pushes the row wide
-     instead of letting the ellipsis inside it do its job. */
-  grid-template-columns: 12px 32px minmax(0, 1fr) auto auto;
+  /* icon / name+subtitle / drag handle / enable toggle.
+     Status dots were intentionally removed (switch carries problem state).
+     Column count must match ProvidersSidebar.tsx children exactly — a
+     mismatched track count is what collapsed names to "Cod…". */
+  grid-template-columns: 32px minmax(0, 1fr) auto auto;
   align-items: center;
-  gap: 8px;
-  padding: 6px 8px;
-  border-radius: 8px;
+  column-gap: 10px;
+  row-gap: 0;
+  /* Slightly taller rows + space between them so the list does not read as a
+     solid block of icons. */
+  min-height: 52px;
+  margin: 3px 0;
+  padding: 10px 10px;
+  border-radius: 10px;
   cursor: pointer;
   user-select: none;
   border: 1px solid transparent;
@@ -3173,39 +3264,7 @@ html {
   }
 }
 
-.providers-sidebar__status {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: var(--provider-status-disabled);
-  box-shadow: 0 0 0 2px rgba(0, 0, 0, 0.25);
-}
-
-.providers-sidebar__status--ok {
-  background: var(--provider-status-ok);
-}
-
-.providers-sidebar__status--stale {
-  background: var(--provider-status-stale);
-}
-
-.providers-sidebar__status--error {
-  background: var(--provider-status-error);
-}
-
-.providers-sidebar__status--disabled {
-  background: var(--provider-status-disabled);
-}
-
-.providers-sidebar__status--loading {
-  background: var(--provider-status-loading);
-  animation: provider-sidebar-pulse 1.4s ease-in-out infinite;
-}
-
-@keyframes provider-sidebar-pulse {
-  0%, 100% { opacity: 0.5; }
-  50%      { opacity: 1; }
-}
+/* Status dots removed: do not reintroduce .providers-sidebar__status*. */
 
 /* Fixed box, so the grid can neither squash it nor let it push the row wide. */
 .providers-sidebar__row > svg,
@@ -3219,21 +3278,13 @@ html {
 .providers-sidebar__text {
   display: flex;
   flex-direction: column;
-  /* `align-self: stretch` first, then centre *inside* that.
-     The grid centres its items, which makes this block exactly as tall as its
-     own two lines — and a `justify-content` on a box with no spare height does
-     nothing at all. Stretching it to the row gives the centring something to
-     work with, so the pair lines up with the icon's middle instead of riding
-     above it. */
+  /* Stretch then centre inside the row so the name/subtitle block lines up
+     with the icon midpoint. */
   align-self: stretch;
   justify-content: center;
   min-width: 0;
-  gap: 1px;
-  /* Both lines get a line box the same height as their text, so the block's
-     own height is exactly the two lines. Without this the name's default
-     line-height added leading above the cap height only, and the pair sat
-     visibly higher than the icon the grid was centring them against. */
-  line-height: 1.3;
+  gap: 3px;
+  line-height: 1.35;
 }
 
 .providers-sidebar__name {
@@ -3245,10 +3296,7 @@ html {
   white-space: nowrap;
 }
 
-/* One line, not two. The auth source and the usage percentage are both short
-   and both secondary, so stacking them made a three-line row whose height no
-   longer matched the icon beside it — the row read as taller than it had
-   content for, and the icon floated in the middle of it. */
+/* One line for auth source + usage percentage. */
 .providers-sidebar__subtitle {
   display: flex;
   flex-direction: row;
@@ -3287,46 +3335,15 @@ html {
   opacity: 0.7;
 }
 
-.providers-sidebar__reorder-controls {
-  display: inline-flex;
-  flex-direction: column;
-  gap: 2px;
-}
-
-.providers-sidebar__reorder-button {
-  width: 18px;
-  height: 16px;
-  display: inline-grid;
-  place-items: center;
-  padding: 0;
-  border: 1px solid transparent;
-  border-radius: 4px;
-  background: transparent;
-  color: var(--provider-row-text-secondary);
-  cursor: pointer;
-  font-size: 0.62rem;
-  line-height: 1;
-  opacity: 0.72;
-  transition: background 120ms ease, border-color 120ms ease, color 120ms ease, opacity 120ms ease;
-}
-
-.providers-sidebar__reorder-button:hover:not(:disabled),
-.providers-sidebar__reorder-button:focus-visible {
-  background: var(--provider-row-bg-hover);
-  border-color: var(--provider-row-border-selected);
-  color: var(--provider-row-text-primary);
-  opacity: 1;
-  outline: none;
-}
-
-.providers-sidebar__reorder-button:disabled {
-  cursor: default;
-  opacity: 0.2;
-}
-
 .providers-sidebar__checkbox {
   margin: 0;
   cursor: pointer;
+}
+
+/* Failed/stale fetch can tint the enabled switch; healthy stays blue. */
+.providers-sidebar__checkbox--problem:checked,
+.providers-sidebar__checkbox--problem:checked:hover:not(:disabled) {
+  background: var(--provider-status-error);
 }
 
 /* ── Provider detail pane (Phase 6b structure helpers) ────────────── */
@@ -5524,36 +5541,8 @@ body:has(.menu-surface--popout) .popout-scale-shell,
   opacity: 0.85;
 }
 
-/* Weekly indicator bar — macOS ProviderSwitcherView addWeeklyIndicator()
-   4px track at bottom of each grid button, fill = remainingPercent */
-.provider-grid__weekly-track {
-  display: block;
-  width: 18px;
-  height: 3px;
-  border-radius: 2px;
-  background: rgba(255, 255, 255, 0.12);
-  overflow: hidden;
-  flex-shrink: 0;
-  position: relative;
-}
-.provider-grid__weekly-track::after {
-  content: "";
-  position: absolute;
-  left: 0;
-  top: 0;
-  bottom: 0;
-  width: var(--weekly-pct, 0%);
-  border-radius: 2px;
-  background: var(--weekly-color, var(--accent, #0a84ff));
-}
-/* Hide weekly bar when selected — matches macOS updateWeeklyIndicatorVisibility */
-.provider-grid__item--active .provider-grid__weekly-track {
-  display: none;
-}
-
-[data-theme="light"] .provider-grid__weekly-track {
-  background: rgba(0, 0, 0, 0.10);
-}
+/* Per-icon quota strip under the provider switcher was removed — the grid
+   is icons (+ optional labels) only; quota lives on the detail cards. */
 
 [data-theme="light"] .provider-grid__item:hover {
   background: rgba(0, 0, 0, 0.06);
@@ -5697,6 +5686,31 @@ body:has(.settings-window-frame) #root {
     0 6px 28px rgba(0, 0, 0, 0.34),
     0 1px 3px rgba(0, 0, 0, 0.22);
   overflow: hidden;
+}
+
+.settings-window-frame .settings.settings-window-motion--visible {
+  animation: settings-window-fade-in 140ms ease-out both;
+}
+
+.settings-window-frame .settings.settings-window-motion--closing {
+  animation: settings-window-fade-out 140ms ease-in both;
+}
+
+@keyframes settings-window-fade-in {
+  from { opacity: 0.92; }
+  to { opacity: 1; }
+}
+
+@keyframes settings-window-fade-out {
+  from { opacity: 1; }
+  to { opacity: 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .settings-window-frame .settings.settings-window-motion--visible,
+  .settings-window-frame .settings.settings-window-motion--closing {
+    animation: none;
+  }
 }
 
 [data-theme="light"] .settings-window-frame .settings {
@@ -5979,6 +5993,13 @@ body:has(.settings-window-frame) #root {
   overflow: hidden;
 }
 
+/* The first panel is already the window's reveal surface. Its opacity-0
+   transition belongs only to later tab changes; running it on the initial
+   paint makes the Settings window appear to blink while opening. */
+.settings-tab-panel--initial {
+  animation: none;
+}
+
 /* Canonical page root shared by every Settings tab. All tab components render
    fragments; this single root is the only layer that owns page width/flow.
    It deliberately uses block flow for normal pages: a flex child with an
@@ -6200,14 +6221,13 @@ body:has(.settings-window-frame) #root {
   letter-spacing: 0.04em;
 }
 .taskbar-preview__strip {
-  display: flex;
-  /* Entries 3 and 4 open a second COLUMN, not a third row — the strip is two
-     text rows tall and no taller. Columns here, rows inside each column, which
-     is the same column-major fill `taskbar_widget::cell_rects` uses. */
-  flex-direction: row;
-  align-items: center;
-  justify-content: center;
-  gap: 8px;
+  /* Layout only: CSS grid mirrors `taskbar_widget::cell_rects` (column-major,
+     ≤2×2). A lone 3rd entry sits top-right, not flex-centred in the full height.
+     Chrome (border / radius / light fill) stays the original settings-card look. */
+  display: grid;
+  column-gap: 8px;
+  row-gap: 0;
+  align-items: stretch;
   min-height: 42px;
   max-width: 240px;
   padding: 4px 8px;
@@ -6230,15 +6250,10 @@ body:has(.settings-window-frame) #root {
 .taskbar-preview__strip.is-disabled {
   opacity: 0.42;
 }
-.taskbar-preview__column {
-  display: flex;
-  flex-direction: column;
-  justify-content: center;
-  flex: 1 1 0;
-  min-width: 0;
-}
 .taskbar-preview__line {
-  display: block;
+  display: flex;
+  align-items: center; /* paragraph-centre within the cell, same as DirectWrite */
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
 }
@@ -6248,7 +6263,9 @@ body:has(.settings-window-frame) #root {
    would vary with the glyph. */
 .taskbar-preview__mark {
   display: inline-block;
+  flex: 0 0 auto;
   width: 1.15em;
+  text-align: center;
 }
 .settings-section-heading {
   display: flex;
@@ -6466,7 +6483,6 @@ body:has(.settings-window-frame) #root {
    control) are styled earlier in this file, near the other form
    control base styles. */
 
-.number-input,
 .text-input {
   background: rgba(255, 255, 255, 0.04);
   border: 1px solid rgba(255, 255, 255, 0.06);
@@ -6475,11 +6491,62 @@ body:has(.settings-window-frame) #root {
   color: var(--text-primary);
   height: 22px;
   box-shadow: none;
-}
-.text-input {
   padding: 0 10px;
   line-height: 20px;
 }
+
+/* Settings-surface override for the shared stepper (earlier block is the base). */
+.number-stepper {
+  height: 26px;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.04);
+  border-color: rgba(255, 255, 255, 0.1);
+}
+
+.number-stepper__btn {
+  flex-basis: 26px;
+  width: 26px;
+  font-size: 0.95rem;
+}
+
+.number-stepper__input {
+  width: 44px;
+  line-height: 24px;
+  border-left-color: rgba(255, 255, 255, 0.08);
+  border-right-color: rgba(255, 255, 255, 0.08);
+}
+
+[data-theme="light"] .number-stepper {
+  background: #fff;
+  border-color: rgba(0, 0, 0, 0.12);
+}
+
+[data-theme="light"] .number-stepper__btn:hover:not(:disabled) {
+  background: rgba(0, 0, 0, 0.04);
+}
+
+[data-theme="light"] .number-stepper__input {
+  border-left-color: rgba(0, 0, 0, 0.08);
+  border-right-color: rgba(0, 0, 0, 0.08);
+}
+
+[data-theme="light"] .number-stepper__input:focus {
+  background: rgba(0, 122, 255, 0.04);
+}
+
+[data-theme="light"] .text-input {
+  background: #fff;
+  border: 1px solid rgba(0, 0, 0, 0.12);
+  box-shadow: none;
+}
+
+.text-input:focus {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
+  border-color: var(--accent);
+}
+
+/* Legacy lone input, if any remain outside NumberInput. */
 .number-input {
   width: 52px;
   height: 22px;
@@ -6490,15 +6557,16 @@ body:has(.settings-window-frame) #root {
   text-align: center;
   font-variant-numeric: tabular-nums;
   line-height: 20px;
+  color: var(--text-primary);
+  font-size: var(--font-body);
 }
-[data-theme="light"] .number-input,
-[data-theme="light"] .text-input {
+
+[data-theme="light"] .number-input {
   background: #fff;
   border: 1px solid rgba(0, 0, 0, 0.12);
-  box-shadow: none;
 }
-.number-input:focus,
-.text-input:focus {
+
+.number-input:focus {
   outline: 2px solid var(--focus-ring);
   outline-offset: 1px;
   border-color: var(--accent);
@@ -6524,12 +6592,14 @@ body:has(.settings-window-frame) #root {
 }
 .providers-sidebar__subtitle {
   font-size: var(--font-caption);
-  /* Keep the two-line metadata block stable while provider data is loading. */
-  min-height: 2.5em;
+  /* There is already one metadata line. Keep its line box intrinsic so the
+     text pair remains vertically centred with the icon while data loads. */
+  min-height: 1.25em;
+  align-items: center;
 }
 .providers-sidebar__subtitle-secondary {
-  display: block;
-  min-height: 1.25em;
+  display: inline;
+  min-height: 0;
 }
 
 /* ── About pane parity ────────────────────────────────────────────── */
@@ -6793,11 +6863,6 @@ body:has(.settings-window-frame) #root {
   text-overflow: ellipsis;
 }
 
-.provider-grid--compact .provider-grid__weekly-track {
-  width: 20px;
-  height: 3px;
-}
-
 .provider-grid__item--more {
   color: var(--text-secondary);
 }
@@ -6886,7 +6951,16 @@ body:has(.settings-window-frame) #root {
     gap: 7px 20px;
   }
 
-  .menu-surface--popout 
+  /* Keep the compact footer rows compact on short PopOut windows. The
+     selector used to be followed by a stray, unterminated selector; that
+     left this media query open and made every rule below it parse
+     unpredictably in WebView2. */
+  .menu-surface--popout .menu-surface__footer-row {
+    padding-top: 3px;
+    padding-bottom: 3px;
+  }
+}
+
 /* ── Unified provider workspace (controls, auth, overview) ──────────
    Continues the single authority layer started at `.provider-detail`.
    Nested cards use --provider-workspace-radius-nested (11px). */
@@ -7443,34 +7517,131 @@ body:has(.settings-window-frame) #root {
 
 html:has(.tray-panel-reveal),
 body:has(.tray-panel-reveal) {
+  width: 100%;
   height: 100%;
+  min-height: 0;
+  overflow: hidden;
+  background: transparent;
+}
+
+/* The detached flyout is the viewport. Give #root the same definite height
+   so WebView2 can resolve the flex chain on the first paint; otherwise the
+   body may size itself to the cards and push the footer below the window. */
+html:has(.tray-panel-reveal) #root,
+body:has(.tray-panel-reveal) #root {
+  width: 100%;
+  height: 100%;
+  min-height: 0;
   overflow: hidden;
   background: transparent;
 }
 
 .tray-panel-reveal {
+  /* Keep this in lockstep with taskbar_menu.rs::ANIM_DURATION_MS and
+     ANIM_TRAVEL_DIP. The native right-click menu is composed at rest, then
+     moves its whole window upward 22 DIP over 180 ms with an ease-out cubic;
+     the flyout must use the same gesture instead of a fade-only reveal. */
+  --tray-menu-animation-duration: 180ms;
+  --tray-menu-animation-travel: 22px;
   display: flex;
   flex-direction: column;
+  width: 100%;
   height: 100vh;
   min-height: 0;
   overflow: hidden;
   background: transparent;
   opacity: 0;
-  transition: opacity 80ms ease-out;
+  transform: translateY(var(--tray-menu-animation-travel));
+  transform-origin: bottom right;
+  will-change: opacity, transform;
+  /* Native slide_frame() uses ease-out cubic for movement and a linear alpha
+     ramp that reaches full opacity at 1.6x progress (180 / 1.6 = 112.5 ms). */
+  transition:
+    transform var(--tray-menu-animation-duration) cubic-bezier(0.215, 0.61, 0.355, 1),
+    opacity 112.5ms linear;
 }
 
 .tray-panel-reveal--ready {
   opacity: 1;
+  transform: translateY(0);
+}
+
+/* The flyout WebView is retained between opens. Park it while hidden, then
+   replay the two native-menu tracks on each reveal: movement follows the
+   ease-out cubic and alpha reaches 100% after 1.6x progress. */
+.tray-panel-reveal--parked {
+  opacity: 0;
+  transform: translateY(var(--tray-menu-animation-travel));
+}
+
+.tray-panel-reveal--opening {
+  animation:
+    tray-panel-menu-slide var(--tray-menu-animation-duration)
+      cubic-bezier(0.215, 0.61, 0.355, 1) both,
+    tray-panel-menu-fade 112.5ms linear both;
+}
+
+.tray-panel-reveal--closing {
+  animation:
+    tray-panel-menu-slide-out var(--tray-menu-animation-duration)
+      cubic-bezier(0.215, 0.61, 0.355, 1) both,
+    tray-panel-menu-fade-out 112.5ms linear both;
+}
+
+@keyframes tray-panel-menu-slide {
+  from {
+    transform: translateY(var(--tray-menu-animation-travel));
+  }
+  to {
+    transform: translateY(0);
+  }
+}
+
+@keyframes tray-panel-menu-fade {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes tray-panel-menu-slide-out {
+  from {
+    transform: translateY(0);
+  }
+  to {
+    transform: translateY(var(--tray-menu-animation-travel));
+  }
+}
+
+@keyframes tray-panel-menu-fade-out {
+  from {
+    opacity: 1;
+  }
+  to {
+    opacity: 0;
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {
   .tray-panel-reveal {
     transition: none;
   }
+
+  .tray-panel-reveal--opening {
+    animation: none;
+  }
+
+  .tray-panel-reveal--closing {
+    animation: none;
+    opacity: 0;
+    transform: translateY(var(--tray-menu-animation-travel));
+  }
 }
 
 .tray-panel-reveal .menu-surface--tray {
-  flex: 1 1 auto;
+  flex: 1 1 0;
   min-height: 0;
   height: 100%;
   max-height: 100%;
@@ -7503,6 +7674,7 @@ body:has(.tray-panel-reveal) {
 }
 
 .menu-surface--tray {
+  flex: 1 1 0;
   min-height: 0;
   width: 100%;
   height: 100%;
@@ -7560,7 +7732,14 @@ body:has(.tray-panel-reveal) {
 }
 
 .menu-surface--tray .menu-surface__body {
-  flex: 1 1 auto;
+  /* Zero basis is intentional: the body must consume the remaining space,
+     not contribute its full card stack height before flex-shrinking. */
+  flex: 1 1 0;
+  /* A definite zero flex base is needed in WebView2 when the stack contains
+     several detailed cards. Without it, the body's intrinsic height can win
+     the flex negotiation and its last card paints underneath the fixed
+     footer instead of being clipped by the scrollport. */
+  height: 0;
   min-width: 0;
   min-height: 0;
   max-width: 100%;
@@ -7662,13 +7841,6 @@ body:has(.tray-panel-reveal) {
   display: none;
 }
 
-.menu-surface--tray .provider-grid__weekly-track,
-.menu-surface--tray .provider-grid--compact .provider-grid__weekly-track {
-  width: calc(18 * var(--flyout-u));
-  height: calc(3 * var(--flyout-u));
-  margin-top: calc(2 * var(--flyout-u));
-}
-
 .menu-surface .menu-card {
   --menu-card-x: calc(12 * var(--flyout-u));
   gap: calc(6 * var(--flyout-u));
@@ -7742,7 +7914,7 @@ body:has(.tray-panel-reveal) {
   position: relative;
   z-index: 1;
   display: flex;
-  flex-shrink: 0;
+  flex: 0 0 auto;
   flex-direction: column;
   gap: 0;
   margin-top: calc(2 * var(--flyout-u));
@@ -8464,6 +8636,8 @@ body:has(.tray-panel-reveal) {
   margin-top: 4px;
 }
 
+/* B "table header" layout — column grid so provider / window / actions line
+   up down the list. Header labels make the two dropdowns scannable. */
 .taskbar-entries {
   display: flex;
   flex-direction: column;
@@ -8472,15 +8646,48 @@ body:has(.tray-panel-reveal) {
   list-style: none;
 }
 
-.taskbar-entries__row {
+.taskbar-entries__list {
   display: flex;
+  flex-direction: column;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+/* # | provider | window | (hidden note) | actions */
+.taskbar-entries__head,
+.taskbar-entries__row {
+  display: grid;
+  grid-template-columns:
+    28px
+    minmax(0, 1.4fr)
+    minmax(88px, 1fr)
+    minmax(0, max-content)
+    80px;
+  column-gap: 8px;
   align-items: center;
-  gap: 8px;
-  padding: 7px 10px;
-  /* Reserve the actions cluster's width on every row, including the ones whose
-     buttons are disabled, so the two dropdown columns keep the same right edge
-     all the way down. */
-  min-height: 42px;
+  padding: 6px 12px;
+  min-height: 40px;
+}
+
+.taskbar-entries__head {
+  min-height: 0;
+  padding-top: 8px;
+  padding-bottom: 4px;
+}
+
+.taskbar-entries__head-cell {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-muted);
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+}
+
+.taskbar-entries__head-cell--actions {
+  text-align: right;
+  /* Span the note + actions columns so the label sits above the buttons. */
+  grid-column: 4 / 6;
 }
 
 .taskbar-entries__row + .taskbar-entries__row {
@@ -8494,22 +8701,68 @@ body:has(.tray-panel-reveal) {
   opacity: 0.5;
 }
 
+/* Coloured index badge. `--entry-idx-color` is the provider brand colour.
+   Default: soft tint + brand digit. Extreme luminances flip via data-tone:
+   - dark  (grok pure black, elevenlabs navy…): solid fill + inverted digit
+   - light (near-white brands): bordered soft fill + dark digit */
 .taskbar-entries__index {
-  flex: 0 0 auto;
-  width: 20px;
-  height: 20px;
+  width: 22px;
+  height: 22px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  border-radius: 6px;
-  background: var(--surface-elevated);
-  color: var(--text-secondary);
-  font-size: var(--font-caption);
+  border-radius: 7px;
+  background: color-mix(
+    in srgb,
+    var(--entry-idx-color, var(--accent)) 16%,
+    transparent
+  );
+  color: var(--entry-idx-color, var(--accent));
+  font-size: 11px;
+  font-weight: 700;
   font-variant-numeric: tabular-nums;
+  line-height: 1;
+}
+
+[data-theme="dark"] .taskbar-entries__index {
+  background: color-mix(
+    in srgb,
+    var(--entry-idx-color, var(--accent)) 22%,
+    transparent
+  );
+}
+
+/* Near-black brands: paint the badge as a solid brand chip with a light digit
+   so "1" is not a black speck on a white card. */
+.taskbar-entries__index[data-tone="dark"] {
+  background: var(--entry-idx-color, #1d1d1f);
+  color: #ffffff;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.08);
+}
+
+/* On a dark surface a pure-black chip vanishes — invert to a light face that
+   still reads as "this brand is monochrome", with a dark digit. */
+[data-theme="dark"] .taskbar-entries__index[data-tone="dark"] {
+  background: #f5f5f7;
+  color: #1d1d1f;
+  box-shadow: none;
+}
+
+/* Near-white brands: keep a readable dark digit and a faint border. */
+.taskbar-entries__index[data-tone="light"] {
+  background: color-mix(in srgb, var(--entry-idx-color, #fff) 55%, #000 6%);
+  color: #1d1d1f;
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.12);
+}
+
+[data-theme="dark"] .taskbar-entries__index[data-tone="light"] {
+  background: color-mix(in srgb, var(--entry-idx-color, #fff) 70%, transparent);
+  color: #f5f5f7;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.18);
 }
 
 .taskbar-entries__hidden-note {
-  flex: 0 0 auto;
+  justify-self: end;
   padding: 2px 6px;
   border-radius: 5px;
   background: color-mix(in srgb, var(--text-muted) 16%, transparent);
@@ -8518,24 +8771,13 @@ body:has(.tray-panel-reveal) {
   white-space: nowrap;
 }
 
-/* Let each row's two dropdowns share the free width instead of hugging their
-   content, so the rows line up into columns.
-   Not an even split: the provider column carries names like "deepseek" while
-   the window column carries "周" or "5小时", so giving them equal width left
-   the second one mostly empty and pushed the row's controls apart for no
-   reason. 1.5 : 1 with a cap keeps both columns aligned down the list without
-   the window select stretching across half the row. */
+.taskbar-entries__hidden-note--empty {
+  padding: 0;
+  background: transparent;
+}
+
 .taskbar-entries__row > .dropdown {
-  flex: 1 1 0;
   min-width: 0;
-}
-
-.taskbar-entries__row > .dropdown:nth-of-type(1) {
-  flex-grow: 1.5;
-}
-
-.taskbar-entries__row > .dropdown:nth-of-type(2) {
-  max-width: 210px;
 }
 
 .taskbar-entries__row > .dropdown .dropdown__trigger {
@@ -8543,14 +8785,12 @@ body:has(.tray-panel-reveal) {
   max-width: none;
 }
 
-/* Reorder/remove controls: a single quiet cluster pushed to the row's end, so
-   the row reads as "position, provider, window" with the verbs out of the way. */
+/* Reorder/remove controls: a single quiet cluster on the row's right edge. */
 .taskbar-entries__actions {
-  flex: 0 0 auto;
+  justify-self: end;
   display: inline-flex;
   align-items: center;
   gap: 2px;
-  margin-left: 2px;
 }
 
 .taskbar-entries__actions button {
@@ -8611,97 +8851,10 @@ body:has(.tray-panel-reveal) {
   cursor: default;
 }
 
-/* Multi-select as a row of toggle chips.
-   Used where a setting takes several values at once and a `Select` cannot say
-   so — the floating bar's reset windows, for one. `aria-pressed` carries the
-   state, so it stays a real toggle for assistive tech. */
-/* Multi-select dropdown — see `MultiSelectField`. A `<details>` rather than a
-   bespoke popup: click and Enter open it, Escape closes it, and it is keyboard
-   reachable without a focus trap of our own. */
-.multi-select {
-  position: relative;
-}
-
-.multi-select__summary {
-  list-style: none;
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  min-width: 150px;
-  max-width: 260px;
-  padding: 5px 10px;
-  border: 1px solid var(--control-border, rgba(255, 255, 255, 0.12));
-  border-radius: 6px;
-  background: var(--control-bg, rgba(255, 255, 255, 0.06));
-  color: var(--text-primary);
-  font-size: 0.78rem;
-}
-
-.multi-select__summary::-webkit-details-marker {
-  display: none;
-}
-
-/* The disclosure arrow, drawn here so the summary keeps one flex child for the
-   value and one for the marker regardless of how long the value is. */
-.multi-select__summary::after {
-  content: "⌄";
-  flex: none;
-  margin-top: -3px;
-  color: var(--text-secondary);
-}
-
-.multi-select__value {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.multi-select[open] > .multi-select__summary {
-  border-color: var(--accent);
-}
-
-/* Absolute, so opening the menu does not push the settings rows below it down
-   — the reason the chip row was replaced. */
-.multi-select__menu {
-  position: absolute;
-  right: 0;
-  z-index: 20;
-  min-width: 100%;
-  max-height: 240px;
-  overflow-y: auto;
-  margin-top: 4px;
-  padding: 4px;
-  border: 1px solid var(--control-border, rgba(255, 255, 255, 0.12));
-  border-radius: 8px;
-  background: var(--surface-elevated);
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.28);
-}
-
-.multi-select__option {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 5px 8px;
-  border-radius: 5px;
-  font-size: 0.78rem;
-  white-space: nowrap;
-  cursor: pointer;
-}
-
-.multi-select__option:hover {
-  background: var(--provider-row-bg-hover, rgba(255, 255, 255, 0.06));
-}
-
-.multi-select__option input:disabled {
-  cursor: not-allowed;
-}
-
-.multi-select[aria-disabled="true"] {
-  opacity: 0.5;
-  pointer-events: none;
-}
+/* Multi-select settings fields use the shared `.dropdown` control in
+   FormControls (`MultiSelect`) — same solid panel as the single-value
+   `Select`. The old `.multi-select` / `<details>` skin (which painted with
+   nearly-transparent --surface-elevated) is gone. */
 
 .option-chips {
   display: inline-flex;

@@ -6,9 +6,30 @@ fn test_settings_default() {
     assert!(settings.enabled_providers.contains("claude"));
     assert!(settings.enabled_providers.contains("codex"));
     assert_eq!(settings.refresh_interval_secs, 300);
+    assert!(settings.provider_timeout_recovery_enabled);
     assert!(settings.show_notifications);
     assert_eq!(settings.high_usage_threshold, 70.0);
     assert_eq!(settings.critical_usage_threshold, 90.0);
+    assert_eq!(
+        settings.dashboard_quota_windows,
+        vec!["session".to_string(), "weekly".to_string()]
+    );
+}
+
+#[test]
+fn dashboard_quota_modes_keep_only_the_two_surface_choices() {
+    assert_eq!(
+        normalize_dashboard_quota_windows(&[]),
+        vec!["session".to_string(), "weekly".to_string()]
+    );
+    assert_eq!(
+        normalize_dashboard_quota_windows(&["weekly".to_string(), "monthly".to_string()]),
+        vec!["weekly".to_string()]
+    );
+    assert_eq!(
+        normalize_dashboard_quota_windows(&["monthly".to_string()]),
+        vec!["session".to_string(), "weekly".to_string()]
+    );
 }
 
 #[test]
@@ -36,34 +57,6 @@ fn float_bar_defaults_are_safe() {
     assert!(settings.float_bar_provider_ids.is_empty());
     assert!(!settings.float_bar_dark_text);
     assert!(!settings.float_bar_show_reset_inline);
-}
-
-#[test]
-fn main_window_scale_defaults_to_100_percent() {
-    let settings = Settings::default();
-    assert_eq!(settings.window_scale_percent, 100);
-}
-
-#[test]
-fn main_window_scale_clamp_pins_to_supported_range() {
-    assert_eq!(clamp_window_scale_percent(0), 100);
-    assert_eq!(clamp_window_scale_percent(99), 100);
-    assert_eq!(clamp_window_scale_percent(100), 100);
-    assert_eq!(clamp_window_scale_percent(125), 125);
-    assert_eq!(clamp_window_scale_percent(180), 180);
-    assert_eq!(clamp_window_scale_percent(250), 250);
-    assert_eq!(clamp_window_scale_percent(251), 250);
-}
-
-#[test]
-fn raw_settings_clamps_main_window_scale_on_load() {
-    let json = r#"{
-            "enabled_providers": ["claude", "codex"],
-            "refresh_interval_secs": 300,
-            "window_scale_percent": 300
-        }"#;
-    let loaded: Settings = serde_json::from_str(json).expect("parse settings");
-    assert_eq!(loaded.window_scale_percent, 250);
 }
 
 #[test]
@@ -891,8 +884,14 @@ fn per_component_display_settings_keep_explicit_values_over_legacy_globals() {
     )
     .unwrap();
 
-    assert!(!settings.float_bar_show_as_used, "explicit false is preserved");
-    assert!(!settings.taskbar_show_as_used, "explicit false is preserved");
+    assert!(
+        !settings.float_bar_show_as_used,
+        "explicit false is preserved"
+    );
+    assert!(
+        !settings.taskbar_show_as_used,
+        "explicit false is preserved"
+    );
     // Untouched components still follow the legacy global.
     assert!(settings.dashboard_show_as_used);
     assert!(settings.float_bar_reset_time_relative);
@@ -1008,7 +1007,10 @@ fn per_component_display_settings_default_to_used_and_relative() {
 #[test]
 fn float_bar_reset_windows_default_to_the_provider_window() {
     let settings: Settings = serde_json::from_str("{}").unwrap();
-    assert_eq!(settings.float_bar_reset_windows, vec!["primary".to_string()]);
+    assert_eq!(
+        settings.float_bar_reset_windows,
+        vec!["primary".to_string()]
+    );
     assert_eq!(
         Settings::default().float_bar_reset_windows,
         vec!["primary".to_string()]

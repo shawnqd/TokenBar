@@ -193,6 +193,16 @@ export default function GeneralTab({
             />
           </Field>
           <Field
+            label={t("ProviderTimeoutRecovery")}
+            description={t("ProviderTimeoutRecoveryHelper")}
+          >
+            <Toggle
+              checked={settings.providerTimeoutRecoveryEnabled ?? true}
+              disabled={saving}
+              onChange={(v) => set({ providerTimeoutRecoveryEnabled: v })}
+            />
+          </Field>
+          <Field
             label={t("RefreshAllProvidersOnMenuOpen")}
             description={t("RefreshAllProvidersOnMenuOpenHelper")}
           >

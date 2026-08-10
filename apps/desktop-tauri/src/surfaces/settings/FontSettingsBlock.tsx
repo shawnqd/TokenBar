@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useLocale } from "../../hooks/useLocale";
-import { Field, NumberInput, Select, Toggle } from "../../components/FormControls";
+import { Field, NumberInput, Select } from "../../components/FormControls";
 import { getTaskbarFontFamilies } from "../../lib/tauri";
 import type { TaskbarFontFamily } from "../../types/bridge";
 
@@ -27,20 +27,19 @@ interface Props {
 /**
  * Size / family / weight for one DirectWrite-rendered surface.
  *
- * Extracted from `TaskbarTab` when the right-click menu needed the same three
- * controls. Both surfaces are drawn by `taskbar_text.rs`, so they have the same
- * capabilities and deserve the same controls — the alternative was a second,
- * simpler set of menu-only controls, which would have implied the menu's font
- * works differently when it does not.
+ * The family list is restricted to fonts with a genuine continuous `wght`
+ * axis (MiSans, Bahnschrift, Segoe UI Variable, …). Static multi-face
+ * families like Microsoft YaHei look continuous on a stepped slider but
+ * only snap between installed faces — the backend marks them
+ * `variableWeight: false` and they stay out of this picker.
  *
- * The family list comes from `IDWriteFontCollection` via the backend rather
- * than a hardcoded list, so it can never offer something the machine cannot
- * render.
+ * A previously-saved static family remains selectable (so the control never
+ * silently rewrites a persisted setting) but the helper text still says it
+ * is not continuous.
  */
 export default function FontSettingsBlock({ value, disabled, onChange }: Props) {
   const { t } = useLocale();
   const [families, setFamilies] = useState<TaskbarFontFamily[]>([]);
-  const [showAllFonts, setShowAllFonts] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -57,32 +56,25 @@ export default function FontSettingsBlock({ value, disabled, onChange }: Props) 
     };
   }, []);
 
-  // Whether the slider's intermediate positions mean anything depends entirely
-  // on the renderer: a static family makes DirectWrite pick the nearest
-  // installed face, so in-between values look identical. The helper text says
-  // which case the user is in rather than letting them discover it.
-  const selectedIsVariable =
-    families.find((f) => f.name === value.family)?.variableWeight ?? false;
-
-  // A typical Windows install carries ~400 families, nearly all of them symbol,
-  // script and per-app faces. The backend marks a short curated set; everything
-  // else stays one switch away rather than being hidden.
-  const recommendedFamilies = useMemo(
-    () => families.filter((family) => family.recommended),
+  const variableFamilies = useMemo(
+    () => families.filter((family) => family.variableWeight),
     [families],
   );
 
+  const selectedIsVariable =
+    families.find((f) => f.name === value.family)?.variableWeight ?? false;
+
   const fontOptions = useMemo(() => {
-    const listed = showAllFonts ? families : recommendedFamilies;
     return [
-      // Keep the persisted family selectable even when it is not installed or
-      // not curated, so the control never appears to silently reset it.
-      ...(listed.some((family) => family.name === value.family)
+      // Keep a previously-saved static family selectable so the control never
+      // appears to silently reset it — the weight helper still tells the truth.
+      ...(variableFamilies.some((family) => family.name === value.family) ||
+      !value.family
         ? []
         : [{ value: value.family, label: value.family }]),
-      ...listed.map((family) => {
+      ...variableFamilies.map((family) => {
         const tags = [
-          family.variableWeight ? t("TaskbarFontVariableTag") : null,
+          t("TaskbarFontVariableTag"),
           family.hasCjk ? null : t("TaskbarFontNoCjkTag"),
         ].filter(Boolean);
         return {
@@ -91,7 +83,7 @@ export default function FontSettingsBlock({ value, disabled, onChange }: Props) 
         };
       }),
     ];
-  }, [families, recommendedFamilies, value.family, showAllFonts, t]);
+  }, [variableFamilies, value.family, t]);
 
   // The slider is driven from a draft and committed on release. Persisting on
   // every `input` event would fire a settings write per pixel dragged.
@@ -130,19 +122,9 @@ export default function FontSettingsBlock({ value, disabled, onChange }: Props) 
       >
         <Select
           value={value.family}
-          disabled={disabled || families.length === 0}
+          disabled={disabled || (families.length === 0 && !value.family)}
           options={fontOptions}
           onChange={(family) => onChange({ family })}
-        />
-      </Field>
-      <Field
-        label={t("TaskbarFontShowAll")}
-        description={`${families.length} / ${recommendedFamilies.length}`}
-      >
-        <Toggle
-          checked={showAllFonts}
-          disabled={disabled || families.length === 0}
-          onChange={setShowAllFonts}
         />
       </Field>
       <Field

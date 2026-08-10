@@ -3,6 +3,7 @@ import { listen } from "@tauri-apps/api/event";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import {
   checkForUpdates,
+  closeSettingsWindow,
   downloadUpdate,
   getBootstrapState,
   getSettingsSnapshot,
@@ -19,8 +20,6 @@ import type { SurfaceSnapshot } from "./hooks/useSurfaceSnapshot";
 
 /** Matches `shell::settings_window::SETTINGS_REVEALED_EVENT`. */
 const SETTINGS_REVEALED_EVENT = "settings-window-revealed";
-/** Matches `shell::settings_window::SETTINGS_HIDDEN_EVENT`. */
-const SETTINGS_HIDDEN_EVENT = "settings-window-hidden";
 
 const Settings = lazy(() => import("./surfaces/Settings"));
 const PopOutPanel = lazy(() => import("./surfaces/PopOutPanel"));
@@ -283,93 +282,100 @@ function DetachedSettingsReadyContent({
   tab: string;
 }) {
   const frameRef = useRef<HTMLElement>(null);
+  const closingRef = useRef(false);
+  const closeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [windowMotion, setWindowMotion] = useState<
+    "idle" | "visible" | "closing"
+  >("idle");
+
+  const cancelCloseAnimation = useCallback(() => {
+    if (closeTimerRef.current) {
+      clearTimeout(closeTimerRef.current);
+      closeTimerRef.current = null;
+    }
+    closingRef.current = false;
+    setWindowMotion("visible");
+  }, []);
+
+  const requestClose = useCallback(() => {
+    if (closingRef.current) return;
+    closingRef.current = true;
+    if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+      closingRef.current = false;
+      setWindowMotion("idle");
+      void closeSettingsWindow();
+      return;
+    }
+
+    setWindowMotion("closing");
+    closeTimerRef.current = setTimeout(() => {
+      closeTimerRef.current = null;
+      void closeSettingsWindow()
+        .catch(() => undefined)
+        .finally(() => {
+          closingRef.current = false;
+          setWindowMotion("idle");
+        });
+    }, 140);
+  }, []);
 
   useEffect(() => {
-    // The frame's opacity tracks the window's visibility, driven by two events
-    // from Rust. Parked at 0 while hidden so `show()` can only ever reveal
-    // something already transparent — otherwise the window paints opaque for
-    // the frame or two the reveal event spends crossing IPC, then blinks out
-    // when the fade starts from 0. That is the flash, and no easing fixes it.
-    //
-    // Safe to park at 0 on mount because this component commits while the
-    // window is still hidden: it is prewarmed, and it is what then asks to be
-    // revealed.
-    const frame = frameRef.current;
-    if (frame) frame.style.opacity = "0";
-
+    // The native Settings window is prewarmed hidden. Keep this outer frame
+    // permanently painted instead of using its opacity as a second visibility
+    // state. The old approach parked the frame at opacity 0 and then raced the
+    // native show/event handshake; a lost event or HMR remount made the window
+    // appear blank or flash. Native hide/show is the single source of truth.
     let disposed = false;
     const unlistens: Array<() => void> = [];
 
-    const settle = () => {
-      const el = frameRef.current;
-      if (el) el.style.opacity = "1";
-      return el;
-    };
-
     void (async () => {
-      // The window is prewarmed and re-shown rather than recreated, so the
-      // React tree never remounts and a CSS mount animation would play once per
-      // app launch. The Web Animations API restarts it on every open with no
-      // remount underneath.
-      //
-      // Only the frontend-drawn frame is animated: this window is borderless
-      // (`force_borderless_transparent_resizable`), so the card below IS the
-      // whole window as far as the user can see.
+      // The window is prewarmed and re-shown rather than recreated. Native
+      // hide/show remains authoritative; the CSS class below is only a small
+      // visual transition and never gates the first paint.
       unlistens.push(
         await listen(SETTINGS_REVEALED_EVENT, () => {
-          // Resting state first, so a cancelled or unsupported animation still
-          // leaves a visible window rather than an invisible one.
-          const el = settle();
-          if (!el) return;
-          // Someone who asked the OS to stop animating gets no animation, not a
-          // shorter one.
-          if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
-            return;
-          }
-          // Opacity only — scale/translate on the outer frame painted as a
-          // whole-window stretch (especially when the first open lands on or
-          // immediately switches to Providers).
-          el.animate(
-            [{ opacity: 0 }, { opacity: 1 }],
-            {
-              duration: 140,
-              easing: "cubic-bezier(0, 0, 0, 1)",
-            },
-          );
+          cancelCloseAnimation();
         }),
       );
+      // Re-opening while the close fade is still running must cancel the
+      // pending native hide. `open_or_focus` emits this event before it checks
+      // visibility, so this also covers the short close/reopen race.
       unlistens.push(
-        await listen(SETTINGS_HIDDEN_EVENT, () => {
-          const el = frameRef.current;
-          if (el) el.style.opacity = "0";
-        }),
+        await listen("settings-change-tab", cancelCloseAnimation),
       );
 
       if (disposed) return;
 
-      // Strictly after both listeners are live. Reversed, Rust could show the
-      // window and emit the reveal before anything is listening — and a lost
-      // reveal leaves a visible window whose frame is still parked at 0, i.e. a
-      // Settings window that opens blank.
-      //
-      // This component cannot commit until the lazy Settings chunk has loaded,
-      // so the DOM is ready now. Do not wait for requestAnimationFrame:
-      // Chromium may pause animation frames for a hidden prewarmed window.
-      await revealSettingsWindow().catch(() => {});
+      // Strictly after listeners are live, complete the native prewarm
+      // handshake. If the window is already visible (HMR/remount), the Rust
+      // command returns true and the same visible state is restored.
+      const nativeRevealCompleted = await revealSettingsWindow().catch(() => false);
+      if (!disposed && nativeRevealCompleted) {
+        cancelCloseAnimation();
+      }
     })();
 
     return () => {
       disposed = true;
+      if (closeTimerRef.current) clearTimeout(closeTimerRef.current);
+      closeTimerRef.current = null;
+      closingRef.current = false;
       for (const unlisten of unlistens) unlisten();
     };
-  }, []);
+  }, [cancelCloseAnimation]);
 
   return (
     <main
       ref={frameRef}
       className="settings-surface settings-surface--full settings-window-frame"
+      style={{ opacity: 1, transform: "none" }}
     >
-      <Settings state={state} initialTab={tab} />
+      <Settings
+        state={state}
+        initialTab={tab}
+        onRequestClose={requestClose}
+        windowMotion={windowMotion}
+      />
     </main>
   );
 }

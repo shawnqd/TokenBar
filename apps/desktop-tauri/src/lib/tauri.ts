@@ -120,8 +120,8 @@ export function openSettingsWindow(tab: string): Promise<void> {
   return invoke<void>("open_settings_window", { tab });
 }
 
-export function revealSettingsWindow(): Promise<void> {
-  return invoke<void>("reveal_settings_window");
+export function revealSettingsWindow(): Promise<boolean> {
+  return invoke<boolean>("reveal_settings_window");
 }
 
 /** Open (or focus) the detached "Open Tray Panel" window. */

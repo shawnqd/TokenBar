@@ -1,4 +1,4 @@
-﻿import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
 vi.mock("../../../hooks/useLocale", () => ({
@@ -39,7 +39,6 @@ const settings: SettingsSnapshot = {
   enableAnimations: true,
   resetTimeRelative: true,
   menuBarDisplayMode: "compact",
-  windowScalePercent: 125,
   trayScalePercent: 100,
   hidePersonalInfo: false,
   autoDownloadUpdates: false,

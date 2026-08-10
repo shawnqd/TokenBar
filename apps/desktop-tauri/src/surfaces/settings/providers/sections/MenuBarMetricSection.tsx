@@ -83,7 +83,7 @@ function metricOptions(
     options.push({ value: "model", label: t("DetailWindowModelSpecific") });
   }
   if (provider.tertiary) {
-    options.push({ value: "tertiary", label: t("DetailWindowTertiary") });
+    options.push({ value: "tertiary", label: t("ProviderMonthlyLabel") });
   }
   if (provider.id === "cursor" || provider.extraRateWindows.length > 0) {
     options.push({ value: "extraUsage", label: t("ExtraUsage") });

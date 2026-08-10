@@ -72,16 +72,51 @@ function Get-TokenBarProcesses {
         $isDesktopBinary -or $isFrontendVite -or $isTauriDev -or $isPnpmDev
     })
 
+    # Never walk an unrestricted process tree here. A Tauri/WebView process can
+    # be re-parented by Windows, and following that relationship can reach
+    # unrelated system services. Only carry the checkout-owned process names
+    # below, and require either a TokenBar command line or the app's private
+    # WebView user-data directory.
+    $allowedChildNames = @(
+        "codexbar-desktop-tauri.exe",
+        "node.exe",
+        "cmd.exe",
+        "cargo.exe",
+        "rustc.exe",
+        "esbuild.exe",
+        "conhost.exe",
+        "msedgewebview2.exe"
+    )
+
     $ids = [System.Collections.Generic.HashSet[int]]::new()
-    $queue = [System.Collections.Generic.Queue[int]]::new()
     foreach ($root in $roots) {
-        if ($ids.Add([int]$root.ProcessId)) { $queue.Enqueue([int]$root.ProcessId) }
+        [void]$ids.Add([int]$root.ProcessId)
     }
-    while ($queue.Count -gt 0) {
-        $parentId = $queue.Dequeue()
-        foreach ($child in $all | Where-Object { [int]$_.ParentProcessId -eq $parentId }) {
-            $childId = [int]$child.ProcessId
-            if ($ids.Add($childId)) { $queue.Enqueue($childId) }
+
+    $changed = $true
+    while ($changed) {
+        $changed = $false
+        foreach ($process in $all) {
+            $processId = [int]$process.ProcessId
+            if ($ids.Contains($processId) -or -not $ids.Contains([int]$process.ParentProcessId)) {
+                continue
+            }
+
+            $name = [string]$process.Name
+            $commandLine = [string]$process.CommandLine
+            if ($allowedChildNames -notcontains $name) {
+                continue
+            }
+
+            $isRepoCommand = Test-RepoReference $commandLine $RepoRoot
+            $isTokenBarWebView = $name -ieq "msedgewebview2.exe" -and
+                (Test-RepoReference $commandLine "--webview-exe-name=codexbar-desktop-tauri.exe")
+            if (-not ($isRepoCommand -or $isTokenBarWebView)) {
+                continue
+            }
+
+            [void]$ids.Add($processId)
+            $changed = $true
         }
     }
 

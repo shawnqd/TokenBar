@@ -58,8 +58,8 @@ pub fn apply_window_layout(
         if props.resizable {
             // Transparent, not the solid-brush variant. `main` is the only
             // window this function lays out, and PopOut (the dashboard) is its
-            // only borderless *resizable* mode — Settings keeps native
-            // decorations and Hidden is never shown. The solid-brush variant
+            // borderless *resizable* mode. Hidden is never shown through this
+            // path. The solid-brush variant
             // this replaced painted the corner regions the frontend clips away
             // with `border-radius` + `clip-path`, so the dashboard rendered
             // square corners no matter what the CSS said. (That function is

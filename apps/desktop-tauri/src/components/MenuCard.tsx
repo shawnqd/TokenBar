@@ -998,7 +998,7 @@ export default function MenuCard({
   if (provider.tertiary && isMeaningfulQuotaWindow(provider.tertiary))
     metrics.push({
       id: "tertiary",
-      label: t("DetailWindowTertiary"),
+      label: quotaWindowLabel("monthly", provider.tertiary, t),
       snap: provider.tertiary,
     });
   for (const extra of provider.extraRateWindows ?? []) {
@@ -1010,14 +1010,16 @@ export default function MenuCard({
       snap: extra.window,
     });
   }
-  // The surface's own quota-window filter (item H). Applied before the compact
-  // slice so "compact shows the first window" means the first window the user
-  // asked to see, not the first one the provider happens to publish.
+  // An owning surface may provide a quota-window filter. Apply it before the
+  // compact slice so "compact shows the first window" means the first window
+  // that surface asked to see. Dashboard cards pass no filter and therefore
+  // adapt to the provider's actual windows.
   //
   // Never allowed to empty the card: a filter that matches nothing here leaves
   // a provider with a name, a plan badge and no readings at all, and nothing on
   // the card explains why. Falling back to the unfiltered list is the same
-  // choice `resolveDashboardProviderIds` makes for the same reason.
+  // same reason as the provider visibility rule: never strand the user with
+  // an empty card.
   const filteredMetrics = (() => {
     const kept = metrics.filter((metric) =>
       dashboardShowsQuotaWindow(metric.snap.kind, quotaWindows),
@@ -1081,8 +1083,8 @@ export default function MenuCard({
   // preview card, PopOut) leaves this undefined and renders the legacy
   // `.menu-card__content` below exactly as before — none of the variables
   // in this block affect their output.
-  const primaryMetric = metrics[0] ?? null;
-  const secondaryMetric = metrics[1] ?? null;
+  const primaryMetric = filteredMetrics[0] ?? null;
+  const secondaryMetric = filteredMetrics[1] ?? null;
   const hasPaceForDensity = !provider.error && !!provider.pace;
 
   // Which quota row inside THIS tier renders the weekly forecast.
@@ -1181,8 +1183,8 @@ export default function MenuCard({
     if (densityMode === "detailed") {
       return (
         <section className="menu-card__zone menu-card__zone--quota menu-card__metrics">
-          {metrics.length > 0
-            ? metrics.map((m, idx) => (
+          {filteredMetrics.length > 0
+            ? filteredMetrics.map((m, idx) => (
                 <MetricRow
                   key={m.id}
                   title={m.label}

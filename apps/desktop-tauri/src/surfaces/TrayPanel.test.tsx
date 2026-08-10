@@ -1,4 +1,4 @@
-﻿import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const tauriMocks = vi.hoisted(() => ({
@@ -145,7 +145,6 @@ function settings(overrides: Partial<SettingsSnapshot> = {}): SettingsSnapshot {
     codexCustomSessionsDirs: [],
     uiLanguage: "english",
     theme: "dark",
-    windowScalePercent: 125,
     trayScalePercent: 100,
     claudeAvoidKeychainPrompts: false,
     disableKeychainAccess: false,
@@ -341,6 +340,33 @@ describe("TrayPanel provider grid", () => {
     await waitFor(() => {
       expect(container.querySelector(".tray-panel-reveal--ready")).not.toBeNull();
     });
+    // The retained DOM is ready for the native reveal handshake. The base
+    // class must not also carry `--parked`: that selector is intentionally
+    // mutually exclusive with `--ready`, otherwise the later parked rule
+    // wins and the first show stays transparent forever.
+    expect(container.querySelector(".tray-panel-reveal--ready.tray-panel-reveal--parked")).toBeNull();
+  });
+
+  it("does not arm the native drag guard for an ordinary provider click", async () => {
+    const { container } = renderTrayPanel([
+      provider("codex", "Codex", 35),
+      provider("claude", "Claude", 20),
+    ]);
+
+    const claude = await waitFor(() => {
+      const item = container.querySelector<HTMLButtonElement>(
+        '.provider-grid__item[aria-label="Claude"]',
+      );
+      expect(item).not.toBeNull();
+      return item!;
+    });
+
+    fireEvent.click(claude);
+
+    await waitFor(() => {
+      expect(container.querySelector(".menu-stack__item--selected")).not.toBeNull();
+    });
+    expect(tauriMocks.beginFlyoutGesture).not.toHaveBeenCalled();
   });
 
   it("renders a hero quota row plus a one-line summary in minimal mode", async () => {
@@ -724,66 +750,12 @@ describe("TrayPanel provider grid", () => {
     );
   });
 
-  it("provider grid indicator follows the dashboard show-as-used setting", async () => {
-    const { container, rerender } = renderTrayPanel(
-      [provider("claude", "Claude", 35)],
-      { dashboardShowAsUsed: true },
-    );
-
-    await waitFor(() => {
-      const track = container.querySelector<HTMLElement>(
-        ".provider-grid__weekly-track",
-      );
-      expect(track?.style.getPropertyValue("--weekly-pct")).toBe("35%");
-    });
-
-    tauriMocks.getCachedProviders.mockResolvedValue([
-      provider("claude", "Claude", 35),
-    ]);
-    tauriMocks.getSettingsSnapshot.mockResolvedValue(
-      settings({ dashboardShowAsUsed: false }),
-    );
-    rerender(
-      <LocaleProvider>
-        <TrayPanel state={bootstrap({ dashboardShowAsUsed: false })} />
-      </LocaleProvider>,
-    );
-
-    await waitFor(() => {
-      const track = container.querySelector<HTMLElement>(
-        ".provider-grid__weekly-track",
-      );
-      expect(track?.style.getPropertyValue("--weekly-pct")).toBe("65%");
-    });
-  });
-
   /**
-   * The per-component split exists so one surface's preference cannot move
-   * another's. The dashboard must ignore the floating bar's and the taskbar
-   * strip's choice even when they disagree with its own.
+   * The switcher grid no longer paints a per-icon quota strip. Cards still
+   * honour dashboardShowAsUsed; that is asserted on the card surface, not
+   * under each icon.
    */
-  it("ignores the floating bar and taskbar show-as-used settings", async () => {
-    const { container } = renderTrayPanel([provider("claude", "Claude", 35)], {
-      dashboardShowAsUsed: true,
-      floatBarShowAsUsed: false,
-      taskbarShowAsUsed: false,
-    taskbarTooltipEntries: [],
-    });
-
-    await waitFor(() => {
-      const track = container.querySelector<HTMLElement>(
-        ".provider-grid__weekly-track",
-      );
-      expect(track?.style.getPropertyValue("--weekly-pct")).toBe("35%");
-    });
-  });
-
-  /**
-   * A provider with no percentage quota (sub2api-style "Subscription active"
-   * rows, or a balance provider's synthetic carrier window) must not get a
-   * percentage track in the grid — a 0%/empty bar reads as a real measurement.
-   */
-  it("draws no percentage track for a provider with no percentage quota", async () => {
+  it("draws no per-icon quota track in the provider switcher", async () => {
     const informational = provider("sub2api", "Sub2API", 0);
     informational.primary = {
       ...informational.primary,
@@ -792,21 +764,17 @@ describe("TrayPanel provider grid", () => {
     };
     const quota = provider("claude", "Claude", 35);
 
-    const { container } = renderTrayPanel([quota, informational]);
-
-    await waitFor(() => {
-      expect(
-        container.querySelectorAll(".provider-grid__weekly-track").length,
-      ).toBe(1);
+    const { container } = renderTrayPanel([quota, informational], {
+      dashboardShowAsUsed: true,
     });
 
-    const informationalItem = container.querySelector<HTMLElement>(
-      '.provider-grid__item[aria-label="Sub2API"]',
-    );
-    expect(informationalItem).not.toBeNull();
+    await waitFor(() => {
+      expect(container.querySelector(".provider-grid")).not.toBeNull();
+    });
+
     expect(
-      informationalItem?.querySelector(".provider-grid__weekly-track"),
-    ).toBeNull();
+      container.querySelectorAll(".provider-grid__weekly-track").length,
+    ).toBe(0);
   });
 
   it("hides provider grid icons when the display setting is disabled", async () => {

@@ -1,4 +1,4 @@
-﻿import { render, waitFor } from "@testing-library/react";
+import { render, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 // App.tsx routes by `getCurrentWebviewWindow().label` before falling through
@@ -94,7 +94,6 @@ function settings(overrides: Partial<SettingsSnapshot> = {}): SettingsSnapshot {
     // "dark" (not "auto") so useTheme's effect short-circuits before ever
     // touching window.matchMedia, which jsdom doesn't implement here.
     theme: "dark",
-    windowScalePercent: 125,
     trayScalePercent: 100,
     claudeAvoidKeychainPrompts: false,
     disableKeychainAccess: false,
@@ -190,7 +189,7 @@ describe("App window-label routing", () => {
   it("routes the detached settings window to Settings, not TrayPanel", async () => {
     webviewWindowMocks.label = "settings";
 
-    const { queryByTestId } = render(<App />);
+    const { container, queryByTestId } = render(<App />);
 
     await waitFor(() => {
       expect(queryByTestId("surface-settings")).not.toBeNull();
@@ -198,7 +197,30 @@ describe("App window-label routing", () => {
     await waitFor(() => {
       expect(tauriMocks.revealSettingsWindow).toHaveBeenCalledTimes(1);
     });
+    // The native window is hidden during prewarm; the frontend stays painted so
+    // a later show cannot expose a blank frame if the IPC reveal event races or
+    // is missed.
+    await waitFor(() => {
+      expect(
+        container.querySelector<HTMLElement>(".settings-window-frame")?.style
+          .opacity,
+      ).toBe("1");
+    });
     expect(queryByTestId("surface-tray-panel")).toBeNull();
+  });
+
+  it("unparks a settings frame when a visible HMR remount is reported", async () => {
+    webviewWindowMocks.label = "settings";
+    tauriMocks.revealSettingsWindow.mockResolvedValue(true);
+
+    const { container } = render(<App />);
+
+    await waitFor(() => {
+      expect(
+        container.querySelector<HTMLElement>(".settings-window-frame")?.style
+          .opacity,
+      ).toBe("1");
+    });
   });
 
   it("routes the detached floatbar window to FloatBar, not TrayPanel", async () => {

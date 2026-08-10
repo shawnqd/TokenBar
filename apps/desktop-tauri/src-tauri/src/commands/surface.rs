@@ -81,26 +81,16 @@ pub fn reveal_tray_panel_window(
     app: tauri::AppHandle,
     state: tauri::State<'_, Mutex<AppState>>,
 ) -> Result<(), String> {
-    use tauri::Manager;
-
-    let Some(window) = app.get_webview_window(crate::shell::flyout_window::FLYOUT_LABEL) else {
-        return Ok(());
-    };
     let mut guard = state.lock().map_err(|e| e.to_string())?;
     guard.mark_flyout_frontend_ready();
     if !guard.take_pending_flyout_reveal() {
         return Ok(());
     }
     drop(guard);
-    crate::shell::dwm::force_borderless_transparent_resizable(&window);
-    window.show().map_err(|e| e.to_string())?;
-    crate::shell::dwm::force_borderless_transparent_resizable(&window);
-    state
-        .lock()
-        .map_err(|e| e.to_string())?
-        .mark_tray_panel_shown(std::time::Instant::now());
-    window.set_focus().map_err(|e| e.to_string())?;
-    Ok(())
+    // The native flyout module is the sole owner of show/focus/geometry and
+    // reveal events. Keeping this command as a readiness bridge prevents a
+    // second, subtly different reveal path from reintroducing focus races.
+    crate::shell::flyout_window::reveal_ready(&app)
 }
 
 /// Mark the prewarmed Settings frontend ready and reveal it only when an open
@@ -109,16 +99,21 @@ pub fn reveal_tray_panel_window(
 pub fn reveal_settings_window(
     app: tauri::AppHandle,
     state: tauri::State<'_, Mutex<AppState>>,
-) -> Result<(), String> {
+) -> Result<bool, String> {
     use tauri::{Emitter, Manager};
 
     let Some(window) = app.get_webview_window(crate::shell::settings_window::SETTINGS_LABEL) else {
-        return Ok(());
+        return Ok(false);
     };
     let mut guard = state.lock().map_err(|e| e.to_string())?;
     guard.mark_settings_frontend_ready();
     let Some(tab) = guard.take_pending_settings_reveal() else {
-        return Ok(());
+        // During prewarm there is no pending reveal and the window is hidden;
+        // during a Vite/HMR remount the same call can happen while Settings is
+        // already visible. Returning that fact lets the frontend unpark only
+        // the latter case, avoiding a first-open flash without breaking live
+        // development remounts.
+        return Ok(window.is_visible().unwrap_or(false));
     };
     drop(guard);
 
@@ -128,8 +123,10 @@ pub fn reveal_settings_window(
         tab,
     )
     .map_err(|e| e.to_string())?;
+    let _ = window.set_decorations(false);
     crate::shell::dwm::force_borderless_transparent_resizable(&window);
     window.show().map_err(|e| e.to_string())?;
+    let _ = window.set_decorations(false);
     crate::shell::dwm::force_borderless_transparent_resizable(&window);
     window.set_focus().map_err(|e| e.to_string())?;
     // This path only runs for a reveal that was armed while the window was
@@ -140,7 +137,7 @@ pub fn reveal_settings_window(
         (),
     )
     .map_err(|e| e.to_string())?;
-    Ok(())
+    Ok(true)
 }
 
 #[tauri::command]

@@ -1,4 +1,4 @@
-﻿import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const tauriMocks = vi.hoisted(() => ({
@@ -40,7 +40,6 @@ const settings: SettingsSnapshot = {
   updateChannel: "stable",
   uiLanguage: "english",
   theme: "dark",
-  windowScalePercent: 125,
   trayScalePercent: 100,
   claudeAvoidKeychainPrompts: true,
   disableKeychainAccess: false,

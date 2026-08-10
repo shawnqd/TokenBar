@@ -1,4 +1,4 @@
-﻿import { render, screen, fireEvent } from "@testing-library/react";
+import { render, screen, fireEvent } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
 vi.mock("../../../hooks/useLocale", () => ({
@@ -26,7 +26,6 @@ import type { SettingsSnapshot, SettingsUpdate } from "../../../types/bridge";
 const settings = {
   theme: "dark",
   menuBarDisplayMode: "detailed",
-  windowScalePercent: 100,
   localUsagePeriod: "today",
   showAllTokenAccountsInMenu: false,
   floatBarShowAsUsed: true,
@@ -121,4 +120,15 @@ describe("settings component isolation", () => {
       }
     });
   }
+
+  it("uses provider switches and provider data for dashboard content", () => {
+    render(<DashboardTab settings={settings} set={() => {}} saving={false} />);
+
+    expect(screen.queryByText("DashboardProvidersLabel")).not.toBeInTheDocument();
+    expect(screen.queryByText("DashboardQuotaWindowsLabel")).not.toBeInTheDocument();
+    expect(screen.queryByText("DashboardQuotaModeSessionWeekly")).not.toBeInTheDocument();
+    expect(screen.queryByText("DashboardQuotaModeWeeklyOnly")).not.toBeInTheDocument();
+    expect(screen.queryByText("TaskbarWindowDaily")).not.toBeInTheDocument();
+    expect(screen.queryByText("TaskbarWindowMonthly")).not.toBeInTheDocument();
+  });
 });

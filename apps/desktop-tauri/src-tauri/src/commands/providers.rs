@@ -145,6 +145,15 @@ pub(crate) fn provider_cookie_domain(id: ProviderId, settings: &Settings) -> Opt
 const DEFAULT_PROVIDER_FETCH_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(35);
 const SLOW_PROVIDER_FETCH_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(75);
 const MAX_CONTEXT_FETCH_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(65);
+/// A timeout is usually a transient network/provider stall. Retry it three
+/// times, with a short linear backoff, then pause this provider for automatic
+/// refreshes until the user explicitly refreshes again.
+pub(crate) const MAX_TIMEOUT_RETRIES: u8 = 3;
+const TIMEOUT_RETRY_BASE_DELAY: std::time::Duration = std::time::Duration::from_millis(250);
+
+pub(crate) fn timeout_retry_delay(retry_number: u8) -> std::time::Duration {
+    TIMEOUT_RETRY_BASE_DELAY.saturating_mul(u32::from(retry_number.max(1)))
+}
 
 pub(crate) fn provider_fetch_timeout(id: ProviderId, ctx: &FetchContext) -> std::time::Duration {
     let provider_timeout = match id {
@@ -199,6 +208,9 @@ pub(crate) fn invalidate_provider_refresh_and_prune_disabled(
     guard
         .transient_provider_failure_counts
         .retain(|id, _| enabled_ids.contains(id));
+    guard
+        .timeout_paused_providers
+        .retain(|id| enabled_ids.contains(id));
     Ok(())
 }
 
@@ -234,7 +246,13 @@ async fn do_refresh_providers_with_policy(
     events::emit_refresh_started(app);
     let enabled_count = inputs.enabled_ids.len();
 
-    let handles = spawn_provider_refreshes(app, &inputs, generation);
+    let handles = spawn_provider_refreshes(
+        app,
+        &inputs,
+        generation,
+        force,
+        inputs.settings.provider_timeout_recovery_enabled,
+    );
     await_provider_refreshes(handles).await;
 
     let error_count = finish_provider_refresh(&state, generation)?;
@@ -259,6 +277,11 @@ fn begin_provider_refresh(
 
     guard.provider_refresh_generation = guard.provider_refresh_generation.wrapping_add(1);
     let generation = guard.provider_refresh_generation;
+    if force {
+        // A user-initiated refresh is the explicit recovery action for a
+        // provider paused after repeated timeouts.
+        guard.timeout_paused_providers.clear();
+    }
     guard.is_refreshing = true;
     guard.provider_refresh_started_at = Some(std::time::Instant::now());
     Ok(Some(generation))
@@ -303,12 +326,29 @@ fn spawn_provider_refreshes(
     app: &tauri::AppHandle,
     inputs: &ProviderRefreshInputs,
     generation: u64,
+    force: bool,
+    timeout_recovery_enabled: bool,
 ) -> Vec<tokio::task::JoinHandle<()>> {
     let mut handles = Vec::with_capacity(inputs.enabled_ids.len());
     let fetch_permits = Arc::new(tokio::sync::Semaphore::new(MAX_CONCURRENT_PROVIDER_FETCHES));
+    let paused_providers = if force || !timeout_recovery_enabled {
+        std::collections::HashSet::new()
+    } else {
+        app.state::<Mutex<AppState>>()
+            .lock()
+            .map(|guard| guard.timeout_paused_providers.clone())
+            .unwrap_or_default()
+    };
 
     for id in &inputs.enabled_ids {
         let id = *id;
+        if paused_providers.contains(&id) {
+            tracing::debug!(
+                provider = id.cli_name(),
+                "skipping automatic refresh for provider paused after timeout retries"
+            );
+            continue;
+        }
         let app_handle = app.clone();
         let fetch_permits = Arc::clone(&fetch_permits);
         let ctx = build_fetch_context(
@@ -323,7 +363,7 @@ fn spawn_provider_refreshes(
             let Ok(_permit) = fetch_permits.acquire_owned().await else {
                 return;
             };
-            refresh_provider(app_handle, id, ctx, generation).await;
+            refresh_provider(app_handle, id, ctx, generation, timeout_recovery_enabled).await;
         }));
     }
 
@@ -335,8 +375,10 @@ async fn refresh_provider(
     id: ProviderId,
     ctx: FetchContext,
     generation: u64,
+    timeout_recovery_enabled: bool,
 ) {
-    let snapshot = fetch_provider_snapshot(id, ctx).await;
+    let fetch = fetch_provider_snapshot(id, ctx, timeout_recovery_enabled).await;
+    let snapshot = fetch.snapshot;
 
     let state = app.state::<Mutex<AppState>>();
     if let Ok(mut guard) = state.lock() {
@@ -347,6 +389,18 @@ async fn refresh_provider(
                 "dropping superseded provider refresh result"
             );
             return;
+        }
+        if timeout_recovery_enabled && fetch.timeout_retries_exhausted {
+            guard.timeout_paused_providers.insert(id);
+            tracing::warn!(
+                provider = id.cli_name(),
+                retries = MAX_TIMEOUT_RETRIES,
+                "pausing provider after timeout retries; manual refresh will resume it"
+            );
+        } else {
+            // A successful result, or a non-timeout error, must not leave an
+            // old timeout pause blocking future automatic refreshes.
+            guard.timeout_paused_providers.remove(&id);
         }
         let snapshot = preserve_last_good_transient_failure(&mut guard, id, snapshot);
         upsert_provider_cache(&mut guard.provider_cache, snapshot.clone());
@@ -409,26 +463,90 @@ fn is_transient_claude_auth_error(error: Option<&str>) -> bool {
         || lower.contains("oauth")
 }
 
-async fn fetch_provider_snapshot(id: ProviderId, ctx: FetchContext) -> ProviderUsageSnapshot {
+struct ProviderFetchAttempt {
+    snapshot: ProviderUsageSnapshot,
+    timeout_retries_exhausted: bool,
+}
+
+pub(crate) fn provider_error_is_timeout(error: &codexbar::core::ProviderError) -> bool {
+    match error {
+        codexbar::core::ProviderError::Timeout => true,
+        codexbar::core::ProviderError::Network(error) => error.is_timeout(),
+        codexbar::core::ProviderError::Other(message) => {
+            let lower = message.to_ascii_lowercase();
+            lower.contains("timeout")
+                || lower.contains("timed out")
+                || lower.contains("deadline exceeded")
+                || lower.contains("gateway timeout")
+                || lower.contains("504")
+        }
+        _ => false,
+    }
+}
+
+async fn fetch_provider_snapshot(
+    id: ProviderId,
+    ctx: FetchContext,
+    timeout_recovery_enabled: bool,
+) -> ProviderFetchAttempt {
     let provider = instantiate_provider(id);
     let metadata = provider.metadata().clone();
     let started = std::time::Instant::now();
 
-    let mut snapshot =
-        match tokio::time::timeout(provider_fetch_timeout(id, &ctx), provider.fetch_usage(&ctx))
-            .await
+    let mut retries = 0;
+    loop {
+        let (mut snapshot, timed_out) = match tokio::time::timeout(
+            provider_fetch_timeout(id, &ctx),
+            provider.fetch_usage(&ctx),
+        )
+        .await
         {
-            Ok(Ok(result)) => ProviderUsageSnapshot::from_fetch_result(id, &metadata, &result),
-            Ok(Err(e)) => ProviderUsageSnapshot::from_error(
-                id,
-                &metadata,
-                codexbar::logging::safe_error_message(e),
+            Ok(Ok(result)) => (
+                ProviderUsageSnapshot::from_fetch_result(id, &metadata, &result),
+                false,
             ),
-            Err(_) => ProviderUsageSnapshot::from_error(id, &metadata, "Timeout".to_string()),
+            Ok(Err(error)) => {
+                let timed_out = provider_error_is_timeout(&error);
+                (
+                    ProviderUsageSnapshot::from_error(
+                        id,
+                        &metadata,
+                        codexbar::logging::safe_error_message(error),
+                    ),
+                    timed_out,
+                )
+            }
+            Err(_) => (
+                ProviderUsageSnapshot::from_error(id, &metadata, "Timeout".to_string()),
+                true,
+            ),
         };
 
-    record_provider_fetch_duration(id, &mut snapshot, started);
-    snapshot
+        if timeout_recovery_enabled && timed_out && retries < MAX_TIMEOUT_RETRIES {
+            retries += 1;
+            tracing::warn!(
+                provider = id.cli_name(),
+                retry = retries,
+                max_retries = MAX_TIMEOUT_RETRIES,
+                "provider refresh timed out; retrying"
+            );
+            tokio::time::sleep(timeout_retry_delay(retries)).await;
+            continue;
+        }
+
+        if timeout_recovery_enabled && timed_out {
+            tracing::warn!(
+                provider = id.cli_name(),
+                retries,
+                "provider refresh timed out after retries; pausing automatic refresh"
+            );
+        }
+        record_provider_fetch_duration(id, &mut snapshot, started);
+        return ProviderFetchAttempt {
+            snapshot,
+            timeout_retries_exhausted: timeout_recovery_enabled && timed_out,
+        };
+    }
 }
 
 fn record_provider_fetch_duration(

@@ -227,8 +227,10 @@ impl ProviderUsageSnapshot {
         // length has. They are already sent as `primary_label`/`secondary_label`
         // below; classifying with them here is what lets every surface read the
         // answer instead of recomputing it.
-        let primary_snap =
-            RateWindowSnapshot::from_rate_window_labelled(&usage.primary, Some(metadata.session_label));
+        let primary_snap = RateWindowSnapshot::from_rate_window_labelled(
+            &usage.primary,
+            Some(metadata.session_label),
+        );
 
         let secondary_snap = usage.secondary.as_ref().map(|sw| {
             let mut s =
@@ -507,6 +509,7 @@ pub struct SettingsSnapshot {
     enabled_providers: Vec<String>,
     provider_order: Vec<String>,
     refresh_interval_secs: u64,
+    provider_timeout_recovery_enabled: bool,
     refresh_all_providers_on_menu_open: bool,
     start_at_login: bool,
     start_minimized: bool,
@@ -533,7 +536,6 @@ pub struct SettingsSnapshot {
     codex_custom_sessions_dirs: Vec<String>,
     ui_language: &'static str,
     theme: &'static str,
-    window_scale_percent: u16,
     tray_scale_percent: u16,
     claude_avoid_keychain_prompts: bool,
     disable_keychain_access: bool,
@@ -615,6 +617,7 @@ impl From<Settings> for SettingsSnapshot {
             enabled_providers,
             provider_order,
             refresh_interval_secs: settings.refresh_interval_secs,
+            provider_timeout_recovery_enabled: settings.provider_timeout_recovery_enabled,
             refresh_all_providers_on_menu_open: settings.refresh_all_providers_on_menu_open,
             start_at_login: settings.start_at_login,
             start_minimized: settings.start_minimized,
@@ -641,7 +644,6 @@ impl From<Settings> for SettingsSnapshot {
             codex_custom_sessions_dirs: settings.codex_custom_sessions_dirs,
             ui_language: language_label(settings.ui_language),
             theme: theme_label(settings.theme),
-            window_scale_percent: settings.window_scale_percent,
             tray_scale_percent: settings.tray_scale_percent,
             claude_avoid_keychain_prompts: avoid_keychain_prompts,
             disable_keychain_access: settings.disable_keychain_access,

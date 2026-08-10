@@ -42,6 +42,8 @@ impl RawTaskbarWidgetFontWeight {
 pub(super) struct RawSettings {
     enabled_providers: HashSet<String>,
     refresh_interval_secs: u64,
+    #[serde(default = "default_true")]
+    provider_timeout_recovery_enabled: bool,
     refresh_all_providers_on_menu_open: bool,
     start_minimized: bool,
     start_at_login: bool,
@@ -138,8 +140,6 @@ pub(super) struct RawSettings {
     install_updates_on_quit: bool,
     ui_language: Language,
     theme: ThemePreference,
-    #[serde(default = "default_window_scale_percent")]
-    window_scale_percent: u16,
     #[serde(default = "default_tray_scale_percent")]
     tray_scale_percent: u16,
 
@@ -209,6 +209,8 @@ pub(super) struct RawSettings {
     dashboard_reset_time_relative: Option<bool>,
     #[serde(default)]
     dashboard_provider_ids: Vec<String>,
+    /// Legacy dashboard-only filter. The current dashboard follows enabled
+    /// providers and provider-reported windows instead of reading this value.
     #[serde(default)]
     dashboard_quota_windows: Vec<String>,
     #[serde(default)]
@@ -267,6 +269,7 @@ impl Default for RawSettings {
         Self {
             enabled_providers: s.enabled_providers,
             refresh_interval_secs: s.refresh_interval_secs,
+            provider_timeout_recovery_enabled: s.provider_timeout_recovery_enabled,
             refresh_all_providers_on_menu_open: s.refresh_all_providers_on_menu_open,
             start_minimized: s.start_minimized,
             start_at_login: s.start_at_login,
@@ -326,7 +329,6 @@ impl Default for RawSettings {
             install_updates_on_quit: s.install_updates_on_quit,
             ui_language: s.ui_language,
             theme: s.theme,
-            window_scale_percent: s.window_scale_percent,
             tray_scale_percent: s.tray_scale_percent,
             float_bar_enabled: s.float_bar_enabled,
             float_bar_opacity: s.float_bar_opacity,
@@ -575,6 +577,7 @@ impl From<RawSettings> for Settings {
         Settings {
             enabled_providers: raw.enabled_providers,
             refresh_interval_secs: raw.refresh_interval_secs,
+            provider_timeout_recovery_enabled: raw.provider_timeout_recovery_enabled,
             refresh_all_providers_on_menu_open: raw.refresh_all_providers_on_menu_open,
             start_minimized: raw.start_minimized,
             start_at_login: raw.start_at_login,
@@ -610,7 +613,6 @@ impl From<RawSettings> for Settings {
             install_updates_on_quit: raw.install_updates_on_quit,
             ui_language: raw.ui_language,
             theme: raw.theme,
-            window_scale_percent: clamp_window_scale_percent(raw.window_scale_percent),
             tray_scale_percent: clamp_tray_scale_percent(raw.tray_scale_percent),
             float_bar_enabled: raw.float_bar_enabled,
             float_bar_opacity: clamp_float_bar_opacity(raw.float_bar_opacity),
@@ -673,7 +675,9 @@ impl From<RawSettings> for Settings {
             // No legacy global to migrate from: the dashboard has always shown
             // every enabled provider, and empty means exactly that.
             dashboard_provider_ids: raw.dashboard_provider_ids,
-            dashboard_quota_windows: raw.dashboard_quota_windows,
+            dashboard_quota_windows: normalize_dashboard_quota_windows(
+                &raw.dashboard_quota_windows,
+            ),
             taskbar_show_as_used: raw.taskbar_show_as_used.unwrap_or(raw.show_as_used),
             // Absent key falls back to the legacy global, matching how
             // `taskbar_show_as_used` migrates.

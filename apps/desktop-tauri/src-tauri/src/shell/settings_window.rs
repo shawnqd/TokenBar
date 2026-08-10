@@ -8,8 +8,8 @@ use tauri::{Emitter, Manager, PhysicalPosition, WebviewUrl};
 use crate::state::AppState;
 
 pub const SETTINGS_LABEL: &str = "settings";
-/// Fired when the window goes from hidden to visible, so the frontend can play
-/// its entrance animation.
+/// Fired when the window goes from hidden to visible. The frontend uses this
+/// only for a small content motion; native visibility remains authoritative.
 ///
 /// The window is prewarmed and reused rather than created per open, so the
 /// React tree never remounts and a mount-time animation would run exactly once
@@ -17,16 +17,6 @@ pub const SETTINGS_LABEL: &str = "settings";
 /// to observe — a hidden window's webview does not reliably get a visibility
 /// change from Chromium.
 pub const SETTINGS_REVEALED_EVENT: &str = "settings-window-revealed";
-/// Fired after the window is hidden, so the frontend can park its frame back at
-/// zero opacity.
-///
-/// Without this the frame rests opaque while hidden, and the next `show()`
-/// paints a fully drawn window for the frame or two it takes the reveal event
-/// to cross the IPC boundary. The fade then starts from zero — so the window
-/// appears, blinks out, and fades back in. That reads as a bug, which is what it
-/// is. Parking the frame at zero while hidden means `show()` can only ever
-/// reveal something already transparent.
-pub const SETTINGS_HIDDEN_EVENT: &str = "settings-window-hidden";
 // The frontend frame reserves a transparent gutter on every side to hold its
 // drop shadow, so the window is larger than the card the user sees. Kept in
 // step with `.settings-surface--full.settings-window-frame`'s padding —
@@ -99,6 +89,14 @@ fn remember_geometry(window: &tauri::WebviewWindow) {
     );
 }
 
+/// WebView2 can restore the top-level HWND style while the prewarmed window
+/// is being initialized or revealed. Keep the native shell decoration-free at
+/// every lifecycle boundary so the frontend title bar is the only title bar.
+fn normalize_window_chrome(window: &tauri::WebviewWindow) {
+    let _ = window.set_decorations(false);
+    super::dwm::force_borderless_transparent_resizable(window);
+}
+
 /// Whether the detached Settings window is visibly open. The tray flyout uses
 /// this to stay on screen as a live settings preview while focus moves between
 /// these two companion surfaces.
@@ -122,14 +120,13 @@ fn build_hidden(app: &tauri::AppHandle, tab: &str) -> Result<(), String> {
         .decorations(false)
         .shadow(false)
         .resizable(true)
-        // Never expose WebView2's blank backing surface. The React Settings
-        // tree calls `reveal_settings_window` after its lazy chunk and first
-        // layout are ready.
-        .visible(false)
         // Dynamically-built windows default to drag-drop ENABLED, which
         // intercepts the HTML5 draggable events the Providers sidebar's
         // drag-reorder relies on before React sees them.
         .disable_drag_drop_handler()
+        // Never expose WebView2's blank backing surface. The React Settings
+        // tree calls `reveal_settings_window` after its lazy chunk and first
+        // layout are ready.
         .visible(false);
 
     // Match the tray flyout's composition: WebView2 supplies transparent
@@ -150,7 +147,7 @@ fn build_hidden(app: &tauri::AppHandle, tab: &str) -> Result<(), String> {
 
     // Keep WS_THICKFRAME for resizing while removing its square paint. The
     // frontend frame owns the radius, hairline and shadow.
-    super::dwm::force_borderless_transparent_resizable(&win);
+    normalize_window_chrome(&win);
 
     // Restore a previously chosen position; otherwise center against the
     // primary monitor. Tauri's `.center()` is unreliable for dynamically-built
@@ -215,9 +212,9 @@ pub fn open_or_focus(app: &tauri::AppHandle, tab: &str) -> Result<(), String> {
         // WebView2 root can replace the HWND style during initialization;
         // without this pass the window looks borderless but loses native edge
         // hit-testing and cannot be resized reliably.
-        super::dwm::force_borderless_transparent_resizable(&window);
+        normalize_window_chrome(&window);
         window.show().map_err(|e| e.to_string())?;
-        super::dwm::force_borderless_transparent_resizable(&window);
+        normalize_window_chrome(&window);
         window.set_focus().map_err(|e| e.to_string())?;
         if was_hidden {
             app.emit_to(SETTINGS_LABEL, SETTINGS_REVEALED_EVENT, ())
@@ -241,11 +238,10 @@ pub fn dismiss(app: &tauri::AppHandle, window: &tauri::WebviewWindow) -> Result<
     if window.label() == SETTINGS_LABEL {
         remember_geometry(window);
         window.hide().map_err(|e| e.to_string())?;
-        // Emitted after the hide: the frame drops to zero opacity behind an
-        // already-invisible window, so the reset itself is never seen.
-        return app
-            .emit_to(SETTINGS_LABEL, SETTINGS_HIDDEN_EVENT, ())
-            .map_err(|e| e.to_string());
+        // The webview stays fully painted while hidden. This is intentional:
+        // native hide/show is the only visibility state, so an event race or
+        // HMR remount cannot reveal a blank frame.
+        return Ok(());
     }
 
     crate::shell::hide_to_tray_if_current(app, |mode| {

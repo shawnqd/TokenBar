@@ -41,6 +41,13 @@ pub struct Settings {
     /// Refresh interval in seconds (0 = manual only)
     pub refresh_interval_secs: u64,
 
+    /// Retry provider requests after timeouts before pausing automatic refresh.
+    /// When enabled, a timed-out request is retried three times with a short
+    /// backoff; only a fourth consecutive timeout pauses that provider until
+    /// the next manual refresh.
+    #[serde(default = "default_true")]
+    pub provider_timeout_recovery_enabled: bool,
+
     /// Force-refresh enabled providers whenever the tray/menu surface opens.
     #[serde(default)]
     pub refresh_all_providers_on_menu_open: bool,
@@ -168,11 +175,6 @@ pub struct Settings {
     /// UI theme preference (Phase 12). Defaults to Auto (prefers-color-scheme).
     #[serde(default)]
     pub theme: ThemePreference,
-
-    /// Main PopOut window display scale, in the inclusive range 100..=250.
-    /// 100 % is normal size; higher values enlarge the window content.
-    #[serde(default = "default_window_scale_percent")]
-    pub window_scale_percent: u16,
 
     /// Tray flyout display scale, in the inclusive range 100..=200.
     /// 100 % is normal size; higher values enlarge the flyout content.
@@ -335,28 +337,15 @@ pub struct Settings {
     #[serde(default = "default_true")]
     pub dashboard_reset_time_relative: bool,
 
-    /// Provider ids the dashboard surfaces (tray flyout and pop-out panel)
-    /// display. Empty = every enabled provider, which is what they did before
-    /// this key existed, so an upgrade changes nothing.
-    ///
-    /// The counterpart of [`float_bar_provider_ids`], and item H's "仪表盘自己的
-    /// 服务商筛选": the global `enabled_providers` list decides which providers
-    /// the app *polls*, and that is not the same question as which ones a given
-    /// surface should be crowded with. Filtering here never enables a provider —
-    /// an id absent from `enabled_providers` stays hidden regardless.
-    ///
-    /// [`float_bar_provider_ids`]: Settings::float_bar_provider_ids
+    /// Retained for settings-file compatibility. Dashboard surfaces now follow
+    /// `enabled_providers` directly; this legacy dashboard-only filter is not
+    /// consulted by the renderer.
     #[serde(default)]
     pub dashboard_provider_ids: Vec<String>,
 
-    /// Which quota-window cycles the dashboard cards render. Empty = all,
-    /// which is what they did before this key existed.
-    ///
-    /// Item H's "额度窗口" for the dashboard. The vocabulary is the cycle kinds
-    /// (`session`, `daily`, `weekly`, `monthly`) the strip's entries and the
-    /// bar's reset windows already use, so one word means one thing on every
-    /// surface. A window with no cycle — a prepaid balance, an API-key status —
-    /// is never filtered out by this; see `dashboardShowsQuotaWindow`.
+    /// Retained for settings-file compatibility. Dashboard cards now render the
+    /// quota windows returned by each provider, so this legacy filter is not
+    /// consulted by the renderer.
     #[serde(default)]
     pub dashboard_quota_windows: Vec<String>,
 
@@ -378,16 +367,11 @@ pub struct Settings {
     #[serde(default = "default_true")]
     pub taskbar_reset_time_relative: bool,
 
-
     /// Hover/tooltip entries for the mini status bar and tray icon, independent
     /// of the painted strip entries (TASK-021 item 9). Empty → reuse strip
     /// entries / primary tray lines.
     #[serde(default)]
     pub taskbar_tooltip_entries: Vec<TaskbarEntry>,
-}
-
-fn default_window_scale_percent() -> u16 {
-    100
 }
 
 fn default_taskbar_widget_position() -> String {
@@ -519,6 +503,24 @@ pub fn normalize_taskbar_entries(requested: &[TaskbarEntry]) -> Vec<TaskbarEntry
     out
 }
 
+/// Normalize the legacy dashboard quota setting for old configuration files.
+/// The dashboard no longer exposes or consumes this setting; keeping the
+/// canonical representation avoids breaking older settings migrations.
+pub fn normalize_dashboard_quota_windows(requested: &[String]) -> Vec<String> {
+    let has_weekly = requested
+        .iter()
+        .any(|value| value.trim().eq_ignore_ascii_case("weekly"));
+    let has_session = requested
+        .iter()
+        .any(|value| value.trim().eq_ignore_ascii_case("session"));
+
+    if has_weekly && !has_session {
+        vec!["weekly".to_string()]
+    } else {
+        vec!["session".to_string(), "weekly".to_string()]
+    }
+}
+
 /// Translate the retired single-choice content setting into the ordered list.
 ///
 /// The mappings reproduce exactly what each legacy value used to render, so an
@@ -553,17 +555,12 @@ fn default_taskbar_widget_text_align() -> String {
     "left".to_string()
 }
 
-pub fn clamp_window_scale_percent(value: u16) -> u16 {
-    value.clamp(100, 250)
-}
-
 /// Window kinds the floating bar can print a reset for.
 ///
 /// `primary` means "whichever window this provider leads with" and is what the
 /// bar did before the setting existed. The rest select by the window's declared
 /// length, the same rule the taskbar strip uses.
-pub const FLOAT_BAR_RESET_WINDOWS: [&str; 5] =
-    ["primary", "session", "weekly", "daily", "monthly"];
+pub const FLOAT_BAR_RESET_WINDOWS: [&str; 5] = ["primary", "session", "weekly", "daily", "monthly"];
 
 /// Most resets one pill will print. Each one costs horizontal space in a bar
 /// that is meant to stay small, and beyond three the pill stops being glanceable.
@@ -730,6 +727,7 @@ impl Default for Settings {
         Self {
             enabled_providers: enabled,
             refresh_interval_secs: 300, // 5 minutes
+            provider_timeout_recovery_enabled: true,
             refresh_all_providers_on_menu_open: false,
             start_minimized: false,
             start_at_login: false,
@@ -761,7 +759,6 @@ impl Default for Settings {
             install_updates_on_quit: false, // Don't auto-install on quit by default
             ui_language: Language::default(), // English by default
             theme: ThemePreference::default(), // Auto (follows prefers-color-scheme)
-            window_scale_percent: default_window_scale_percent(),
             tray_scale_percent: default_tray_scale_percent(),
             float_bar_enabled: false,
             float_bar_opacity: default_float_bar_opacity(),
@@ -791,7 +788,7 @@ impl Default for Settings {
             dashboard_show_as_used: true,
             dashboard_reset_time_relative: true,
             dashboard_provider_ids: Vec::new(),
-            dashboard_quota_windows: Vec::new(),
+            dashboard_quota_windows: vec!["session".to_string(), "weekly".to_string()],
             taskbar_show_as_used: true,
             taskbar_reset_time_relative: true,
             taskbar_tooltip_entries: Vec::new(),

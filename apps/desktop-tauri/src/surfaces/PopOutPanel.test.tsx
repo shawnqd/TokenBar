@@ -1,4 +1,4 @@
-﻿import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const tauriMocks = vi.hoisted(() => ({
@@ -148,7 +148,6 @@ function settings(): SettingsSnapshot {
     codexCustomSessionsDirs: [],
     uiLanguage: "english",
     theme: "dark",
-    windowScalePercent: 125,
     trayScalePercent: 100,
     claudeAvoidKeychainPrompts: false,
     disableKeychainAccess: false,
@@ -297,25 +296,6 @@ describe("PopOutPanel", () => {
     expect(tauriMocks.openFlyoutWindow).not.toHaveBeenCalled();
   });
 
-  it("applies the persisted PopOut display scale", async () => {
-    const { container } = renderPopOut(
-      [provider("codex", "Codex", 80)],
-      undefined,
-      [],
-      { windowScalePercent: 175 },
-    );
-
-    await waitFor(() => {
-      expect(container.querySelector(".popout-scale-shell")).not.toBeNull();
-    });
-
-    // Scaling is applied via the webview's native zoom, not an inline
-    // `--window-scale` style (which the earlier CSS-zoom approach used).
-    await waitFor(() => {
-      expect(webviewWindowMocks.setZoom).toHaveBeenCalledWith(1.75);
-    });
-  });
-
   it("does not resize or reposition the native window on mount", async () => {
     renderPopOut([provider("codex", "Codex", 80)]);
 
@@ -364,6 +344,7 @@ describe("PopOutPanel", () => {
       ],
       undefined,
       catalog,
+      { enabledProviders: ["codex", "claude", "cursor"] },
     );
 
     await waitFor(() => {
@@ -382,7 +363,9 @@ describe("PopOutPanel", () => {
       provider(id, displayName, (index * 7) % 100),
     );
 
-    const { container } = renderPopOut(providers);
+    const { container } = renderPopOut(providers, undefined, [], {
+      enabledProviders: providers.map((snapshot) => snapshot.providerId),
+    });
 
     await waitFor(() => {
       expect(container.querySelector(".provider-grid--compact")).not.toBeNull();

@@ -278,6 +278,9 @@ export interface SettingsSnapshot {
   enabledProviders: string[];
   providerOrder?: string[];
   refreshIntervalSecs: number;
+  /** Retry timeout failures three times before pausing background refresh. */
+  /** Backend always supplies this; optional keeps older test/bootstrap fixtures compatible. */
+  providerTimeoutRecoveryEnabled?: boolean;
   refreshAllProvidersOnMenuOpen: boolean;
   startAtLogin: boolean;
   startMinimized: boolean;
@@ -306,7 +309,7 @@ export interface SettingsSnapshot {
   uiLanguage: Language;
   theme: ThemePreference;
   /** 100..=250 — clamped server-side. */
-  windowScalePercent: number;
+
   /** 100..=200 — clamped server-side. */
   trayScalePercent: number;
   claudeAvoidKeychainPrompts: boolean;
@@ -365,14 +368,13 @@ export interface SettingsSnapshot {
   /** Tray flyout + PopOut panel: countdown (`true`) or absolute time. */
   dashboardResetTimeRelative: boolean;
   /**
-   * Which providers the tray flyout and pop-out panel show. Empty = every
-   * enabled provider, the behaviour before this key existed. Filtering here
-   * never enables a provider — `enabledProviders` still decides that.
+   * Legacy dashboard-only provider filter, retained for settings migration.
+   * The dashboard now follows `enabledProviders` directly.
    */
   dashboardProviderIds: string[];
   /**
-   * Which quota-window cycles the dashboard cards render. Empty = all.
-   * Vocabulary is `QuotaCycleKind`; a window with no cycle is never hidden.
+   * Legacy dashboard quota filter, retained for settings migration. Dashboard
+   * cards now render the quota windows returned by each provider.
    */
   dashboardQuotaWindows: string[];
   /**
@@ -399,6 +401,7 @@ export interface SettingsSnapshot {
 export interface SettingsUpdate {
   enabledProviders?: string[];
   refreshIntervalSecs?: number;
+  providerTimeoutRecoveryEnabled?: boolean;
   refreshAllProvidersOnMenuOpen?: boolean;
   startAtLogin?: boolean;
   startMinimized?: boolean;
@@ -425,7 +428,6 @@ export interface SettingsUpdate {
   codexCustomSessionsDirs?: string[];
   uiLanguage?: Language;
   theme?: ThemePreference;
-  windowScalePercent?: number;
   trayScalePercent?: number;
   claudeAvoidKeychainPrompts?: boolean;
   disableKeychainAccess?: boolean;
@@ -458,6 +460,7 @@ export interface SettingsUpdate {
   floatBarResetTimeRelative?: boolean;
   dashboardShowAsUsed?: boolean;
   dashboardResetTimeRelative?: boolean;
+  /** Legacy dashboard-only filters; retained for migration compatibility. */
   dashboardProviderIds?: string[];
   dashboardQuotaWindows?: string[];
   taskbarShowAsUsed?: boolean;

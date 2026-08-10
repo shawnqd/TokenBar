@@ -1,6 +1,6 @@
 use codexbar::core::ProviderId;
 use serde::Serialize;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
 use crate::commands::ProviderUsageSnapshot;
@@ -121,6 +121,10 @@ pub struct AppState {
     pub tray_anchor: Option<TrayAnchor>,
     pub provider_cache: Vec<ProviderUsageSnapshot>,
     pub transient_provider_failure_counts: HashMap<ProviderId, u8>,
+    /// Providers that exhausted the bounded timeout retry policy. This is a
+    /// runtime pause only: a manual refresh clears it and tries again, while
+    /// the background refresh loop leaves the provider's last result alone.
+    pub timeout_paused_providers: HashSet<ProviderId>,
     pub provider_cache_updated_at: Option<std::time::Instant>,
     pub provider_refresh_started_at: Option<std::time::Instant>,
     pub provider_refresh_generation: u64,
@@ -188,6 +192,7 @@ impl AppState {
             tray_anchor: None,
             provider_cache: Vec::new(),
             transient_provider_failure_counts: HashMap::new(),
+            timeout_paused_providers: HashSet::new(),
             provider_cache_updated_at: None,
             provider_refresh_started_at: None,
             provider_refresh_generation: 0,

@@ -703,6 +703,37 @@ fn provider_fetch_timeout_respects_context_web_timeout_with_cap() {
 }
 
 #[test]
+fn timeout_retry_policy_uses_three_retries_with_short_backoff() {
+    assert_eq!(super::MAX_TIMEOUT_RETRIES, 3);
+    assert_eq!(
+        super::timeout_retry_delay(1),
+        std::time::Duration::from_millis(250)
+    );
+    assert_eq!(
+        super::timeout_retry_delay(3),
+        std::time::Duration::from_millis(750)
+    );
+    // Retry numbering is defensive: a zero value still waits the base delay.
+    assert_eq!(
+        super::timeout_retry_delay(0),
+        std::time::Duration::from_millis(250)
+    );
+}
+
+#[test]
+fn only_timeout_failures_enter_the_retry_policy() {
+    assert!(super::provider_error_is_timeout(
+        &codexbar::core::ProviderError::Timeout
+    ));
+    assert!(super::provider_error_is_timeout(
+        &codexbar::core::ProviderError::Other("HTTP 504 Gateway Timeout".into())
+    ));
+    assert!(!super::provider_error_is_timeout(
+        &codexbar::core::ProviderError::AuthRequired
+    ));
+}
+
+#[test]
 fn provider_cache_upsert_replaces_existing_provider() {
     let metadata = instantiate_provider(ProviderId::Codex).metadata().clone();
     let result = ProviderFetchResult {

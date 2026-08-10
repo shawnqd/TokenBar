@@ -1,16 +1,25 @@
+import codexbarIcon from "../assets/codexbar-icon.png";
+
 interface TokenBarIconProps {
   size?: number;
   className?: string;
 }
 
-/** Shared TokenBar brand mark: three high-contrast signals, legible at 16px. */
+/**
+ * Shared TokenBar brand mark in the tray / pop-out provider switcher.
+ * Uses the same product PNG as the app / tray shell icon so the "全部"
+ * tile matches the installed mark (not a second hand-drawn three-rail SVG).
+ */
 export function TokenBarIcon({ size = 18, className }: TokenBarIconProps) {
   return (
-    <svg aria-hidden="true" className={className} width={size} height={size} viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-      <rect width="24" height="24" rx="6" fill="#101827" />
-      <rect x="5" y="6" width="14" height="3" rx="1.5" fill="#62E5FF" />
-      <rect x="5" y="10.5" width="14" height="3" rx="1.5" fill="#62E5FF" />
-      <rect x="5" y="15" width="14" height="3" rx="1.5" fill="#62E5FF" />
-    </svg>
+    <img
+      src={codexbarIcon}
+      width={size}
+      height={size}
+      className={className}
+      alt=""
+      aria-hidden
+      draggable={false}
+    />
   );
 }

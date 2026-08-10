@@ -23,16 +23,37 @@ export function quotaWindowLabel(
   rate: RateWindowSnapshot,
   t: (key: LocaleKey) => string,
 ): string {
-  // `kind` is decided once in Rust (`quota_cycle.rs`). This used to test
-  // `windowMinutes >= 7 days`, an open-ended bound with no upper limit, so a
-  // MONTHLY window was labelled "Weekly" here while the taskbar strip called the
-  // same window "月".
-  if (rate.kind === "weekly") {
+  // `kind` is decided once in Rust (`quota_cycle.rs`). Prefer it so English
+  // provider labels like "Rolling" or slot names like "tertiary" never leak
+  // into the UI when the window length already classifies the cycle.
+  if (rate.kind === "weekly") return t("ProviderWeeklyLabel");
+  if (rate.kind === "monthly") return t("ProviderMonthlyLabel");
+  if (rate.kind === "session" || rate.kind === "daily") {
+    return t("ProviderSessionLabel");
+  }
+  const normalized = raw?.trim().toLowerCase() ?? "";
+  if (
+    normalized === "weekly" ||
+    normalized.includes("week")
+  ) {
     return t("ProviderWeeklyLabel");
   }
-  const normalized = raw?.trim().toLowerCase();
-  if (normalized === "weekly") return t("ProviderWeeklyLabel");
-  if (normalized === "session" || normalized === "session (5h)") {
+  if (
+    normalized === "monthly" ||
+    normalized.includes("month") ||
+    normalized === "tertiary"
+  ) {
+    return t("ProviderMonthlyLabel");
+  }
+  if (
+    normalized === "session" ||
+    normalized === "session (5h)" ||
+    normalized === "rolling" ||
+    normalized.includes("rolling") ||
+    normalized.includes("5h") ||
+    normalized.includes("5-hour") ||
+    normalized.includes("5 hour")
+  ) {
     return t("ProviderSessionLabel");
   }
   return raw?.trim() || t("ProviderSessionLabel");

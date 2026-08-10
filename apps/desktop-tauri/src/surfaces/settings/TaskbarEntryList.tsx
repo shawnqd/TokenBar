@@ -1,4 +1,6 @@
+import type { CSSProperties } from "react";
 import { Select } from "../../components/FormControls";
+import { providerIndexBadge } from "../../components/charts/chartPalette";
 import { useLocale } from "../../hooks/useLocale";
 import type { TaskbarEntry, TaskbarWindowKind } from "../../types/bridge";
 import type { LocaleKey } from "../../i18n/keys";
@@ -29,14 +31,11 @@ interface Props {
  * The ordered "provider + quota window" list, shared by the strip's entries and
  * its hover tooltip's.
  *
- * These were two near-copies, and the copy drifted in ways the user could see:
- * the tooltip list had no reorder buttons, its remove button fell back to the
- * default heavy button style instead of the compact icon cluster, its add
- * button rendered as a full-width bordered block rather than the list's last
- * row — and, less visibly but worse, it offered **every** quota window instead
- * of only the ones the chosen provider can answer for. The first three made the
- * page look unfinished; the fourth let you configure a tooltip line that can
- * only ever print "不支持".
+ * Layout is the B "table header" direction: a column grid
+ * (# / provider / window / note / actions) so the two dropdowns align down the
+ * list instead of stretching into empty flex space. Index badges take the
+ * provider's brand colour; near-black / near-white brands (grok, …) invert via
+ * `data-tone` so the digit stays readable on both themes.
  */
 export default function TaskbarEntryList({
   entries,
@@ -67,10 +66,26 @@ export default function TaskbarEntryList({
   };
 
   return (
-    <>
-      <ol className="taskbar-entries">
+    <div className="taskbar-entries">
+      <div className="taskbar-entries__head" aria-hidden>
+        <span className="taskbar-entries__head-cell">#</span>
+        <span className="taskbar-entries__head-cell">
+          {t("TaskbarEntriesColProvider")}
+        </span>
+        <span className="taskbar-entries__head-cell">
+          {t("TaskbarEntriesColWindow")}
+        </span>
+        <span className="taskbar-entries__head-cell taskbar-entries__head-cell--actions">
+          {t("TaskbarEntriesColActions")}
+        </span>
+      </div>
+      <ol className="taskbar-entries__list">
         {entries.map((entry, index) => {
           const hidden = hiddenFrom !== undefined && index >= hiddenFrom;
+          const badge = providerIndexBadge(entry.providerId);
+          const indexStyle = {
+            "--entry-idx-color": badge.color,
+          } as CSSProperties;
           return (
             <li
               key={`${entry.providerId}-${entry.window}-${index}`}
@@ -80,7 +95,13 @@ export default function TaskbarEntryList({
                  than wondering why a line never appears. */
               data-hidden={hidden ? "true" : undefined}
             >
-              <span className="taskbar-entries__index">{index + 1}</span>
+              <span
+                className="taskbar-entries__index"
+                data-tone={badge.tone === "normal" ? undefined : badge.tone}
+                style={indexStyle}
+              >
+                {index + 1}
+              </span>
               <Select
                 value={entry.providerId}
                 disabled={disabled}
@@ -101,10 +122,12 @@ export default function TaskbarEntryList({
                   replace(index, { window: value as TaskbarWindowKind })
                 }
               />
-              {hidden && (
+              {hidden ? (
                 <span className="taskbar-entries__hidden-note">
                   {t("TaskbarEntriesHidden")}
                 </span>
+              ) : (
+                <span className="taskbar-entries__hidden-note taskbar-entries__hidden-note--empty" />
               )}
               <span className="taskbar-entries__actions">
                 <button
@@ -146,12 +169,15 @@ export default function TaskbarEntryList({
         onClick={() =>
           onChange([
             ...entries,
-            { providerId: providerChoices[0]?.id ?? "auto", window: newEntryWindow },
+            {
+              providerId: providerChoices[0]?.id ?? "auto",
+              window: newEntryWindow,
+            },
           ])
         }
       >
         + {t("TaskbarEntriesAdd")}
       </button>
-    </>
+    </div>
   );
 }

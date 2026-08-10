@@ -1,4 +1,4 @@
-﻿import { act, render, waitFor } from "@testing-library/react";
+import { act, render, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const tauriMocks = vi.hoisted(() => ({
@@ -122,7 +122,6 @@ function settings(overrides: Partial<SettingsSnapshot> = {}): SettingsSnapshot {
     codexCustomSessionsDirs: [],
     uiLanguage: "english",
     theme: "dark",
-    windowScalePercent: 125,
     trayScalePercent: 100,
     claudeAvoidKeychainPrompts: false,
     disableKeychainAccess: false,

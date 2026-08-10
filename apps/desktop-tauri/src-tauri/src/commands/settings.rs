@@ -9,6 +9,7 @@ use super::*;
 pub struct SettingsUpdate {
     pub enabled_providers: Option<Vec<String>>,
     pub refresh_interval_secs: Option<u64>,
+    pub provider_timeout_recovery_enabled: Option<bool>,
     pub refresh_all_providers_on_menu_open: Option<bool>,
     pub start_at_login: Option<bool>,
     pub start_minimized: Option<bool>,
@@ -35,7 +36,6 @@ pub struct SettingsUpdate {
     pub codex_custom_sessions_dirs: Option<Vec<String>>,
     pub ui_language: Option<String>,
     pub theme: Option<String>,
-    pub window_scale_percent: Option<u16>,
     pub tray_scale_percent: Option<u16>,
     pub claude_avoid_keychain_prompts: Option<bool>,
     pub disable_keychain_access: Option<bool>,
@@ -153,6 +153,9 @@ impl SettingsUpdate {
         if let Some(v) = self.refresh_interval_secs {
             settings.refresh_interval_secs = v;
         }
+        if let Some(v) = self.provider_timeout_recovery_enabled {
+            settings.provider_timeout_recovery_enabled = v;
+        }
         if let Some(v) = self.refresh_all_providers_on_menu_open {
             settings.refresh_all_providers_on_menu_open = v;
         }
@@ -206,9 +209,6 @@ impl SettingsUpdate {
         {
             settings.local_usage_period = v.clone();
         }
-        if let Some(v) = self.window_scale_percent {
-            settings.window_scale_percent = codexbar::settings::clamp_window_scale_percent(v);
-        }
         if let Some(v) = self.tray_scale_percent {
             settings.tray_scale_percent = codexbar::settings::clamp_tray_scale_percent(v);
         }
@@ -240,7 +240,8 @@ impl SettingsUpdate {
             settings.dashboard_provider_ids = ids.clone();
         }
         if let Some(ref windows) = self.dashboard_quota_windows {
-            settings.dashboard_quota_windows = windows.clone();
+            settings.dashboard_quota_windows =
+                codexbar::settings::normalize_dashboard_quota_windows(windows);
         }
         if let Some(v) = self.taskbar_reset_time_relative {
             settings.taskbar_reset_time_relative = v;
@@ -576,6 +577,7 @@ pub async fn update_settings(
     let rebuild_tray_menu = patch.rebuilds_tray_menu();
     let refresh_tray_presentation = patch.refreshes_tray_presentation();
     let enabled_providers_changed = patch.enabled_providers.is_some();
+    let timeout_recovery_disabled = patch.provider_timeout_recovery_enabled == Some(false);
     let previous_language = settings.ui_language;
     #[cfg(windows)]
     let taskbar_widget_toggled = patch.taskbar_widget_enabled;
@@ -605,6 +607,15 @@ pub async fn update_settings(
         let enabled_ids = settings.get_enabled_provider_ids();
         let state = app.state::<Mutex<AppState>>();
         invalidate_provider_refresh_and_prune_disabled(&state, &enabled_ids)?;
+    }
+    if timeout_recovery_disabled {
+        // Turning the policy off is an explicit request to resume ordinary
+        // one-attempt refreshes. Do not leave a runtime pause from the old
+        // policy blocking the next automatic cycle.
+        let state = app.state::<Mutex<AppState>>();
+        if let Ok(mut guard) = state.lock() {
+            guard.timeout_paused_providers.clear();
+        }
     }
     if clear_local_usage_cache {
         crate::commands::clear_provider_local_usage_cache();
@@ -743,9 +754,8 @@ mod tests {
     /// just as dead.
     #[test]
     fn dashboard_reset_time_mode_survives_the_bridge_round_trip() {
-        let patch: SettingsUpdate =
-            serde_json::from_str(r#"{"dashboardResetTimeRelative":false}"#)
-                .expect("camelCase toggle must deserialize");
+        let patch: SettingsUpdate = serde_json::from_str(r#"{"dashboardResetTimeRelative":false}"#)
+            .expect("camelCase toggle must deserialize");
         assert_eq!(
             patch.dashboard_reset_time_relative,
             Some(false),
@@ -755,15 +765,18 @@ mod tests {
         assert!(patch.refreshes_tray_presentation());
 
         let mut settings = Settings::default();
-        assert!(settings.dashboard_reset_time_relative, "default is a countdown");
+        assert!(
+            settings.dashboard_reset_time_relative,
+            "default is a countdown"
+        );
         patch.apply_to(&mut settings).expect("patch applies");
         assert!(!settings.dashboard_reset_time_relative);
         // The floating bar owns a separate copy and must not follow along.
         assert!(settings.float_bar_reset_time_relative);
 
         // What the frontend reads back is what decides the rendered text.
-        let json = serde_json::to_value(SettingsSnapshot::from(settings))
-            .expect("snapshot serializes");
+        let json =
+            serde_json::to_value(SettingsSnapshot::from(settings)).expect("snapshot serializes");
         assert_eq!(json["dashboardResetTimeRelative"], serde_json::json!(false));
         assert_eq!(json["floatBarResetTimeRelative"], serde_json::json!(true));
     }
@@ -793,8 +806,8 @@ mod tests {
         assert!(settings.dashboard_show_as_used);
         assert!(settings.dashboard_reset_time_relative);
 
-        let json = serde_json::to_value(SettingsSnapshot::from(settings))
-            .expect("snapshot serializes");
+        let json =
+            serde_json::to_value(SettingsSnapshot::from(settings)).expect("snapshot serializes");
         assert_eq!(json["floatBarShowAsUsed"], serde_json::json!(false));
         assert_eq!(json["floatBarResetTimeRelative"], serde_json::json!(false));
     }
@@ -811,22 +824,23 @@ mod tests {
     }
 
     #[test]
-    fn apply_display_settings_clamps_window_scale_percent() {
+    fn timeout_recovery_setting_round_trips_and_accepts_camel_case() {
+        let patch: SettingsUpdate =
+            serde_json::from_str(r#"{"providerTimeoutRecoveryEnabled":false}"#)
+                .expect("timeout recovery setting must deserialize");
+        assert_eq!(patch.provider_timeout_recovery_enabled, Some(false));
+
         let mut settings = Settings::default();
+        assert!(settings.provider_timeout_recovery_enabled);
+        patch.apply_to(&mut settings).expect("patch applies");
+        assert!(!settings.provider_timeout_recovery_enabled);
 
-        SettingsUpdate {
-            window_scale_percent: Some(300),
-            ..Default::default()
-        }
-        .apply_display_settings(&mut settings);
-        assert_eq!(settings.window_scale_percent, 250);
-
-        SettingsUpdate {
-            window_scale_percent: Some(50),
-            ..Default::default()
-        }
-        .apply_display_settings(&mut settings);
-        assert_eq!(settings.window_scale_percent, 100);
+        let json =
+            serde_json::to_value(SettingsSnapshot::from(settings)).expect("snapshot serializes");
+        assert_eq!(
+            json["providerTimeoutRecoveryEnabled"],
+            serde_json::json!(false)
+        );
     }
 
     #[test]

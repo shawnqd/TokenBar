@@ -15,7 +15,6 @@ vi.mock("../../../lib/tauri", () => ({
 const baseSettings = {
   theme: "dark",
   menuBarDisplayMode: "detailed",
-  windowScalePercent: 100,
   menuFontSize: 12,
   menuFontFamily: "Microsoft YaHei UI",
   menuFontWeight: 300,
@@ -60,8 +59,11 @@ describe("DisplayTab", () => {
       fireEvent.change(range, { target: { value: "700" } });
       fireEvent.blur(range);
     }
-    for (const input of container.querySelectorAll('input[type="number"]')) {
+    for (const input of container.querySelectorAll(
+      '.number-stepper__input, input[type="number"]',
+    )) {
       fireEvent.change(input, { target: { value: "14" } });
+      fireEvent.blur(input);
     }
 
     const written = set.mock.calls.flatMap((call) => Object.keys(call[0] ?? {}));

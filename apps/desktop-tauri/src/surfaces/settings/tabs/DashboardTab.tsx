@@ -1,4 +1,3 @@
-import { useCallback, useEffect, useState } from "react";
 import { useLocale } from "../../../hooks/useLocale";
 import { Field, SegmentedControl, Toggle } from "../../../components/FormControls";
 import type {
@@ -8,38 +7,14 @@ import type {
 } from "../../../types/bridge";
 import type { TabProps } from "../../Settings";
 import BinaryChoiceField from "../BinaryChoiceField";
-import MultiSelectField from "../MultiSelectField";
 
 /**
  * Dashboard settings — the tray flyout and the pop-out panel.
  *
- * Item H splits the settings surface by component. Everything here writes only
- * `dashboard*` keys; the floating bar and the taskbar strip own their own copies
- * of the same choices on their own pages. That separation is the point: changing
- * how the dashboard reads a quota must not silently change the taskbar.
+ * This page owns only dashboard presentation choices. Provider visibility and
+ * quota-window selection are intentionally adaptive: the dashboard follows
+ * the provider switches and renders the windows each provider supplies.
  */
-
-/**
- * The dated cycles a card can show, in increasing length.
- *
- * Deliberately only the cycles — a window with no cycle (a prepaid balance, an
- * API-key status) is never filtered by this control, so offering a chip for it
- * would promise something the filter does not do. See
- * `dashboardShowsQuotaWindow`.
- */
-const QUOTA_WINDOW_KINDS = ["session", "daily", "weekly", "monthly"] as const;
-
-/** Reuses the strip composer's labels so one cycle reads the same everywhere. */
-const QUOTA_WINDOW_LABEL_KEYS = {
-  session: "TaskbarWindowSession",
-  daily: "TaskbarWindowDaily",
-  weekly: "TaskbarWindowWeekly",
-  monthly: "TaskbarWindowMonthly",
-} as const;
-
-function clampWindowScalePercent(value: number): number {
-  return Math.min(250, Math.max(100, Number.isFinite(value) ? value : 100));
-}
 
 /** Only the keys this page owns, so "restore defaults" cannot reach another component. */
 const DASHBOARD_DEFAULTS = {
@@ -47,31 +22,11 @@ const DASHBOARD_DEFAULTS = {
   dashboardShowAsUsed: true,
   dashboardResetTimeRelative: true,
   showAllTokenAccountsInMenu: false,
-  // Empty is "every enabled provider", so restoring defaults widens the
-  // dashboard back out rather than pinning today's roster.
-  dashboardProviderIds: [] as string[],
-  dashboardQuotaWindows: [] as string[],
   localUsagePeriod: "today" as LocalUsagePeriod,
-  windowScalePercent: 100,
-  trayScalePercent: 100,
 };
 
 export default function DashboardTab({ settings, set, saving }: TabProps) {
   const { t } = useLocale();
-  const [windowScaleDraft, setWindowScaleDraft] = useState(() =>
-    clampWindowScalePercent(settings.windowScalePercent),
-  );
-
-  useEffect(() => {
-    setWindowScaleDraft(clampWindowScalePercent(settings.windowScalePercent));
-  }, [settings.windowScalePercent]);
-
-  const commitWindowScale = useCallback(() => {
-    const next = clampWindowScalePercent(windowScaleDraft);
-    if (next !== settings.windowScalePercent) {
-      set({ windowScalePercent: next });
-    }
-  }, [set, settings.windowScalePercent, windowScaleDraft]);
 
   return (
     <>
@@ -97,35 +52,6 @@ export default function DashboardTab({ settings, set, saving }: TabProps) {
           </button>
         </div>
         <div className="settings-section__group">
-          {/* Leads the group: which providers appear is a bigger question than
-              how each one is phrased, and the rows below all describe cards
-              that this list decides the existence of. */}
-          <MultiSelectField
-            label={t("DashboardProvidersLabel")}
-            description={t("DashboardProvidersHelper")}
-            options={(settings.enabledProviders ?? []).map((id) => ({
-              value: id,
-              label: id,
-            }))}
-            value={settings.dashboardProviderIds ?? []}
-            allLabel={t("DashboardFilterAll")}
-            disabled={saving}
-            onChange={(next) => set({ dashboardProviderIds: next })}
-          />
-          {/* Item H's other dashboard list: which reset cycles the cards show.
-              Same control and the same "empty means all" encoding. */}
-          <MultiSelectField
-            label={t("DashboardQuotaWindowsLabel")}
-            description={t("DashboardQuotaWindowsHelper")}
-            options={QUOTA_WINDOW_KINDS.map((kind) => ({
-              value: kind,
-              label: t(QUOTA_WINDOW_LABEL_KEYS[kind]),
-            }))}
-            value={settings.dashboardQuotaWindows ?? []}
-            allLabel={t("DashboardFilterAll")}
-            disabled={saving}
-            onChange={(next) => set({ dashboardQuotaWindows: next })}
-          />
           <Field label={t("DisplayModeLabel")} description={t("DisplayModeHelper")}>
             <SegmentedControl
               value={settings.menuBarDisplayMode}
@@ -183,26 +109,6 @@ export default function DashboardTab({ settings, set, saving }: TabProps) {
               checked={settings.showAllTokenAccountsInMenu}
               disabled={saving}
               onChange={(value) => set({ showAllTokenAccountsInMenu: value })}
-            />
-          </Field>
-          <Field label={t("WindowScaleLabel")} description={t("WindowScaleHelper")}>
-            <input
-              type="range"
-              min={100}
-              max={250}
-              step={5}
-              value={windowScaleDraft}
-              disabled={saving}
-              onChange={(event) =>
-                setWindowScaleDraft(
-                  clampWindowScalePercent(Number(event.target.value)),
-                )
-              }
-              onPointerUp={commitWindowScale}
-              onTouchEnd={commitWindowScale}
-              onBlur={commitWindowScale}
-              onKeyUp={commitWindowScale}
-              aria-label={t("WindowScaleAriaLabel")}
             />
           </Field>
         </div>

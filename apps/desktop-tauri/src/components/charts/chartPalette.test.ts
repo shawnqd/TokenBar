@@ -2,6 +2,8 @@ import { describe, it, expect } from "vitest";
 import {
   providerCostColor,
   providerCreditsColor,
+  providerIndexBadge,
+  relativeLuminance,
   serviceColorVar,
 } from "./chartPalette";
 
@@ -32,6 +34,41 @@ describe("chartPalette.providerColor", () => {
     expect(providerCreditsColor("another-ghost")).toBe(
       "var(--chart-credits)",
     );
+  });
+});
+
+describe("chartPalette.providerIndexBadge", () => {
+  it("uses the brand token for known colourful providers with normal tone", () => {
+    expect(providerIndexBadge("codex")).toEqual({
+      color: "var(--chart-codex, rgb(73, 163, 176))",
+      tone: "normal",
+    });
+    expect(providerIndexBadge("deepseek").tone).toBe("normal");
+  });
+
+  it("inverts near-black brands like grok so the digit stays readable", () => {
+    const grok = providerIndexBadge("grok");
+    expect(grok.tone).toBe("dark");
+    expect(grok.color).toContain("--chart-grok");
+    // Same brand under aliases.
+    expect(providerIndexBadge("xai").tone).toBe("dark");
+    expect(providerIndexBadge("supergrok").tone).toBe("dark");
+  });
+
+  it("falls back to accent for auto / empty, and cost token for unknowns", () => {
+    expect(providerIndexBadge("auto")).toEqual({
+      color: "var(--accent)",
+      tone: "normal",
+    });
+    expect(providerIndexBadge("").tone).toBe("normal");
+    expect(providerIndexBadge("not-a-real-provider").color).toBe(
+      "var(--chart-cost)",
+    );
+  });
+
+  it("classifies pure black as dark via relative luminance", () => {
+    expect(relativeLuminance([0, 0, 0])).toBeLessThan(0.12);
+    expect(relativeLuminance([73, 163, 176])).toBeGreaterThan(0.12);
   });
 });
 

@@ -319,6 +319,12 @@ export function ProvidersSidebar({
             ["--provider-brand" as string]: brand,
           };
 
+          // Status dots were removed on purpose: they duplicated the switch.
+          // Error/stale now tints the enable switch red instead.
+          const problemSwitch =
+            p.enabled && (p.status === "error" || p.status === "stale");
+          const statusLabel = t(STATUS_TO_KEY[p.status]);
+
           return (
             <li
               key={p.id}
@@ -326,6 +332,8 @@ export function ProvidersSidebar({
               role="option"
               tabIndex={isSelected ? 0 : -1}
               aria-selected={isSelected}
+              aria-description={statusLabel}
+              title={statusLabel}
               draggable={!disabled}
               style={rowStyle}
               onClick={() => onSelect(p.id)}
@@ -335,11 +343,6 @@ export function ProvidersSidebar({
               onDrop={handleDrop(p.id)}
               onDragEnd={handleDragEnd}
             >
-              <span
-                className={`providers-sidebar__status providers-sidebar__status--${p.status}`}
-                title={t(STATUS_TO_KEY[p.status])}
-                aria-label={t(STATUS_TO_KEY[p.status])}
-              />
               <ProviderIcon providerId={p.id} size={32} />
               <div className="providers-sidebar__text">
                 <span className="providers-sidebar__name">{p.displayName}</span>
@@ -364,7 +367,7 @@ export function ProvidersSidebar({
               </span>
               <input
                 type="checkbox"
-                className="toggle toggle--sm providers-sidebar__checkbox"
+                className={`toggle toggle--sm providers-sidebar__checkbox${problemSwitch ? " providers-sidebar__checkbox--problem" : ""}`}
                 checked={p.enabled}
                 disabled={disabled}
                 onClick={(e) => e.stopPropagation()}

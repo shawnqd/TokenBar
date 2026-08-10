@@ -1,4 +1,4 @@
-﻿import { describe, it, expect } from "vitest";
+import { describe, it, expect } from "vitest";
 import type { Language, LocaleStrings, SettingsSnapshot } from "./bridge";
 
 describe("Language type", () => {
@@ -57,7 +57,6 @@ describe("Language type", () => {
       enableAnimations: true,
       resetTimeRelative: true,
       menuBarDisplayMode: "compact",
-      windowScalePercent: 125,
       trayScalePercent: 100,
       hidePersonalInfo: false,
       autoDownloadUpdates: false,

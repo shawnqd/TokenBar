@@ -25,8 +25,8 @@ vi.mock("../lib/tauri", () => tauriMocks);
 import { useSettings } from "./useSettings";
 import type { SettingsSnapshot } from "../types/bridge";
 
-const snapshot = (windowScalePercent: number) =>
-  ({ windowScalePercent }) as unknown as SettingsSnapshot;
+const snapshot = (dashboardShowAsUsed: boolean) =>
+  ({ dashboardShowAsUsed }) as unknown as SettingsSnapshot;
 
 describe("useSettings live sync", () => {
   beforeEach(() => {
@@ -34,10 +34,10 @@ describe("useSettings live sync", () => {
   });
 
   it("re-fetches the snapshot when settings-changed fires from another window", async () => {
-    tauriMocks.getSettingsSnapshot.mockResolvedValue(snapshot(100));
+    tauriMocks.getSettingsSnapshot.mockResolvedValue(snapshot(true));
     // Stable identity: the hook's bootstrap effect keys on `initial`, so a new
     // object each render would loop forever.
-    const initial = snapshot(100);
+    const initial = snapshot(true);
     const { result } = renderHook(() => useSettings(initial));
 
     // The hook registers a "settings-changed" listener.
@@ -45,23 +45,23 @@ describe("useSettings live sync", () => {
       expect(eventMocks.listeners["settings-changed"]).toBeTypeOf("function"),
     );
 
-    // A change persisted by the detached Settings window bumps the scale.
-    tauriMocks.getSettingsSnapshot.mockResolvedValue(snapshot(175));
+    // A change persisted by the detached Settings window flips the flag.
+    tauriMocks.getSettingsSnapshot.mockResolvedValue(snapshot(false));
     await act(async () => {
       eventMocks.listeners["settings-changed"]();
     });
 
     await waitFor(() =>
-      expect(result.current.settings.windowScalePercent).toBe(175),
+      expect(result.current.settings.dashboardShowAsUsed).toBe(false),
     );
   });
 
   it("unsubscribes the listener on unmount", async () => {
     const unlisten = vi.fn();
     eventMocks.listen.mockResolvedValueOnce(unlisten);
-    tauriMocks.getSettingsSnapshot.mockResolvedValue(snapshot(100));
+    tauriMocks.getSettingsSnapshot.mockResolvedValue(snapshot(true));
 
-    const initial = snapshot(100);
+    const initial = snapshot(true);
     const { unmount } = renderHook(() => useSettings(initial));
     await waitFor(() => expect(eventMocks.listen).toHaveBeenCalled());
 

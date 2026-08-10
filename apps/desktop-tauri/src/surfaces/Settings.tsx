@@ -136,7 +136,17 @@ function isSettingsTab(value: string): value is SettingsTab {
 // animate a Win32 resize, and tab-dependent layout used to amplify that into
 // a whole-window stretch when entering Providers.
 
-export default function Settings({ state, initialTab: propTab }: { state: BootstrapState; initialTab?: string }) {
+export default function Settings({
+  state,
+  initialTab: propTab,
+  onRequestClose,
+  windowMotion,
+}: {
+  state: BootstrapState;
+  initialTab?: string;
+  onRequestClose?: () => void;
+  windowMotion?: "idle" | "visible" | "closing";
+}) {
   const { settings, saving, error, update } = useSettings(state.settings);
   const { t } = useLocale();
   const shellTarget = useSurfaceTarget("settings");
@@ -147,6 +157,11 @@ export default function Settings({ state, initialTab: propTab }: { state: Bootst
         ? shellTarget.tab
         : "general";
   const [activeTab, setActiveTab] = useState<SettingsTab>(initialTab);
+  // The first Settings paint is the native-window reveal surface, not a tab
+  // switch. Keep the tab transition for real tab changes, but do not run its
+  // opacity-0 keyframe during the first paint (that was the remaining source
+  // of the open flash after the window fade was made stable).
+  const initialPanelRef = useRef(true);
   // Tracks which side the next tab panel should slide in from: 1 when
   // moving to a tab further right in the bar, -1 when moving left. A ref
   // (rather than deriving from `activeTab` state) so the direction is
@@ -156,6 +171,7 @@ export default function Settings({ state, initialTab: propTab }: { state: Bootst
   const [tabSlideDirection, setTabSlideDirection] = useState<1 | -1>(1);
   const changeTab = useCallback((next: SettingsTab) => {
     if (activeTabRef.current === next) return;
+    initialPanelRef.current = false;
     const from = TAB_META.findIndex((t) => t.id === activeTabRef.current);
     const to = TAB_META.findIndex((t) => t.id === next);
     setTabSlideDirection(to >= from ? 1 : -1);
@@ -187,7 +203,11 @@ export default function Settings({ state, initialTab: propTab }: { state: Bootst
   }, [changeTab]);
 
   return (
-    <div className="settings">
+    <div
+      className={`settings${
+        windowMotion ? ` settings-window-motion--${windowMotion}` : ""
+      }`}
+    >
       {/* custom title bar (decorations disabled for guaranteed dark theme) */}
       <div className="settings-titlebar" data-tauri-drag-region>
         <span className="settings-titlebar__title" data-tauri-drag-region>
@@ -202,7 +222,9 @@ export default function Settings({ state, initialTab: propTab }: { state: Bootst
           />
           <button
             className="settings-titlebar__control settings-titlebar__control--close"
-            onClick={() => void closeSettingsWindow()}
+            onClick={() =>
+              onRequestClose ? onRequestClose() : void closeSettingsWindow()
+            }
             aria-label={t("WindowClose")}
             title={t("WindowClose")}
           >
@@ -246,7 +268,7 @@ export default function Settings({ state, initialTab: propTab }: { state: Bootst
           key={activeTab}
           className={`settings-tab-panel${
             activeTab === "providers" ? " settings-tab-panel--providers" : ""
-          }`}
+          }${initialPanelRef.current ? " settings-tab-panel--initial" : ""}`}
           data-slide={tabSlideDirection > 0 ? "right" : "left"}
         >
           <div

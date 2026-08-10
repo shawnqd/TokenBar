@@ -4,7 +4,6 @@ import {
   Field,
   NumberInput,
   SegmentedControl,
-  Select,
   Toggle,
 } from "../../../components/FormControls";
 import {
@@ -93,8 +92,10 @@ export default function TaskbarTab({ settings, set, saving }: TabProps) {
 
   const commitEntries = (next: TaskbarEntry[]) =>
     set({ taskbarWidgetEntries: next });
-  const [families, setFamilies] = useState<TaskbarFontFamily[]>([]);
-  const [showAllFonts, setShowAllFonts] = useState(false);
+  /** Best continuous-weight family for "restore appearance" — not the full list. */
+  const [defaultVariableFamily, setDefaultVariableFamily] = useState<string | null>(
+    null,
+  );
   const [availability, setAvailability] = useState<Record<
     string,
     TaskbarWindowKind[]
@@ -146,60 +147,26 @@ export default function TaskbarTab({ settings, set, saving }: TabProps) {
     return offered;
   };
 
-  // Real installed families, straight from DirectWrite. Never a hardcoded list:
-  // offering a family this machine lacks would silently fall back to something
-  // else at paint time, and the user would have no way to tell.
+  // Best continuous-weight family for restore-defaults. The full picker list
+  // lives inside FontSettingsBlock so this tab does not re-derive curation.
   useEffect(() => {
     let cancelled = false;
     getTaskbarFontFamilies()
-      .then((list) => {
-        if (!cancelled) setFamilies(list);
+      .then((list: TaskbarFontFamily[]) => {
+        if (cancelled) return;
+        const best =
+          list.find((f) => f.recommended && f.variableWeight)?.name ??
+          list.find((f) => f.variableWeight)?.name ??
+          null;
+        setDefaultVariableFamily(best);
       })
       .catch(() => {
-        if (!cancelled) setFamilies([]);
+        if (!cancelled) setDefaultVariableFamily(null);
       });
     return () => {
       cancelled = true;
     };
   }, []);
-
-  // Whether the weight slider is genuinely continuous depends on the FONT, not
-  // on the renderer. Saying so is the whole point of this task item: a static
-  // family makes DirectWrite pick the nearest installed face, so intermediate
-  // slider positions would look identical.
-  const selectedIsVariable =
-    families.find((f) => f.name === fontFamily)?.variableWeight ?? false;
-
-  // A typical Windows install carries ~400 families, nearly all of them symbol,
-  // script and per-app faces that have no business in a 12px status strip.
-  // Showing that raw list was the complaint; the backend marks a short curated
-  // set, and everything else stays one switch away rather than being hidden.
-  const recommendedFamilies = useMemo(
-    () => families.filter((family) => family.recommended),
-    [families],
-  );
-  const fontOptions = useMemo(() => {
-    const listed = showAllFonts ? families : recommendedFamilies;
-    return [
-      // Keep the persisted family selectable even when it is not installed or
-      // not curated, so the control never appears to silently reset it.
-      ...(listed.some((family) => family.name === fontFamily)
-        ? []
-        : [{ value: fontFamily, label: fontFamily }]),
-      ...listed.map((family) => {
-        const tags = [
-          family.variableWeight ? t("TaskbarFontVariableTag") : null,
-          family.hasCjk ? null : t("TaskbarFontNoCjkTag"),
-        ].filter(Boolean);
-        return {
-          value: family.name,
-          label: tags.length
-            ? `${family.name} · ${tags.join(" · ")}`
-            : family.name,
-        };
-      }),
-    ];
-  }, [families, recommendedFamilies, fontFamily, showAllFonts, t]);
 
   // The preview shows the renderer's OWN lines, fetched from the native strip,
   // rather than an imitation built from sample numbers here.
@@ -228,17 +195,23 @@ export default function TaskbarTab({ settings, set, saving }: TabProps) {
     };
   }, [entries, settings]);
 
-  // Column-major, matching `taskbar_widget::cell_rects`: entries 1 and 2 fill
-  // the left column, 3 and 4 the right. Filling row-major instead would put
-  // entry 2 beside entry 1, so a two-entry strip would preview as one row when
-  // the renderer stacks it.
-  const previewColumns = useMemo(() => {
+  /**
+   * Same grid geometry as `taskbar_widget::cell_rects`:
+   * - at most 2 rows × 2 columns
+   * - column-major fill (1,2 left; 3,4 right)
+   * - row count = ceil(n / columns), so a lone third entry sits in the *top*
+   *   half of the right column — not vertically centred in the full strip
+   *   (which is what a flex column with `justify-content: center` did).
+   */
+  const previewLayout = useMemo(() => {
     const visible = previewLines.slice(0, VISIBLE_LINES);
-    const columns = Math.max(1, Math.ceil(visible.length / 2));
-    const rows = Math.max(1, Math.ceil(visible.length / columns));
-    return Array.from({ length: columns }, (_, column) =>
-      visible.slice(column * rows, column * rows + rows),
-    );
+    const count = Math.max(visible.length, 0);
+    if (count === 0) {
+      return { columns: 1, rows: 1, cells: [] as typeof visible };
+    }
+    const columns = Math.max(1, Math.ceil(count / 2));
+    const rows = Math.max(1, Math.ceil(count / columns));
+    return { columns, rows, cells: visible };
   }, [previewLines]);
 
   useEffect(() => {
@@ -257,11 +230,11 @@ export default function TaskbarTab({ settings, set, saving }: TabProps) {
       taskbarWidgetFontSize: 12,
       taskbarWidgetWidth: 132,
       taskbarWidgetFontWeight: 400,
-      // The backend sorts best-first — continuous weight and Chinese coverage
-      // ahead of everything — so "defaults" means the best font this machine
-      // has, not a name hardcoded years ago that may not even be installed.
+      // Prefer the best genuine continuous-weight face this machine has.
+      // Static Microsoft faces are no longer the default — the weight slider
+      // only does real work on a variable font.
       taskbarWidgetFontFamily:
-        recommendedFamilies[0]?.name ?? "Microsoft YaHei UI",
+        defaultVariableFamily ?? "Segoe UI Variable",
       taskbarWidgetTextAlign: "left",
     });
   };
@@ -295,28 +268,34 @@ export default function TaskbarTab({ settings, set, saving }: TabProps) {
               fontVariationSettings: `"wght" ${fontWeightDraft}`,
               fontFamily,
               textAlign,
+              gridTemplateColumns: `repeat(${previewLayout.columns}, minmax(0, 1fr))`,
+              gridTemplateRows: `repeat(${previewLayout.rows}, 1fr)`,
             }}
           >
-            {previewColumns.map((column, columnIndex) => (
-              <div className="taskbar-preview__column" key={columnIndex}>
-                {column.map((line, rowIndex) => (
-                  <span className="taskbar-preview__line" key={rowIndex}>
-                    {line.glyph ? (
-                      // The mark is drawn in its own colour by the renderer —
-                      // shapes repeat across providers, so the colour is what
-                      // identifies one. A monochrome preview would not be one.
-                      <span
-                        className="taskbar-preview__mark"
-                        style={{ color: line.color ?? undefined }}
-                      >
-                        {line.glyph}
-                      </span>
-                    ) : null}
-                    {line.text}
-                  </span>
-                ))}
-              </div>
-            ))}
+            {previewLayout.cells.map((line, index) => {
+              const column = Math.floor(index / previewLayout.rows) + 1;
+              const row = (index % previewLayout.rows) + 1;
+              return (
+                <span
+                  key={`${line.text}-${index}`}
+                  className="taskbar-preview__line"
+                  style={{ gridColumn: column, gridRow: row }}
+                >
+                  {line.glyph ? (
+                    // The mark is drawn in its own colour by the renderer —
+                    // shapes repeat across providers, so the colour is what
+                    // identifies one. A monochrome preview would not be one.
+                    <span
+                      className="taskbar-preview__mark"
+                      style={{ color: line.color ?? undefined }}
+                    >
+                      {line.glyph}
+                    </span>
+                  ) : null}
+                  {line.text}
+                </span>
+              );
+            })}
           </div>
         </div>
       </header>
