@@ -30,6 +30,11 @@ const STATE_CLOSING: u8 = 3;
 
 static FLYOUT_STATE: AtomicU8 = AtomicU8::new(STATE_HIDDEN);
 static CLOSE_GENERATION: AtomicU64 = AtomicU64::new(0);
+// Every global mouse-hook task captures the input generation at the moment
+// Windows delivers the button-down event.  A later tray toggle or window
+// transition advances this generation, making an older queued outside-close
+// task harmless instead of letting it close a panel that has already reopened.
+static INPUT_GENERATION: AtomicU64 = AtomicU64::new(0);
 static HOOK_INSTALLED: AtomicBool = AtomicBool::new(false);
 
 fn set_state(state: u8) {
@@ -47,6 +52,18 @@ fn cancel_pending_close() -> bool {
     CLOSE_GENERATION.fetch_add(1, Ordering::SeqCst);
     set_state(STATE_VISIBLE);
     true
+}
+
+fn next_input_generation() -> u64 {
+    INPUT_GENERATION.fetch_add(1, Ordering::AcqRel) + 1
+}
+
+fn invalidate_pending_input() {
+    let _ = next_input_generation();
+}
+
+fn input_generation_is_current(generation: u64) -> bool {
+    INPUT_GENERATION.load(Ordering::Acquire) == generation
 }
 
 fn remembered_size(props: &crate::surface::WindowProperties) -> (f64, f64) {
@@ -294,9 +311,12 @@ unsafe extern "system" fn mouse_hook_proc(code: i32, wparam: usize, lparam: isiz
             // rectangle is only a hint and can be stale after a move/resize.
             // Always ask the main thread to compare against the current
             // top-level HWND rectangle instead.
-            tracing::debug!(x, y, "flyout: global mouse button queued");
+            let generation = next_input_generation();
+            tracing::debug!(x, y, generation, "flyout: global mouse button queued");
             let posted = app.clone();
-            let _ = app.run_on_main_thread(move || close_if_outside(&posted, x, y));
+            let _ = app.run_on_main_thread(move || {
+                close_if_outside(&posted, x, y, generation)
+            });
         }
     }
     unsafe { CallNextHookEx(0, code, wparam, lparam) }
@@ -346,7 +366,11 @@ fn native_menu_is_tracking() -> bool {
     false
 }
 
-fn close_if_outside(app: &AppHandle, x: i32, y: i32) {
+fn close_if_outside(app: &AppHandle, x: i32, y: i32, generation: u64) {
+    if !input_generation_is_current(generation) {
+        tracing::debug!(x, y, generation, "flyout: stale outside check ignored");
+        return;
+    }
     let Some(window) = app.get_webview_window(FLYOUT_LABEL) else {
         return;
     };
@@ -406,6 +430,7 @@ pub fn is_open(app: &AppHandle) -> bool {
 }
 
 fn show_window(app: &AppHandle, window: &tauri::WebviewWindow) -> Result<(), String> {
+    invalidate_pending_input();
     let was_visible = window.is_visible().unwrap_or(false);
     let was_closing = cancel_pending_close();
     set_state(STATE_SHOWING);
@@ -463,6 +488,7 @@ fn open_or_focus_inner(
     position: Option<(i32, i32)>,
     reveal_when_ready: bool,
 ) -> Result<(), String> {
+    invalidate_pending_input();
     if let Some(window) = app.get_webview_window(FLYOUT_LABEL) {
         cancel_pending_close();
         if let Some((x, y)) = position {
@@ -542,6 +568,7 @@ pub fn toggle_with_blur_consume(app: &AppHandle, position: Option<(i32, i32)>) {
 /// function: outside click, Escape, tray toggle and native close request.
 pub fn request_close(app: &AppHandle) -> Result<(), String> {
     tracing::debug!("flyout: request_close entered");
+    invalidate_pending_input();
     let Some(window) = app.get_webview_window(FLYOUT_LABEL) else {
         set_state(STATE_HIDDEN);
         return Ok(());
@@ -725,6 +752,18 @@ mod tests {
 
         assert!(!should_dismiss_for_click(&ctx, 52, 72));
         assert!(should_dismiss_for_click(&ctx, 0, 0));
+    }
+
+    #[test]
+    fn queued_outside_check_is_invalidated_by_a_later_transition() {
+        let queued = next_input_generation();
+        assert!(input_generation_is_current(queued));
+
+        // Opening or closing the flyout advances the generation. A callback
+        // queued for the previous click must not act on the newly transitioned
+        // window state.
+        invalidate_pending_input();
+        assert!(!input_generation_is_current(queued));
     }
 
     #[test]
