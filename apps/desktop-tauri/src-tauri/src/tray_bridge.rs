@@ -308,8 +308,15 @@ pub fn setup(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
             } = event
             {
                 let app = tray.app_handle();
-                if button == MouseButton::Left && button_state == MouseButtonState::Up {
+                if button == MouseButton::Left {
+                    // Publish the current icon bounds on mouse-down as well as
+                    // mouse-up. The global flyout hook can queue its outside
+                    // check before the up event toggles the panel; using the
+                    // fresh anchor prevents a moved taskbar icon from being
+                    // mistaken for an outside click during the close animation.
                     store_anchor(app, &rect, position);
+                }
+                if button == MouseButton::Left && button_state == MouseButtonState::Up {
                     // Left-click toggles the dedicated flyout window (Pop Out
                     // Dashboard): open it, or cleanly close it when this same
                     // click already blur-dismissed it (no open→close flicker).
