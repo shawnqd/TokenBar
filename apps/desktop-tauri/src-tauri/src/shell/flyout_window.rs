@@ -109,6 +109,11 @@ impl ScreenRect {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ClickOutsideContext {
     pub flyout_rect: ScreenRect,
+    /// The native tray icon that owns the flyout. A click here is a toggle
+    /// event handled by `tray_bridge`, not an outside-dismiss event. Keeping
+    /// this in the same main-thread decision prevents a tray click during the
+    /// close animation from reopening and immediately closing the panel.
+    pub tray_icon_rect: Option<ScreenRect>,
     pub settings_visible: bool,
     pub proof_mode: bool,
     pub native_menu_tracking: bool,
@@ -119,6 +124,9 @@ pub fn should_dismiss_for_click(ctx: &ClickOutsideContext, x: i32, y: i32) -> bo
         && !ctx.settings_visible
         && !ctx.native_menu_tracking
         && !ctx.flyout_rect.contains(x, y)
+        && !ctx
+            .tray_icon_rect
+            .is_some_and(|tray_icon_rect| tray_icon_rect.contains(x, y))
 }
 
 #[cfg(windows)]
@@ -369,6 +377,15 @@ fn close_if_outside(app: &AppHandle, x: i32, y: i32) {
     };
     let context = ClickOutsideContext {
         flyout_rect,
+        tray_icon_rect: app
+            .try_state::<Mutex<AppState>>()
+            .and_then(|state| state.lock().ok()?.tray_anchor)
+            .map(|anchor| ScreenRect {
+                x: anchor.x,
+                y: anchor.y,
+                width: anchor.width as i32,
+                height: anchor.height as i32,
+            }),
         settings_visible: crate::shell::settings_window::is_visible(app),
         proof_mode: crate::proof_harness::is_proof_mode(app),
         native_menu_tracking: native_menu_is_tracking(),
@@ -679,6 +696,7 @@ mod tests {
                 width: 328,
                 height: 776,
             },
+            tray_icon_rect: None,
             settings_visible: false,
             proof_mode: false,
             native_menu_tracking: false,
@@ -693,6 +711,20 @@ mod tests {
     #[test]
     fn outside_click_is_the_only_default_close_trigger() {
         assert!(should_dismiss_for_click(&context(), 0, 0));
+    }
+
+    #[test]
+    fn tray_icon_click_is_not_an_outside_dismissal() {
+        let mut ctx = context();
+        ctx.tray_icon_rect = Some(ScreenRect {
+            x: 40,
+            y: 60,
+            width: 24,
+            height: 24,
+        });
+
+        assert!(!should_dismiss_for_click(&ctx, 52, 72));
+        assert!(should_dismiss_for_click(&ctx, 0, 0));
     }
 
     #[test]
