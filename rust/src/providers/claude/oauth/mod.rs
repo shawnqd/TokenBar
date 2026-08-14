@@ -122,9 +122,13 @@ impl ClaudeOAuthFetcher {
     /// Load credentials and fetch usage, transparently refreshing an expired
     /// OAuth token first (like the Claude CLI does) so the panel stays green
     /// without the user having to re-run `claude`.
+    ///
+    /// Terminal refresh errors (invalid_grant) are propagated immediately;
+    /// transient failures fall back to the original credentials so the stale
+    /// token can still be used for a diagnostic error message.
     pub async fn fetch(&self) -> Result<ProviderFetchResult, ProviderError> {
         let (credentials, source) = credentials_store::load_credentials()?;
-        let credentials = self.ensure_fresh_credentials(credentials, source).await;
+        let credentials = self.ensure_fresh_credentials(credentials, source).await?;
         self.fetch_with_credentials(credentials).await
     }
 
@@ -162,13 +166,18 @@ impl ClaudeOAuthFetcher {
 
     /// If the token is expired (or about to expire), refresh it using the
     /// refresh token and persist the new token back to `.credentials.json`.
-    /// Best-effort: on any failure the original credentials are returned so the
-    /// caller falls back to the existing "expired" handling.
+    ///
+    /// Error classification (upstream PR #309):
+    /// - Terminal (invalid_grant): the refresh token is permanently invalid.
+    ///   The error is propagated immediately so the user can re-authenticate.
+    /// - Transient: the original credentials are returned so the caller falls
+    ///   back to the existing "expired" handling (which produces a diagnostic
+    ///   error without blocking future refresh attempts).
     async fn ensure_fresh_credentials(
         &self,
         mut credentials: ClaudeOAuthCredentials,
         source: credentials_store::CredentialSource,
-    ) -> ClaudeOAuthCredentials {
+    ) -> Result<ClaudeOAuthCredentials, ProviderError> {
         // Prefer an in-memory refreshed token if it is fresher than what we just
         // read from disk (covers a prior persist that failed to write). Scoped
         // to this credential's own source so a refresh cached for one source
@@ -180,7 +189,7 @@ impl ClaudeOAuthFetcher {
         }
 
         if !credentials.is_expired() {
-            return credentials;
+            return Ok(credentials);
         }
 
         // The credentials file is shared with the Claude Code CLI, which also
@@ -190,14 +199,14 @@ impl ClaudeOAuthFetcher {
         if let Ok((disk, disk_source)) = credentials_store::load_credentials() {
             if !disk.is_expired() {
                 credentials_store::store_refreshed(&disk_source, &disk);
-                return disk;
+                return Ok(disk);
             }
             credentials = disk;
         }
 
         let Some(refresh_token) = credentials.refresh_token.clone() else {
             // Environment-provided tokens have no refresh token; nothing to do.
-            return credentials;
+            return Ok(credentials);
         };
 
         match refresh::refresh_access_token(&self.client, &refresh_token, &credentials).await {
@@ -207,11 +216,20 @@ impl ClaudeOAuthFetcher {
                     tracing::debug!("Claude OAuth token refreshed but could not persist: {err}");
                 }
                 tracing::debug!("Refreshed expired Claude OAuth token");
-                refreshed
+                Ok(refreshed)
             }
             Err(err) => {
-                tracing::debug!("Claude OAuth token refresh failed: {err}");
-                credentials
+                // Terminal errors (invalid_grant) are propagated immediately.
+                // Transient errors fall back to the original credentials.
+                let is_terminal = err
+                    .to_string()
+                    .contains("terminal");
+                if is_terminal {
+                    tracing::warn!("Claude OAuth token refresh failed (terminal): {err}");
+                    return Err(err);
+                }
+                tracing::debug!("Claude OAuth token refresh failed (transient, using stale credentials): {err}");
+                Ok(credentials)
             }
         }
     }
@@ -444,11 +462,10 @@ impl Default for ClaudeOAuthFetcher {
 }
 
 fn normalize_utilization(utilization: f64) -> f64 {
-    if utilization > 0.0 && utilization <= 1.0 {
-        utilization * 100.0
-    } else {
-        utilization
-    }
+    // The Claude API returns utilization as a percentage value (0-100) directly.
+    // Values like 45.5 mean 45.5%, values like 0.5 mean 0.5%.
+    // No multiplication needed — the upstream fixed this in PR #1948.
+    utilization
 }
 
 /// Parse an ISO8601 date string
@@ -477,15 +494,17 @@ mod tests {
     use std::time::Duration;
 
     #[test]
-    fn converts_fractional_utilization_to_percent() {
+    fn preserves_fractional_percentage_utilization() {
+        // The Claude API returns utilization as a percentage value (0-100) directly.
+        // 45.5% is returned as 45.5, not 0.455.
         let window = UsageWindow {
-            utilization: Some(0.23),
+            utilization: Some(45.5),
             resets_at: None,
         };
 
         let rate = ClaudeOAuthFetcher::to_rate_window(&window, Some(300)).expect("rate window");
 
-        assert!((rate.used_percent - 23.0).abs() < f64::EPSILON);
+        assert!((rate.used_percent - 45.5).abs() < f64::EPSILON);
     }
 
     #[test]
@@ -501,7 +520,71 @@ mod tests {
     }
 
     #[test]
+    fn preserves_small_percentage_utilization() {
+        // Regression: values < 1% must not be amplified
+        let window = UsageWindow {
+            utilization: Some(0.5),
+            resets_at: None,
+        };
+
+        let rate = ClaudeOAuthFetcher::to_rate_window(&window, Some(300)).expect("rate window");
+
+        assert!((rate.used_percent - 0.5).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn handles_zero_utilization() {
+        let window = UsageWindow {
+            utilization: Some(0.0),
+            resets_at: None,
+        };
+
+        let rate = ClaudeOAuthFetcher::to_rate_window(&window, Some(300)).expect("rate window");
+
+        assert!((rate.used_percent - 0.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn handles_full_utilization() {
+        let window = UsageWindow {
+            utilization: Some(100.0),
+            resets_at: None,
+        };
+
+        let rate = ClaudeOAuthFetcher::to_rate_window(&window, Some(300)).expect("rate window");
+
+        assert!((rate.used_percent - 100.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn handles_none_utilization_returns_none() {
+        let window = UsageWindow {
+            utilization: None,
+            resets_at: None,
+        };
+
+        let rate = ClaudeOAuthFetcher::to_rate_window(&window, Some(300));
+        assert!(rate.is_none());
+    }
+
+    #[test]
+    fn handles_integer_utilization_from_upstream() {
+        // The API sometimes returns utilization as an integer (e.g., 23 for 23%).
+        // serde_json parses it as f64 via the Option<f64> field.
+        let window = UsageWindow {
+            utilization: Some(23.0_f64),
+            resets_at: None,
+        };
+
+        let rate = ClaudeOAuthFetcher::to_rate_window(&window, Some(300)).expect("rate window");
+
+        assert!((rate.used_percent - 23.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
     fn parses_current_snake_case_oauth_usage_response() {
+        // The API returns utilization as a percentage value directly.
+        // 1.0 means 1%, 0.14 means 0.14%, 0.0 means 0%.
         let response: OAuthUsageResponse = serde_json::from_str(
             r#"{
                 "five_hour": {"utilization": 1.0, "resets_at": "2026-05-22T22:10:00Z"},
@@ -521,8 +604,9 @@ mod tests {
         };
         let usage = ClaudeOAuthFetcher::new().build_usage_snapshot(&response, &credentials);
 
-        assert_eq!(usage.primary.used_percent, 100.0);
-        assert!((usage.secondary.expect("weekly").used_percent - 14.0).abs() < 0.001);
+        // Values are already in percent form; no multiplication
+        assert!((usage.primary.used_percent - 1.0).abs() < f64::EPSILON);
+        assert!((usage.secondary.expect("weekly").used_percent - 0.14).abs() < f64::EPSILON);
         assert!(usage.extra_rate_windows.is_empty());
     }
 

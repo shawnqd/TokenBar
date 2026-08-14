@@ -675,11 +675,10 @@ impl Default for ClaudeWebApiFetcher {
 }
 
 fn normalize_utilization(utilization: f64) -> f64 {
-    if utilization > 0.0 && utilization <= 1.0 {
-        utilization * 100.0
-    } else {
-        utilization
-    }
+    // The Claude API returns utilization as a percentage value (0-100) directly.
+    // Values like 45.5 mean 45.5%, values like 0.5 mean 0.5%.
+    // No multiplication needed — the upstream fixed this in PR #1948.
+    utilization
 }
 
 fn cookie_value(cookie_header: &str, name: &str) -> Option<String> {
@@ -709,9 +708,23 @@ mod tests {
     }
 
     #[test]
-    fn converts_fractional_utilization_to_percent() {
+    fn preserves_fractional_percentage_utilization() {
+        // The Claude API returns utilization as a percentage value (0-100) directly.
+        // 45.5% is returned as 45.5, not 0.455.
         let window = UsageWindow {
-            utilization: Some(0.23),
+            utilization: Some(45.5),
+            resets_at: None,
+        };
+
+        let rate = ClaudeWebApiFetcher::new().to_rate_window(&window, Some(300));
+
+        assert!((rate.used_percent - 45.5).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn preserves_existing_percentage_utilization() {
+        let window = UsageWindow {
+            utilization: Some(23.0),
             resets_at: None,
         };
 
@@ -721,9 +734,60 @@ mod tests {
     }
 
     #[test]
-    fn preserves_existing_percentage_utilization() {
+    fn preserves_small_percentage_utilization() {
+        // Regression: values < 1% must not be amplified
         let window = UsageWindow {
-            utilization: Some(23.0),
+            utilization: Some(0.5),
+            resets_at: None,
+        };
+
+        let rate = ClaudeWebApiFetcher::new().to_rate_window(&window, Some(300));
+
+        assert!((rate.used_percent - 0.5).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn handles_zero_utilization() {
+        let window = UsageWindow {
+            utilization: Some(0.0),
+            resets_at: None,
+        };
+
+        let rate = ClaudeWebApiFetcher::new().to_rate_window(&window, Some(300));
+
+        assert!((rate.used_percent - 0.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn handles_full_utilization() {
+        let window = UsageWindow {
+            utilization: Some(100.0),
+            resets_at: None,
+        };
+
+        let rate = ClaudeWebApiFetcher::new().to_rate_window(&window, Some(300));
+
+        assert!((rate.used_percent - 100.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn handles_none_utilization_defaults_to_zero() {
+        let window = UsageWindow {
+            utilization: None,
+            resets_at: None,
+        };
+
+        let rate = ClaudeWebApiFetcher::new().to_rate_window(&window, Some(300));
+
+        assert!((rate.used_percent - 0.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn handles_integer_utilization_from_upstream() {
+        // The API sometimes returns utilization as an integer (e.g., 23 for 23%).
+        // serde_json parses it as f64 via the Option<f64> field.
+        let window = UsageWindow {
+            utilization: Some(23.0_f64),
             resets_at: None,
         };
 
