@@ -49,8 +49,13 @@ export function windowByKind(
     // skipped: a prepaid provider synthesises a 0%/100% window purely to smuggle
     // its amount through `resetDescription`, and it is NOT flagged
     // informational, so taking the primary slot on trust would print a reset
-    // time belonging to a window that is not a cycle at all.
-    return allWindows(provider).find((w) => !looksLikeBalance(w)) ?? null;
+    // time belonging to a window that is not a cycle at all. Reset-credit
+    // carriers get the same treatment (UP-W-015).
+    return (
+      allWindows(provider).find(
+        (w) => !looksLikeBalance(w) && !looksLikeResetCreditCarrier(w),
+      ) ?? null
+    );
   }
   return allWindows(provider).find((window) => window.kind === kind) ?? null;
 }
@@ -67,4 +72,19 @@ function looksLikeBalance(window: RateWindowSnapshot): boolean {
   const text = window.resetDescription?.trim();
   if (!text || !/\d/.test(text)) return false;
   return /[¥￥$]|CNY|USD/i.test(text) && !/unavailable|余额不可用/i.test(text);
+}
+
+/**
+ * Whether a window is the Codex reset-credit counter wearing a rate window's
+ * clothes.
+ *
+ * Rust flags the live reset-credits row informational (UP-W-015), but cached
+ * snapshots that predate the flag carry it as an unflagged 0% window whose
+ * description is exactly "N reset credits available". Detecting the carrier by
+ * its text keeps the primary lookup from reading a stale placeholder as a real
+ * "0% used" quota, without needing the provider list.
+ */
+function looksLikeResetCreditCarrier(window: RateWindowSnapshot): boolean {
+  const text = window.resetDescription?.trim();
+  return Boolean(text && /^\d+\s+reset credits? available$/i.test(text));
 }
