@@ -260,6 +260,14 @@ async fn do_refresh_providers_with_policy(
 
     events::emit_refresh_complete(app, enabled_count, error_count);
 
+    // UP-M-001: core quota snapshots are already published above (each
+    // provider emits `provider-updated` as it completes, and the shared cache
+    // is updated before this point). The optional enrichment stage — local
+    // cost/credits cache — runs in the background only after the core results
+    // are out, so a slow or failed enrichment never keeps the core cards
+    // waiting or makes them blank.
+    crate::auto_refresh::schedule_refresh_enrichment(&inputs.settings);
+
     Ok(())
 }
 

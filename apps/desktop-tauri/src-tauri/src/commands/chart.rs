@@ -144,10 +144,12 @@ pub(crate) fn restore_provider_chart_cache() {
 pub async fn get_provider_local_usage_summary(
     provider_id: String,
 ) -> Option<ProviderLocalUsageSummary> {
+    let failure_provider_id = provider_id.clone();
     tauri::async_runtime::spawn_blocking(move || load_provider_local_usage_summary(&provider_id))
         .await
         .unwrap_or_else(|err| {
             tracing::warn!("Provider local usage worker failed: {}", err);
+            record_local_usage_fetch_failure(&failure_provider_id, CostFetchFailure::Failed);
             None
         })
 }
@@ -419,6 +421,124 @@ pub(crate) fn clear_provider_local_usage_cache() {
     }
 }
 
+/// Why a local-usage enrichment pass could not produce data.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(dead_code)]
+pub(crate) enum CostFetchFailure {
+    /// The scan failed outright (no readable logs, worker error). The next
+    /// read may retry immediately.
+    Failed,
+    /// The scan exceeded its budget. Hold the degraded state for the TTL so
+    /// the panel does not keep kicking off expensive rescans.
+    TimedOut,
+}
+
+pub(crate) fn cost_fetch_failure_allows_early_retry(failure: CostFetchFailure) -> bool {
+    !matches!(failure, CostFetchFailure::TimedOut)
+}
+
+pub(crate) fn token_cost_cache_is_fresh(
+    loaded_at: Option<Instant>,
+    now: Instant,
+    ttl: Duration,
+) -> bool {
+    loaded_at
+        .and_then(|loaded| now.checked_duration_since(loaded))
+        .map(|age| age <= ttl)
+        .unwrap_or(false)
+}
+
+/// Record an enrichment failure as a degraded cache entry: the provider keeps
+/// its core quota snapshot untouched, but local-usage reads see no data and
+/// the timestamp tells the next read whether it may retry immediately.
+fn record_local_usage_fetch_failure(provider_id: &str, failure: CostFetchFailure) {
+    let loaded_at = if cost_fetch_failure_allows_early_retry(failure) {
+        Instant::now() - LOCAL_USAGE_TTL - Duration::from_secs(1)
+    } else {
+        Instant::now()
+    };
+    store_local_usage_summary_at(provider_id, None, loaded_at);
+}
+
+fn store_local_usage_summary(provider_id: &str, summary: Option<ProviderLocalUsageSummary>) {
+    store_local_usage_summary_at(provider_id, summary, Instant::now());
+}
+
+fn store_local_usage_summary_at(
+    provider_id: &str,
+    summary: Option<ProviderLocalUsageSummary>,
+    loaded_at: Instant,
+) {
+    if let Ok(mut guard) = local_usage_cache().lock() {
+        guard.insert(
+            provider_id.to_string(),
+            CachedLocalUsage { loaded_at, summary },
+        );
+    }
+}
+
+/// Read the local-usage cache without triggering a scan. Used by tests to
+/// observe the degraded marker; production reads go through
+/// `load_local_usage_summary` / `load_local_usage_summary_cached`.
+#[cfg(test)]
+pub(crate) fn cached_provider_local_usage_summary(
+    provider_id: &str,
+) -> Option<ProviderLocalUsageSummary> {
+    let Ok(guard) = local_usage_cache().lock() else {
+        return None;
+    };
+    guard
+        .get(provider_id)
+        .and_then(|entry| entry.summary.clone())
+}
+
+/// Apply one enrichment scan result: a successful summary is cached, a
+/// missing summary marks the provider degraded so the next pass can retry
+/// without leaving stale data visible.
+fn apply_local_usage_scan(provider_id: String, summary: Option<ProviderLocalUsageSummary>) {
+    match summary {
+        Some(summary) => store_local_usage_summary(&provider_id, Some(summary)),
+        None => record_local_usage_fetch_failure(&provider_id, CostFetchFailure::Failed),
+    }
+}
+
+/// Background enrichment stage (UP-M-001): refresh the local-usage cache for
+/// the given providers after the core quota refresh has already published its
+/// results. Runs on the blocking pool so a slow scan never delays the core
+/// refresh command, the tray update or the UI snapshot events; a failure only
+/// marks the enrichment cache degraded and leaves the core results intact.
+pub(crate) async fn refresh_provider_local_usage_cache(provider_ids: Vec<String>) {
+    if provider_ids.is_empty() {
+        return;
+    }
+
+    let failure_provider_ids = provider_ids.clone();
+    let scans = match tauri::async_runtime::spawn_blocking(move || {
+        provider_ids
+            .into_iter()
+            .map(|provider_id| {
+                let summary = load_local_usage_summary(&provider_id, None);
+                (provider_id, summary)
+            })
+            .collect::<Vec<_>>()
+    })
+    .await
+    {
+        Ok(scans) => scans,
+        Err(err) => {
+            tracing::warn!("Provider local usage refresh worker failed: {err}");
+            for provider_id in failure_provider_ids {
+                record_local_usage_fetch_failure(&provider_id, CostFetchFailure::Failed);
+            }
+            return;
+        }
+    };
+
+    for (provider_id, summary) in scans {
+        apply_local_usage_scan(provider_id, summary);
+    }
+}
+
 fn load_local_usage_summary_cached(
     provider_id: &str,
     cancel: Option<&AtomicBool>,
@@ -426,7 +546,7 @@ fn load_local_usage_summary_cached(
     let cache = local_usage_cache();
     if let Ok(guard) = cache.lock()
         && let Some(entry) = guard.get(provider_id)
-        && entry.loaded_at.elapsed() <= LOCAL_USAGE_TTL
+        && token_cost_cache_is_fresh(Some(entry.loaded_at), Instant::now(), LOCAL_USAGE_TTL)
     {
         return entry.summary.clone();
     }
@@ -440,15 +560,7 @@ fn load_local_usage_summary_cached(
         return None;
     }
 
-    if let Ok(mut guard) = cache.lock() {
-        guard.insert(
-            provider_id.to_string(),
-            CachedLocalUsage {
-                loaded_at: Instant::now(),
-                summary: summary.clone(),
-            },
-        );
-    }
+    store_local_usage_summary(provider_id, summary.clone());
     summary
 }
 
@@ -564,10 +676,15 @@ fn load_openai_dashboard_chart_data(
 #[cfg(test)]
 mod tests {
     use super::{
-        ProviderChartData, cache_provider_chart_data, cached_provider_chart_data,
-        clear_provider_local_usage_cache, localized_estimate_note,
+        CostFetchFailure, ProviderChartData, ProviderLocalUsageSummary,
+        apply_local_usage_scan, cache_provider_chart_data, cached_provider_chart_data,
+        cached_provider_local_usage_summary, clear_provider_local_usage_cache,
+        cost_fetch_failure_allows_early_retry, load_local_usage_summary,
+        local_usage_cache, localized_estimate_note, record_local_usage_fetch_failure,
+        refresh_provider_local_usage_cache, token_cost_cache_is_fresh,
     };
     use codexbar::settings::Language;
+    use std::time::{Duration, Instant};
 
     #[test]
     fn japanese_estimate_note_is_localized() {
@@ -605,5 +722,133 @@ mod tests {
 
         clear_provider_local_usage_cache();
         assert!(cached_provider_chart_data("cache-test", None).is_none());
+    }
+
+    // ── UP-M-001 enrichment stage ─────────────────────────────────────
+
+    #[test]
+    fn hard_failure_marks_enrichment_degraded_and_allows_immediate_retry() {
+        clear_provider_local_usage_cache();
+        record_local_usage_fetch_failure("codex", CostFetchFailure::Failed);
+
+        let cache = local_usage_cache();
+        let guard = cache.lock().unwrap();
+        let entry = guard.get("codex").expect("degraded entry recorded");
+        assert!(entry.summary.is_none());
+        assert!(!token_cost_cache_is_fresh(
+            Some(entry.loaded_at),
+            Instant::now(),
+            super::LOCAL_USAGE_TTL
+        ));
+        drop(guard);
+        assert!(cost_fetch_failure_allows_early_retry(
+            CostFetchFailure::Failed
+        ));
+    }
+
+    #[test]
+    fn timed_out_enrichment_holds_degraded_state_until_ttl() {
+        clear_provider_local_usage_cache();
+        record_local_usage_fetch_failure("codex", CostFetchFailure::TimedOut);
+
+        let cache = local_usage_cache();
+        let guard = cache.lock().unwrap();
+        let entry = guard.get("codex").expect("degraded entry recorded");
+        assert!(entry.summary.is_none());
+        assert!(token_cost_cache_is_fresh(
+            Some(entry.loaded_at),
+            Instant::now(),
+            super::LOCAL_USAGE_TTL
+        ));
+        drop(guard);
+        assert!(!cost_fetch_failure_allows_early_retry(
+            CostFetchFailure::TimedOut
+        ));
+    }
+
+    #[test]
+    fn enrichment_failure_marks_only_the_scanned_provider() {
+        clear_provider_local_usage_cache();
+        record_local_usage_fetch_failure("codex", CostFetchFailure::Failed);
+
+        // The failure only writes the enrichment cache for the scanned
+        // provider; nothing touches the quota path or other providers, so the
+        // core cards keep their last published snapshot.
+        let cache = local_usage_cache();
+        assert!(cache.lock().unwrap().get("claude").is_none());
+        assert!(cached_provider_local_usage_summary("claude").is_none());
+    }
+
+    #[test]
+    fn enrichment_pass_stores_success_and_marks_failed_scan_degraded() {
+        clear_provider_local_usage_cache();
+        let summary = ProviderLocalUsageSummary {
+            today_cost: Some(1.0),
+            today_tokens: Some(10),
+            seven_day_cost: None,
+            seven_day_tokens: None,
+            thirty_day_cost: Some(2.0),
+            thirty_day_tokens: Some(200),
+            today_top_model: None,
+            seven_day_top_model: None,
+            thirty_day_top_model: Some("gpt-5".to_string()),
+            estimate_note: "estimated".to_string(),
+        };
+        apply_local_usage_scan("codex".to_string(), Some(summary));
+        assert!(cached_provider_local_usage_summary("codex").is_some());
+
+        apply_local_usage_scan("claude".to_string(), None);
+        let cache = local_usage_cache();
+        let guard = cache.lock().unwrap();
+        let entry = guard.get("claude").expect("degraded entry recorded");
+        assert!(entry.summary.is_none());
+        assert!(!token_cost_cache_is_fresh(
+            Some(entry.loaded_at),
+            Instant::now(),
+            super::LOCAL_USAGE_TTL
+        ));
+        drop(guard);
+    }
+
+    #[test]
+    fn enrichment_pass_with_unknown_provider_records_degradation_without_scanning() {
+        clear_provider_local_usage_cache();
+        tauri::async_runtime::block_on(refresh_provider_local_usage_cache(vec![
+            "not-a-local-provider".to_string(),
+        ]));
+
+        let cache = local_usage_cache();
+        let guard = cache.lock().unwrap();
+        let entry = guard
+            .get("not-a-local-provider")
+            .expect("degraded entry recorded");
+        assert!(entry.summary.is_none());
+        assert!(!token_cost_cache_is_fresh(
+            Some(entry.loaded_at),
+            Instant::now(),
+            super::LOCAL_USAGE_TTL
+        ));
+        drop(guard);
+        // The on-demand path still returns nothing for the degraded provider
+        // instead of blocking on a re-scan.
+        assert!(load_local_usage_summary("not-a-local-provider", None).is_none());
+    }
+
+    #[test]
+    fn enrichment_ttl_is_independent_of_provider_quota_cache() {
+        // A degraded enrichment entry expiring does not make the core quota
+        // cache stale: the core snapshot keeps publishing on its own clock.
+        let now = Instant::now();
+        let enrichment_loaded = now - Duration::from_secs(31);
+        let provider_updated = now;
+        assert!(!token_cost_cache_is_fresh(
+            Some(enrichment_loaded),
+            now,
+            super::LOCAL_USAGE_TTL
+        ));
+        assert!(crate::commands::is_provider_cache_fresh(
+            Some(provider_updated),
+            Duration::from_secs(30)
+        ));
     }
 }
