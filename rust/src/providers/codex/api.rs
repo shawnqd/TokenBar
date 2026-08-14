@@ -13,8 +13,92 @@ const DEFAULT_BASE_URL: &str = "https://chatgpt.com/backend-api";
 const USAGE_PATH: &str = "/wham/usage";
 const RESET_CREDITS_PATH: &str = "/wham/rate-limit-reset-credits";
 const CREDENTIAL_CACHE_TTL: Duration = Duration::from_secs(5);
+/// Consecutive agreeing reset-credit observations required before a missing
+/// value may be backfilled (UP-W-020 double-sample evidence).
+const RESET_CREDIT_DOUBLE_SAMPLE: u8 = 2;
 
 static CREDENTIAL_CACHE: OnceLock<Mutex<Option<CachedCodexCredentials>>> = OnceLock::new();
+
+/// Last confirmed reset-credit inventory, used to backfill a temporarily
+/// missing `/wham/rate-limit-reset-credits` answer (UP-W-020).
+///
+/// The provider is single-account today; if multi-account lands (UP-W-011) this
+/// must become per-account like the credential cache.
+static RESET_CREDIT_EVIDENCE: OnceLock<Mutex<Option<ResetCreditEvidence>>> = OnceLock::new();
+
+/// Double-sample evidence for one reset-credit count.
+///
+/// A single observation is not trusted: the endpoint is a supplemental fetch
+/// that can return stale or partial data, and resurrecting a one-off count
+/// would show the user credits they no longer have. Only two consecutive
+/// agreeing samples qualify, and the evidence is consumed by the backfill
+/// (once-only), so a permanently failing endpoint never keeps showing an old
+/// count forever.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ResetCreditEvidence {
+    available_count: u32,
+    /// Consecutive agreeing samples observed so far (capped at 2).
+    samples: u8,
+    /// Whether this evidence has already been backfilled once.
+    backfilled: bool,
+}
+
+impl ResetCreditEvidence {
+    fn new(available_count: u32) -> Self {
+        Self {
+            available_count,
+            samples: 1,
+            backfilled: false,
+        }
+    }
+
+    /// Record a fresh real observation. A differing count restarts the run; an
+    /// agreeing one advances it. A real answer (even 0) supersedes any earlier
+    /// value and re-arms the evidence for a future backfill.
+    fn record(&mut self, available_count: u32) {
+        if self.available_count == available_count {
+            self.samples = self.samples.saturating_add(1).min(RESET_CREDIT_DOUBLE_SAMPLE);
+            self.backfilled = false;
+        } else {
+            *self = Self::new(available_count);
+        }
+    }
+
+    /// Once-only backfill from double-sample evidence.
+    ///
+    /// Returns the count to backfill exactly once per evidence: the first call
+    /// marks the evidence consumed, so a second call (e.g. another refresh
+    /// still missing the endpoint) returns `None` instead of resurrecting the
+    /// same count again.
+    fn try_backfill(&mut self) -> Option<u32> {
+        if self.samples >= RESET_CREDIT_DOUBLE_SAMPLE && !self.backfilled {
+            self.backfilled = true;
+            return Some(self.available_count);
+        }
+        None
+    }
+}
+
+/// Record a successful reset-credit observation into the shared evidence.
+fn record_reset_credit_sample(available_count: u32) {
+    if let Ok(mut guard) = RESET_CREDIT_EVIDENCE
+        .get_or_init(|| Mutex::new(None))
+        .lock()
+    {
+        match guard.as_mut() {
+            Some(evidence) => evidence.record(available_count),
+            None => *guard = Some(ResetCreditEvidence::new(available_count)),
+        }
+    }
+}
+
+/// Attempt the once-only reset-credit backfill; returns the count to show.
+fn try_backfill_reset_credit() -> Option<u32> {
+    let Some(mut guard) = RESET_CREDIT_EVIDENCE.get_or_init(|| Mutex::new(None)).lock().ok() else {
+        return None;
+    };
+    guard.as_mut().and_then(ResetCreditEvidence::try_backfill)
+}
 
 /// Codex API client
 pub struct CodexApi {
@@ -84,20 +168,32 @@ impl CodexApi {
             .map_err(|e| ProviderError::Parse(e.to_string()))?;
 
         let (mut usage, cost) = self.build_result_from_json(&json)?;
-        if let Ok(reset_credits) = self.fetch_rate_limit_reset_credits(&creds, &base_url).await
-            && reset_credits.available_count > 0
-        {
-            let mut window = RateWindow::new(0.0);
-            window.reset_description = Some(format!(
-                "{} reset credit{} available",
-                reset_credits.available_count,
-                if reset_credits.available_count == 1 {
-                    ""
-                } else {
-                    "s"
+
+        // Reset credits are supplemental inventory, not a quota cycle: a
+        // count of zero means the user has none, and the count itself is shown
+        // as an informational row ("N reset credits available"), never as a
+        // percentage. UP-W-015: the row must not read as a real 0% window.
+        match self.fetch_rate_limit_reset_credits(&creds, &base_url).await {
+            Ok(reset_credits) => {
+                let available_count = reset_credits.available_count;
+                // A real answer — including zero — supersedes earlier evidence.
+                record_reset_credit_sample(available_count);
+                if available_count > 0 {
+                    let window = reset_credits_rate_window(available_count);
+                    usage = usage.with_extra_rate_window("reset-credits", "Reset credits", window);
                 }
-            ));
-            usage = usage.with_extra_rate_window("reset-credits", "Reset credits", window);
+            }
+            Err(error) => {
+                // UP-W-020: the endpoint is temporarily missing. Backfill the
+                // last double-confirmed count, but only once per evidence.
+                tracing::debug!(
+                    "Codex reset credits temporarily unavailable ({error}); considering double-sample backfill"
+                );
+                if let Some(available_count) = try_backfill_reset_credit().filter(|&count| count > 0) {
+                    let window = reset_credits_rate_window(available_count);
+                    usage = usage.with_extra_rate_window("reset-credits", "Reset credits", window);
+                }
+            }
         }
         Ok((usage, cost))
     }
@@ -338,21 +434,25 @@ impl CodexApi {
         if let Some(rate_limit) = json.get("rate_limit") {
             let primary_opt = rate_limit
                 .get("primary_window")
-                .map(|w| self.parse_window(w));
+                .and_then(|w| self.parse_window_if_present(w));
 
             let secondary_opt = rate_limit
                 .get("secondary_window")
-                .map(|w| self.parse_window(w));
+                .and_then(|w| self.parse_window_if_present(w));
 
             let code_review = rate_limit
                 .get("code_review_window")
-                .map(|w| self.parse_window(w));
+                .and_then(|w| self.parse_window_if_present(w));
 
-            // If primary is missing, promote secondary to primary (weekly-only plans)
+            // If primary is missing or a placeholder, promote secondary to
+            // primary (weekly-only plans) so the weekly quota is still
+            // recognised without a 5-hour window (UP-W-015). When nothing
+            // real remains, the slot carries an informational placeholder
+            // instead of a fabricated 0% window.
             let (primary, secondary) = match (primary_opt, secondary_opt) {
                 (Some(p), s) => (p, s),
                 (None, Some(s)) => (s, None),
-                (None, None) => (RateWindow::new(0.0), None),
+                (None, None) => (no_active_session_window(), None),
             };
 
             return (primary, secondary, code_review);
@@ -362,9 +462,13 @@ impl CodexApi {
         if let Some(rate_limits) = json.get("rate_limits").and_then(|v| v.as_array())
             && let Some(first) = rate_limits.first()
         {
-            let primary = self.parse_window(first);
-            let secondary = rate_limits.get(1).map(|w| self.parse_window(w));
-            let code_review = rate_limits.get(2).map(|w| self.parse_window(w));
+            let primary = self.parse_window_if_present(first).unwrap_or_else(no_active_session_window);
+            let secondary = rate_limits
+                .get(1)
+                .and_then(|w| self.parse_window_if_present(w));
+            let code_review = rate_limits
+                .get(2)
+                .and_then(|w| self.parse_window_if_present(w));
             return (primary, secondary, code_review);
         }
 
@@ -401,6 +505,13 @@ impl CodexApi {
             reset_at,
             format_reset_countdown(reset_at),
         )
+    }
+
+    /// Parse a window only when it is real data — a `null` or an empty
+    /// placeholder object (`{}`) is an API omission, not a 0% quota, and must
+    /// not become a fake window (UP-W-015).
+    fn parse_window_if_present(&self, window: &serde_json::Value) -> Option<RateWindow> {
+        (!window.is_null() && !is_placeholder_window(window)).then(|| self.parse_window(window))
     }
 
     fn extract_additional_rate_limits(&self, json: &serde_json::Value) -> Vec<NamedRateWindow> {
@@ -667,6 +778,32 @@ struct ResetCredits {
     credits: Vec<serde_json::Value>,
     #[serde(default)]
     available_count: u32,
+}
+
+/// The supplemental "N reset credits available" row.
+///
+/// Informational by design (UP-W-015): it carries inventory, not a percentage
+/// quota, so no surface may render it as a real "0% used" window. `used_percent`
+/// stays 0 and the description carries the count; the bridge flags the row
+/// `is_informational` and quota windows everywhere skip it.
+fn reset_credits_rate_window(available_count: u32) -> RateWindow {
+    let description = format!(
+        "{} reset credit{} available",
+        available_count,
+        if available_count == 1 { "" } else { "s" }
+    );
+    RateWindow::informational(description)
+}
+
+/// Informational placeholder for a plan that has no active 5-hour session.
+///
+/// The window keeps a session length so cycle classification still recognises
+/// the slot, while `is_informational` stops any surface from reading the 0% as
+/// a real quota (UP-W-015: weekly-only plans must not show a fake 5-hour row).
+fn no_active_session_window() -> RateWindow {
+    let mut window = RateWindow::with_details(0.0, Some(5 * 60), None, Some("No active 5h session".to_string()));
+    window.is_informational = true;
+    window
 }
 
 fn decode_reset_credits(data: &[u8]) -> Result<ResetCredits, ProviderError> {
@@ -1002,5 +1139,175 @@ mod tests {
         let cost = cost.expect("cost");
         assert_eq!(cost.used, 40.0);
         assert_eq!(cost.limit, Some(100.0));
+    }
+
+    // ── UP-W-015: placeholder/informational window recognition ────────────
+
+    #[test]
+    fn placeholder_primary_is_skipped_and_weekly_promoted() {
+        // A `{}` placeholder primary must not read as a real 0% window; the
+        // real weekly window takes the primary slot (Codex weekly-only plans
+        // without a 5-hour window).
+        let api = CodexApi::new();
+        let (usage, _) = api
+            .build_result_from_json(&json!({
+                "rate_limit": {
+                    "primary_window": {},
+                    "secondary_window": {
+                        "used_percent": 25,
+                        "limit_window_seconds": 604800,
+                        "reset_at": 1783036800
+                    }
+                }
+            }))
+            .expect("codex usage");
+
+        assert!(!usage.primary.is_informational);
+        assert_eq!(usage.primary.used_percent, 25.0);
+        assert_eq!(usage.primary.window_minutes, Some(10080));
+        assert!(usage.secondary.is_none());
+    }
+
+    #[test]
+    fn null_primary_window_is_skipped() {
+        // A JSON `null` window is an API omission, not a 0% quota.
+        let api = CodexApi::new();
+        let (usage, _) = api
+            .build_result_from_json(&json!({
+                "rate_limit": {
+                    "primary_window": null,
+                    "secondary_window": {
+                        "used_percent": 25,
+                        "limit_window_seconds": 604800,
+                        "reset_at": 1783036800
+                    }
+                }
+            }))
+            .expect("codex usage");
+
+        assert!(!usage.primary.is_informational);
+        assert_eq!(usage.primary.window_minutes, Some(10080));
+        assert!(usage.secondary.is_none());
+    }
+
+    #[test]
+    fn missing_all_windows_yields_informational_placeholder() {
+        // No real windows at all: the slot must not fabricate a 0% quota.
+        let api = CodexApi::new();
+        let (usage, _) = api
+            .build_result_from_json(&json!({
+                "rate_limit": {}
+            }))
+            .expect("codex usage");
+
+        assert!(usage.primary.is_informational);
+        assert_eq!(
+            usage.primary.reset_description.as_deref(),
+            Some("No active 5h session")
+        );
+    }
+
+    #[test]
+    fn placeholder_first_array_window_is_skipped() {
+        // The `rate_limits` array can lead with an empty placeholder; it must
+        // not become a fake primary quota. Positional mapping is preserved:
+        // the placeholder yields an informational session slot and the real
+        // weekly window stays in `secondary`, where window-by-kind surfaces
+        // find it (UP-W-015).
+        let api = CodexApi::new();
+        let (usage, _) = api
+            .build_result_from_json(&json!({
+                "rate_limits": [
+                    {},
+                    { "used_percent": 25, "limit_window_seconds": 604800, "reset_at": 1783036800 }
+                ]
+            }))
+            .expect("codex usage");
+
+        assert!(usage.primary.is_informational);
+        assert_eq!(
+            usage.primary.reset_description.as_deref(),
+            Some("No active 5h session")
+        );
+        let weekly = usage.secondary.expect("weekly window");
+        assert!(!weekly.is_informational);
+        assert_eq!(weekly.used_percent, 25.0);
+        assert_eq!(weekly.window_minutes, Some(10080));
+    }
+
+    #[test]
+    fn reset_credits_window_is_informational_not_a_quota() {
+        let window = reset_credits_rate_window(2);
+        assert!(window.is_informational);
+        assert_eq!(window.used_percent, 0.0);
+        assert_eq!(
+            window.reset_description.as_deref(),
+            Some("2 reset credits available")
+        );
+
+        let single = reset_credits_rate_window(1);
+        assert_eq!(
+            single.reset_description.as_deref(),
+            Some("1 reset credit available")
+        );
+    }
+
+    // ── UP-W-020: double-sample reset-credit backfill ─────────────────────
+
+    #[test]
+    fn backfill_requires_double_sample_evidence() {
+        let mut evidence = ResetCreditEvidence::new(2);
+        // One observation is not enough: a single sample could be stale.
+        assert_eq!(evidence.try_backfill(), None);
+        // Two consecutive agreeing observations confirm the count.
+        evidence.record(2);
+        assert_eq!(evidence.try_backfill(), Some(2));
+    }
+
+    #[test]
+    fn backfill_resets_on_differing_count() {
+        let mut evidence = ResetCreditEvidence::new(2);
+        evidence.record(2);
+        assert_eq!(evidence.try_backfill(), Some(2));
+        // A new real answer with a different count restarts the run; the old
+        // evidence is not trusted for the new count.
+        evidence.record(3);
+        assert_eq!(evidence.try_backfill(), None);
+        evidence.record(3);
+        assert_eq!(evidence.try_backfill(), Some(3));
+    }
+
+    #[test]
+    fn backfill_runs_only_once_per_evidence() {
+        // UP-W-020 idempotency: the same evidence is backfilled exactly once.
+        let mut evidence = ResetCreditEvidence::new(2);
+        evidence.record(2);
+        assert_eq!(evidence.try_backfill(), Some(2));
+        assert_eq!(evidence.try_backfill(), None);
+        assert_eq!(evidence.try_backfill(), None);
+    }
+
+    #[test]
+    fn real_zero_supersedes_positive_evidence() {
+        // A real "0 available" answer must never be overwritten by a stale
+        // positive backfill.
+        let mut evidence = ResetCreditEvidence::new(2);
+        evidence.record(2);
+        assert_eq!(evidence.try_backfill(), Some(2));
+        evidence.record(0);
+        assert_eq!(evidence.try_backfill(), None);
+    }
+
+    #[test]
+    fn fresh_observation_rearms_evidence() {
+        // After a backfill, a fresh real observation re-arms the evidence so a
+        // later outage can backfill once more; the consumed state is not
+        // carried into the new sample run.
+        let mut evidence = ResetCreditEvidence::new(2);
+        evidence.record(2);
+        assert_eq!(evidence.try_backfill(), Some(2));
+        evidence.record(2);
+        assert_eq!(evidence.try_backfill(), Some(2));
+        assert_eq!(evidence.try_backfill(), None);
     }
 }

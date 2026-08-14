@@ -131,4 +131,109 @@ describe("windowByKind", () => {
       expect(windowByKind(real, "primary")).not.toBeNull();
     });
   });
+
+  describe("Codex weekly quota without a 5-hour window (UP-W-015)", () => {
+    /**
+     * Codex reports its weekly quota in `primary`; a weekly-only plan has no
+     * 5-hour session window at all. The weekly must resolve as both "primary"
+     * and "weekly", and no session window may be invented.
+     */
+    it("resolves the weekly window when no session window exists", () => {
+      const weeklyOnly = provider(
+        rateWindow("weekly", { usedPercent: 40, windowMinutes: 7 * 24 * 60 }),
+      );
+      expect(windowByKind(weeklyOnly, "primary")?.usedPercent).toBe(40);
+      expect(windowByKind(weeklyOnly, "weekly")?.usedPercent).toBe(40);
+      expect(windowByKind(weeklyOnly, "session")).toBeNull();
+    });
+
+    /**
+     * The upstream observation (Windows PR #277): Codex's primary slot can be
+     * an informational placeholder while the real weekly quota sits in
+     * `secondary`. The primary lookup must fall through to the real window,
+     * never treat the placeholder as the quota.
+     */
+    it("falls through an informational primary to the real weekly window", () => {
+      const placeholder = provider(
+        rateWindow("session", { isInformational: true, usedPercent: 0 }),
+        { secondary: rateWindow("weekly", { usedPercent: 55 }) },
+      );
+      expect(windowByKind(placeholder, "primary")?.usedPercent).toBe(55);
+      expect(windowByKind(placeholder, "weekly")?.usedPercent).toBe(55);
+      expect(windowByKind(placeholder, "session")).toBeNull();
+    });
+
+    /**
+     * When every window is informational (e.g. the whole response was a
+     * placeholder), no lookup may return one of them as a real quota.
+     */
+    it("never promotes an informational-only provider to a quota", () => {
+      const allInformational = provider(
+        rateWindow("session", { isInformational: true }),
+        {
+          secondary: rateWindow("weekly", { isInformational: true }),
+          tertiary: rateWindow("monthly", { isInformational: true }),
+        },
+      );
+      expect(windowByKind(allInformational, "primary")).toBeNull();
+      expect(windowByKind(allInformational, "weekly")).toBeNull();
+      expect(windowByKind(allInformational, "session")).toBeNull();
+    });
+
+    /**
+     * Codex reset credits arrive as an extra "reset-credits" window that is
+     * informational by design (it carries inventory, not a percentage). It
+     * must never be chosen as the provider's primary quota.
+     */
+    it("skips the informational reset-credits extra window", () => {
+      const withResetCredits = provider(
+        rateWindow("weekly", { usedPercent: 12 }),
+        {
+          extraRateWindows: [
+            {
+              id: "reset-credits",
+              title: "Reset credits",
+              window: rateWindow(null, {
+                usedPercent: 0,
+                isInformational: true,
+                resetDescription: "3 reset credits available",
+              }),
+            },
+          ],
+        },
+      );
+      expect(windowByKind(withResetCredits, "primary")?.usedPercent).toBe(12);
+      expect(windowByKind(withResetCredits, "weekly")?.usedPercent).toBe(12);
+      // The reset-credit row is not a cycle and must not answer to any.
+      expect(windowByKind(withResetCredits, "session")).toBeNull();
+      expect(windowByKind(withResetCredits, "monthly")).toBeNull();
+    });
+
+    /**
+     * A 0% window that is NOT flagged informational but whose description
+     * names reset credits is the same placeholder from cached snapshots that
+     * predate the informational flag. With no real quota window at all, the
+     * primary lookup must return nothing rather than this carrier — a fake
+     * "0% used" with "N reset credits available" would read as a real quota.
+     */
+    it("never chooses an unflagged reset-credit carrier as the primary", () => {
+      const stale = provider(
+        rateWindow("session", { isInformational: true, usedPercent: 0 }),
+        {
+          extraRateWindows: [
+            {
+              id: "reset-credits",
+              title: "Reset credits",
+              window: rateWindow(null, {
+                usedPercent: 0,
+                resetDescription: "2 reset credits available",
+              }),
+            },
+          ],
+        },
+      );
+      expect(windowByKind(stale, "primary")).toBeNull();
+      expect(windowByKind(stale, "weekly")).toBeNull();
+    });
+  });
 });
