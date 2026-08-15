@@ -737,12 +737,44 @@ fn provider_status_label(
     lang: codexbar::settings::Language,
     relative_reset: bool,
 ) -> (String, String) {
-    let label =
-        crate::commands::compact_tray_status_label(&snapshot.primary, lang, relative_reset);
+    // Antigravity's summary probe publishes the real buckets as named extras
+    // and leaves the primary slot as a skipped placeholder; the tray label must
+    // use the most restricted known bucket from the same named windows.
+    let window = if snapshot.provider_id == "antigravity" {
+        most_restricted_known_window(snapshot)
+    } else {
+        &snapshot.primary
+    };
+    let label = crate::commands::compact_tray_status_label(window, lang, relative_reset);
     (
         snapshot.provider_id.clone(),
         format!("{} {}", snapshot.display_name, label),
     )
+}
+
+/// The most constrained non-informational window in a snapshot. Used where a
+/// provider's primary slot is a placeholder (Antigravity's quota summary) so
+/// the compact/tray reading stays the real, most-restricted known bucket.
+fn most_restricted_known_window(
+    snapshot: &crate::commands::ProviderUsageSnapshot,
+) -> &crate::commands::RateWindowSnapshot {
+    let mut best: Option<&crate::commands::RateWindowSnapshot> = None;
+    let mut best_percent = -1.0;
+    for window in std::iter::once(&snapshot.primary)
+        .chain(snapshot.secondary.iter())
+        .chain(snapshot.model_specific.iter())
+        .chain(snapshot.tertiary.iter())
+        .chain(snapshot.extra_rate_windows.iter().map(|extra| &extra.window))
+    {
+        if window.is_informational {
+            continue;
+        }
+        if window.used_percent > best_percent {
+            best_percent = window.used_percent;
+            best = Some(window);
+        }
+    }
+    best.unwrap_or(&snapshot.primary)
 }
 
 /// Pick the provider whose usage the tray icon should render.
@@ -758,13 +790,20 @@ fn pick_tray_provider<'a>(
     }
     if prefer_highest {
         ok_snapshots.iter().copied().max_by(|a, b| {
-            a.primary
-                .used_percent
-                .partial_cmp(&b.primary.used_percent)
+            provider_usage_percent(a)
+                .partial_cmp(&provider_usage_percent(b))
                 .unwrap_or(std::cmp::Ordering::Equal)
         })
     } else {
         Some(ok_snapshots[0])
+    }
+}
+
+fn provider_usage_percent(snapshot: &crate::commands::ProviderUsageSnapshot) -> f64 {
+    if snapshot.provider_id == "antigravity" {
+        most_restricted_known_window(snapshot).used_percent
+    } else {
+        snapshot.primary.used_percent
     }
 }
 
@@ -855,6 +894,11 @@ fn automatic_metric_percent(
             snapshot.secondary.as_ref().map(|w| w.used_percent),
             extra_rate_window_percent(snapshot),
         ]),
+        // The summary probe leaves the primary slot as a skipped placeholder;
+        // the automatic metric reads the most restricted known named bucket.
+        Some(ProviderId::Antigravity) => {
+            Some(most_restricted_known_window(snapshot).used_percent)
+        }
         _ => Some(snapshot.primary.used_percent),
     }
 }
@@ -1384,6 +1428,7 @@ mod tests {
                 reserve_will_last_to_reset: false,
                 reserve_eta_seconds: None,
             },
+            usage_known: true,
         }
     }
 
@@ -1652,5 +1697,58 @@ mod tests {
         let (primary, _) = selected_tray_percents(&snapshot, &settings);
 
         assert_eq!(primary, 72.0);
+    }
+
+    /// Antigravity's summary probe leaves the primary slot as a skipped
+    /// placeholder and publishes the real buckets as named windows; the tray
+    /// must read the most restricted known bucket from those windows.
+    #[test]
+    fn antigravity_tray_uses_most_restricted_known_named_window() {
+        let mut snapshot = fake_snapshot("antigravity", "Antigravity", 0.0);
+        snapshot.primary.is_informational = true;
+        snapshot.extra_rate_windows.push(fake_extra_window(20.0));
+        snapshot.extra_rate_windows.push(fake_extra_window(75.0));
+
+        assert_eq!(most_restricted_known_window(&snapshot).used_percent, 75.0);
+        assert_eq!(provider_usage_percent(&snapshot), 75.0);
+
+        let settings = Settings::default();
+        let (primary, _) = selected_tray_percents(&snapshot, &settings);
+        assert_eq!(primary, 75.0);
+
+        let label = provider_status_label(
+            &snapshot,
+            codexbar::settings::Language::English,
+            /* relative_reset = */ true,
+        );
+        assert_eq!(label.1, "Antigravity 75%");
+    }
+
+    #[test]
+    fn antigravity_highest_selection_uses_most_restricted_known_window() {
+        let mut antigravity = fake_snapshot("antigravity", "Antigravity", 0.0);
+        antigravity.primary.is_informational = true;
+        antigravity.extra_rate_windows.push(fake_extra_window(65.0));
+
+        let codex = fake_snapshot("codex", "Codex", 50.0);
+        let refs: Vec<&crate::commands::ProviderUsageSnapshot> = vec![&codex, &antigravity];
+
+        let picked = pick_tray_provider(&refs, /* prefer_highest = */ true)
+            .expect("highest mode should pick a provider");
+        assert_eq!(picked.provider_id, "antigravity");
+    }
+
+    #[test]
+    fn antigravity_automatic_metric_ignores_unknown_windows() {
+        let mut unknown_window = fake_extra_window(0.0);
+        unknown_window.window.is_informational = true;
+        unknown_window.usage_known = false;
+
+        let mut snapshot = fake_snapshot("antigravity", "Antigravity", 0.0);
+        snapshot.primary.is_informational = true;
+        snapshot.extra_rate_windows.push(unknown_window);
+        snapshot.extra_rate_windows.push(fake_extra_window(31.0));
+
+        assert_eq!(provider_usage_percent(&snapshot), 31.0);
     }
 }

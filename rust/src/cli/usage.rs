@@ -431,9 +431,23 @@ fn append_usage_window_lines(
         use_color,
     );
     append_model_specific_line(lines, usage.model_specific.as_ref(), use_color);
+    // Named extra windows (Antigravity's four summary buckets, Codex reset
+    // credits, ...) are real quota data and belong in the CLI output too.
+    for extra in &usage.extra_rate_windows {
+        append_window_line(lines, &extra.title, &extra.window, use_color);
+    }
 }
 
 fn append_window_line(lines: &mut Vec<String>, label: &str, window: &RateWindow, use_color: bool) {
+    // An informational window has no real quotient: painting a 0% bar would
+    // fabricate a reading. Show the provider's wording instead, or nothing.
+    if window.is_informational {
+        let description = window.reset_description.as_deref().unwrap_or_default().trim();
+        if !description.is_empty() {
+            lines.push(format!("  {:<8} {}", format!("{}:", label), description));
+        }
+        return;
+    }
     let bar = render_progress_bar(window.used_percent, 20, use_color);
     let reset = window
         .format_countdown()
@@ -485,27 +499,74 @@ fn append_model_specific_line(
 pub fn render_brief_text(provider: ProviderId, result: &ProviderFetchResult) -> String {
     let metadata = instantiate_provider(provider).metadata().clone();
     let usage = &result.usage;
-    let reset = usage
-        .primary
-        .format_countdown()
-        .unwrap_or_else(|| "n/a".to_string());
-    let mut parts = vec![format!(
-        "{} {}",
-        metadata.session_label,
-        format_percent(usage.primary.used_percent)
-    )];
-    if let Some(secondary) = &usage.secondary {
+    // An informational primary has no real percentage (e.g. Antigravity's
+    // quota-summary probe leaves the primary slot as a placeholder and
+    // publishes the four real buckets as named extras). In that shape brief
+    // mirrors the tray's `most_restricted_known_window` and prints the most
+    // restricted known bucket instead of a misleading "limits unavailable".
+    let fallback_known = if usage.primary.is_informational {
+        most_restricted_known_window(usage)
+    } else {
+        None
+    };
+    let mut parts = Vec::new();
+    if !usage.primary.is_informational {
         parts.push(format!(
             "{} {}",
-            metadata.weekly_label,
-            format_percent(secondary.used_percent)
+            metadata.session_label,
+            format_percent(usage.primary.used_percent)
         ));
+    } else if let Some((label, window)) = fallback_known {
+        parts.push(format!("{} {}", label, format_percent(window.used_percent)));
     }
+    if let Some(secondary) = &usage.secondary {
+        if !secondary.is_informational {
+            parts.push(format!(
+                "{} {}",
+                metadata.weekly_label,
+                format_percent(secondary.used_percent)
+            ));
+        }
+    }
+    if parts.is_empty() {
+        parts.push("limits unavailable".to_string());
+    }
+    // The reset follows the window that produced the primary reading so the
+    // countdown is not silently wrong when a named bucket replaced the slot.
+    let reset_source = if usage.primary.is_informational {
+        fallback_known
+            .map(|(_, window)| window)
+            .unwrap_or(&usage.primary)
+    } else {
+        &usage.primary
+    };
+    let reset = reset_source
+        .format_countdown()
+        .unwrap_or_else(|| "n/a".to_string());
     parts.push(format!("resets {reset}"));
     if let Some(plan) = &usage.login_method {
         parts.push(plan.clone());
     }
     format!("{}: {}", provider.display_name(), parts.join(", "))
+}
+
+/// The most constrained known named window in a snapshot, mirroring the tray's
+/// `most_restricted_known_window`: windows that do not report a real fraction
+/// (unknown usage / informational) never win over windows that do. Used by
+/// brief mode when the primary slot is an informational placeholder and the
+/// real data lives in the named extras (the Antigravity quota-summary shape).
+fn most_restricted_known_window(usage: &UsageSnapshot) -> Option<(&str, &RateWindow)> {
+    usage
+        .extra_rate_windows
+        .iter()
+        .filter(|extra| extra.usage_known && !extra.window.is_informational)
+        .max_by(|a, b| {
+            a.window
+                .used_percent
+                .partial_cmp(&b.window.used_percent)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        })
+        .map(|named| (named.title.as_str(), &named.window))
 }
 
 fn format_percent(percent: f64) -> String {
@@ -601,5 +662,110 @@ mod tests {
             output,
             "Claude: Session (5h) <1%, Weekly 100%, resets n/a, Pro"
         );
+    }
+
+    #[test]
+    fn informational_primary_never_renders_a_fabricated_zero() {
+        let result = fetch_result(UsageSnapshot::new(RateWindow::informational("")));
+
+        let output = render_brief_text(ProviderId::Claude, &result);
+
+        assert_eq!(output, "Claude: limits unavailable, resets n/a");
+    }
+
+    #[test]
+    fn brief_antigravity_summary_shape_uses_most_restricted_known_bucket() {
+        // Antigravity's quota-summary probe publishes the four real buckets as
+        // named extras and leaves the primary slot as an informational
+        // placeholder; brief must surface the most restricted known bucket
+        // (like the tray does) instead of the misleading "limits unavailable".
+        let usage = UsageSnapshot::new(RateWindow::informational(""))
+            .with_extra_rate_window(
+                "antigravity-quota-summary-gemini-five-hour",
+                "Gemini 5-hour",
+                RateWindow::new(20.0),
+            )
+            .with_extra_rate_window(
+                "antigravity-quota-summary-gemini-weekly",
+                "Gemini weekly",
+                RateWindow::new(50.0),
+            )
+            .with_extra_rate_window(
+                "antigravity-quota-summary-claude-gpt-five-hour",
+                "Claude/GPT 5-hour",
+                RateWindow::new(10.0),
+            )
+            .with_extra_rate_window(
+                "antigravity-quota-summary-claude-gpt-weekly",
+                "Claude/GPT weekly",
+                RateWindow::new(75.0),
+            );
+        let result = fetch_result(usage);
+
+        let output = render_brief_text(ProviderId::Antigravity, &result);
+
+        assert_eq!(output, "Antigravity: Claude/GPT weekly 75%, resets n/a");
+    }
+
+    #[test]
+    fn non_antigravity_render_keeps_informational_and_extra_semantics() {
+        // Cross-provider regression lock: the informational/extra rendering is
+        // not Antigravity-specific. An informational extra must show the
+        // provider's wording without a fabricated 0% bar, a real-data extra
+        // keeps its true percent, and the regular primary still renders.
+        // Fixture uses the shared deepseek shape.
+        let usage = UsageSnapshot::new(RateWindow::new(20.0))
+            .with_extra_rate_window(
+                "tokens-today",
+                "Tokens today",
+                RateWindow::with_details(42.0, None, None, Some("1.2M tokens".to_string())),
+            )
+            .with_extra_rate_window(
+                "balance-gate",
+                "Balance gate",
+                RateWindow::informational("Balance unavailable for API calls"),
+            );
+        let result = fetch_result(usage);
+        let output = render_text_with_status(ProviderId::DeepSeek, &result, None, false);
+
+        // Real-data extras keep their true percentage.
+        assert!(output.contains("Tokens today"));
+        assert!(output.contains("42% used"));
+        // Informational extras render the provider's wording, never a bar (a
+        // bar line would start with `[` right after the label).
+        assert!(output.contains("Balance gate: Balance unavailable for API calls"));
+        assert!(!output.contains("Balance gate: ["));
+        // The regular primary keeps rendering normally.
+        assert!(output.contains("20% used"));
+    }
+
+    #[test]
+    fn extras_are_rendered_after_the_slots() {
+        let usage = UsageSnapshot::new(RateWindow::new(10.0)).with_extra_rate_window(
+            "antigravity-quota-summary-gemini-weekly",
+            "Gemini weekly",
+            RateWindow::new(50.0),
+        );
+        let result = fetch_result(usage);
+        let output = render_text_with_status(ProviderId::Antigravity, &result, None, false);
+
+        assert!(output.contains("Gemini weekly"));
+        assert!(output.contains("50% used"));
+    }
+
+    #[test]
+    fn informational_extra_renders_description_without_a_bar() {
+        let usage = UsageSnapshot::new(RateWindow::new(12.0)).with_extra_rate_window(
+            "antigravity-quota-summary-gemini-5-hour",
+            "Gemini 5-hour",
+            RateWindow::informational("Limits not available"),
+        );
+        let result = fetch_result(usage);
+        let output = render_text_with_status(ProviderId::Antigravity, &result, None, false);
+
+        assert!(output.contains("Gemini 5-hour: Limits not available"));
+        // The informational extra must not paint a fabricated zero-percent bar
+        // (a bar line would start with the label followed by `[`).
+        assert!(!output.contains("Gemini 5-hour: ["));
     }
 }

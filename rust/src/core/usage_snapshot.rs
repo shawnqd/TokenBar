@@ -42,6 +42,16 @@ pub struct NamedRateWindow {
     pub id: String,
     pub title: String,
     pub window: RateWindow,
+    /// False when the provider publishes the window without a known remaining
+    /// fraction (reset-only or disabled buckets). Such a window must be shown
+    /// as unavailable and must never be mistaken for a real 100%-remaining
+    /// quota; the inner `RateWindow` is informational in that case.
+    #[serde(default = "default_usage_known")]
+    pub usage_known: bool,
+}
+
+fn default_usage_known() -> bool {
+    true
 }
 
 impl NamedRateWindow {
@@ -50,7 +60,14 @@ impl NamedRateWindow {
             id: id.into(),
             title: title.into(),
             window,
+            usage_known: true,
         }
+    }
+
+    /// Mark this window as carrying unknown usage (reset-only / disabled).
+    pub fn with_usage_known(mut self, usage_known: bool) -> Self {
+        self.usage_known = usage_known;
+        self
     }
 }
 
@@ -138,6 +155,14 @@ impl UsageSnapshot {
         self
     }
 
+    /// Builder pattern: append a pre-built labeled extra rate window. Providers
+    /// that need to mark a window as unknown-usage build a `NamedRateWindow`
+    /// with `with_usage_known(false)` and push it here.
+    pub fn with_named_rate_window(mut self, named: NamedRateWindow) -> Self {
+        self.extra_rate_windows.push(named);
+        self
+    }
+
     /// Builder pattern: set account email
     pub fn with_email(mut self, email: impl Into<String>) -> Self {
         self.account_email = Some(email.into());
@@ -179,6 +204,11 @@ impl UsageSnapshot {
         }
 
         for extra in &self.extra_rate_windows {
+            // A window with unknown usage is not a real quota; it must never
+            // win "most restrictive" over a window that actually reports data.
+            if !extra.usage_known {
+                continue;
+            }
             if extra.window.used_percent > most.used_percent {
                 most = &extra.window;
             }
@@ -199,6 +229,7 @@ impl UsageSnapshot {
             || self
                 .extra_rate_windows
                 .iter()
+                .filter(|extra| extra.usage_known)
                 .any(|extra| extra.window.is_exhausted())
     }
 }

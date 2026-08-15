@@ -531,6 +531,13 @@ export interface ProviderUsageSnapshot {
     id: string;
     title: string;
     window: RateWindowSnapshot;
+    /**
+     * False when the provider published the window without a known remaining
+     * fraction (reset-only or disabled buckets). The window itself is
+     * informational in that case; render it as unavailable, never as a real
+     * 100%-remaining bar.
+     */
+    usageKnown?: boolean;
   }>;
   cost: CostSnapshotBridge | null;
   planName: string | null;
@@ -842,6 +849,9 @@ export interface ProviderDetail {
     id: string;
     title: string;
     window: RateWindowSnapshot;
+    /** False when the provider published the window without a known remaining
+     *  fraction; render as unavailable, never as a 100%-remaining bar. */
+    usageKnown?: boolean;
   }>;
 
   cost: CostSnapshotBridge | null;

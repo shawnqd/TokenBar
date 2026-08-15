@@ -122,6 +122,11 @@ pub struct NamedRateWindowSnapshot {
     pub id: String,
     pub title: String,
     pub window: RateWindowSnapshot,
+    /// False when the provider published the window without a known remaining
+    /// fraction (reset-only or disabled buckets). The window itself is
+    /// informational in that case; surfaces must show it as unavailable rather
+    /// than a real 100%-remaining bar.
+    pub usage_known: bool,
 }
 
 /// Pace prediction snapshot for tray/bridge display.
@@ -269,6 +274,7 @@ impl ProviderUsageSnapshot {
                         &extra.window,
                         Some(extra.title.as_str()),
                     ),
+                    usage_known: extra.usage_known,
                 })
                 .collect(),
             cost: result.cost.as_ref().map(|c| CostSnapshotBridge {
