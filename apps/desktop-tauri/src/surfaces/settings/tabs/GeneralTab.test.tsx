@@ -17,6 +17,11 @@ vi.mock("@tauri-apps/api/core", () => ({
   ]),
 }));
 
+vi.mock("../../../lib/tauri", () => ({
+  registerGlobalShortcut: vi.fn().mockResolvedValue(undefined),
+  unregisterGlobalShortcut: vi.fn().mockResolvedValue(undefined),
+}));
+
 import GeneralTab from "./GeneralTab";
 import type { SettingsSnapshot } from "../../../types/bridge";
 
@@ -121,5 +126,11 @@ describe("GeneralTab language picker", () => {
     fireEvent.click(screen.getByRole("button", { name: "English" }));
 
     expect(screen.getByText("繁體中文（臺灣）")).toBeInTheDocument();
+  });
+
+  it("hosts the tray shortcut and not notification controls", () => {
+    render(<GeneralTab settings={settings} set={vi.fn()} saving={false} />);
+    expect(screen.getByText("GlobalShortcutFieldLabel")).toBeInTheDocument();
+    expect(screen.queryByText("ShowNotifications")).not.toBeInTheDocument();
   });
 });

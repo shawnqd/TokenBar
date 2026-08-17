@@ -1,0 +1,40 @@
+/* Floating bar settings preview styles. Scoped under .settings-v5 so this
+   never leaks into the real floating bar or other surfaces. */
+
+.settings-v5 .s5-stage-frame--float {
+  width: 280px;
+  height: 156px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.settings-v5 .s5-fbar {
+  display: inline-flex;
+  gap: 8px;
+  align-items: center;
+  padding: 6px 10px;
+  border-radius: 999px;
+  background: rgba(28, 28, 32, 0.88);
+  color: #f5f5f8;
+  font-size: 12px;
+}
+
+.settings-v5 .s5-fbar.light {
+  background: rgba(255, 255, 255, 0.92);
+  color: #1a1a1c;
+  border: 1px solid rgba(0, 0, 0, 0.08);
+}
+
+.settings-v5 .s5-fbar.vert {
+  flex-direction: column;
+  border-radius: 12px;
+}
+
+.settings-v5 .s5-fbar.dim {
+  opacity: 0.42;
+}
+
+.settings-v5 .s5-fbar b {
+  font-variant-numeric: tabular-nums;
+}

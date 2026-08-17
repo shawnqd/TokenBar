@@ -28,7 +28,6 @@ import type { LocaleKey } from "../i18n/keys";
 import { paceCategory } from "../surfaces/tray/paceCategory";
 import { SimpleBarChart, StackedBarChart } from "./MiniBarChart";
 import { providerSupportsChartData } from "../lib/providerCharts";
-import { getPaceEstimate } from "../lib/paceBudget";
 import { dashboardShowsQuotaWindow } from "../lib/dashboardProviders";
 import { getProviderBalance } from "../lib/providerBalance";
 import { ProviderBalanceBlock } from "./ProviderBalanceBlock";
@@ -589,66 +588,10 @@ function displayPlanName(planName: string | null): string | null {
 // the same stages into the three states the row actually renders. The
 // DetailPace* keys stay in the locale files for the Providers detail view.
 
-/** Runway line shared by the legacy pace section and the tray density-tier
- * pace row — the weekly usage forecast merged in: status (icon + text) on
- * the left, the estimated hours on the right. */
-function PaceRunway({
-  pace,
-  weeklyForecast,
-  t,
-}: {
-  pace: PaceSnapshot;
-  weeklyForecast: ReturnType<typeof getPaceEstimate>;
-  t: (key: LocaleKey) => string;
-}) {
-  const lasts = weeklyForecast
-    ? weeklyForecast.lastsUntilReset
-    : pace.willLastToReset;
-  const hours =
-    weeklyForecast?.hoursRemaining ??
-    (pace.etaSeconds != null ? pace.etaSeconds / 3600 : null);
-  const formatHours = (h: number) =>
-    h < 1
-      ? t("PanelForecastLessThanHour")
-      : `${h < 10 ? Math.round(h * 10) / 10 : Math.round(h)} ${t("PanelForecastHoursUnit")}`;
-  return (
-    <div className="menu-card__pace-runway" data-state={lasts ? "ok" : "warn"}>
-      <span className="menu-card__pace-runway-status">
-        {lasts ? <CheckIcon /> : <WarnIcon />}
-        {lasts ? t("DetailPaceWillLastToReset") : t("DetailPaceRunsOutIn")}
-      </span>
-      {hours != null && (
-        <strong className="menu-card__pace-runway-value">
-          ≈ {formatHours(hours)}
-        </strong>
-      )}
-    </div>
-  );
-}
-
-
 interface MetricEntry {
   id: string;
   label: string;
   snap: RateWindowSnapshot;
-}
-
-type MetricPaceView =
-  | { kind: "forecast"; estimate: NonNullable<ReturnType<typeof getPaceEstimate>> }
-  | { kind: "reserve"; percent: number }
-  | { kind: "none" };
-
-function getMetricPaceView(snap: RateWindowSnapshot): MetricPaceView {
-  if (snap.isExhausted) return { kind: "none" };
-
-  const estimate = isWeeklyWindow(snap) ? getPaceEstimate(snap) : null;
-  if (estimate) return { kind: "forecast", estimate };
-
-  if (snap.reservePercent != null) {
-    return { kind: "reserve", percent: snap.reservePercent };
-  }
-
-  return { kind: "none" };
 }
 
 /**
@@ -663,19 +606,6 @@ function isWeeklyWindow(snap: RateWindowSnapshot): boolean {
   return snap.kind === "weekly";
 }
 
-/**
- * The weekly forecast, rendered inside the weekly quota block (item A).
- *
- * Previously the card drew the weekly quota bar here and a second, visually
- * identical "pace" bar further down with its own actual/expected track — two
- * weekly blocks describing the same window. The forecast now annotates the quota
- * bar the block already draws: the expected position becomes a marker on that
- * track, and this component contributes only the words.
- *
- * When there is no usable forecast it says so. Rendering `0` or an em dash here
- * would read as "you are 0% ahead", which is a measurement the data does not
- * support.
- */
 /**
  * Under- or over-spent for how far the window has elapsed.
  *
@@ -708,7 +638,7 @@ function paceStateOf(
   return delta > 0 ? "deficit" : "reserve";
 }
 
-function WeeklyForecast({
+function QuotaForecast({
   forecast,
   t,
 }: {
@@ -785,7 +715,6 @@ function MetricRow({
   hero = false,
   planLabel = null,
   pace = null,
-  showForecast = false,
 }: {
   title: string;
   snap: RateWindowSnapshot;
@@ -793,26 +722,34 @@ function MetricRow({
   display: QuotaDisplayContext;
   hero?: boolean;
   planLabel?: string | null;
-  /** The provider's weekly pace snapshot, or null when it has none. */
+  /** The provider's weekly pace snapshot, or null when it has none. Only used
+   * for the weekly window; the bridge computes it against that window. */
   pace?: PaceSnapshot | null;
-  /**
-   * Render the merged weekly forecast inside this block. Set only for the weekly
-   * window, because that is the window `provider.pace` actually measures — the
-   * bridge selects it by window length, not by slot.
-   */
-  showForecast?: boolean;
 }) {
   const { t } = useLocale();
   const reserveDescription = formatReserveDescription(snap, t);
-  // A forecast is only meaningful for the weekly window, and only when the
-  // window itself carries a real quota — projecting over a balance provider's
-  // synthetic 0% window would fabricate a number (item A.4).
-  const forecast = showForecast
-    ? quotaForecastDisplay(pace, snap)
-    : FORECAST_UNAVAILABLE;
+  // One generic forecast per window. `provider.pace` is computed by the bridge
+  // against the weekly window, so it only feeds the weekly forecast; every
+  // other window projects from its own length/reset metadata.
+  const forecast = quotaForecastDisplay(snap.kind === "weekly" ? pace : null, snap);
   const marker = forecastMarkerPercent(forecast, display);
+  const forecastShown = forecast.available && !snap.isInformational && !snap.isExhausted;
+  // The legacy reserve row is a compatibility fallback for windows the new
+  // forecast cannot project (no length/reset metadata). Never renders beside
+  // a real forecast.
   const reservePercent =
-    !snap.isExhausted && snap.reservePercent != null ? snap.reservePercent : null;
+    !forecastShown && !snap.isExhausted && snap.reservePercent != null
+      ? snap.reservePercent
+      : null;
+  // The weekly window always owns a forecast slot: when the data is insufficient
+  // the slot says so instead of disappearing (kept from the original weekly-only
+  // rendering). Non-weekly windows simply omit the row instead.
+  const showUnavailable =
+    !forecastShown &&
+    reservePercent == null &&
+    !snap.isInformational &&
+    !snap.isExhausted &&
+    isWeeklyWindow(snap);
 
   return (
     <ProviderQuotaBlock
@@ -828,9 +765,11 @@ function MetricRow({
       paceState={paceStateOf(forecast)}
       expectedLabel={t("PanelExpected")}
     >
-      {showForecast && !snap.isInformational && !snap.isExhausted && (
-        <WeeklyForecast forecast={forecast} t={t} />
-      )}
+      {forecastShown ? (
+        <QuotaForecast forecast={forecast} t={t} />
+      ) : showUnavailable ? (
+        <QuotaForecast forecast={FORECAST_UNAVAILABLE} t={t} />
+      ) : null}
       {reservePercent != null && (
         <div className="menu-metric__row menu-metric__reserve">
           <span className="menu-metric__pct">{Math.round(reservePercent)}% {t("PanelReserveSuffix")}</span>
@@ -851,22 +790,20 @@ function CompactSecondaryQuota({
   rate,
   display,
   pace = null,
-  showForecast = false,
 }: {
   title: string;
   rate: RateWindowSnapshot;
   display: QuotaDisplayContext;
-  /** The provider's weekly pace snapshot, or null when it has none. */
+  /** The provider's weekly pace snapshot, or null when it has none. Only used
+   * for the weekly window; see `MetricRow`. */
   pace?: PaceSnapshot | null;
-  /**
-   * Render the merged weekly forecast under this row. Compact usually carries
-   * the weekly window here rather than in the hero, so this is where the tier
-   * meets item 4's "same forecast language in all three tiers" requirement.
-   */
-  showForecast?: boolean;
 }) {
   const { t } = useLocale();
   const percent = quotaPercentDisplay(rate, display);
+  const forecast = quotaForecastDisplay(rate.kind === "weekly" ? pace : null, rate);
+  const forecastShown = forecast.available && !rate.isInformational && !rate.isExhausted;
+  const showUnavailable =
+    !forecastShown && !rate.isInformational && !rate.isExhausted && isWeeklyWindow(rate);
 
   return (
     <div className="menu-card__compact-secondary">
@@ -877,9 +814,11 @@ function CompactSecondaryQuota({
       <div className="menu-card__compact-secondary-track">
         <span style={{ width: `${percent.fillPercent}%` }} />
       </div>
-      {showForecast && !rate.isInformational && !rate.isExhausted && (
-        <WeeklyForecast forecast={quotaForecastDisplay(pace, rate)} t={t} />
-      )}
+      {forecastShown ? (
+        <QuotaForecast forecast={forecast} t={t} />
+      ) : showUnavailable ? (
+        <QuotaForecast forecast={FORECAST_UNAVAILABLE} t={t} />
+      ) : null}
     </div>
   );
 }
@@ -1032,11 +971,12 @@ export default function MenuCard({
     ? filteredMetrics.slice(0, 1)
     : filteredMetrics;
 
-  // Which visible row owns the weekly forecast (item A). `provider.pace` is
-  // computed by the bridge against the weekly window specifically, so the
-  // forecast must attach to that row and to no other — attaching it to whatever
-  // sits in `primary` is the bug that once made Claude's 5-hour usage render as
-  // its weekly pace. Compact rows are a summary and get no forecast at all.
+  // Which visible row is the weekly window. `provider.pace` is computed by the
+  // bridge against the weekly window specifically, so the weekly row is the one
+  // that feeds on that enriched input; every other window projects from its own
+  // metadata. Attaching it to whatever sits in `primary` is the bug that once
+  // made Claude's 5-hour usage render as its weekly pace. Compact rows are a
+  // summary and get no stand-alone forecast block.
   const weeklyMetricId = compactMetrics
     ? null
     // `filteredMetrics`, not `metrics`: the forecast has to attach to a row
@@ -1087,13 +1027,11 @@ export default function MenuCard({
   const secondaryMetric = filteredMetrics[1] ?? null;
   const hasPaceForDensity = !provider.error && !!provider.pace;
 
-  // Which quota row inside THIS tier renders the weekly forecast.
-  //
-  // Detailed draws every metric, so the weekly row always owns it. Compact
-  // draws two rows and minimal draws one, so the weekly window may not be
-  // drawn at all — then no row owns the forecast and `densityOrphanForecast`
-  // below renders it standalone. Package item 4: the three tiers share one
-  // forecast language, and none of them may go blank on pace.
+  // Which quota row inside THIS tier is the weekly window. Used by
+  // `densityOrphanForecast` to decide whether the weekly window is drawn as a
+  // quota row (and therefore gets its forecast inline) or needs a standalone
+  // block. With the generic forecast every drawn row gets its own forecast, so
+  // this flag is no longer needed to gate the forecast rendering.
   const densityForecastRowId = (() => {
     if (!weeklyMetricId) return null;
     if (densityMode === "detailed") return weeklyMetricId;
@@ -1160,12 +1098,6 @@ export default function MenuCard({
       // detailed/compact/minimal all reserve that space for the percentage.
       planLabel={null}
       pace={provider.pace}
-      // All three density tiers share the same forecast *language*. Detailed
-      // shows the full runway row inside the weekly quota block; compact and
-      // minimal also attach the forecast when the hero row *is* the weekly
-      // window so they never go blank on pace (TASK-021 item 4). Compact/
-      // minimal still reduce surrounding density elsewhere.
-      showForecast={primaryMetric.id === densityForecastRowId}
     />
   ) : balance ? (
     <ProviderBalanceBlock balance={balance} showTitle={false} />
@@ -1194,7 +1126,6 @@ export default function MenuCard({
                   hero={idx === 0}
                   planLabel={null}
                   pace={provider.pace}
-                  showForecast={m.id === weeklyMetricId}
                 />
               ))
             : balance && <ProviderBalanceBlock balance={balance} showTitle={false} />}
@@ -1226,7 +1157,6 @@ export default function MenuCard({
               rate={secondaryMetric.snap}
               display={display}
               pace={provider.pace}
-              showForecast={secondaryMetric.id === densityForecastRowId}
             />
           )}
         </section>
@@ -1234,8 +1164,7 @@ export default function MenuCard({
     }
     // minimal — bare metrics block, no tinted zone background (kept
     // deliberately lighter-weight than the detailed/compact zones). The hero
-    // row still carries forecast when it is the weekly window (see
-    // densityPrimaryRow.showForecast).
+    // row still carries its own forecast via the generic MetricRow logic.
     return <section className="menu-card__metrics">{densityPrimaryRow}</section>;
   })();
 
@@ -1363,7 +1292,9 @@ export default function MenuCard({
   // The weekly window is not drawn as a quota row in this tier (minimal shows
   // only the hero, so a provider whose weekly sits in `secondary` — Claude and
   // Codex both do — would otherwise lose the forecast entirely, which is
-  // exactly the "详细模式有预测、其他模式只剩空白" case item 4 forbids).
+  // exactly the "详细模式有预测、其他模式只剩空白" case item 4 forbids). Every
+  // drawn row gets its own forecast via the generic MetricRow logic, but the
+  // weekly window still needs a standalone block when it is not drawn.
   //
   // It names the window it measures, because without the name it reads as a
   // statement about the hero row above — the misattribution `weeklyMetricId`
@@ -1380,7 +1311,7 @@ export default function MenuCard({
         {!namedAbove && (
           <span className="menu-card__orphan-forecast-label">{weekly.label}</span>
         )}
-        <WeeklyForecast forecast={quotaForecastDisplay(provider.pace, weekly.snap)} t={t} />
+        <QuotaForecast forecast={quotaForecastDisplay(provider.pace, weekly.snap)} t={t} />
       </div>
     );
   })();
@@ -1445,7 +1376,6 @@ export default function MenuCard({
                   hero={idx === 0}
                   planLabel={idx === 0 && !suppressPlanBadge ? planName : null}
                   pace={provider.pace}
-                  showForecast={m.id === weeklyMetricId}
                 />
               ))}
             </section>

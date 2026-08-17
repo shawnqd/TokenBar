@@ -34,14 +34,25 @@ use std::sync::{Mutex, OnceLock};
 
 use tauri::Manager;
 
-/// One printable line of the strip.
+/// One printable cell of the strip under the `[icon][tag][value]` cluster
+/// model.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct StripLine {
-    /// The provider's brand mark, drawn in its own colour ahead of the text.
-    /// `None` for a provider with no registered mark, in which case `text`
-    /// still carries the provider's name and nothing is lost.
+    /// The provider's brand mark, used only as the glyph fallback when the
+    /// provider has no official SVG to rasterise.
     pub mark: Option<crate::provider_mark::ProviderMark>,
-    pub text: String,
+    /// The provider id whose official SVG is drawn into the icon slot; `None`
+    /// when the entry resolved to an unknown provider (glyph fallback).
+    pub icon_provider_id: Option<String>,
+    /// The short dimmed tag (a cycle count, a window word, …).
+    pub tag: String,
+    /// The bold value run (a percentage, amount, speed, or the unavailable
+    /// reason text — never a fabricated 0%/100%).
+    pub value: String,
+    /// Which window this cell shows (`session|weekly|daily|monthly|balance|speed|primary`).
+    pub window_kind: String,
+    /// Render state (`ready|loading|refreshing|stale|error|notConfigured|unsupported|unknown`).
+    pub state: String,
 }
 
 /// What the strip prints, one entry per configured line, in the user's order.
@@ -79,10 +90,14 @@ enum WidgetPosition {
 static WIDGET_POSITION: Mutex<WidgetPosition> = Mutex::new(WidgetPosition::Notification);
 static WIDGET_FONT_WEIGHT: Mutex<i32> = Mutex::new(400);
 static WIDGET_FONT_SIZE: Mutex<i32> = Mutex::new(12);
-static WIDGET_WIDTH: Mutex<i32> = Mutex::new(132);
+static WIDGET_WIDTH: Mutex<i32> = Mutex::new(136);
 static WIDGET_TEXT_ALIGN: Mutex<u32> = Mutex::new(0);
 static WIDGET_CONTENT: Mutex<String> = Mutex::new(String::new());
 static WIDGET_FONT_FAMILY: Mutex<String> = Mutex::new(String::new());
+/// Official-icon slot size in logical pixels, clamped 10..=18 (default 14).
+static WIDGET_ICON_SIZE: Mutex<i32> = Mutex::new(14);
+/// Icon render style: `pure` | `badge` | `solid` (default `pure`).
+static WIDGET_ICON_STYLE: Mutex<String> = Mutex::new(String::new());
 
 const WS_POPUP: u32 = 0x8000_0000;
 const WS_CHILD: u32 = 0x4000_0000;
@@ -654,6 +669,27 @@ pub fn set_text_align(align: &str) {
     repaint();
 }
 
+/// Official-icon slot size in logical pixels (clamped 10..=18).
+pub fn set_icon_size(size: u8) {
+    if let Ok(mut current) = WIDGET_ICON_SIZE.lock() {
+        *current = i32::from(size.clamp(10, 18));
+    }
+    repaint();
+}
+
+/// Icon render style: `pure` | `badge` | `solid`.
+pub fn set_icon_style(style: &str) {
+    let value = match style {
+        "badge" => "badge",
+        "solid" => "solid",
+        _ => "pure",
+    };
+    if let Ok(mut current) = WIDGET_ICON_STYLE.lock() {
+        *current = value.to_string();
+    }
+    repaint();
+}
+
 fn repaint() {
     let hwnd = WIDGET_HWND.lock().map(|g| *g).unwrap_or(0);
     if hwnd != 0 && unsafe { IsWindow(hwnd) } != 0 {
@@ -1114,6 +1150,10 @@ unsafe fn paint(hwnd: isize) {
         .map(|weight| *weight)
         .unwrap_or(400) as f32;
     let family = widget_font_family();
+    let icon_size_px = ((WIDGET_ICON_SIZE.lock().map(|s| *s).unwrap_or(14) * dpi as i32) as f32) / 96.0;
+    let icon_style = crate::taskbar_icons::IconStyle::parse(
+        &WIDGET_ICON_STYLE.lock().map(|s| s.clone()).unwrap_or_else(|_| "pure".to_string()),
+    );
 
     let entries = LINES.lock().map(|g| g.clone()).unwrap_or_default();
     let pad = (6 * dpi as i32) / 96;
@@ -1125,44 +1165,53 @@ unsafe fn paint(hwnd: isize) {
         .lock()
         .map(|align| *align)
         .unwrap_or(DT_LEFT);
+    let text_align = match align {
+        DT_CENTER => crate::taskbar_text::TextAlign::Center,
+        DT_RIGHT => crate::taskbar_text::TextAlign::Right,
+        _ => crate::taskbar_text::TextAlign::Left,
+    };
 
     // DirectWrite, not GDI. `CreateFontW` cannot reach a font's OpenType
     // variation axes, so it collapsed every requested weight to Regular or
-    // Bold; `taskbar_text` drives the `wght` axis directly and was measured to
-    // render distinct strokes for values between the named stops.
+    // Bold; `taskbar_text` drives the `wght` axis directly.
     let to_win_rect = |r: &Rect| crate::taskbar_text::WinRect {
         left: r.left,
         top: r.top,
         right: r.right,
         bottom: r.bottom,
     };
-    let text_lines: Vec<crate::taskbar_text::TextLine<'_>> = visible
+    let cells: Vec<crate::taskbar_text::StripCell<'_>> = visible
         .iter()
         .zip(line_rects.iter())
-        .map(|(line, rect)| crate::taskbar_text::TextLine {
-            text: line.text.as_str(),
+        .map(|(line, rect)| crate::taskbar_text::StripCell {
             rect: to_win_rect(rect),
-            mark: line.mark.map(|mark| crate::taskbar_text::LineMark {
+            tag: line.tag.as_str(),
+            value: line.value.as_str(),
+            // Official brand SVG in the icon slot. The earlier 0xc000041d in
+            // WM_PAINT was the by-value Vector2 ABI mismatch in the geometry
+            // sink (fixed by windows-numerics); draw_strip_cells_with now
+            // exercises the same path in an offscreen regression test.
+            icon_provider: line.icon_provider_id.as_deref(),
+            glyph: line.mark.map(|mark| crate::taskbar_text::LineMark {
                 glyph: mark.glyph,
                 color_rgb: mark.color_rgb,
             }),
         })
         .collect();
-    let drawn = crate::taskbar_text::draw_lines(
+    let drawn = crate::taskbar_text::draw_strip_cells(
         hdc,
         to_win_rect(&client),
-        &text_lines,
+        &cells,
         &crate::taskbar_text::TextStyle {
             family: &family,
             weight: font_weight,
             size_px,
-            align: match align {
-                DT_CENTER => crate::taskbar_text::TextAlign::Center,
-                DT_RIGHT => crate::taskbar_text::TextAlign::Right,
-                _ => crate::taskbar_text::TextAlign::Left,
-            },
+            align: text_align,
             color_rgb: text,
         },
+        background,
+        icon_size_px,
+        icon_style,
     );
 
     // GDI fallback. If DirectWrite is unavailable the strip must still show
@@ -1183,12 +1232,11 @@ unsafe fn paint(hwnd: isize) {
         let format = align | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX | DT_END_ELLIPSIS;
         for (line, rect) in visible.iter().zip(line_rects.iter()) {
             let mut r = *rect;
-            // GDI has one text colour per DC, so the fallback prints the mark
-            // inline and monochrome rather than in the brand colour. Losing the
-            // colour is acceptable here; losing the reading is not.
-            let body = match line.mark {
-                Some(mark) => format!("{} {}", mark.glyph, line.text),
-                None => line.text.clone(),
+            // GDI has one text colour per DC, so the fallback prints the tag and
+            // value inline; the glyph goes in front only when there is no icon.
+            let body = match (line.icon_provider_id.is_some(), line.mark) {
+                (false, Some(mark)) => format!("{} {} {}", mark.glyph, line.tag, line.value),
+                _ => format!("{} {}", line.tag, line.value).trim().to_string(),
             };
             let wide_text = wide(&body);
             unsafe { DrawTextW(hdc, wide_text.as_ptr(), -1, &raw mut r, format) };
@@ -1216,6 +1264,8 @@ pub fn install() {
     set_font_size(settings.taskbar_widget_font_size);
     set_width(settings.taskbar_widget_width);
     set_text_align(&settings.taskbar_widget_text_align);
+    set_icon_size(settings.taskbar_widget_icon_size);
+    set_icon_style(&settings.taskbar_widget_icon_style);
     if !settings.taskbar_widget_enabled {
         return;
     }
@@ -1444,7 +1494,6 @@ pub fn start() -> Result<(), String> {
     );
     Ok(())
 }
-
 
 #[cfg(test)]
 mod tests {

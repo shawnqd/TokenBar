@@ -1,0 +1,138 @@
+/* Tray panel settings preview styles. Scoped under .settings-v5 so this
+   never leaks into the real tray flyout or other surfaces. */
+
+.settings-v5 .s5-stage-frame--tray {
+  width: 328px;
+  height: 256px;
+  overflow-y: auto;
+}
+
+/* Real TrayCard stack (TRAY_PANEL_SPECIFICATION 7.3): one card per archetype
+   (Claude / DeepSeek / Cursor), each 328 DIP wide; the frame scrolls when the
+   density pushes the stack taller than the stage. Card styling itself comes
+   from tray-v5.css imported by TrayCard — this only frames and stacks. */
+.settings-v5 .s5-tray-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: 328px;
+}
+
+.settings-v5 .s5-tray-card {
+  width: 328px;
+  border: 1px solid var(--flyout-hairline);
+  border-radius: 12px;
+  padding: 12px 14px;
+  background: var(--flyout-bg);
+}
+
+.settings-v5 .s5-tray-card.compact {
+  padding: 9px 12px;
+}
+
+.settings-v5 .s5-tray-card.minimal {
+  padding: 6px 9px;
+}
+
+.settings-v5 .s5-tc-head {
+  display: flex;
+  justify-content: space-between;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.settings-v5 .s5-tc-head span {
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--flyout-muted);
+}
+
+.settings-v5 .s5-tc-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  margin-top: 6px;
+}
+
+.settings-v5 .s5-tc-tag {
+  font-size: 11px;
+  color: var(--flyout-sub);
+}
+
+.settings-v5 .s5-tc-pct {
+  font-size: 28px;
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.03em;
+}
+
+.settings-v5 .s5-tray-card.compact .s5-tc-pct {
+  font-size: 22px;
+}
+
+.settings-v5 .s5-bar {
+  height: 5.5px;
+  border-radius: 99px;
+  background: var(--track-bg, #ececee);
+  margin-top: 6px;
+  overflow: hidden;
+}
+
+.settings-v5 .s5-tray-card.compact .s5-bar {
+  height: 4.5px;
+}
+
+.settings-v5 .s5-tray-card.minimal .s5-bar {
+  height: 3.5px;
+  margin-top: 4px;
+}
+
+.settings-v5 .s5-bar > b {
+  display: block;
+  height: 100%;
+  background: var(--flyout-accent);
+  border-radius: 99px;
+}
+
+.settings-v5 .s5-pill {
+  display: inline-flex;
+  align-items: center;
+  font-size: 11px;
+  padding: 2px 7px;
+  border-radius: 99px;
+  background: rgba(16, 124, 16, 0.1);
+  color: var(--pace-reserve, #107c10);
+}
+
+[data-theme="dark"] .settings-v5 .s5-pill {
+  background: rgba(56, 193, 114, 0.14);
+}
+
+.settings-v5 .s5-insight {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 11px;
+  color: var(--flyout-sub);
+  margin-top: 6px;
+}
+
+.settings-v5 .s5-insight strong {
+  font-size: 12.5px;
+  font-weight: 700;
+  color: var(--flyout-text, inherit);
+}
+
+.settings-v5 .s5-insight-sub {
+  font-size: 10.5px;
+  color: var(--flyout-muted);
+  line-height: 1.45;
+  margin-top: 4px;
+}
+
+.settings-v5 .s5-min-line {
+  display: flex;
+  justify-content: space-between;
+  font-size: 13px;
+  font-weight: 600;
+}

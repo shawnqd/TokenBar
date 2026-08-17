@@ -42,6 +42,9 @@ pub struct ResolvedEntry {
     pub provider_label: String,
     /// Which window, as the caller's localized label.
     pub window: String,
+    /// The window kind (`session|weekly|daily|monthly|balance|speed|primary`),
+    /// used by the renderer's preview/state model.
+    pub window_kind: String,
     /// The percentage to print, when the entry resolved to real data.
     pub percent: Option<f64>,
     /// A prepaid balance, already formatted (`¥38.88`), for `balance` entries.
@@ -59,12 +62,14 @@ impl ResolvedEntry {
         provider_id: impl Into<String>,
         provider_label: impl Into<String>,
         window: impl Into<String>,
+        window_kind: impl Into<String>,
         reason: EntryUnavailable,
     ) -> Self {
         Self {
             provider_id: provider_id.into(),
             provider_label: provider_label.into(),
             window: window.into(),
+            window_kind: window_kind.into(),
             percent: None,
             amount: None,
             unavailable: Some(reason),
@@ -279,6 +284,7 @@ pub fn resolve_entries(
                     entry.provider_id.clone(),
                     entry.provider_id.clone(),
                     label,
+                    entry.window.clone(),
                     reason,
                 );
             };
@@ -288,6 +294,7 @@ pub fn resolve_entries(
                     snapshot.provider_id.clone(),
                     snapshot.display_name.clone(),
                     label,
+                    entry.window.clone(),
                     EntryUnavailable::ProviderError,
                 );
             }
@@ -298,6 +305,7 @@ pub fn resolve_entries(
                         provider_id: snapshot.provider_id.clone(),
                         provider_label: snapshot.display_name.clone(),
                         window: label,
+                        window_kind: entry.window.clone(),
                         percent: Some(value),
                         amount: None,
                         unavailable: None,
@@ -306,6 +314,7 @@ pub fn resolve_entries(
                         snapshot.provider_id.clone(),
                         snapshot.display_name.clone(),
                         label,
+                        entry.window.clone(),
                         EntryUnavailable::WindowUnsupported,
                     ),
                 };
@@ -323,6 +332,7 @@ pub fn resolve_entries(
                         provider_id: snapshot.provider_id.clone(),
                         provider_label: snapshot.display_name.clone(),
                         window: label,
+                        window_kind: entry.window.clone(),
                         percent: None,
                         amount: Some(amount),
                         unavailable: None,
@@ -331,6 +341,7 @@ pub fn resolve_entries(
                         snapshot.provider_id.clone(),
                         snapshot.display_name.clone(),
                         label,
+                        entry.window.clone(),
                         EntryUnavailable::WindowUnsupported,
                     ),
                 };
@@ -345,6 +356,7 @@ pub fn resolve_entries(
                     provider_id: snapshot.provider_id.clone(),
                     provider_label: snapshot.display_name.clone(),
                     window: window.kind.map(window_label).unwrap_or_default(),
+                    window_kind: "primary".to_string(),
                     amount: None,
                     percent: Some(if settings.taskbar_show_as_used {
                         window.used_percent
@@ -357,6 +369,7 @@ pub fn resolve_entries(
                     provider_id: snapshot.provider_id.clone(),
                     provider_label: snapshot.display_name.clone(),
                     window: label,
+                    window_kind: entry.window.clone(),
                     amount: None,
                     percent: Some(if settings.taskbar_show_as_used {
                         window.used_percent
@@ -369,6 +382,7 @@ pub fn resolve_entries(
                     snapshot.provider_id.clone(),
                     snapshot.display_name.clone(),
                     label,
+                    entry.window.clone(),
                     EntryUnavailable::WindowUnsupported,
                 ),
             }
@@ -801,4 +815,33 @@ mod tests {
             assert_eq!(out.window, expected, "{minutes:?}/{slot:?}");
         }
     }
+
+    /// The split cell model: `window_kind` mirrors each entry's kind, and a real
+    /// percent / a balance amount / an unavailable reason all carry their
+    /// distinct payload for the renderer's tag+value mapping.
+    #[test]
+    fn resolved_entries_carry_the_split_cell_payload() {
+        // percent + kind = session
+        let snaps = vec![snapshot("codex", "Codex")];
+        let s = settings_with(vec![("codex", "session"), ("codex", "balance")]);
+        let out = resolve_entries(&s, &snaps, None, &label, &no_speed);
+        assert_eq!(out.len(), 2);
+        // Session resolves to a real percent.
+        assert_eq!(out[0].window_kind, "session");
+        assert_eq!(out[0].percent, Some(10.0));
+        assert_eq!(out[0].amount, None);
+        assert_eq!(out[0].unavailable, None);
+        // Balance on a provider with no balance record is unsupported (never a
+        // fabricated amount).
+        assert_eq!(out[1].window_kind, "balance");
+        assert_eq!(out[1].amount, None);
+        assert_eq!(out[1].unavailable, Some(EntryUnavailable::WindowUnsupported));
+
+        // A disabled provider maps to the notConfigured-style unavailable.
+        let mut disabled = settings_with(vec![("grok", "session")]);
+        let out2 = resolve_entries(&disabled, &[], None, &label, &no_speed);
+        assert_eq!(out2[0].window_kind, "session");
+        assert_eq!(out2[0].unavailable, Some(EntryUnavailable::ProviderDisabled));
+    }
+
 }

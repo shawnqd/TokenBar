@@ -11,6 +11,7 @@ import type { LocaleKey } from "../../../i18n/keys";
 import { ProviderIcon } from "../../../components/providers/ProviderIcon";
 import { getProviderIcon } from "../../../components/providers/providerIcons";
 import { COOKIE_IMPORT_ID } from "./CookieFileImport";
+import "../settingsSurfaces.css";
 
 /** Last-fetch state mapped from a ProviderUsageSnapshot / settings pair. */
 export type ProviderSidebarStatus =
@@ -249,20 +250,6 @@ export function ProvidersSidebar({
 
   return (
     <div className="providers-sidebar-shell">
-      <button
-        type="button"
-        className={`providers-sidebar__pinned-row${isCookieImportSelected ? " providers-sidebar__pinned-row--selected" : ""}`}
-        aria-selected={isCookieImportSelected}
-        onClick={() => onSelect(COOKIE_IMPORT_ID)}
-      >
-        <span className="providers-sidebar__pinned-icon" aria-hidden>
-          <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth={1.4} strokeLinecap="round" strokeLinejoin="round">
-            <path d="M8 10.5V2.5M8 2.5 5.2 5.3M8 2.5l2.8 2.8" />
-            <path d="M2.5 10v2.3a.7.7 0 0 0 .7.7h9.6a.7.7 0 0 0 .7-.7V10" />
-          </svg>
-        </span>
-        <span className="providers-sidebar__pinned-name">批量导入 Cookie</span>
-      </button>
       <div className="providers-sidebar-search">
         <input
           className="providers-sidebar-search__input"
@@ -285,6 +272,23 @@ export function ProvidersSidebar({
           </button>
         )}
       </div>
+      <button
+        type="button"
+        className={`providers-sidebar__pinned-row${isCookieImportSelected ? " providers-sidebar__pinned-row--selected" : ""}`}
+        aria-selected={isCookieImportSelected}
+        onClick={() => onSelect(COOKIE_IMPORT_ID)}
+      >
+        <span className="providers-sidebar__pinned-icon" aria-hidden>
+          <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth={1.4} strokeLinecap="round" strokeLinejoin="round">
+            <path d="M8 10.5V2.5M8 2.5 5.2 5.3M8 2.5l2.8 2.8" />
+            <path d="M2.5 10v2.3a.7.7 0 0 0 .7.7h9.6a.7.7 0 0 0 .7-.7V10" />
+          </svg>
+        </span>
+        <span className="providers-sidebar__pinned-name">
+          {/* TODO(lane-s-i18n): 批量导入网页会话 */}
+          批量导入网页会话
+        </span>
+      </button>
       <ul
         ref={sidebarRef}
         className="providers-sidebar"
@@ -350,20 +354,10 @@ export function ProvidersSidebar({
                   <span className="providers-sidebar__subtitle-primary">
                     {p.subtitlePrimary}
                   </span>
-                  <span
-                    className="providers-sidebar__subtitle-secondary"
-                    aria-hidden={!p.subtitleSecondary}
-                  >
-                    {p.subtitleSecondary || "\u00a0"}
-                  </span>
                 </span>
               </div>
-              <span
-                className="providers-sidebar__handle"
-                aria-hidden="true"
-                title={t("ProviderSidebarReorderHint")}
-              >
-                ⋮⋮
+              <span className="providers-sidebar__metric">
+                {p.subtitleSecondary ?? ""}
               </span>
               <input
                 type="checkbox"

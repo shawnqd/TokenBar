@@ -56,10 +56,13 @@ impl SurfaceMode {
                 visible: true,
                 decorations: false,
                 resizable: true,
-                width: 328.0,
-                height: 776.0,
-                min_width: Some(300.0),
-                min_height: Some(360.0),
+                // 20 DIP wider/taller than the 328x776 panel: the CSS keeps a
+                // 10 DIP transparent gutter on every side so the unified
+                // flyout shadow (settings-window style) has room to paint.
+                width: 348.0,
+                height: 796.0,
+                min_width: Some(320.0),
+                min_height: Some(380.0),
                 max_width: None,
                 max_height: None,
                 always_on_top: true,
@@ -90,8 +93,8 @@ impl SurfaceMode {
                 visible: true,
                 decorations: true,
                 resizable: true,
-                width: 912.0,
-                height: 580.0,
+                width: 1120.0,
+                height: 780.0,
                 min_width: None,
                 min_height: None,
                 max_width: None,
@@ -275,15 +278,15 @@ mod tests {
     #[test]
     fn tray_panel_properties() {
         let props = SurfaceMode::TrayPanel.window_properties();
-        assert_eq!(props.width, 328.0);
-        assert_eq!(props.height, 776.0);
+        assert_eq!(props.width, 348.0);
+        assert_eq!(props.height, 796.0);
     }
 
     #[test]
     fn tray_panel_has_resize_bounds() {
         let props = SurfaceMode::TrayPanel.window_properties();
-        assert_eq!(props.min_width, Some(300.0));
-        assert_eq!(props.min_height, Some(360.0));
+        assert_eq!(props.min_width, Some(320.0));
+        assert_eq!(props.min_height, Some(380.0));
         assert_eq!(props.max_width, None);
         assert_eq!(props.max_height, None);
     }
@@ -298,15 +301,15 @@ mod tests {
         assert!(props.always_on_top);
         assert!(props.skip_taskbar);
         assert!(!props.decorations);
-        assert_eq!(props.min_width, Some(300.0));
-        assert_eq!(props.min_height, Some(360.0));
+        assert_eq!(props.min_width, Some(320.0));
+        assert_eq!(props.min_height, Some(380.0));
     }
 
     #[test]
     fn settings_properties() {
         let props = SurfaceMode::Settings.window_properties();
-        assert_eq!(props.width, 912.0);
-        assert_eq!(props.height, 580.0);
+        assert_eq!(props.width, 1120.0);
+        assert_eq!(props.height, 780.0);
     }
 
     #[test]

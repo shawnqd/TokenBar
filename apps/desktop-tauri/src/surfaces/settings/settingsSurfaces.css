@@ -1,0 +1,234 @@
+/* Surface settings pages: left controls + right sticky PreviewFrame.
+   Isolated here because Lane P cannot edit the shared styles.css. */
+
+.settings-surf-page {
+  display: flex;
+  flex-direction: column;
+  min-height: 100%;
+}
+
+.settings-surf-page > .settings-page-head,
+.settings-surf-page > .settings-page-head--solo {
+  display: block;
+  grid-template-columns: unset;
+  gap: 0;
+  align-items: flex-start;
+  margin: 0 0 12px;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: none;
+}
+
+.settings-surf-page > .settings-page-head .settings-page-head__description,
+.settings-surf-page > .settings-page-head--solo .settings-page-head__description {
+  max-width: 56em;
+}
+
+.settings-surf-split {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 352px;
+  gap: 16px;
+  align-items: start;
+  min-height: 0;
+}
+
+.settings-surf-fields {
+  min-width: 0;
+}
+
+.settings-surf-fields > .settings-section:last-child {
+  margin-bottom: 0;
+}
+
+.settings-preview-frame {
+  position: sticky;
+  top: 0;
+  flex: 0 0 auto;
+  border: 1px solid var(--flyout-hairline, var(--panel-border));
+  border-radius: 12px;
+  background: var(--flyout-zone-bg, var(--surface-elevated));
+  padding: 10px 12px 12px;
+}
+
+[data-theme="light"] .settings-preview-frame {
+  background: #ffffff;
+}
+
+.settings-preview-frame__label {
+  margin: 0 0 8px;
+  color: var(--flyout-muted, var(--text-muted));
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.settings-preview-frame__stage {
+  overflow: hidden;
+  box-sizing: border-box;
+}
+
+.settings-preview-frame__stage--tray .settings-tray-preview,
+.settings-preview-frame__stage--tray .menu-card {
+  max-width: 328px;
+}
+
+.settings-preview-frame__stage--tray {
+  width: 328px;
+  height: 256px;
+}
+
+.settings-preview-frame__stage--float {
+  width: 280px;
+  height: 156px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.settings-preview-frame__stage--taskbar {
+  width: 248px;
+  height: 52px;
+  display: flex;
+  align-items: center;
+}
+
+.settings-preview-frame__stage--float .floatbar {
+  pointer-events: none;
+}
+
+.settings-preview-frame__stage--float.is-off .floatbar,
+.settings-preview-frame__stage--taskbar.is-off .taskbar-preview__strip {
+  opacity: 0.42;
+}
+
+.settings-tray-preview {
+  width: 328px;
+  height: 256px;
+  overflow: hidden;
+}
+
+.settings-tray-preview__scale {
+  width: 328px;
+  transform-origin: top left;
+}
+
+.settings-tray-preview .menu-card {
+  width: 328px;
+}
+
+.settings-taskbar-preview {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  min-width: 0;
+}
+
+.settings-taskbar-preview .taskbar-preview__strip {
+  max-width: 100%;
+  width: auto;
+  min-width: 0;
+  box-sizing: border-box;
+}
+
+.settings-taskbar-preview .taskbar-preview__line {
+  display: flex;
+  justify-content: flex-start;
+  min-width: 0;
+}
+
+.settings-taskbar-preview .taskbar-preview__cluster {
+  display: flex;
+  justify-content: flex-start;
+  align-items: center;
+  gap: 3px;
+  min-width: 0;
+}
+
+.settings-taskbar-preview .taskbar-preview__mark {
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+}
+
+.settings-taskbar-preview .taskbar-preview__mark svg {
+  width: 82%;
+  height: 82%;
+  display: block;
+}
+
+.settings-taskbar-preview .taskbar-preview__mark.is-wide svg {
+  width: 72%;
+  height: 72%;
+}
+
+.settings-taskbar-preview .taskbar-preview__strip[data-icon-style="badge"] .taskbar-preview__mark {
+  border-radius: 3px;
+  background: color-mix(in srgb, currentColor 18%, transparent);
+}
+
+.settings-taskbar-preview .taskbar-preview__strip[data-icon-style="solid"] .taskbar-preview__mark {
+  border-radius: 3px;
+  background: currentColor;
+}
+
+.settings-taskbar-preview .taskbar-preview__strip[data-icon-style="solid"] .taskbar-preview__mark svg,
+.settings-taskbar-preview .taskbar-preview__strip[data-icon-style="solid"] .taskbar-preview__mark {
+  color: inherit;
+}
+
+.settings-taskbar-preview .taskbar-preview__strip[data-icon-style="solid"] .taskbar-preview__mark svg {
+  color: #fff;
+  fill: #fff;
+}
+
+.settings-taskbar-preview .taskbar-preview__tag {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--text-muted);
+  font-weight: 400;
+}
+
+.settings-taskbar-preview .taskbar-preview__val {
+  flex: 0 0 auto;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  text-align: left;
+}
+
+@media (max-width: 760px) {
+  .settings-surf-split {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .settings-preview-frame {
+    position: static;
+  }
+}
+
+/* Providers list: no drag handle; metric is its own left-aligned column. */
+.providers-sidebar__row {
+  grid-template-columns: 36px minmax(0, 1fr) 44px auto;
+}
+
+.providers-sidebar__metric {
+  min-width: 0;
+  color: var(--provider-row-text-primary);
+  font-size: 12px;
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+  text-align: left;
+}
+
+.providers-sidebar__row--selected .providers-sidebar__metric {
+  color: var(--accent);
+}
+
+.providers-sidebar__handle {
+  display: none;
+}

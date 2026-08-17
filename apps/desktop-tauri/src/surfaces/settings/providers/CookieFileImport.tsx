@@ -78,8 +78,11 @@ export function CookieFileImport() {
           </svg>
         </span>
         <div>
-          <h3>批量导入 Cookie</h3>
-          <p>支持 cookies.txt 或 Cookie JSON，仅在本机解析并按服务商域名匹配保存。</p>
+          <h3>批量导入网页会话</h3>
+          <p>
+            {/* TODO(lane-s-i18n) */}
+            不是第四种登录。和每家里的「捕获 / 粘贴」一样，都是网页会话，只是一次写给好几家。
+          </p>
         </div>
       </div>
 

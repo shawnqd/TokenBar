@@ -26,6 +26,8 @@ mod taskbar_menu;
 #[cfg(windows)]
 mod taskbar_text;
 #[cfg(windows)]
+mod taskbar_icons;
+#[cfg(windows)]
 mod taskbar_widget;
 mod tray_bridge;
 mod tray_menu;
@@ -158,6 +160,7 @@ fn main() {
             commands::get_provider_catalog,
             commands::get_settings_snapshot,
             commands::update_settings,
+            commands::reset_settings,
             commands::get_taskbar_font_families,
             commands::get_taskbar_window_availability,
             commands::get_taskbar_preview_lines,
@@ -207,6 +210,7 @@ fn main() {
             commands::get_app_info,
             commands::get_provider_chart_data,
             commands::get_provider_local_usage_summary,
+            commands::clear_provider_local_usage_cache_command,
             commands::reorder_providers,
             commands::set_provider_cookie_source,
             commands::get_provider_cookie_source,

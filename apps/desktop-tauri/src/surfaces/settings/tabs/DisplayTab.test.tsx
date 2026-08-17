@@ -29,6 +29,7 @@ describe("DisplayTab", () => {
       <DisplayTab settings={baseSettings} set={() => {}} saving={false} />,
     );
     expect(screen.getByText("ThemeLabel")).toBeInTheDocument();
+    expect(screen.getByText("EnableAnimationsLabel")).toBeInTheDocument();
   });
 
   /**

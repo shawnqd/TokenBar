@@ -57,8 +57,7 @@ describe("IdentitySection balance-only providers", () => {
     ["deepseek", "CNY balance: ¥38.81", "api"],
     ["mimo", "lite (expired)", "web"],
   ] as const)("hides the %s plan echo; the subtitle carries the source", (id, plan, source) => {
-    // The parent always builds the subtitle as "{sourceLabel} · {updated}",
-    // so the identity grid no longer repeats the data source as its own row.
+    // Compact HTML header: plan echo stays hidden; fallback subtitle is the source line.
     render(
       <IdentitySection
         provider={detail(id)}

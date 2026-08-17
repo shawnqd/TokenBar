@@ -16,7 +16,7 @@
 //   1 — mismatch (prints a diff-style report)
 //   2 — parse failure (file missing / regex produced zero matches)
 
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
 
@@ -97,3 +97,38 @@ if (problems.length) {
 console.log(
   `[check-provider-marks] OK — ${ts.size} provider marks match between TS and Rust`,
 );
+
+// ── Official brand SVG availability ────────────────────────────────────
+// Every provider mark the strip can render should have official SVG artwork
+// (`ProviderIcon-<id>.svg`) so the native icon slot uses the real brand mark
+// instead of the glyph fallback. A handful of ids reuse a sibling asset
+// (mirroring SVG_ALIASES in taskbar_icons.rs); the check resolves those too.
+const svgAlias = {
+  alibabatokenplan: 'alibaba',
+  arkagentplan: 'volcengine-ark',
+  arkcodingplan: 'volcengine-ark',
+  kimik2: 'kimi',
+  mimoapi: 'mimo',
+};
+const iconsDir = resolve(here, '..', 'src', 'components', 'providers', 'icons');
+
+const iconProblems = [];
+let files = [];
+try { files = readdirSync(iconsDir); } catch (err) {
+  console.error(`[check-provider-marks] cannot list icons dir: ${err.message}`);
+  process.exit(2);
+}
+for (const id of rust.keys()) {
+  const asset = svgAlias[id] ?? id;
+  if (!files.includes(`ProviderIcon-${asset}.svg`)) {
+    iconProblems.push(`  no ProviderIcon-${asset}.svg for provider ${id}`);
+  }
+}
+
+if (iconProblems.length) {
+  console.error(`[check-provider-marks] MISSING SVG ASSETS (${rust.size} marks)`);
+  for (const line of iconProblems) console.error(line);
+  process.exit(1);
+}
+
+console.log(`[check-provider-marks] OK — every marked provider has an SVG asset`);

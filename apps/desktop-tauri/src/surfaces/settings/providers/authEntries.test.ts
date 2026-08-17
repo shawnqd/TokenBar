@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { resolveAuthEntries, resolvePrimaryAuth } from "./authEntries";
+import {
+  mapBespokeToUserKind,
+  resolveAuthEntries,
+  resolvePrimaryAuth,
+  userFacingAuthMethods,
+} from "./authEntries";
 
 const OAUTH_ONLY = { supportsOAuth: true, supportsCli: true, supportsApiKey: false };
 const API_ONLY = { supportsOAuth: false, supportsCli: false, supportsApiKey: true };
@@ -147,5 +152,20 @@ describe("resolveAuthEntries methods list", () => {
       isBespoke: false,
     });
     expect(methods).toEqual(["apiKey"]);
+  });
+
+  it("never offers bespoke as a fourth user-visible method", () => {
+    const { methods } = resolveAuthEntries({
+      providerId: "claude",
+      cookieDomain: "claude.ai",
+      dashboardUrl: "https://claude.ai",
+      capabilities: OAUTH_ONLY,
+      isBespoke: true,
+    });
+    expect(methods).toContain("bespoke");
+    expect(userFacingAuthMethods(methods, "claude")).toEqual(["cookie"]);
+    expect(userFacingAuthMethods(methods, "claude")).not.toContain("bespoke");
+    expect(mapBespokeToUserKind("gemini")).toBe("signIn");
+    expect(mapBespokeToUserKind("vertexai")).toBe("apiKey");
   });
 });

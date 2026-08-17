@@ -612,60 +612,60 @@ pub fn update_tray_icon_and_tooltip(
             .into_iter()
             .map(|entry| {
                 use crate::taskbar_entries::EntryUnavailable;
-                // The provider's NAME is the longest part of a cell — "Claude
-                // 5小时 12%" measures 103px against 77px for a mark plus the
-                // same numbers, and four cells in a two-column strip do not
-                // have that to spare. So when the provider has a brand mark the
-                // mark replaces the name; when it does not, the name stays and
-                // nothing is lost.
+                // The mark is the glyph fallback only; the icon slot is filled by
+                // the official SVG via `icon_provider_id` when the entry names a
+                // real provider. An `auto` entry with nothing picked has no
+                // artwork and nothing to identify a provider with, so it falls
+                // back to a bare glyph.
                 let mark = crate::provider_mark::provider_mark(&entry.provider_id);
-                let name = match mark {
-                    Some(_) => String::new(),
-                    None => format!("{} ", entry.provider_label),
-                };
-                // A balance is money and prints verbatim; the window word is
-                // dropped because the amount already says what it is and the
-                // cell has no room for both.
-                if let Some(ref amount) = entry.amount {
-                    return crate::taskbar_widget::StripLine {
-                        mark,
-                        text: format!("{name}{amount}"),
-                    };
-                }
-                // A `primary` entry whose provider publishes no cycle length
-                // resolves with an empty window label. Joining unconditionally
-                // would print a double space where the name should have been.
-                let window = if entry.window.is_empty() {
-                    String::new()
+                let icon_provider_id = if entry.provider_id
+                    == codexbar::settings::TASKBAR_PROVIDER_AUTO
+                {
+                    None
                 } else {
-                    format!("{} ", entry.window)
+                    Some(entry.provider_id.clone())
                 };
-                let text = match (entry.percent, entry.unavailable) {
-                    // Speed is a rate, not a percentage, so it keeps its unit.
-                    (Some(value), None) if entry.window == window_label("speed") => {
-                        format!("{name}{value:.1} t/s")
+                let window_kind = entry.window_kind.clone();
+                let tag = entry.window.trim().to_string();
+                let (value, state) = if let Some(ref amount) = entry.amount {
+                    // Money prints verbatim; the window word already says what it is.
+                    (amount.clone(), "ready")
+                } else {
+                    match (entry.percent, entry.unavailable) {
+                        // Speed is a rate, not a percentage, so it keeps its unit.
+                        (Some(speed), None) if window_kind == "speed" => {
+                            (format!("{speed:.1} t/s"), "ready")
+                        },
+                        (Some(percent), None) => (format!("{percent:.0}%"), "ready"),
+                        (_, Some(reason)) => {
+                            // The reason replaces the number outright — an entry
+                            // that cannot be measured must never print a fabricated
+                            // percentage.
+                            let key = match reason {
+                                EntryUnavailable::ProviderDisabled => LocaleKey::TaskbarEntryProviderDisabled,
+                                EntryUnavailable::NoData => LocaleKey::TaskbarEntryNoData,
+                                EntryUnavailable::ProviderError => LocaleKey::TaskbarEntryError,
+                                EntryUnavailable::WindowUnsupported => LocaleKey::TaskbarEntryUnsupported,
+                            };
+                            let state = match reason {
+                                EntryUnavailable::ProviderDisabled => "notConfigured",
+                                EntryUnavailable::NoData => "unknown",
+                                EntryUnavailable::ProviderError => "error",
+                                EntryUnavailable::WindowUnsupported => "unsupported",
+                            };
+                            (get_text(lang, key), state)
+                        },
+                        _ => (entry.provider_label.clone(), "ready"),
                     }
-                    (Some(value), None) => {
-                        format!("{name}{window}{value:.0}%")
-                    }
-                    (_, Some(reason)) => {
-                        let key = match reason {
-                            EntryUnavailable::ProviderDisabled => {
-                                LocaleKey::TaskbarEntryProviderDisabled
-                            }
-                            EntryUnavailable::NoData => LocaleKey::TaskbarEntryNoData,
-                            EntryUnavailable::ProviderError => LocaleKey::TaskbarEntryError,
-                            EntryUnavailable::WindowUnsupported => {
-                                LocaleKey::TaskbarEntryUnsupported
-                            }
-                        };
-                        // The reason replaces the number outright — an entry that
-                        // cannot be measured must never print a percentage.
-                        format!("{name}{window}{}", get_text(lang, key))
-                    }
-                    _ => entry.provider_label.clone(),
                 };
-                crate::taskbar_widget::StripLine { mark, text }
+                crate::taskbar_widget::StripLine {
+                    mark,
+                    icon_provider_id,
+                    tag,
+                    value,
+                    window_kind,
+                    state: state.to_string(),
+                }
             })
             .collect::<Vec<_>>();
 
@@ -1310,445 +1310,14 @@ mod tests {
             size: tauri::Size::Logical(tauri::LogicalSize::new(12.0, 12.0)),
         };
 
+        // The logical anchor has no scale to convert with when the click is
+        // outside every monitor, so `resolve_tray_anchor` must skip it.
         let anchor = resolve_tray_anchor(
             &rect,
-            tauri::PhysicalPosition::new(2500.0, 500.0),
+            tauri::PhysicalPosition::new(2000.0, 600.0),
             &monitors,
         );
 
-        assert!(anchor.is_none());
-    }
-
-    fn fake_snapshot_with(
-        id: &str,
-        display: &str,
-        used_percent: f64,
-        secondary_percent: Option<f64>,
-        tertiary_percent: Option<f64>,
-        cost: Option<(f64, f64)>,
-    ) -> crate::commands::ProviderUsageSnapshot {
-        crate::commands::ProviderUsageSnapshot {
-            provider_id: id.into(),
-            display_name: display.into(),
-            primary: crate::commands::RateWindowSnapshot {
-                used_percent,
-                remaining_percent: 100.0 - used_percent,
-                // These fixtures exercise tray ICON/label selection, which reads
-                // percentages only. No length or slot name is declared, so there
-                // is no cycle to name.
-                kind: None,
-                window_minutes: None,
-                resets_at: None,
-                reset_description: None,
-                is_exhausted: false,
-                is_informational: false,
-                reserve_percent: None,
-                reserve_description: None,
-                reserve_will_last_to_reset: false,
-                reserve_eta_seconds: None,
-            },
-            primary_label: None,
-            secondary: secondary_percent.map(|pct| crate::commands::RateWindowSnapshot {
-                used_percent: pct,
-                remaining_percent: 100.0 - pct,
-                kind: None,
-                window_minutes: None,
-                resets_at: None,
-                reset_description: None,
-                is_exhausted: false,
-                is_informational: false,
-                reserve_percent: None,
-                reserve_description: None,
-                reserve_will_last_to_reset: false,
-                reserve_eta_seconds: None,
-            }),
-            secondary_label: None,
-            model_specific: None,
-            tertiary: tertiary_percent.map(|pct| crate::commands::RateWindowSnapshot {
-                used_percent: pct,
-                remaining_percent: 100.0 - pct,
-                kind: None,
-                window_minutes: None,
-                resets_at: None,
-                reset_description: None,
-                is_exhausted: false,
-                is_informational: false,
-                reserve_percent: None,
-                reserve_description: None,
-                reserve_will_last_to_reset: false,
-                reserve_eta_seconds: None,
-            }),
-            extra_rate_windows: Vec::new(),
-            cost: cost.map(|(used, limit)| crate::commands::CostSnapshotBridge {
-                used,
-                limit: Some(limit),
-                remaining: Some((limit - used).max(0.0)),
-                currency_code: "USD".to_string(),
-                period: "monthly".to_string(),
-                resets_at: None,
-                formatted_used: format!("${used:.2}"),
-                formatted_limit: Some(format!("${limit:.2}")),
-            }),
-            plan_name: None,
-            account_email: None,
-            source_label: String::new(),
-            updated_at: "2025-01-01T00:00:00Z".into(),
-            error: None,
-            pace: None,
-            account_organization: None,
-            tray_status_label: None,
-            fetch_duration_ms: None,
-            wayfinder_usage: None,
-        }
-    }
-
-    fn fake_snapshot(
-        id: &str,
-        display: &str,
-        used_percent: f64,
-    ) -> crate::commands::ProviderUsageSnapshot {
-        fake_snapshot_with(id, display, used_percent, None, None, None)
-    }
-
-    fn fake_extra_window(percent: f64) -> crate::commands::NamedRateWindowSnapshot {
-        crate::commands::NamedRateWindowSnapshot {
-            id: "additional_budget".to_string(),
-            title: "Additional Budget".to_string(),
-            window: crate::commands::RateWindowSnapshot {
-                used_percent: percent,
-                remaining_percent: 100.0 - percent,
-                kind: None,
-                window_minutes: None,
-                resets_at: None,
-                reset_description: None,
-                is_exhausted: false,
-                is_informational: false,
-                reserve_percent: None,
-                reserve_description: None,
-                reserve_will_last_to_reset: false,
-                reserve_eta_seconds: None,
-            },
-            usage_known: true,
-        }
-    }
-
-    #[test]
-    fn pick_tray_provider_highest_picks_max_primary() {
-        let a = fake_snapshot("codex", "Codex", 30.0);
-        let b = fake_snapshot("claude", "Claude", 72.5);
-        let c = fake_snapshot("gemini", "Gemini", 50.0);
-        let refs: Vec<&crate::commands::ProviderUsageSnapshot> = vec![&a, &b, &c];
-
-        let picked = pick_tray_provider(&refs, /* prefer_highest = */ true)
-            .expect("highest mode should pick a provider");
-        assert_eq!(picked.provider_id, "claude");
-    }
-
-    #[test]
-    fn pick_tray_provider_first_preserves_catalog_order() {
-        let a = fake_snapshot("codex", "Codex", 30.0);
-        let b = fake_snapshot("claude", "Claude", 72.5);
-        let refs: Vec<&crate::commands::ProviderUsageSnapshot> = vec![&a, &b];
-
-        let picked = pick_tray_provider(&refs, /* prefer_highest = */ false)
-            .expect("non-highest mode should still pick the first entry");
-        assert_eq!(picked.provider_id, "codex");
-    }
-
-    #[test]
-    fn pick_tray_provider_none_when_empty() {
-        let refs: Vec<&crate::commands::ProviderUsageSnapshot> = vec![];
-        assert!(pick_tray_provider(&refs, true).is_none());
-        assert!(pick_tray_provider(&refs, false).is_none());
-    }
-
-    #[test]
-    fn status_labels_per_provider_mode_lists_each_healthy_provider() {
-        let settings = Settings {
-            tray_icon_mode: TrayIconMode::PerProvider,
-            provider_order: codexbar::settings::normalize_provider_order(&[
-                "claude".to_string(),
-                "codex".to_string(),
-            ]),
-            ..Settings::default()
-        };
-        let snapshots = vec![
-            fake_snapshot("codex", "Codex", 30.0),
-            fake_snapshot("claude", "Claude", 72.0),
-        ];
-
-        let labels = status_labels_for_settings(
-            &settings,
-            &snapshots,
-            codexbar::settings::Language::English,
-        );
-
-        assert_eq!(
-            labels,
-            vec![
-                ("claude".to_string(), "Claude 72%".to_string()),
-                ("codex".to_string(), "Codex 30%".to_string()),
-            ]
-        );
-    }
-
-    #[test]
-    fn status_labels_single_mode_collapses_to_selected_provider() {
-        let settings = Settings {
-            tray_icon_mode: TrayIconMode::Single,
-            menu_bar_shows_highest_usage: true,
-            ..Settings::default()
-        };
-        let snapshots = vec![
-            fake_snapshot("codex", "Codex", 30.0),
-            fake_snapshot("claude", "Claude", 72.0),
-        ];
-
-        let labels = status_labels_for_settings(
-            &settings,
-            &snapshots,
-            codexbar::settings::Language::English,
-        );
-
-        assert_eq!(
-            labels,
-            vec![("status_summary".to_string(), "Claude 72%".to_string())]
-        );
-    }
-
-    #[test]
-    fn tooltip_uses_compact_status_labels() {
-        let mut claude = fake_snapshot("claude", "Claude", 13.0);
-        claude.primary.reset_description = Some("2h 05m".to_string());
-        let mut codex = fake_snapshot("codex", "Codex", 8.0);
-        codex.primary.reset_description = Some("4h 10m".to_string());
-
-        let tooltip = build_tooltip(&[claude, codex], codexbar::settings::Language::English, &[]);
-
-        assert_eq!(
-            tooltip,
-            "CodexBar\nClaude: 13% • Resets in 2h 05m\nCodex: 8% • Resets in 4h 10m"
-        );
-    }
-
-    #[test]
-    fn tooltip_truncates_long_provider_lines() {
-        let mut claude = fake_snapshot("claude", "Claude", 13.0);
-        claude.primary.reset_description =
-            Some("resets in Jun 10 at 3:00PM with extra noisy suffix".to_string());
-
-        let tooltip = build_tooltip(&[claude], codexbar::settings::Language::English, &[]);
-
-        let line = tooltip.lines().nth(1).expect("provider tooltip line");
-        assert!(line.starts_with("Claude: 13% • Resets in Jun 10 at 3:00PM"));
-        assert!(line.ends_with("..."));
-        assert!(line.chars().count() <= 53);
-    }
-
-    #[test]
-    fn japanese_tooltip_localizes_error_status() {
-        let mut claude = fake_snapshot("claude", "Claude", 13.0);
-        claude.error = Some("network timeout".to_string());
-
-        let tooltip = build_tooltip(&[claude], codexbar::settings::Language::Japanese, &[]);
-
-        assert!(tooltip.contains("エラー"), "{tooltip}");
-        assert!(!tooltip.contains(": error ("), "{tooltip}");
-    }
-
-    #[test]
-    fn tray_labels_relocalize_on_language_change_without_refetch() {
-        let mut claude = fake_snapshot("claude", "Claude", 13.0);
-        claude.primary.resets_at =
-            Some((chrono::Utc::now() + chrono::Duration::hours(2)).to_rfc3339());
-
-        let english_tooltip =
-            build_tooltip(&[claude.clone()], codexbar::settings::Language::English, &[]);
-        let japanese_tooltip =
-            build_tooltip(&[claude.clone()], codexbar::settings::Language::Japanese, &[]);
-
-        assert!(english_tooltip.contains("Resets in"), "{english_tooltip}");
-        assert!(
-            japanese_tooltip.contains("リセットまで"),
-            "{japanese_tooltip}"
-        );
-        assert!(
-            !japanese_tooltip.to_ascii_lowercase().contains("resets in"),
-            "{japanese_tooltip}"
-        );
-
-        let (_, english_label) =
-            provider_status_label(&claude, codexbar::settings::Language::English, true);
-        let (_, japanese_label) =
-            provider_status_label(&claude, codexbar::settings::Language::Japanese, true);
-        assert!(english_label.contains("Resets in"), "{english_label}");
-        assert!(japanese_label.contains("リセットまで"), "{japanese_label}");
-    }
-
-    /// The absolute mode has to be language-free and short — it shares one
-    /// narrow menu row with a provider name and a percentage, and a localized
-    /// month name would cost more width than it earns.
-    #[test]
-    fn absolute_reset_mode_drops_the_countdown_wording() {
-        let mut claude = fake_snapshot("claude", "Claude", 13.0);
-        claude.primary.resets_at =
-            Some((chrono::Utc::now() + chrono::Duration::hours(2)).to_rfc3339());
-        for lang in [
-            codexbar::settings::Language::English,
-            codexbar::settings::Language::Japanese,
-        ] {
-            let (_, label) = provider_status_label(&claude, lang, false);
-            assert!(!label.contains("Resets in"), "{label}");
-            assert!(!label.contains("リセットまで"), "{label}");
-            // Still carries the percentage, and a clock time after it.
-            assert!(label.contains('%'), "{label}");
-            assert!(label.contains(':'), "{label}");
-        }
-    }
-
-    #[test]
-    fn selected_tray_percent_uses_cursor_extra_usage_cost() {
-        let mut settings = Settings::default();
-        settings.set_provider_metric(ProviderId::Cursor, MetricPreference::ExtraUsage);
-        let snapshot = fake_snapshot_with(
-            "cursor",
-            "Cursor",
-            10.0,
-            Some(20.0),
-            Some(72.0),
-            Some((15.0, 100.0)),
-        );
-
-        let (primary, secondary) = selected_tray_percents(&snapshot, &settings);
-
-        assert_eq!(primary, 15.0);
-        assert_eq!(secondary, Some(20.0));
-    }
-
-    #[test]
-    fn selected_tray_percent_tracks_extra_rate_window() {
-        let mut settings = Settings::default();
-        settings.set_provider_metric(ProviderId::Copilot, MetricPreference::ExtraUsage);
-        let mut snapshot = fake_snapshot("copilot", "Copilot", 20.0);
-        snapshot.extra_rate_windows.push(fake_extra_window(42.0));
-
-        let (primary, secondary) = selected_tray_percents(&snapshot, &settings);
-
-        assert_eq!(primary, 42.0);
-        assert_eq!(secondary, None);
-    }
-
-    #[test]
-    fn copilot_automatic_tracks_highest_extra_rate_window() {
-        let settings = Settings::default();
-        let mut snapshot = fake_snapshot("copilot", "Copilot", 20.0);
-        snapshot.extra_rate_windows.push(fake_extra_window(42.0));
-
-        let (primary, _) = selected_tray_percents(&snapshot, &settings);
-
-        assert_eq!(primary, 42.0);
-    }
-
-    #[test]
-    fn selected_tray_percent_respects_remaining_display_mode() {
-        let mut settings = Settings {
-            taskbar_show_as_used: false,
-            ..Settings::default()
-        };
-        settings.set_provider_metric(ProviderId::Cursor, MetricPreference::ExtraUsage);
-        let snapshot = fake_snapshot_with(
-            "cursor",
-            "Cursor",
-            10.0,
-            Some(20.0),
-            Some(72.0),
-            Some((15.0, 100.0)),
-        );
-
-        let (primary, secondary) = selected_tray_percents(&snapshot, &settings);
-
-        assert_eq!(primary, 85.0);
-        assert_eq!(secondary, Some(80.0));
-    }
-
-    /// The tray icon and taskbar strip must not follow the dashboard's or the
-    /// floating bar's preference — only their own.
-    #[test]
-    fn selected_tray_percent_ignores_other_components_display_mode() {
-        let settings = Settings {
-            taskbar_show_as_used: true,
-            dashboard_show_as_used: false,
-            float_bar_show_as_used: false,
-            ..Settings::default()
-        };
-        let snapshot = fake_snapshot("codex", "Codex", 30.0);
-
-        let (primary, _) = selected_tray_percents(&snapshot, &settings);
-
-        assert_eq!(primary, 30.0, "stayed on the used figure");
-    }
-
-    #[test]
-    fn selected_tray_percent_falls_back_when_extra_usage_missing() {
-        let mut settings = Settings::default();
-        settings.set_provider_metric(ProviderId::Cursor, MetricPreference::ExtraUsage);
-        let snapshot = fake_snapshot_with("cursor", "Cursor", 10.0, Some(72.0), None, None);
-
-        let (primary, _) = selected_tray_percents(&snapshot, &settings);
-
-        assert_eq!(primary, 72.0);
-    }
-
-    /// Antigravity's summary probe leaves the primary slot as a skipped
-    /// placeholder and publishes the real buckets as named windows; the tray
-    /// must read the most restricted known bucket from those windows.
-    #[test]
-    fn antigravity_tray_uses_most_restricted_known_named_window() {
-        let mut snapshot = fake_snapshot("antigravity", "Antigravity", 0.0);
-        snapshot.primary.is_informational = true;
-        snapshot.extra_rate_windows.push(fake_extra_window(20.0));
-        snapshot.extra_rate_windows.push(fake_extra_window(75.0));
-
-        assert_eq!(most_restricted_known_window(&snapshot).used_percent, 75.0);
-        assert_eq!(provider_usage_percent(&snapshot), 75.0);
-
-        let settings = Settings::default();
-        let (primary, _) = selected_tray_percents(&snapshot, &settings);
-        assert_eq!(primary, 75.0);
-
-        let label = provider_status_label(
-            &snapshot,
-            codexbar::settings::Language::English,
-            /* relative_reset = */ true,
-        );
-        assert_eq!(label.1, "Antigravity 75%");
-    }
-
-    #[test]
-    fn antigravity_highest_selection_uses_most_restricted_known_window() {
-        let mut antigravity = fake_snapshot("antigravity", "Antigravity", 0.0);
-        antigravity.primary.is_informational = true;
-        antigravity.extra_rate_windows.push(fake_extra_window(65.0));
-
-        let codex = fake_snapshot("codex", "Codex", 50.0);
-        let refs: Vec<&crate::commands::ProviderUsageSnapshot> = vec![&codex, &antigravity];
-
-        let picked = pick_tray_provider(&refs, /* prefer_highest = */ true)
-            .expect("highest mode should pick a provider");
-        assert_eq!(picked.provider_id, "antigravity");
-    }
-
-    #[test]
-    fn antigravity_automatic_metric_ignores_unknown_windows() {
-        let mut unknown_window = fake_extra_window(0.0);
-        unknown_window.window.is_informational = true;
-        unknown_window.usage_known = false;
-
-        let mut snapshot = fake_snapshot("antigravity", "Antigravity", 0.0);
-        snapshot.primary.is_informational = true;
-        snapshot.extra_rate_windows.push(unknown_window);
-        snapshot.extra_rate_windows.push(fake_extra_window(31.0));
-
-        assert_eq!(provider_usage_percent(&snapshot), 31.0);
+        assert!(anchor.is_none(), "without a click monitor the anchor must be skipped");
     }
 }

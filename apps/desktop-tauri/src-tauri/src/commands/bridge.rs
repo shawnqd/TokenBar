@@ -553,6 +553,7 @@ pub struct SettingsSnapshot {
     float_bar_style: String,
     float_bar_click_through: bool,
     float_bar_provider_ids: Vec<String>,
+    float_bar_entries: Vec<TaskbarEntryBridge>,
     float_bar_dark_text: bool,
     float_bar_show_reset_inline: bool,
     float_bar_reset_windows: Vec<String>,
@@ -569,6 +570,8 @@ pub struct SettingsSnapshot {
     taskbar_widget_font_size: u8,
     taskbar_widget_width: u16,
     taskbar_widget_text_align: String,
+    taskbar_widget_icon_size: u8,
+    taskbar_widget_icon_style: String,
     // Per-component quota presentation. `show_as_used` / `reset_time_relative`
     // above are legacy migration sources and are no longer read by any surface.
     float_bar_show_as_used: bool,
@@ -661,6 +664,11 @@ impl From<Settings> for SettingsSnapshot {
             float_bar_style: settings.float_bar_style,
             float_bar_click_through: settings.float_bar_click_through,
             float_bar_provider_ids: settings.float_bar_provider_ids,
+            float_bar_entries: settings
+                .float_bar_entries
+                .iter()
+                .map(TaskbarEntryBridge::from)
+                .collect(),
             float_bar_dark_text: settings.float_bar_dark_text,
             float_bar_show_reset_inline: settings.float_bar_show_reset_inline,
             float_bar_reset_windows: settings.float_bar_reset_windows.clone(),
@@ -681,6 +689,8 @@ impl From<Settings> for SettingsSnapshot {
             taskbar_widget_font_size: settings.taskbar_widget_font_size,
             taskbar_widget_width: settings.taskbar_widget_width,
             taskbar_widget_text_align: settings.taskbar_widget_text_align,
+            taskbar_widget_icon_size: settings.taskbar_widget_icon_size,
+            taskbar_widget_icon_style: settings.taskbar_widget_icon_style.clone(),
             float_bar_show_as_used: settings.float_bar_show_as_used,
             float_bar_reset_time_relative: settings.float_bar_reset_time_relative,
             dashboard_show_as_used: settings.dashboard_show_as_used,

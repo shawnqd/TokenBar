@@ -421,6 +421,12 @@ pub(crate) fn clear_provider_local_usage_cache() {
     }
 }
 
+#[tauri::command]
+pub fn clear_provider_local_usage_cache_command() {
+    clear_provider_local_usage_cache();
+}
+
+
 /// Why a local-usage enrichment pass could not produce data.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[allow(dead_code)]

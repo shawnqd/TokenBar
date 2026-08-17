@@ -1,0 +1,171 @@
+/* Mini taskbar settings preview styles. Scoped under .settings-v5 so this
+   never leaks into the real taskbar strip or other surfaces. */
+
+.settings-v5 .s5-stage-frame--taskbar {
+  width: 248px;
+  height: 52px;
+  display: flex;
+  align-items: center;
+}
+
+.settings-v5 .s5-strip {
+  width: 136px;
+  height: 36px;
+  display: grid;
+  grid-auto-flow: column;
+  grid-template-rows: 1fr 1fr;
+  grid-template-columns: 1fr 1fr;
+  column-gap: 6px;
+  padding: 2px 6px;
+  align-items: center;
+  font-variant-numeric: tabular-nums;
+}
+
+.settings-v5 .s5-strip.dim {
+  opacity: 0.42;
+}
+
+.settings-v5 .s5-cell {
+  display: grid;
+  grid-template-columns: var(--icon, 14px) minmax(0, 1fr) auto;
+  gap: 3px;
+  align-items: center;
+  min-width: 0;
+}
+
+.settings-v5 .s5-mark {
+  width: var(--icon, 14px);
+  height: var(--icon, 14px);
+  max-width: var(--icon, 14px);
+  border-radius: 0;
+  overflow: hidden;
+  display: grid;
+  place-items: center;
+}
+
+.settings-v5 .s5-mark svg {
+  width: 82%;
+  height: 82%;
+  display: block;
+}
+
+.settings-v5 .s5-strip[data-style="badge"] .s5-mark {
+  border-radius: 3px;
+}
+
+.settings-v5 .s5-strip[data-style="solid"] .s5-mark {
+  border-radius: 3px;
+}
+
+.settings-v5 .s5-strip[data-style="solid"] .s5-mark svg {
+  color: #fff !important;
+  fill: #fff;
+}
+
+.settings-v5 .s5-cell .s5-tag {
+  font-size: 11px;
+  color: var(--flyout-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.settings-v5 .s5-cell .s5-val {
+  font-size: 12px;
+  font-weight: 600;
+}
+
+/* Real TaskbarStripPreview inside settings */
+.settings-v5 .settings-taskbar-preview {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  min-width: 0;
+}
+
+.settings-v5 .settings-taskbar-preview .taskbar-preview__strip {
+  max-width: 100%;
+  width: auto;
+  min-width: 0;
+  box-sizing: border-box;
+}
+
+.settings-v5 .settings-taskbar-preview .taskbar-preview__line {
+  display: flex;
+  justify-content: flex-start;
+  min-width: 0;
+}
+
+.settings-v5 .settings-taskbar-preview .taskbar-preview__cluster {
+  display: flex;
+  justify-content: flex-start;
+  align-items: center;
+  gap: 3px;
+  min-width: 0;
+}
+
+.settings-v5 .settings-taskbar-preview .taskbar-preview__mark {
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+}
+
+.settings-v5 .settings-taskbar-preview .taskbar-preview__mark svg {
+  width: 82%;
+  height: 82%;
+  display: block;
+}
+
+.settings-v5 .settings-taskbar-preview .taskbar-preview__mark.is-wide svg {
+  width: 72%;
+  height: 72%;
+}
+
+.settings-v5 .settings-taskbar-preview .taskbar-preview__strip[data-icon-style="badge"] .taskbar-preview__mark {
+  border-radius: 3px;
+  background: color-mix(in srgb, currentColor 18%, transparent);
+}
+
+.settings-v5 .settings-taskbar-preview .taskbar-preview__strip[data-icon-style="solid"] .taskbar-preview__mark {
+  border-radius: 3px;
+  background: currentColor;
+}
+
+.settings-v5 .settings-taskbar-preview .taskbar-preview__strip[data-icon-style="solid"] .taskbar-preview__mark svg,
+.settings-v5 .settings-taskbar-preview .taskbar-preview__strip[data-icon-style="solid"] .taskbar-preview__mark {
+  color: inherit;
+}
+
+.settings-v5 .settings-taskbar-preview .taskbar-preview__strip[data-icon-style="solid"] .taskbar-preview__mark svg {
+  color: #fff;
+  fill: #fff;
+}
+
+.settings-v5 .settings-taskbar-preview .taskbar-preview__tag {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--text-muted);
+  font-weight: 400;
+}
+
+.settings-v5 .settings-taskbar-preview .taskbar-preview__val {
+  flex: 0 0 auto;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  text-align: left;
+}
+
+/* Marks that ship their own badge (Grok's black tile + white glyph) must not
+   gain a tile backing or a forced white fill in badge / solid modes, or their
+   official two-tone mark would be flattened. ProviderIcon already draws it. */
+.settings-v5 .settings-taskbar-preview .taskbar-preview__strip[data-icon-style="badge"] .taskbar-preview__mark.is-self-badge,
+.settings-v5 .settings-taskbar-preview .taskbar-preview__strip[data-icon-style="solid"] .taskbar-preview__mark.is-self-badge {
+  background: transparent;
+}
+.settings-v5 .settings-taskbar-preview .taskbar-preview__strip[data-icon-style="solid"] .taskbar-preview__mark.is-self-badge svg {
+  color: unset !important;
+  fill: unset !important;
+}

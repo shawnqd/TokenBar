@@ -536,21 +536,56 @@ describe("MenuCard", () => {
     ).not.toBeInTheDocument();
   });
 
-  it("does not show pace budgets for a five-hour session window", async () => {
+  it("shows a generic forecast for a five-hour session window with full metadata", async () => {
     const resetAt = new Date(Date.now() + 4 * 60 * 60 * 1000);
     const snapshot = provider(null, 31);
     snapshot.primary = rateWindow(31, {
       windowMinutes: 5 * 60,
+      kind: "session",
       resetsAt: resetAt.toISOString(),
     });
 
     renderCard(snapshot);
 
     expect(await screen.findByText("69%")).toBeInTheDocument();
-    expect(screen.queryByText("Usage forecast")).not.toBeInTheDocument();
-    expect(
-      screen.queryByRole("img", { name: /PaceChartAriaLabel/i }),
-    ).not.toBeInTheDocument();
+    // Session windows with a length and reset boundary now project their own
+    // forecast from the window-generic logic — no pace block required.
+    const forecast = document.querySelector(".menu-metric__forecast");
+    expect(forecast).toBeInTheDocument();
+    expect(forecast).toHaveTextContent("in deficit");
+    expect(forecast).toHaveTextContent("Runs out in");
+  });
+
+  it("ignores provider.pace for a session window forecast and uses the window's own metadata", async () => {
+    const resetAt = new Date(Date.now() + 4 * 60 * 60 * 1000);
+    const snapshot = provider(null, 40);
+    snapshot.primary = rateWindow(40, {
+      kind: "session",
+      windowMinutes: 5 * 60,
+      resetsAt: resetAt.toISOString(),
+    });
+    // provider.pace measures the weekly window; this session window must
+    // project from its own length/reset metadata, not the pace value.
+    snapshot.pace = {
+      stage: "ahead",
+      deltaPercent: 12.3,
+      willLastToReset: true,
+      etaSeconds: null,
+      expectedUsedPercent: 40,
+      actualUsedPercent: 52.3,
+      speedMultiplierToReset: 1.5,
+    };
+
+    renderCard(snapshot);
+
+    expect(await screen.findByText("60%")).toBeInTheDocument();
+    const forecast = document.querySelector(".menu-metric__forecast");
+    expect(forecast).toBeInTheDocument();
+    // The weekly pace would say "12.3% in deficit" and "Enough to last until
+    // the next reset" — the session window derives its own delta and runway.
+    expect(forecast).not.toHaveTextContent("12.3%");
+    expect(forecast).toHaveTextContent("Runs out in");
+    expect(forecast).toHaveTextContent("in deficit");
   });
 
   it("keeps the reserve row when timing data is incomplete", async () => {
@@ -564,6 +599,145 @@ describe("MenuCard", () => {
 
     expect(await screen.findByText("12% in reserve")).toBeInTheDocument();
     expect(screen.queryByText("Usage forecast")).not.toBeInTheDocument();
+  });
+
+  it("renders only one forecast for a weekly window carrying both pace and reserve", async () => {
+    const resetAt = new Date(Date.now() + 6 * 24 * 60 * 60 * 1000);
+    const snapshot = provider(null, 52);
+    snapshot.primary = rateWindow(52, {
+      kind: "weekly",
+      windowMinutes: 7 * 24 * 60,
+      resetsAt: resetAt.toISOString(),
+      reservePercent: 20,
+      reserveWillLastToReset: true,
+    });
+    snapshot.pace = {
+      stage: "ahead",
+      deltaPercent: 12.3,
+      willLastToReset: true,
+      etaSeconds: null,
+      expectedUsedPercent: 40,
+      actualUsedPercent: 52.3,
+      speedMultiplierToReset: 1.5,
+    };
+
+    renderCard(snapshot);
+
+    expect(await screen.findByText("Claude")).toBeInTheDocument();
+    // The new pace forecast wins; the legacy reserve row must not render
+    // beside it for the same window.
+    const forecasts = document.querySelectorAll(".menu-metric__forecast");
+    expect(forecasts.length).toBe(1);
+    expect(forecasts[0]).toHaveTextContent("12.3% in deficit");
+    expect(document.querySelector(".menu-metric__reserve")).toBeNull();
+  });
+
+  it("shows a generic forecast for a monthly window with full metadata", async () => {
+    const resetAt = new Date(Date.now() + 20 * 24 * 60 * 60 * 1000);
+    const snapshot = provider(null, 40);
+    snapshot.primary = rateWindow(40, {
+      kind: "monthly",
+      windowMinutes: 30 * 24 * 60,
+      resetsAt: resetAt.toISOString(),
+    });
+    // provider.pace always measures the weekly window. Its delta/expected
+    // values are deliberately far from what the monthly window's own
+    // length/reset metadata derives (~6.7% deficit at ~33% elapsed, runway
+    // that runs out), so a forecast contaminated by pace would be visibly
+    // wrong: "15.7% in deficit" plus "Enough to last until the next reset".
+    snapshot.pace = {
+      stage: "ahead",
+      deltaPercent: 15.7,
+      willLastToReset: true,
+      etaSeconds: null,
+      expectedUsedPercent: 24.3,
+      actualUsedPercent: 40,
+      speedMultiplierToReset: 1.3,
+    };
+
+    renderCard(snapshot);
+
+    expect(await screen.findByText("Claude")).toBeInTheDocument();
+    const forecast = document.querySelector(".menu-metric__forecast");
+    expect(forecast).toBeInTheDocument();
+    expect(forecast).toHaveTextContent("in deficit");
+    // The monthly window projects from its own length/reset metadata, not from
+    // provider.pace (which measures the weekly window): neither the pace's
+    // delta nor its "Enough to last" runway may appear, and its own shorter
+    // runway must.
+    expect(forecast).not.toHaveTextContent("15.7%");
+    expect(forecast).not.toHaveTextContent("Enough to last");
+    expect(forecast).toHaveTextContent("Runs out in");
+    // The bar marker is still present, derived from the monthly projection.
+    expect(document.querySelector(".provider-quota__bar [data-pace]")).not.toBeNull();
+  });
+
+  it("does not fabricate a forecast when window metadata is missing", async () => {
+    const snapshot = provider(null, 20);
+    snapshot.primary = rateWindow(20, {
+      kind: "weekly",
+      windowMinutes: null,
+      resetsAt: null,
+    });
+
+    renderCard(snapshot);
+
+    expect(await screen.findByText("80%")).toBeInTheDocument();
+    // The weekly window gets the shared unavailable fallback rather than a
+    // fabricated number. Non-weekly windows omit the slot entirely.
+    expect(document.querySelector(".menu-metric__forecast--unavailable")).toBeInTheDocument();
+    // No pace marker on the bar without a projection.
+    expect(document.querySelector(".provider-quota__bar [data-pace]")).toBeNull();
+  });
+
+  it("does not project a forecast for informational windows", async () => {
+    const snapshot = provider(null, 0);
+    snapshot.primary = rateWindow(0, {
+      kind: "weekly",
+      resetDescription: "Subscription active",
+    });
+    snapshot.primary.isInformational = true;
+
+    renderCard(snapshot);
+
+    expect(await screen.findByText("Subscription active")).toBeInTheDocument();
+    expect(document.querySelector(".menu-metric__forecast")).toBeNull();
+    expect(document.querySelector(".menu-metric__reserve")).toBeNull();
+  });
+
+  it("does not project a forecast for exhausted windows", async () => {
+    const resetAt = new Date(Date.now() + 6 * 24 * 60 * 60 * 1000);
+    const snapshot = provider(null, 100, { exhausted: true });
+    snapshot.primary = rateWindow(100, {
+      kind: "weekly",
+      windowMinutes: 7 * 24 * 60,
+      resetsAt: resetAt.toISOString(),
+      exhausted: true,
+      reservePercent: 20,
+      reserveWillLastToReset: true,
+    });
+
+    renderCard(snapshot);
+
+    expect(await screen.findByText("DetailWindowExhausted")).toBeInTheDocument();
+    expect(document.querySelector(".menu-metric__forecast")).toBeNull();
+    expect(document.querySelector(".menu-metric__reserve")).toBeNull();
+  });
+
+  it("falls back to the legacy reserve row when a weekly window has no forecast data", async () => {
+    const snapshot = provider(null, 20);
+    snapshot.primary = rateWindow(20, {
+      kind: "weekly",
+      reservePercent: 12,
+      reserveWillLastToReset: true,
+    });
+
+    renderCard(snapshot);
+
+    expect(await screen.findByText("12% in reserve")).toBeInTheDocument();
+    // No forecast slot at all: the reserve row is the compatibility fallback.
+    expect(document.querySelector(".menu-metric__forecast")).toBeNull();
+    expect(document.querySelector(".provider-quota__bar [data-pace]")).toBeNull();
   });
 
   it("renders reset credits as a remaining count instead of a quota percent", async () => {

@@ -186,6 +186,21 @@ describe("App window-label routing", () => {
     expect(queryByTestId("surface-float-bar")).toBeNull();
   });
 
+  it("does not paint Settings on the shared main window", async () => {
+    webviewWindowMocks.label = "main";
+    surfaceSnapshotMocks.current = {
+      mode: "settings",
+      target: { kind: "settings" },
+    };
+
+    const { queryByTestId } = render(<App />);
+
+    await waitFor(() => {
+      expect(tauriMocks.getBootstrapState).toHaveBeenCalled();
+    });
+    expect(queryByTestId("surface-settings")).toBeNull();
+  });
+
   it("routes the detached settings window to Settings, not TrayPanel", async () => {
     webviewWindowMocks.label = "settings";
 

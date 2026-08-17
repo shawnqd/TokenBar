@@ -4,8 +4,27 @@ import { describe, expect, it, vi } from "vitest";
 vi.mock("../../../hooks/useLocale", () => ({
   useLocale: () => ({ t: (key: string) => key, language: "english" }),
 }));
+vi.mock("../../../hooks/useProviders", () => ({
+  useProviders: () => ({
+    providers: [],
+    isRefreshing: false,
+    refresh: () => {},
+    lastRefresh: null,
+    hasCachedData: false,
+    hasLoadedCache: true,
+  }),
+}));
+vi.mock("../../../hooks/useOutputSpeedSnapshot", () => ({
+  useOutputSpeedSnapshot: () => null,
+}));
 vi.mock("../../../floatbar", () => ({
   FloatBarSettingsSection: () => null,
+}));
+vi.mock("@tauri-apps/api/event", () => ({
+  listen: vi.fn().mockResolvedValue(() => {}),
+}));
+vi.mock("@tauri-apps/api/window", () => ({
+  getCurrentWindow: () => ({ startDragging: vi.fn() }),
 }));
 vi.mock("../../../lib/tauri", () => ({
   getTaskbarFontFamilies: vi.fn().mockResolvedValue([]),
@@ -16,6 +35,12 @@ vi.mock("../../../lib/tauri", () => ({
   // suite's. `vi.mock` replaces the whole module, so every command a rendered
   // tab calls has to be present here or the tab throws on mount.
   getTaskbarPreviewLines: vi.fn().mockResolvedValue([]),
+  getProviderChartData: vi.fn().mockResolvedValue(null),
+  getCachedProviders: vi.fn().mockResolvedValue([]),
+  getOutputSpeedSnapshot: vi.fn().mockResolvedValue(null),
+  getProviderLocalUsageSummary: vi.fn().mockResolvedValue(null),
+  refreshProvidersIfStale: vi.fn().mockResolvedValue(undefined),
+  getSettingsSnapshot: vi.fn().mockResolvedValue({}),
 }));
 
 import DashboardTab from "./DashboardTab";
