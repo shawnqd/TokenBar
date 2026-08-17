@@ -411,7 +411,10 @@ unsafe fn draw_strip_cells_with(
         let avail = (right - left).max(0.0);
         let slot_px = icon_size_px.max(1.0);
         let tag_w = unsafe { run_width(&renderer.dwrite, cell.tag, style.weight, style.size_px) };
-        let value_w = unsafe { run_width(&renderer.dwrite, cell.value, 600.0, style.size_px) };
+        // Match value_style.weight so the layout width agrees with
+        // the text run actually drawn; a hard-coded 600 made the value
+        // drift visually away from the tag at non-default font weights.
+        let value_w = unsafe { run_width(&renderer.dwrite, cell.value, style.weight, style.size_px) };
         let cluster_w = slot_px + gap + tag_w + value_gap + value_w;
         let start_x = match style.align {
             TextAlign::Left => left,
