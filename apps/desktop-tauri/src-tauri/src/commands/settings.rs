@@ -69,6 +69,8 @@ pub struct SettingsUpdate {
     pub taskbar_widget_text_align: Option<String>,
     pub taskbar_widget_icon_size: Option<u8>,
     pub taskbar_widget_icon_style: Option<String>,
+    pub taskbar_widget_icon_gap_px: Option<u8>,
+    pub taskbar_widget_value_gap_px: Option<u8>,
     // Per-component quota presentation. Each surface owns its own pair; the
     // legacy `show_as_used` / `reset_time_relative` above are migration-only.
     pub float_bar_show_as_used: Option<bool>,
@@ -129,6 +131,8 @@ impl SettingsUpdate {
             || self.taskbar_widget_text_align.is_some()
             || self.taskbar_widget_icon_size.is_some()
             || self.taskbar_widget_icon_style.is_some()
+            || self.taskbar_widget_icon_gap_px.is_some()
+            || self.taskbar_widget_value_gap_px.is_some()
             || self.taskbar_widget_position.is_some()
             || self.taskbar_widget_enabled.is_some()
             || self.taskbar_tooltip_entries.is_some()
@@ -379,6 +383,12 @@ impl SettingsUpdate {
                 "badge" | "solid" => v.clone(),
                 _ => "pure".to_string(),
             };
+        }
+        if let Some(v) = self.taskbar_widget_icon_gap_px {
+            settings.taskbar_widget_icon_gap_px = v.min(12);
+        }
+        if let Some(v) = self.taskbar_widget_value_gap_px {
+            settings.taskbar_widget_value_gap_px = v.min(8);
         }
         if let Some(ref entries) = self.taskbar_widget_entries {
             // Normalized here rather than trusted: the request can name an
@@ -664,6 +674,10 @@ pub async fn update_settings(
     let taskbar_widget_icon_size = patch.taskbar_widget_icon_size;
     #[cfg(windows)]
     let taskbar_widget_icon_style = patch.taskbar_widget_icon_style.clone();
+    #[cfg(windows)]
+    let taskbar_widget_icon_gap_px = patch.taskbar_widget_icon_gap_px;
+    #[cfg(windows)]
+    let taskbar_widget_value_gap_px = patch.taskbar_widget_value_gap_px;
 
     patch.validate_shortcut_change(&app, &settings.global_shortcut)?;
     let float_bar_patch = patch.apply_to(&mut settings)?;
@@ -730,6 +744,14 @@ pub async fn update_settings(
     #[cfg(windows)]
     if let Some(ref icon_style) = taskbar_widget_icon_style {
         crate::taskbar_widget::set_icon_style(icon_style);
+    }
+    #[cfg(windows)]
+    if let Some(icon_gap) = taskbar_widget_icon_gap_px {
+        crate::taskbar_widget::set_icon_gap(icon_gap);
+    }
+    #[cfg(windows)]
+    if let Some(value_gap) = taskbar_widget_value_gap_px {
+        crate::taskbar_widget::set_value_gap(value_gap);
     }
     if rebuild_tray_menu {
         crate::tray_bridge::rebuild_tray_menu(&app);
