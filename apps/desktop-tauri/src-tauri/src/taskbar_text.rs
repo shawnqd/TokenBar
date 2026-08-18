@@ -283,6 +283,8 @@ pub fn draw_strip_cells(
     style: &TextStyle<'_>,
     background_rgb: u32,
     icon_size_px: f32,
+    icon_gap_px: f32,
+    value_gap_px: f32,
     icon_style: crate::taskbar_icons::IconStyle,
 ) -> bool {
     RENDERER.with(|cell| {
@@ -298,7 +300,7 @@ pub fn draw_strip_cells(
         }
         let renderer = slot.as_ref().expect("renderer initialized above");
         match unsafe {
-            draw_strip_cells_with(renderer, hdc, bounds, cells, style, background_rgb, icon_size_px, icon_style)
+            draw_strip_cells_with(renderer, hdc, bounds, cells, style, background_rgb, icon_size_px, icon_gap_px, value_gap_px, icon_style)
         } {
             Ok(()) => true,
             Err(err) => {
@@ -373,6 +375,8 @@ unsafe fn draw_strip_cells_with(
     style: &TextStyle<'_>,
     background_rgb: u32,
     icon_size_px: f32,
+    icon_gap_px: f32,
+    value_gap_px: f32,
     icon_style: crate::taskbar_icons::IconStyle,
 ) -> windows::core::Result<()> {
     let target = &renderer.target;
@@ -385,7 +389,7 @@ unsafe fn draw_strip_cells_with(
         align: TextAlign::Left, color_rgb: style.color_rgb,
     };
     let value_style = TextStyle {
-        family: style.family, weight: 600.0, size_px: style.size_px,
+        family: style.family, weight: style.weight, size_px: style.size_px,
         align: TextAlign::Left, color_rgb: style.color_rgb,
     };
     let tag_format = unsafe { create_format(&renderer.dwrite, &tag_style)? };
@@ -400,8 +404,8 @@ unsafe fn draw_strip_cells_with(
     };
     let mark_format = unsafe { create_format(&renderer.dwrite, &mark_style)? };
 
-    let gap = 3.0f32;
-    let value_gap = 1.0f32;
+    let gap = icon_gap_px.max(0.0);
+    let value_gap = value_gap_px.max(0.0);
     unsafe { target.BeginDraw() };
     for cell in cells {
         let left = cell.rect.left as f32;
@@ -1255,6 +1259,8 @@ mod tests {
                 &style,
                 0x00_1010u32,
                 20.0,
+                5.0,
+                2.0,
                 crate::taskbar_icons::IconStyle::Pure,
             );
             let ink = if drawn {

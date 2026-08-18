@@ -98,6 +98,8 @@ static WIDGET_FONT_FAMILY: Mutex<String> = Mutex::new(String::new());
 static WIDGET_ICON_SIZE: Mutex<i32> = Mutex::new(14);
 /// Icon render style: `pure` | `badge` | `solid` (default `pure`).
 static WIDGET_ICON_STYLE: Mutex<String> = Mutex::new(String::new());
+static WIDGET_ICON_GAP: Mutex<i32> = Mutex::new(5);
+static WIDGET_VALUE_GAP: Mutex<i32> = Mutex::new(2);
 
 const WS_POPUP: u32 = 0x8000_0000;
 const WS_CHILD: u32 = 0x4000_0000;
@@ -678,6 +680,22 @@ pub fn set_icon_size(size: u8) {
 }
 
 /// Icon render style: `pure` | `badge` | `solid`.
+/// Gap between taskbar icon and tag in logical pixels (0..=12).
+pub fn set_icon_gap(px: u8) {
+    if let Ok(mut current) = WIDGET_ICON_GAP.lock() {
+        *current = i32::from(px.min(12));
+    }
+    repaint();
+}
+
+/// Gap between taskbar tag and value in logical pixels (0..=8).
+pub fn set_value_gap(px: u8) {
+    if let Ok(mut current) = WIDGET_VALUE_GAP.lock() {
+        *current = i32::from(px.min(8));
+    }
+    repaint();
+}
+
 pub fn set_icon_style(style: &str) {
     let value = match style {
         "badge" => "badge",
@@ -1151,6 +1169,8 @@ unsafe fn paint(hwnd: isize) {
         .unwrap_or(400) as f32;
     let family = widget_font_family();
     let icon_size_px = ((WIDGET_ICON_SIZE.lock().map(|s| *s).unwrap_or(14) * dpi as i32) as f32) / 96.0;
+    let icon_gap_px = ((WIDGET_ICON_GAP.lock().map(|s| *s).unwrap_or(5) * dpi as i32) as f32) / 96.0;
+    let value_gap_px = ((WIDGET_VALUE_GAP.lock().map(|s| *s).unwrap_or(2) * dpi as i32) as f32) / 96.0;
     let icon_style = crate::taskbar_icons::IconStyle::parse(
         &WIDGET_ICON_STYLE.lock().map(|s| s.clone()).unwrap_or_else(|_| "pure".to_string()),
     );
@@ -1211,6 +1231,8 @@ unsafe fn paint(hwnd: isize) {
         },
         background,
         icon_size_px,
+        icon_gap_px,
+        value_gap_px,
         icon_style,
     );
 
@@ -1266,6 +1288,8 @@ pub fn install() {
     set_text_align(&settings.taskbar_widget_text_align);
     set_icon_size(settings.taskbar_widget_icon_size);
     set_icon_style(&settings.taskbar_widget_icon_style);
+    set_icon_gap(settings.taskbar_widget_icon_gap_px);
+    set_value_gap(settings.taskbar_widget_value_gap_px);
     if !settings.taskbar_widget_enabled {
         return;
     }

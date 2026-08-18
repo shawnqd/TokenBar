@@ -309,6 +309,26 @@ export default function TaskbarStatusPage({
               onChange={(v) => set({ taskbarWidgetIconSize: v })}
             />
           </V5Field>
+          <V5Field label="图标间距" help="图标和文字之间的间距，0 到 12 像素，默认 5" off={off}>
+            <V5Num
+              value={settings.taskbarWidgetIconGapPx ?? 5}
+              min={0}
+              max={12}
+              unit="px"
+              disabled={saving || off}
+              onChange={(v) => set({ taskbarWidgetIconGapPx: v })}
+            />
+          </V5Field>
+          <V5Field label="数值间距" help="文字和额度数字之间的间距，0 到 8 像素，默认 2" off={off}>
+            <V5Num
+              value={settings.taskbarWidgetValueGapPx ?? 2}
+              min={0}
+              max={8}
+              unit="px"
+              disabled={saving || off}
+              onChange={(v) => set({ taskbarWidgetValueGapPx: v })}
+            />
+          </V5Field>
           <V5Field
             label="图标渲染样式"
             help="三种都要做进产品和预览"

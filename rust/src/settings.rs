@@ -325,6 +325,14 @@ pub struct Settings {
     #[serde(default = "default_taskbar_widget_icon_style")]
     pub taskbar_widget_icon_style: String,
 
+    /// Taskbar strip gap between icon and tag in logical pixels (0..=12).
+    #[serde(default = "default_taskbar_widget_icon_gap_px")]
+    pub taskbar_widget_icon_gap_px: u8,
+
+    /// Taskbar strip gap between tag and value in logical pixels (0..=8).
+    #[serde(default = "default_taskbar_widget_value_gap_px")]
+    pub taskbar_widget_value_gap_px: u8,
+
     // ── Per-component quota presentation ─────────────────────────────
     //
     // The floating bar, the dashboard surfaces (tray flyout + PopOut panel)
@@ -437,6 +445,8 @@ fn default_taskbar_widget_icon_size() -> u8 {
     14
 }
 
+fn default_taskbar_widget_icon_gap_px() -> u8 { 5 }
+fn default_taskbar_widget_value_gap_px() -> u8 { 2 }
 fn default_taskbar_widget_icon_style() -> String {
     "pure".to_string()
 }
@@ -851,6 +861,8 @@ impl Default for Settings {
             taskbar_widget_font_size: default_taskbar_widget_font_size(),
             taskbar_widget_icon_size: default_taskbar_widget_icon_size(),
             taskbar_widget_icon_style: default_taskbar_widget_icon_style(),
+            taskbar_widget_icon_gap_px: default_taskbar_widget_icon_gap_px(),
+            taskbar_widget_value_gap_px: default_taskbar_widget_value_gap_px(),
             taskbar_widget_width: default_taskbar_widget_width(),
             taskbar_widget_text_align: default_taskbar_widget_text_align(),
             float_bar_show_as_used: true,

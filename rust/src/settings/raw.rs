@@ -197,6 +197,10 @@ pub(super) struct RawSettings {
     taskbar_widget_icon_size: u8,
     #[serde(default = "default_taskbar_widget_icon_style")]
     taskbar_widget_icon_style: String,
+    #[serde(default = "default_taskbar_widget_icon_gap_px")]
+    taskbar_widget_icon_gap_px: u8,
+    #[serde(default = "default_taskbar_widget_value_gap_px")]
+    taskbar_widget_value_gap_px: u8,
 
     // ── Per-component quota presentation ─────────────────────────────
     //
@@ -273,6 +277,8 @@ fn default_taskbar_widget_icon_size() -> u8 {
     14
 }
 
+fn default_taskbar_widget_icon_gap_px() -> u8 { 5 }
+fn default_taskbar_widget_value_gap_px() -> u8 { 2 }
 fn default_taskbar_widget_icon_style() -> String {
     "pure".to_string()
 }
@@ -372,6 +378,8 @@ impl Default for RawSettings {
             taskbar_widget_text_align: s.taskbar_widget_text_align,
             taskbar_widget_icon_size: s.taskbar_widget_icon_size,
             taskbar_widget_icon_style: s.taskbar_widget_icon_style.clone(),
+            taskbar_widget_icon_gap_px: s.taskbar_widget_icon_gap_px,
+            taskbar_widget_value_gap_px: s.taskbar_widget_value_gap_px,
             float_bar_show_as_used: Some(s.float_bar_show_as_used),
             float_bar_reset_time_relative: Some(s.float_bar_reset_time_relative),
             dashboard_show_as_used: Some(s.dashboard_show_as_used),
@@ -684,6 +692,8 @@ impl From<RawSettings> for Settings {
                 _ => "left".to_string(),
             },
             taskbar_widget_icon_size: raw.taskbar_widget_icon_size.clamp(10, 18),
+            taskbar_widget_icon_gap_px: raw.taskbar_widget_icon_gap_px.min(12),
+            taskbar_widget_value_gap_px: raw.taskbar_widget_value_gap_px.min(8),
             taskbar_widget_icon_style: match raw.taskbar_widget_icon_style.as_str() {
                 "badge" | "solid" => raw.taskbar_widget_icon_style,
                 _ => "pure".to_string(),

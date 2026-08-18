@@ -410,6 +410,8 @@ export interface SettingsSnapshot {
   taskbarWidgetTextAlign: TaskbarWidgetTextAlign;
   taskbarWidgetIconSize?: number;
   taskbarWidgetIconStyle?: "pure" | "badge" | "solid";
+  taskbarWidgetIconGapPx?: number;
+  taskbarWidgetValueGapPx?: number;
 
   // ── Per-component quota presentation ───────────────────────────────
   //
@@ -516,6 +518,8 @@ export interface SettingsUpdate {
   taskbarWidgetTextAlign?: TaskbarWidgetTextAlign;
   taskbarWidgetIconSize?: number;
   taskbarWidgetIconStyle?: "pure" | "badge" | "solid";
+  taskbarWidgetIconGapPx?: number;
+  taskbarWidgetValueGapPx?: number;
   floatBarShowAsUsed?: boolean;
   floatBarResetTimeRelative?: boolean;
   dashboardShowAsUsed?: boolean;
