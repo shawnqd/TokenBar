@@ -294,7 +294,7 @@ fn larger_visible_destination_reclamps_preserved_top_left() {
     let reclamped =
         reclamp_preserved_visible_position(current_top_left, &monitor, SurfaceMode::Settings, 1.0);
 
-    assert_eq!(reclamped, (1000, 492));
+    assert_eq!(reclamped, (792, 292));
 }
 
 #[test]
@@ -912,5 +912,5 @@ fn main_surface_layout_does_not_restore_tray_panel_geometry() {
 
     let size = logical_size_from_geometry(SurfaceMode::TrayPanel, &props, Some(stored));
 
-    assert_eq!(size, (348.0, 796.0));
+    assert_eq!(size, (340.0, 788.0));
 }

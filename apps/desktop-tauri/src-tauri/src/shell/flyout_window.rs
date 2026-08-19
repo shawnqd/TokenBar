@@ -918,8 +918,8 @@ mod tests {
     #[test]
     fn tray_window_properties_keep_native_resize_contract() {
         let props = SurfaceMode::TrayPanel.window_properties();
-        assert_eq!(props.width, 348.0);
-        assert_eq!(props.height, 796.0);
+        assert_eq!(props.width, 340.0);
+        assert_eq!(props.height, 788.0);
         assert_eq!(props.min_width, Some(320.0));
         assert_eq!(props.min_height, Some(380.0));
         assert!(props.resizable);

@@ -13,10 +13,10 @@ import { buildBundle } from "../../test/localeHarness";
 import TrayCard from "./TrayCard";
 import type { ProviderUsageSnapshot, RateWindowSnapshot } from "../../types/bridge";
 
-function rw(usedPercent: number, windowMinutes: number | null, kind: string | null, resetsAt: string | null = null): RateWindowSnapshot {
+function rw(usedPercent: number, windowMinutes: number | null, kind: string | null, resetsAt: string | null = null, resetDescription: string | null = null): RateWindowSnapshot {
   return {
     usedPercent, remainingPercent: 100 - usedPercent, kind: kind as any, windowMinutes,
-    resetsAt, resetDescription: null, isExhausted: false, reservePercent: null, reserveDescription: null,
+    resetsAt, resetDescription, isExhausted: false, reservePercent: null, reserveDescription: null,
   };
 }
 
@@ -34,6 +34,7 @@ function opencodeSnapshot(): ProviderUsageSnapshot {
     tertiary: rw(45, 43200, "monthly"),
     extraRateWindows: [
       { id: "renewal", title: "Renews", window: rw(0, null, null, "2026-08-22T00:00:00Z"), usageKnown: true },
+      { id: "zen-balance", title: "Zen balance", window: rw(0, null, null, null, "$38.80"), usageKnown: true },
     ],
     cost: null, planName: null, accountEmail: null, sourceLabel: "auto",
     updatedAt: "2026-08-16T12:00:00Z", error: null, pace: null, accountOrganization: null,
@@ -51,7 +52,7 @@ describe("TrayCard OpenCode Go projection", () => {
     }));
   });
 
-  it("renders exactly the three real cycles — 5h hero, weekly secondary, monthly tile", async () => {
+  it("renders exactly the three real cycles — 5h hero, weekly + monthly tiles, plus the zen balance block", async () => {
     const { container } = render(
       <LocaleProvider>
         <TrayCard
@@ -66,11 +67,34 @@ describe("TrayCard OpenCode Go projection", () => {
     });
     const labels = Array.from(container.querySelectorAll(".quota-row__label, .quota-tile__label"))
       .map((el) => el.textContent);
+    // OpenCode Go layout: weekly is now a full tile in the grid, not the hero secondary.
     expect(labels).toEqual(["5 小时额度", "周额度", "月额度"]);
     const heroPct = container.querySelector(".quota-row__hero-pct");
     expect(heroPct?.textContent).toBe("72%");
+    // Zen balance surfaces through the balance block, not as a quota tile.
+    const balanceAmount = container.querySelector(".balance-block__amount");
+    expect(balanceAmount?.textContent).toBe("$38.80");
     // The date-only "Renews" marker must never become a tile with a fake bar.
     expect(container.textContent).not.toContain("Renews");
+    // The zen-balance row's own title stays out of the UI; only 余额 amount renders.
+    expect(container.textContent).not.toContain("Zen balance");
+  });
+
+  it("lone extra tile spans full width", async () => {
+    const { container } = render(
+      <LocaleProvider>
+        <TrayCard
+          provider={{ ...opencodeSnapshot(), secondary: null }}
+          densityMode="detailed"
+          display={{ showAsUsed: true, resetTimeRelative: true, highUsageThreshold: 75, criticalUsageThreshold: 95 }}
+        />
+      </LocaleProvider>
+    );
+    await waitFor(() => {
+      if (!container.querySelector(".tray-card")) throw new Error("card not rendered");
+    });
+    // A single leftover tile must take both grid columns.
+    expect(container.querySelector(".quota-tile--full")).not.toBeNull();
   });
 
   it("minimal tier keeps the hero metric and never invents a bar", async () => {
@@ -87,6 +111,8 @@ describe("TrayCard OpenCode Go projection", () => {
       if (!container.querySelector(".tray-card")) throw new Error("card not rendered");
     });
     expect(container.querySelector(".minimal-streamlined__metric")?.textContent).toBe("72%");
+    // Secondary + extra windows condense into one chip on the minimal tier.
+    expect(container.textContent).toContain("周58%·月45%");
     expect(container.textContent).not.toContain("Renews");
   });
 });

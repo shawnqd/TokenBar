@@ -70,20 +70,20 @@
 
 /* ── Flyout chrome ────────────────────────────────────────────────────── */
 
-/* Unified flyout shell (same recipe as the Settings window): a 10 DIP
+/* Unified flyout shell (same recipe as the Settings window): a 6 DIP
    transparent gutter on every side holds the drop shadow (painted by
    ::before, unclipped) while the panel itself carries the 1px outline. The
-   native window is 348x796 so the 328x776 panel keeps its design size. */
+   native window is 340x788 so the 328x776 panel keeps its design size. */
 .tray-panel-reveal {
   position: relative;
-  padding: 10px;
+  padding: 6px;
   box-sizing: border-box;
 }
 
 .tray-panel-reveal::before {
   content: "";
   position: absolute;
-  inset: 10px;
+  inset: 6px;
   border-radius: var(--window-radius, 12px);
   /* Matched to the native taskbar context menu and the Settings window
      (taskbar_menu.rs: SHADOW_BLUR_DIP = 3, SHADOW_OFFSET_Y_DIP = 3). */
