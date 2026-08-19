@@ -572,6 +572,8 @@ pub struct SettingsSnapshot {
     taskbar_widget_text_align: String,
     taskbar_widget_icon_size: u8,
     taskbar_widget_icon_style: String,
+    taskbar_widget_icon_gap_px: u8,
+    taskbar_widget_value_gap_px: u8,
     // Per-component quota presentation. `show_as_used` / `reset_time_relative`
     // above are legacy migration sources and are no longer read by any surface.
     float_bar_show_as_used: bool,
@@ -691,6 +693,8 @@ impl From<Settings> for SettingsSnapshot {
             taskbar_widget_text_align: settings.taskbar_widget_text_align,
             taskbar_widget_icon_size: settings.taskbar_widget_icon_size,
             taskbar_widget_icon_style: settings.taskbar_widget_icon_style.clone(),
+            taskbar_widget_icon_gap_px: settings.taskbar_widget_icon_gap_px,
+            taskbar_widget_value_gap_px: settings.taskbar_widget_value_gap_px,
             float_bar_show_as_used: settings.float_bar_show_as_used,
             float_bar_reset_time_relative: settings.float_bar_reset_time_relative,
             dashboard_show_as_used: settings.dashboard_show_as_used,

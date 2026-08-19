@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import type { SettingsSnapshot, SettingsUpdate } from "../types/bridge";
 import { getSettingsSnapshot, updateSettings } from "../lib/tauri";
@@ -18,6 +18,7 @@ export function useSettings(initial: SettingsSnapshot): UseSettingsReturn {
   const [settings, setSettings] = useState<SettingsSnapshot>(initial);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const latestSeq = useRef(0);
 
   useEffect(() => {
     let cancelled = false;
@@ -52,8 +53,13 @@ export function useSettings(initial: SettingsSnapshot): UseSettingsReturn {
     // before the listener finishes registering.
     Promise.resolve(
       listen("settings-changed", () => {
+        const seq = ++latestSeq.current;
         getSettingsSnapshot()
-          .then((fresh) => setSettings(fresh))
+          .then((fresh) => {
+            if (seq === latestSeq.current) {
+              setSettings(fresh);
+            }
+          })
           .catch(() => {
             // Keep the current copy if the refresh fails.
           });
@@ -78,6 +84,7 @@ export function useSettings(initial: SettingsSnapshot): UseSettingsReturn {
     // round trip to the Rust bridge is fast enough that waiting for it
     // before reflecting the change reads as a page-wide flash (every
     // `disabled={saving}` control dims and undims within one frame).
+    const seq = ++latestSeq.current;
     setSettings((prev) => ({ ...prev, ...patch }));
     setError(null);
 
@@ -88,6 +95,9 @@ export function useSettings(initial: SettingsSnapshot): UseSettingsReturn {
 
     try {
       const next = await updateSettings(patch);
+      // Discard stale responses from earlier requests that arrived out of
+      // order — the optimistic value is already the latest.
+      if (seq !== latestSeq.current) return;
       setSettings(next);
       if (typeof window !== "undefined") {
         window.dispatchEvent(
