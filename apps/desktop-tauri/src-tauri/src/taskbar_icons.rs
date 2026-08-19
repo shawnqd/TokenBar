@@ -95,7 +95,13 @@ pub fn brand_color(provider_id: &str) -> u32 {
 
 pub fn provider_svg_source(provider_id: &str) -> Option<&'static str> {
     let key = SVG_ALIASES.iter().find(|(id, _)| *id == provider_id).map(|(_, t)| *t).unwrap_or(provider_id);
-    PROVIDER_ICON_TABLE.iter().find(|(id, _)| *id == key).map(|(_, src)| *src)
+    if let Some((_, src)) = PROVIDER_ICON_TABLE.iter().find(|(id, _)| *id == key) {
+        return Some(*src);
+    }
+    PROVIDER_ICON_TABLE
+        .iter()
+        .find(|(id, _)| id.eq_ignore_ascii_case(key))
+        .map(|(_, src)| *src)
 }
 
 fn inset_fraction(provider_id: &str) -> f32 {
