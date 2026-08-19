@@ -34,7 +34,7 @@ import type {
   WorkAreaRect,
   OutputSpeedSnapshot,
   TaskbarFontFamily,
-  TaskbarPreviewLine,
+  TaskbarStripCell,
   TaskbarWindowKind,
 } from "../types/bridge";
 
@@ -59,6 +59,11 @@ export function updateSettings(
 ): Promise<SettingsSnapshot> {
   return invoke<SettingsSnapshot>("update_settings", { patch });
 }
+
+export function resetSettings(): Promise<SettingsSnapshot> {
+  return invoke<SettingsSnapshot>("reset_settings");
+}
+
 
 /**
  * Font families installed on this machine, with whether each supports a
@@ -93,8 +98,8 @@ export function getTaskbarWindowAvailability(): Promise<
  * rendering correctly — because it had to restate rules that live in Rust.
  * Empty off Windows, and empty until the strip has been painted once.
  */
-export function getTaskbarPreviewLines(): Promise<TaskbarPreviewLine[]> {
-  return invoke<TaskbarPreviewLine[]>("get_taskbar_preview_lines");
+export function getTaskbarPreviewLines(): Promise<TaskbarStripCell[]> {
+  return invoke<TaskbarStripCell[]>("get_taskbar_preview_lines");
 }
 
 export function setSurfaceMode<M extends VisibleSurfaceMode>(
@@ -294,6 +299,11 @@ export function getProviderLocalUsageSummary(
 ): Promise<ProviderLocalUsageSummary | null> {
   return invoke<ProviderLocalUsageSummary | null>("get_provider_local_usage_summary", { providerId });
 }
+
+export function clearProviderLocalUsageCache(): Promise<void> {
+  return invoke<void>("clear_provider_local_usage_cache_command");
+}
+
 
 // ── Token account bridge ─────────────────────────────────────────────
 

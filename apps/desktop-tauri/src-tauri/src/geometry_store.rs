@@ -19,7 +19,7 @@ const GEOMETRY_FILENAME: &str = "window_geometry.json";
 /// Bumped when the meaning of stored fields changes. v1 switched the stored
 /// window SIZE from physical to logical pixels, so legacy (versionless) files
 /// hold physical sizes that must be discarded on load.
-const GEOMETRY_VERSION: u32 = 1;
+const GEOMETRY_VERSION: u32 = 2;
 
 /// Persisted window geometry entry. Size is optional because not every surface
 /// is resizable; we always persist position when available.
@@ -203,12 +203,23 @@ mod tests {
     #[test]
     fn current_version_file_keeps_sizes() {
         let json =
+            r#"{"version":2,"entries":{"settings":{"x":10,"y":20,"width":1168,"height":828}}}"#;
+        let mut file: GeometryFile = serde_json::from_str(json).unwrap();
+        migrate(&mut file);
+        let entry = file.entries.get("settings").unwrap();
+        assert_eq!(entry.width, Some(1168));
+        assert_eq!(entry.height, Some(828));
+    }
+
+    #[test]
+    fn v1_settings_size_is_dropped_for_v5_card() {
+        let json =
             r#"{"version":1,"entries":{"settings":{"x":10,"y":20,"width":520,"height":600}}}"#;
         let mut file: GeometryFile = serde_json::from_str(json).unwrap();
         migrate(&mut file);
         let entry = file.entries.get("settings").unwrap();
-        assert_eq!(entry.width, Some(520));
-        assert_eq!(entry.height, Some(600));
+        assert_eq!(entry.width, None);
+        assert_eq!(entry.height, None);
     }
 
     #[test]

@@ -49,6 +49,16 @@ import vertexai from "./icons/ProviderIcon-vertexai.svg?raw";
 import warp from "./icons/ProviderIcon-warp.svg?raw";
 import windsurf from "./icons/ProviderIcon-windsurf.svg?raw";
 import zai from "./icons/ProviderIcon-zai.svg?raw";
+import azureopenai from "./icons/ProviderIcon-azureopenai.svg?raw";
+import nanogpt from "./icons/ProviderIcon-nanogpt.svg?raw";
+import infini from "./icons/ProviderIcon-infini.svg?raw";
+import wayfinder from "./icons/ProviderIcon-wayfinder.svg?raw";
+import openaiapi from "./icons/ProviderIcon-openaiapi.svg?raw";
+import chutes from "./icons/ProviderIcon-chutes.svg?raw";
+import litellm from "./icons/ProviderIcon-litellm.svg?raw";
+import poe from "./icons/ProviderIcon-poe.svg?raw";
+import devin from "./icons/ProviderIcon-devin.svg?raw";
+import zed from "./icons/ProviderIcon-zed.svg?raw";
 
 /**
  * Replace hard-coded fills/strokes in the bundled brand SVGs with
@@ -126,6 +136,16 @@ const RAW: Record<string, string> = {
   warp: tint(warp),
   windsurf: tint(windsurf),
   zai: tint(zai),
+  azureopenai: tint(azureopenai),
+  nanogpt: tint(nanogpt),
+  infini: tint(infini),
+  wayfinder: tint(wayfinder),
+  openaiapi: tint(openaiapi),
+  chutes: tint(chutes),
+  litellm: tint(litellm),
+  poe: tint(poe),
+  devin: tint(devin),
+  zed: tint(zed),
 };
 
 /**
@@ -161,7 +181,7 @@ export const PROVIDER_ICON_REGISTRY: Record<string, ProviderIcon> = {
   minimax:     { id: "minimax",     brandColor: "#fe603c", fallbackLetter: "M", svgPath: RAW.minimax },
   mistral:     { id: "mistral",     brandColor: "#ff500f", fallbackLetter: "M", svgPath: RAW.mistral },
   ollama:      { id: "ollama",      brandColor: "#8b95b0", fallbackLetter: "○", svgPath: RAW.ollama },
-  azureopenai: { id: "azureopenai", brandColor: "#0078d4", fallbackLetter: "A" },
+  azureopenai: { id: "azureopenai", brandColor: "#0078d4", fallbackLetter: "A", svgPath: RAW.azureopenai },
   t3chat:      { id: "t3chat",      brandColor: "#8b5cf6", fallbackLetter: "T", svgPath: RAW.t3chat },
   opencode:    { id: "opencode",    brandColor: "#3b82f6", fallbackLetter: "○", svgPath: RAW.opencode },
   opencodego:  { id: "opencodego",  brandColor: "#3b82f6", fallbackLetter: "○", svgPath: RAW.opencodego },
@@ -172,8 +192,8 @@ export const PROVIDER_ICON_REGISTRY: Record<string, ProviderIcon> = {
   windsurf:    { id: "windsurf",    brandColor: "#22c55e", fallbackLetter: "W", svgPath: RAW.windsurf },
   zai:         { id: "zai",         brandColor: "#e85a6a", fallbackLetter: "Z", svgPath: RAW.zai },
   // Aliases / Rust-side normalizations without their own SVG.
-  nanogpt:     { id: "nanogpt",     brandColor: "#687fa1", fallbackLetter: "N" },
-  infini:      { id: "infini",      brandColor: "#687fa1", fallbackLetter: "I" },
+  nanogpt:     { id: "nanogpt",     brandColor: "#687fa1", fallbackLetter: "N", svgPath: RAW.nanogpt },
+  infini:      { id: "infini",      brandColor: "#687fa1", fallbackLetter: "I", svgPath: RAW.infini },
   abacus:      { id: "abacus",      brandColor: "#7c3aed", fallbackLetter: "A", svgPath: RAW.abacus },
   manus:       { id: "manus",       brandColor: "#34322d", fallbackLetter: "M", svgPath: RAW.manus },
   mimo:        { id: "mimo",        brandColor: "#ff6900", fallbackLetter: "M", svgPath: RAW.mimo },
@@ -188,14 +208,14 @@ export const PROVIDER_ICON_REGISTRY: Record<string, ProviderIcon> = {
   sakana:      { id: "sakana",      brandColor: "#0ea5e9", fallbackLetter: "S", svgPath: RAW.sakana },
   stepfun:     { id: "stepfun",     brandColor: "#999999", fallbackLetter: "S", svgPath: RAW.stepfun },
   sub2api:     { id: "sub2api",     brandColor: "#7c3aed", fallbackLetter: "S", svgPath: RAW.sub2api },
-  wayfinder:   { id: "wayfinder",   brandColor: "#2563eb", fallbackLetter: "W" },
+  wayfinder:   { id: "wayfinder",   brandColor: "#2563eb", fallbackLetter: "W", svgPath: RAW.wayfinder },
   venice:      { id: "venice",      brandColor: "#111827", fallbackLetter: "V", svgPath: RAW.venice },
-  openaiapi:   { id: "openaiapi",   brandColor: "#10a37f", fallbackLetter: "O" },
-  chutes:      { id: "chutes",      brandColor: "#ff5c35", fallbackLetter: "C" },
-  litellm:     { id: "litellm",     brandColor: "#0ea5e9", fallbackLetter: "L" },
-  poe:         { id: "poe",         brandColor: "#5d5fef", fallbackLetter: "P" },
-  devin:       { id: "devin",       brandColor: "#111827", fallbackLetter: "D" },
-  zed:         { id: "zed",         brandColor: "#084ccf", fallbackLetter: "Z" },
+  openaiapi:   { id: "openaiapi",   brandColor: "#10a37f", fallbackLetter: "O", svgPath: RAW.openaiapi },
+  chutes:      { id: "chutes",      brandColor: "#ff5c35", fallbackLetter: "C", svgPath: RAW.chutes },
+  litellm:     { id: "litellm",     brandColor: "#0ea5e9", fallbackLetter: "L", svgPath: RAW.litellm },
+  poe:         { id: "poe",         brandColor: "#5d5fef", fallbackLetter: "P", svgPath: RAW.poe },
+  devin:       { id: "devin",       brandColor: "#111827", fallbackLetter: "D", svgPath: RAW.devin },
+  zed:         { id: "zed",         brandColor: "#084ccf", fallbackLetter: "Z", svgPath: RAW.zed },
 };
 
 const ALIASES: Record<string, string> = {

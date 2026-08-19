@@ -1,8 +1,12 @@
 import { useCallback, useEffect, useState } from "react";
 import { useLocale } from "../../../hooks/useLocale";
 import { invoke } from "@tauri-apps/api/core";
-import { playNotificationSound } from "../../../lib/tauri";
-import { Field, NumberInput, Select, Toggle } from "../../../components/FormControls";
+import {
+  registerGlobalShortcut,
+  unregisterGlobalShortcut,
+} from "../../../lib/tauri";
+import { ShortcutCapture } from "../../../components/ShortcutCapture";
+import { Field, Select, Toggle } from "../../../components/FormControls";
 import type { Language, LanguageOption } from "../../../types/bridge";
 import type { LocaleKey } from "../../../i18n/keys";
 import type { TabProps } from "../../Settings";
@@ -25,33 +29,45 @@ const REFRESH_CADENCE_KEYS: { value: string; labelKey: LocaleKey }[] = [
   { value: "3600", labelKey: "RefreshCadenceOneHour" },
 ];
 
-export default function GeneralTab({
-  mode = "general",
-  settings,
-  set,
-  saving,
-}: TabProps & { mode?: "general" | "notifications" }) {
+export default function GeneralTab({ settings, set, saving }: TabProps) {
   const { t } = useLocale();
-  const [playingSound, setPlayingSound] = useState(false);
   const [languageOptions, setLanguageOptions] = useState<LanguageOption[]>(
     FALLBACK_LANGUAGE_OPTIONS,
   );
+  const [shortcutError, setShortcutError] = useState<string | null>(null);
 
   useEffect(() => {
     invoke<LanguageOption[]>("get_available_languages")
       .then(setLanguageOptions)
-      .catch(() => {}); // graceful fallback to static default
+      .catch(() => {});
   }, []);
 
-  const handleTestSound = useCallback(() => {
-    setPlayingSound(true);
-    void playNotificationSound().catch(() => {});
-    window.setTimeout(() => setPlayingSound(false), 1500);
-  }, []);
+  const commitShortcut = useCallback(
+    async (accelerator: string) => {
+      setShortcutError(null);
+      try {
+        await registerGlobalShortcut(accelerator).catch(() => {});
+        set({ globalShortcut: accelerator });
+      } catch (err: unknown) {
+        setShortcutError(err instanceof Error ? err.message : String(err));
+      }
+    },
+    [set],
+  );
+
+  const clearShortcut = useCallback(async () => {
+    setShortcutError(null);
+    try {
+      await unregisterGlobalShortcut().catch(() => {});
+      set({ globalShortcut: "" });
+    } catch (err: unknown) {
+      setShortcutError(err instanceof Error ? err.message : String(err));
+    }
+  }, [set]);
 
   return (
     <>
-      {mode === "general" && <section className="settings-section">
+      <section className="settings-section">
         <h3 className="settings-section__title">{t("SectionLanguage")}</h3>
         <div className="settings-section__group">
           <Field label={t("InterfaceLanguage")}>
@@ -66,9 +82,9 @@ export default function GeneralTab({
             />
           </Field>
         </div>
-      </section>}
+      </section>
 
-      {mode === "general" && <section className="settings-section">
+      <section className="settings-section">
         <h3 className="settings-section__title">{t("StartupSettings")}</h3>
         <div className="settings-section__group">
           <Field label={t("StartAtLogin")} description={t("StartAtLoginHelper")}>
@@ -89,93 +105,9 @@ export default function GeneralTab({
             />
           </Field>
         </div>
-      </section>}
+      </section>
 
-      {mode === "notifications" && <section className="settings-section">
-        <h3 className="settings-section__title">
-          {t("SectionNotifications")}
-        </h3>
-        <div className="settings-section__group">
-          <Field
-            label={t("ShowNotifications")}
-            description={t("ShowNotificationsHelper")}
-          >
-            <Toggle
-              checked={settings.showNotifications}
-              disabled={saving}
-              onChange={(v) => set({ showNotifications: v })}
-            />
-          </Field>
-          <Field label={t("SoundEnabled")} description={t("SoundEnabledHelper")}>
-            <div className="sound-enabled-row">
-              <Toggle
-                checked={settings.soundEnabled}
-                disabled={saving}
-                onChange={(v) => set({ soundEnabled: v })}
-              />
-              <button
-                type="button"
-                className="shortcut-capture__button shortcut-capture__button--ghost"
-                disabled={saving || !settings.soundEnabled || playingSound}
-                onClick={handleTestSound}
-              >
-                {playingSound
-                  ? t("NotificationTestSoundPlaying")
-                  : t("NotificationTestSound")}
-              </button>
-            </div>
-          </Field>
-          {settings.soundEnabled && (
-            <Field label={t("SoundVolume")} description={t("SoundVolumeHelper")}>
-              <NumberInput
-                value={settings.soundVolume}
-                min={0}
-                max={100}
-                step={5}
-                disabled={saving}
-                onChange={(v) => set({ soundVolume: v })}
-              />
-            </Field>
-          )}
-        </div>
-      </section>}
-
-      {mode === "notifications" && <section className="settings-section">
-        <h3 className="settings-section__title">
-          {t("SectionUsageThresholds")}
-        </h3>
-        <div className="settings-section__group">
-          <Field
-            label={t("HighUsageAlert")}
-            description={t("HighUsageWarningHelper")}
-          >
-            <NumberInput
-              value={settings.highUsageThreshold}
-              min={0}
-              max={100}
-              step={5}
-              disabled={saving}
-              onChange={(v) => set({ highUsageThreshold: v })}
-            />
-          </Field>
-          <Field
-            label={t("CriticalUsageAlert")}
-            description={t("CriticalUsageWarningHelper")}
-          >
-            <NumberInput
-              value={settings.criticalUsageThreshold}
-              min={0}
-              max={100}
-              step={5}
-              disabled={saving}
-              onChange={(v) => set({ criticalUsageThreshold: v })}
-            />
-          </Field>
-        </div>
-      </section>}
-
-      {/* ── Automation ───────────────────────────────────────────── */}
-      {mode === "general" && <section className="settings-section">
+      <section className="settings-section">
         <h3 className="settings-section__title">{t("SectionRefresh")}</h3>
         <div className="settings-section__group">
           <Field
@@ -193,16 +125,6 @@ export default function GeneralTab({
             />
           </Field>
           <Field
-            label={t("ProviderTimeoutRecovery")}
-            description={t("ProviderTimeoutRecoveryHelper")}
-          >
-            <Toggle
-              checked={settings.providerTimeoutRecoveryEnabled ?? true}
-              disabled={saving}
-              onChange={(v) => set({ providerTimeoutRecoveryEnabled: v })}
-            />
-          </Field>
-          <Field
             label={t("RefreshAllProvidersOnMenuOpen")}
             description={t("RefreshAllProvidersOnMenuOpenHelper")}
           >
@@ -212,8 +134,39 @@ export default function GeneralTab({
               onChange={(v) => set({ refreshAllProvidersOnMenuOpen: v })}
             />
           </Field>
+          <Field
+            label={t("ProviderTimeoutRecovery")}
+            description={t("ProviderTimeoutRecoveryHelper")}
+          >
+            <Toggle
+              checked={settings.providerTimeoutRecoveryEnabled ?? true}
+              disabled={saving}
+              onChange={(v) => set({ providerTimeoutRecoveryEnabled: v })}
+            />
+          </Field>
         </div>
-      </section>}
+      </section>
+
+      <section className="settings-section">
+        <h3 className="settings-section__title">{t("SectionKeyboard")}</h3>
+        <div className="settings-section__group">
+          <Field
+            label={t("GlobalShortcutFieldLabel")}
+            description={t("GlobalShortcutToggleHelper")}
+          >
+            <ShortcutCapture
+              value={settings.globalShortcut}
+              disabled={saving}
+              onCommit={(accel) => void commitShortcut(accel)}
+              onClear={() => void clearShortcut()}
+            />
+          </Field>
+        </div>
+        {shortcutError && (
+          <p className="settings-section__error">{shortcutError}</p>
+        )}
+        <p className="settings-section__hint">{t("ShortcutRecordingHint")}</p>
+      </section>
     </>
   );
 }

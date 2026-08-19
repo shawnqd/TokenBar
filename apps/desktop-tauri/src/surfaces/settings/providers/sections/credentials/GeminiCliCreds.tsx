@@ -61,13 +61,7 @@ export function GeminiCliCreds({ providerId, t }: Props) {
         title={t("CredsGeminiCliLabel")}
         badge={statusLabel}
         badgeTone={status.signedIn ? "ok" : "unset"}
-        meta={
-          status.credentialsPath ? (
-            <span className="provider-detail-grid__mono">
-              {status.credentialsPath}
-            </span>
-          ) : null
-        }
+        meta={null}
         actions={
           <>
             {status.signedIn && status.credentialsPath && (

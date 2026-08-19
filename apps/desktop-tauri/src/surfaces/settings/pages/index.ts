@@ -1,0 +1,11 @@
+export type { SettingsPageProps } from "./pageTypes";
+export { default as GeneralPage } from "./GeneralPage";
+export { default as ProvidersPage } from "./ProvidersPage";
+export { default as TrayPanelPage } from "./TrayPanelPage";
+export { default as FloatBarPage } from "./FloatBarPage";
+export { default as TaskbarStatusPage } from "./TaskbarStatusPage";
+export { default as NotificationsPage } from "./NotificationsPage";
+export { default as AppearancePage } from "./AppearancePage";
+export { default as PrivacyPage } from "./PrivacyPage";
+export { default as AdvancedPage } from "./AdvancedPage";
+export { default as AboutPage } from "./AboutPage";

@@ -381,11 +381,13 @@ impl KimiProvider {
         response: KimiWebUsageResponse,
         subscription: Option<KimiSubscriptionStatsResponse>,
     ) -> Result<UsageSnapshot, ProviderError> {
-        let coding = response
-            .usages
-            .into_iter()
-            .find(|usage| usage.scope == "FEATURE_CODING")
-            .ok_or_else(|| ProviderError::Parse("Kimi FEATURE_CODING usage missing".into()))?;
+        let coding = match response.usages.into_iter().find(|usage| usage.scope == "FEATURE_CODING") {
+            Some(coding) => coding,
+            None => {
+                tracing::warn!("Kimi FEATURE_CODING usage missing; returning empty snapshot");
+                return Ok(UsageSnapshot::new(RateWindow::new(0.0)).with_login_method("Kimi"));
+            }
+        };
         let primary = Self::rate_window_from_usage_detail(&coding.detail, Some(10080))?;
         let mut usage = UsageSnapshot::new(primary).with_login_method("Kimi");
 
@@ -436,9 +438,14 @@ impl KimiProvider {
         detail: &KimiUsageDetail,
         window_minutes: Option<u32>,
     ) -> Result<RateWindow, ProviderError> {
-        let limit = value_as_f64(detail.limit.as_ref())
-            .filter(|limit| *limit > 0.0)
-            .ok_or_else(|| ProviderError::Parse("Kimi usage limit missing".into()))?;
+        let limit = match value_as_f64(detail.limit.as_ref()).filter(|limit| *limit > 0.0) {
+            Some(limit) => limit,
+            None => {
+                tracing::warn!("Kimi usage limit missing or zero; degrading to 0.0");
+                let reset_at = detail.reset_time.as_ref().and_then(parse_kimi_timestamp);
+                return Ok(RateWindow::with_details(0.0, window_minutes, reset_at, None));
+            }
+        };
         let used = match (
             value_as_f64(detail.used.as_ref()),
             value_as_f64(detail.remaining.as_ref()),
@@ -446,9 +453,8 @@ impl KimiProvider {
             (Some(used), _) => used,
             (None, Some(remaining)) => (limit - remaining).max(0.0),
             (None, None) => {
-                return Err(ProviderError::Parse(
-                    "Kimi usage used/remaining value missing".into(),
-                ));
+                tracing::warn!("Kimi usage used/remaining both missing; degrading to 0.0");
+                0.0
             }
         };
         let reset_at = detail.reset_time.as_ref().and_then(parse_kimi_timestamp);
@@ -1082,5 +1088,45 @@ mod tests {
     #[test]
     fn credential_freshness_requires_sixty_second_margin() {
         assert!((KIMI_CODE_CREDENTIAL_MIN_TTL_SECS - 60.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn rate_window_from_usage_detail_missing_limit_degraded() {
+        let detail = KimiUsageDetail {
+            limit: None,
+            used: Some(serde_json::Value::Number(serde_json::Number::from_f64(10.0).unwrap())),
+            remaining: None,
+            reset_time: None,
+        };
+        let result = KimiProvider::rate_window_from_usage_detail(&detail, Some(10080));
+        assert!(result.is_ok(), "missing limit should degrade, not error");
+        let window = result.unwrap();
+        assert_eq!(window.used_percent, 0.0);
+    }
+
+    #[test]
+    fn rate_window_from_usage_detail_missing_used_and_remaining_degraded() {
+        let detail = KimiUsageDetail {
+            limit: Some(serde_json::Value::Number(serde_json::Number::from_f64(100.0).unwrap())),
+            used: None,
+            remaining: None,
+            reset_time: None,
+        };
+        let result = KimiProvider::rate_window_from_usage_detail(&detail, Some(10080));
+        assert!(result.is_ok(), "missing used/remaining should degrade, not error");
+        let window = result.unwrap();
+        assert_eq!(window.used_percent, 0.0);
+    }
+
+    #[test]
+    fn snapshot_from_web_usage_response_missing_feature_coding_degraded() {
+        let response = KimiWebUsageResponse {
+            usages: vec![],
+        };
+        let result = KimiProvider::snapshot_from_web_usage_response(response, None);
+        assert!(result.is_ok(), "missing FEATURE_CODING should degrade, not error");
+        let snapshot = result.unwrap();
+        assert_eq!(snapshot.primary.used_percent, 0.0);
+        assert_eq!(snapshot.login_method.as_deref(), Some("Kimi"));
     }
 }

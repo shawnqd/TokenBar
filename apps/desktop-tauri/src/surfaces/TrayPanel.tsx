@@ -1,4 +1,4 @@
-import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import type {
   BootstrapState,
@@ -19,13 +19,9 @@ import { useSettings } from "../hooks/useSettings";
 import { useLocale } from "../hooks/useLocale";
 import { useTrayPanelLayout } from "../hooks/useTrayPanelLayout";
 import { useOutputSpeedSnapshot } from "../hooks/useOutputSpeedSnapshot";
-import MenuCard from "../components/MenuCard";
-import MenuSurface, {
-  MenuEmpty,
-  type MenuFooterRow,
-} from "../components/MenuSurface";
+import TrayCard from "./tray/TrayCard";
+import { MenuEmpty } from "../components/MenuSurface";
 import ProviderGrid, { prioritizeProviders } from "../components/ProviderGrid";
-import { openProviderDashboard, openProviderStatusPage } from "../lib/tauri";
 import { orderProviderSnapshots } from "../lib/providerOrder";
 import { quotaDisplayContext } from "../lib/quotaDisplay";
 import { outputSpeedProviderId } from "../lib/outputSpeed";
@@ -34,26 +30,6 @@ import {
   orderedEnabledProviderSlots,
 } from "../lib/trayProviders";
 
-/** Provider IDs that have a dashboard URL in the backend */
-const HAS_DASHBOARD = new Set([
-  "abacus", "alibaba", "alibabatokenplan", "amp", "augment",
-  "azureopenai", "bedrock", "claude", "codex", "codebuff",
-  "commandcode", "copilot", "crof", "crossmodel", "cursor", "deepgram", "deepseek",
-  "doubao", "arkcodingplan", "arkagentplan", "elevenlabs", "factory", "gemini", "grok", "groq",
-  "infini", "jetbrains", "kilo", "kimi", "kimik2", "kiro", "manus",
-  "mimo", "mimoapi", "minimax", "mistral", "nanogpt", "ollama", "openaiapi",
-  "opencode", "opencodego", "openrouter", "perplexity", "qoder", "sakana", "stepfun",
-  "t3chat", "venice", "vertexai", "warp", "windsurf",
-  "zai",
-]);
-/** Provider IDs that have a status page URL in the backend */
-const HAS_STATUS_PAGE = new Set([
-  "alibabatokenplan", "amp", "augment", "azureopenai", "bedrock",
-  "claude", "codex", "copilot", "deepgram", "deepseek", "elevenlabs",
-  "gemini", "grok", "groq", "kiro", "mistral", "openaiapi",
-  "openrouter", "vertexai", "windsurf",
-]);
-
 const TRAY_INITIAL_REFRESH_DELAY_MS = 250;
 const DENSE_OVERVIEW_THRESHOLD = 32;
 /** Matches shell::flyout_window's retained-window lifecycle events. */
@@ -61,10 +37,53 @@ const TRAY_PANEL_REVEALED_EVENT = "tray-panel-revealed";
 const TRAY_PANEL_CLOSING_EVENT = "tray-panel-closing";
 const TRAY_PANEL_HIDDEN_EVENT = "tray-panel-hidden";
 
+/** Stroke-width / cap / join shared by every footer action glyph. */
+const footerIconProps = {
+  width: 14,
+  height: 14,
+  viewBox: "0 0 24 24",
+  fill: "none",
+  stroke: "currentColor",
+  strokeWidth: 1.85,
+  strokeLinecap: "round" as const,
+  strokeLinejoin: "round" as const,
+  "aria-hidden": true,
+};
+const DashboardIcon = () => (
+  <svg {...footerIconProps}>
+    <rect x="3" y="3" width="7" height="7" rx="1.5" />
+    <rect x="14" y="3" width="7" height="7" rx="1.5" />
+    <rect x="14" y="14" width="7" height="7" rx="1.5" />
+    <rect x="3" y="14" width="7" height="7" rx="1.5" />
+  </svg>
+);
+const RefreshIcon = () => (
+  <svg {...footerIconProps}>
+    <path d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" />
+    <path d="M3 3v5h5" />
+    <path d="M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16" />
+    <path d="M21 21v-5h-5" />
+  </svg>
+);
+const GearIcon = () => (
+  <svg {...footerIconProps}>
+    <circle cx="12" cy="12" r="3" />
+    <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z" />
+  </svg>
+);
+const PowerIcon = () => (
+  <svg {...footerIconProps}>
+    <path d="M18.36 6.64a9 9 0 1 1-12.73 0" />
+    <line x1="12" y1="2" x2="12" y2="12" />
+  </svg>
+);
+
 /**
- * Tray popover surface — two modes like macOS CodexBar:
- * 1. Overview (default): provider grid + all cards stacked
- * 2. Detail: click a provider in grid → show only that provider's card
+ * Tray popover surface — native 328 DIP flyout with three density tiers
+ * (overview obeys the setting; a single provider's detail view is always
+ * detailed). The card stack is driven by TrayCard (the unified modular port
+ * of design/density-preview.html); the footer holds the four actions as
+ * stroke-icon rows.
  */
 export default function TrayPanel({ state }: { state: BootstrapState }) {
   const { settings } = useSettings(state.settings);
@@ -83,18 +102,13 @@ export default function TrayPanel({ state }: { state: BootstrapState }) {
     settings.outputSpeedEnabled !== false,
   );
   // The tray flyout and the PopOut dashboard share the "dashboard" component's
-  // settings — they render the same cards from the same snapshot. Neither reads
-  // the floating bar's or the taskbar strip's preference.
+  // settings — they render the same cards from the same snapshot.
   const display = useMemo(
     () => quotaDisplayContext(settings, "dashboard"),
     [settings],
   );
-  // Provider switches are the single source of truth for the dashboard. A
-  // stale legacy dashboard-only filter must not hide an enabled provider.
   const shownProviderIds = settings.enabledProviders;
-  // The cache is deliberately retained when a provider is disabled so the
-  // Settings page can still describe its last result.  A tray flyout is a
-  // live view, though: it must only render currently enabled providers.
+  // A tray flyout is a live view: render only currently enabled providers.
   const enabledSnapshots = useMemo(
     () => providers.filter((provider) => shownProviderIds.includes(provider.providerId)),
     [providers, shownProviderIds],
@@ -135,13 +149,12 @@ export default function TrayPanel({ state }: { state: BootstrapState }) {
     () => new Map(sorted.map((provider) => [provider.providerId, provider])),
     [sorted],
   );
-  // This is a detached window, not a state of the main-window surface router.
-  // Selection is local to the retained flyout WebView, so a refresh or a
-  // surface-mode event in the main window cannot reset the provider card.
-  // null = overview (all providers), string = single provider detail.
+  // Selection is local to the retained flyout WebView.
   const [selectedProviderId, setSelectedProviderId] = useState<string | null>(null);
   const [gridExpanded, setGridExpanded] = useState(false);
-  const revealRef = useRef<HTMLDivElement>(null);
+  const [revealPhase, setRevealPhase] = useState<
+    "parked" | "opening" | "closing"
+  >("parked");
   const expectsDenseOverview =
     selectedProviderId === null &&
     !gridExpanded &&
@@ -151,77 +164,29 @@ export default function TrayPanel({ state }: { state: BootstrapState }) {
     return hydrateProviderSlots(denseProviderSlots, providersById);
   }, [denseProviderSlots, expectsDenseOverview, providersById, sorted]);
 
-  // Cards to display based on mode
-  // Overview: all providers in the grid — non-error first, then errors
-  // Detail: only the selected provider's card (macOS shows single provider)
   const visibleProviders = useMemo(() => {
     if (selectedProviderId === null) {
-      // Overview: show providers in the same Settings/catalog order as the grid.
       if (sorted.length + 1 > DENSE_OVERVIEW_THRESHOLD && !gridExpanded) {
         return prioritizeProviders(denseTrayProviders, null).slice(0, 4);
       }
       return sorted;
     }
-    // Detail: show ONLY the selected provider (macOS behavior — no appended errors)
     const match = sorted.find((p) => p.providerId === selectedProviderId);
-    if (!match) {
-      return sorted;
-    }
+    if (!match) return sorted;
     return [match];
   }, [denseTrayProviders, sorted, selectedProviderId, gridExpanded]);
 
-  // The tray panel is hosted by the dedicated `flyout` window. It opens at the
-  // 328×776 logical reference size, then lets the native window own edge
-  // resizing and remembered dimensions; provider data must never write size.
-  // The display-mode setting only governs the "all providers" overview list.
-  // Opening a single provider is an explicit "show me everything" action, so
-  // its detail card always renders full content regardless of the mode —
-  // hardcoded "detailed" here rather than reading `menuBarDisplayMode`.
+  // Detail is an explicit "show me everything" action → always detailed.
   const densityMode: MenuBarDisplayMode =
     selectedProviderId !== null ? "detailed" : settings.menuBarDisplayMode;
-  const { layoutReady } = useTrayPanelLayout({
-    // The native flyout starts hidden and must be revealed as soon as the
-    // React shell mounts. Provider/cache data is allowed to arrive later;
-    // using it as the reveal gate makes proof-mode automation observe
-    // IsWindowVisible=false during a slow first refresh and misclassify that
-    // as blur-dismiss.
-    canMeasure: true,
-  });
+  useTrayPanelLayout({ canMeasure: true });
 
   useEffect(() => {
     let disposed = false;
     const unlisteners: Array<() => void> = [];
-
-    const replayReveal = () => {
-      const element = revealRef.current;
-      if (!element) return;
-      // The WebView is retained between opens. Restart the same two-part
-      // animation used by the native right-click menu on every hidden ->
-      // visible transition, rather than relying on a mount-time transition.
-      element.classList.remove("tray-panel-reveal--opening");
-      element.classList.remove("tray-panel-reveal--closing");
-      element.classList.remove("tray-panel-reveal--parked");
-      void element.offsetWidth;
-      element.classList.add("tray-panel-reveal--opening");
-    };
-    const replayClose = () => {
-      const element = revealRef.current;
-      if (!element) return;
-      // The native window remains visible for the animation duration. This is
-      // the exact reverse of the right-click menu's entrance gesture.
-      element.classList.remove("tray-panel-reveal--opening");
-      element.classList.remove("tray-panel-reveal--closing");
-      element.classList.remove("tray-panel-reveal--parked");
-      void element.offsetWidth;
-      element.classList.add("tray-panel-reveal--closing");
-    };
-    const parkReveal = () => {
-      const element = revealRef.current;
-      if (!element) return;
-      element.classList.remove("tray-panel-reveal--opening");
-      element.classList.remove("tray-panel-reveal--closing");
-      element.classList.add("tray-panel-reveal--parked");
-    };
+    const replayReveal = () => setRevealPhase("opening");
+    const replayClose = () => setRevealPhase("closing");
+    const parkReveal = () => setRevealPhase("parked");
 
     void (async () => {
       unlisteners.push(await listen(TRAY_PANEL_REVEALED_EVENT, replayReveal));
@@ -239,10 +204,6 @@ export default function TrayPanel({ state }: { state: BootstrapState }) {
   }, []);
 
   const openSettings = useCallback(() => {
-    // Keep the flyout visible as a live preview while Settings is open.
-    // The native blur handler recognizes the Settings window as an allowed
-    // companion surface, so this does not turn ordinary click-outside into a
-    // permanently pinned flyout.
     void openSettingsWindow("general").catch(() => {});
   }, []);
   const openDashboard = useCallback(() => {
@@ -258,26 +219,7 @@ export default function TrayPanel({ state }: { state: BootstrapState }) {
     void quitApplication();
   }, []);
 
-  const footerRows: MenuFooterRow[] = [
-    // Glyphs chosen for what the row *does*. `⧉` (overlapping squares — the
-    // duplicate/clone mark) said nothing about a dashboard, and `⌧` is a
-    // cancel box, not quitting; `⊞` reads as a panel of tiles and `⏻` is the
-    // standard power mark.
-    { icon: "⊞", label: t("TrayOpenDashboard"), onClick: openDashboard },
-    {
-      icon: "↻",
-      label: t("ActionRefresh"),
-      shortcut: "Ctrl+R",
-      onClick: refresh,
-      // Clicking refresh used to give no sign it had registered; the numbers
-      // simply changed a second or two later, or did not.
-      spinning: isRefreshing,
-    },
-    { icon: "⚙", label: t("MenuSettings"), shortcut: "Ctrl+,", onClick: openSettings },
-    { icon: "⏻", label: t("MenuQuit"), shortcut: "Ctrl+Q", onClick: quitApp },
-  ];
-
-  // Keyboard shortcuts
+  // Keyboard shortcuts — Esc dismiss, Ctrl+R refresh, Ctrl+, settings, Ctrl+Q quit.
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       if (
@@ -311,12 +253,9 @@ export default function TrayPanel({ state }: { state: BootstrapState }) {
     return () => window.removeEventListener("keydown", handler);
   }, [refresh, openSettings, quitApp]);
 
-  const handleGridClick = useCallback(
-    (providerId: string | null) => {
-      setSelectedProviderId(providerId);
-    },
-    [],
-  );
+  const handleGridClick = useCallback((providerId: string | null) => {
+    setSelectedProviderId(providerId);
+  }, []);
   const handleReorder = useCallback((orderedIds: string[]) => {
     void reorderProviders(orderedIds).catch(() => {});
   }, []);
@@ -326,137 +265,115 @@ export default function TrayPanel({ state }: { state: BootstrapState }) {
   const handleGestureEnd = useCallback(() => {
     void endFlyoutGesture().catch(() => {});
   }, []);
-  // The WebView is prewarmed while the native flyout is hidden. Keep the
-  // retained DOM parked from its very first paint; otherwise the first native
-  // `show()` exposes the resting card for a frame before the reveal event can
-  // restart the entrance animation, which is the intermittent flash users
-  // see on opening.
-  // `--parked` is the pre-reveal state, not a permanent companion class. If
-  // both it and `--ready` are present, the later CSS rule wins and leaves the
-  // whole panel transparent when the one-shot native reveal event races the
-  // React listener. The ready state must be representable by the class string
-  // alone; native events still replay the animation on retained opens.
-  const revealClassName = `tray-panel-reveal tray-panel-reveal--native-size${layoutReady ? " tray-panel-reveal--ready" : " tray-panel-reveal--parked"}${expectsDenseOverview ? " tray-panel-reveal--dense" : ""}${selectedProviderId !== null ? " tray-panel-reveal--detail" : ""}`;
+
+  const revealClassName = `tray-panel-reveal tray-panel-reveal--native-size tray-panel-reveal--${revealPhase}${expectsDenseOverview ? " tray-panel-reveal--dense" : ""}${selectedProviderId !== null ? " tray-panel-reveal--detail" : ""}`;
   const isDetailView = selectedProviderId !== null;
+
   const renderProviderCard = (p: ProviderUsageSnapshot) => {
-    const isSelected =
-      selectedProviderId !== null && p.providerId === selectedProviderId;
-    const speedProviderId = outputSpeedProviderId(p.providerId);
+    const speedId = outputSpeedProviderId(p.providerId);
     return (
-      <div
-        className={`menu-stack__item${isSelected ? " menu-stack__item--selected" : ""}`}
-        id={`card-${p.providerId}`}
+      <TrayCard
         key={p.providerId}
-      >
-        <MenuCard
-          provider={p}
-          display={display}
-          outputSpeed={speedProviderId ? outputSpeed?.[speedProviderId] : null}
-          localUsagePeriod={settings.localUsagePeriod}
-          showProviderIcon={settings.switcherShowsIcons}
-          densityMode={densityMode}
-        />
-      </div>
+        provider={p}
+        densityMode={densityMode}
+        display={display}
+        outputSpeed={speedId ? outputSpeed?.[speedId] : null}
+        localUsagePeriod={settings.localUsagePeriod}
+        showProviderIcon={settings.switcherShowsIcons}
+        detail={isDetailView}
+      />
     );
   };
 
   useEffect(() => {
     // A density-mode switch (in the overview) must always reveal the top of
-    // the card stack, rather than preserving a scroll offset that belonged
-    // to the previous tier's (taller or shorter) content.
+    // the card stack, rather than preserving a scroll offset that belonged to
+    // the previous tier's content.
     if (isDetailView) return;
     const body = document.querySelector<HTMLElement>(
-      ".menu-surface--tray .menu-surface__body",
+      ".tray-panel-reveal .flyout-body",
     );
     if (body) body.scrollTop = 0;
   }, [densityMode, isDetailView]);
 
+  const grid = (
+    <ProviderGrid
+      providers={expectsDenseOverview ? denseTrayProviders : sorted}
+      selectedProviderId={selectedProviderId}
+      display={display}
+      showProviderIcons={settings.switcherShowsIcons}
+      expanded={gridExpanded}
+      onExpandedChange={setGridExpanded}
+      onSelect={handleGridClick}
+      onReorder={handleReorder}
+      onGestureStart={handleGestureStart}
+      onGestureEnd={handleGestureEnd}
+    />
+  );
+
+  const footer = (
+    <footer className="flyout-footer" aria-label={t("PanelMenu")}>
+      <button type="button" className="footer-row" onClick={openDashboard}>
+        <span className="footer-row__left">
+          <span className="footer-row__icon"><DashboardIcon /></span>
+          <span className="footer-row__label">{t("TrayOpenDashboard")}</span>
+        </span>
+      </button>
+      <button type="button" className="footer-row" onClick={() => refresh()}>
+        <span className="footer-row__left">
+          <span className={`footer-row__icon${isRefreshing ? " is-spinning" : ""}`}><RefreshIcon /></span>
+          <span className="footer-row__label">{t("ActionRefresh")}</span>
+        </span>
+        <span className="footer-row__shortcut">Ctrl+R</span>
+      </button>
+      <button type="button" className="footer-row" onClick={openSettings}>
+        <span className="footer-row__left">
+          <span className="footer-row__icon"><GearIcon /></span>
+          <span className="footer-row__label">{t("MenuSettings")}</span>
+        </span>
+        <span className="footer-row__shortcut">Ctrl+,</span>
+      </button>
+      <button type="button" className="footer-row" onClick={quitApp}>
+        <span className="footer-row__left">
+          <span className="footer-row__icon"><PowerIcon /></span>
+          <span className="footer-row__label">{t("MenuQuit")}</span>
+        </span>
+        <span className="footer-row__shortcut">Ctrl+Q</span>
+      </button>
+    </footer>
+  );
+
   if (sorted.length === 0) {
     return (
-      <div ref={revealRef} className={revealClassName}>
-        <MenuSurface
-          variant="tray"
-          onRefresh={refresh}
-          isRefreshing={isRefreshing}
-          actions={[]}
-          footerRows={footerRows}
-        >
-          <MenuEmpty
-            isLoading={isRefreshing && !hasCachedData}
-            onSettings={openSettings}
-          />
-        </MenuSurface>
+      <div className={revealClassName}>
+        <div className="tray-panel">
+          {grid}
+          <div className="flyout-body">
+            <MenuEmpty
+              isLoading={isRefreshing && !hasCachedData}
+              onSettings={openSettings}
+            />
+          </div>
+          {footer}
+        </div>
       </div>
     );
   }
 
   return (
-    <div ref={revealRef} className={revealClassName}>
-      <MenuSurface
-        variant="tray"
-        onRefresh={refresh}
-        isRefreshing={isRefreshing}
-        actions={[]}
-        footerRows={footerRows}
-        fixedHeader={
-          <ProviderGrid
-            providers={expectsDenseOverview ? denseTrayProviders : sorted}
-            selectedProviderId={selectedProviderId}
-            display={display}
-            showProviderIcons={settings.switcherShowsIcons}
-            expanded={gridExpanded}
-            onExpandedChange={setGridExpanded}
-            onSelect={handleGridClick}
-            onReorder={handleReorder}
-            onGestureStart={handleGestureStart}
-            onGestureEnd={handleGestureEnd}
-          />
-        }
-      >
-        <div className="menu-stack">
+    <div className={revealClassName}>
+      <div className="tray-panel">
+        {grid}
+        <div className="flyout-body">
           {visibleProviders.map((p, idx) => (
             <Fragment key={p.providerId}>
-              {idx > 0 && <div className="menu-stack__sep" />}
+              {idx > 0 && <div className="provider-stack-divider" />}
               {renderProviderCard(p)}
             </Fragment>
           ))}
         </div>
-        {/* Context actions — detail mode only, matches macOS actionsSection */}
-        {selectedProviderId && (HAS_DASHBOARD.has(selectedProviderId) || HAS_STATUS_PAGE.has(selectedProviderId)) && (
-          <div className="context-actions">
-            {HAS_DASHBOARD.has(selectedProviderId) && (
-              <button
-                type="button"
-                className="context-actions__btn"
-                onClick={() => void openProviderDashboard(selectedProviderId)}
-              >
-                <span className="context-actions__icon" aria-hidden>
-                  <svg width="13" height="13" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
-                    <rect x="2" y="9" width="2.5" height="5" rx="0.6" fill="currentColor" />
-                    <rect x="6.75" y="6" width="2.5" height="8" rx="0.6" fill="currentColor" />
-                    <rect x="11.5" y="3" width="2.5" height="11" rx="0.6" fill="currentColor" />
-                  </svg>
-                </span>
-                {t("ActionUsageDashboard")}
-              </button>
-            )}
-            {HAS_STATUS_PAGE.has(selectedProviderId) && (
-              <button
-                type="button"
-                className="context-actions__btn"
-                onClick={() => void openProviderStatusPage(selectedProviderId)}
-              >
-                <span className="context-actions__icon" aria-hidden>
-                  <svg width="14" height="13" viewBox="0 0 18 14" fill="none" xmlns="http://www.w3.org/2000/svg">
-                    <path d="M1 7H4L5.5 3L8 11L10.5 5L12 7H17" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" fill="none" />
-                  </svg>
-                </span>
-                {t("ActionStatusPage")}
-              </button>
-            )}
-          </div>
-        )}
-      </MenuSurface>
+        {footer}
+      </div>
     </div>
   );
 }

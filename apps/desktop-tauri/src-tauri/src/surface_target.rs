@@ -12,6 +12,10 @@ const SETTINGS_TAB_IDS: &[&str] = &[
     "menuBar",
     "dashboard",
     "floatBar",
+    "trayPanel",
+    "taskbarStatus",
+    "appearance",
+    "privacy",
     "advanced",
     "about",
 ];
@@ -174,6 +178,12 @@ mod tests {
     #[test]
     fn supported_settings_tabs_match_shell_tabs() {
         assert!(is_supported_settings_tab("menuBar"));
+        assert!(is_supported_settings_tab("dashboard"));
+        assert!(is_supported_settings_tab("menu"));
+        assert!(is_supported_settings_tab("trayPanel"));
+        assert!(is_supported_settings_tab("taskbarStatus"));
+        assert!(is_supported_settings_tab("appearance"));
+        assert!(is_supported_settings_tab("privacy"));
         assert!(is_supported_settings_tab("about"));
         assert!(!is_supported_settings_tab("apiKeys"));
         assert!(!is_supported_settings_tab("security"));

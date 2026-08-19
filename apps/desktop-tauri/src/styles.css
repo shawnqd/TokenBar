@@ -60,16 +60,11 @@
   --icon-sidebar: 20px;
   --icon-about: 92px;
   --about-icon-radius: 16px;
-  /* Shared outer-window geometry. The tray flyout and detached Settings
-     window intentionally use one radius so their silhouettes cannot drift. */
-  /* One corner radius for every window the app draws: the tray flyout, the
-     dashboard and the Settings frame all derive from this, and the self-drawn
-     context menu uses the same 8 (`CORNER_RADIUS_DIP` in `taskbar_menu.rs`).
-     8 is also what DWM itself rounds to — `DWMWA_WINDOW_CORNER_PREFERENCE` is a
-     fixed ~8px — so a window we round ourselves and one Windows rounds for us
-     now agree. It was 24px, which read as a different design language from the
-     menu sitting right next to it. */
-  --window-radius: 8px;
+  /* One outer radius for every app-owned top-level surface: tray flyout,
+     PopOut dashboard and detached Settings all derive from this token. The
+     self-drawn taskbar context menu mirrors it through `CORNER_RADIUS_DIP` in
+     `taskbar_menu.rs`. Internal controls keep their own geometry. */
+  --window-radius: 12px;
 
   /* ── General surfaces / text ───────────────────────────────────── */
   --app-bg: #1c1c1e;
@@ -5647,14 +5642,12 @@ body:has(.settings-window-frame) #root {
 }
 
 .settings-surface--full.settings-window-frame {
+  position: relative;
   width: 100%;
   height: 100%;
-  /* Transparent gutter that holds the drop shadow.
-     It must be WIDER than the shadow reaches, not equal to it: a box-shadow
-     extends |offset| + blur/2, so the old 12px gutter against a `0 4px 16px`
-     shadow left exactly 0px of headroom downward and the falloff was truncated
-     at the window edge — a hard outer ring instead of a fade. The shadow below
-     reaches 20px down and 14px sideways, so 24px clears it everywhere.
+  /* Transparent gutter that holds the drop shadow. 24px clears the
+     native-menu-style shadow everywhere (it reaches ~6px down and ~3px
+     sideways), so the falloff fades out well inside the window edge.
      Unlike the tray flyout (which is anchored to the tray and deliberately has
      no shadow at all), a Settings window floats on the desktop and needs the
      separation. */
@@ -5662,29 +5655,35 @@ body:has(.settings-window-frame) #root {
   background: transparent;
 }
 
+/* Settings drop shadow, matched to the native taskbar context menu
+   (`taskbar_menu.rs`: SHADOW_BLUR_DIP = 3, SHADOW_OFFSET_Y_DIP = 3 — a small
+   downward offset only, horizontally symmetric — strength 0.32 dark / 0.15
+   light, same 12 DIP corner radius). It lives on the frame's pseudo-element
+   because `.settings` clips its own box-shadow away via
+   `clip-path: inset(0 round …)`; the pseudo sits in the transparent gutter,
+   unclipped, so the contact edge reads like the right-click menu instead of a
+   wide halo. */
+.settings-window-frame::before {
+  content: "";
+  position: absolute;
+  inset: 24px;
+  border-radius: var(--window-radius);
+  box-shadow: 0 3px 3px rgba(0, 0, 0, 0.32);
+  pointer-events: none;
+}
+
 .settings-window-frame .settings {
   min-height: 0;
   height: 100%;
   /* Shape borrowed from `.menu-surface--tray`: `clip-path` is what actually
      rounds the corners — `border-radius` alone leaves square corners on
-     descendants that paint their own background, such as the title bar. */
+     descendants that paint their own background, such as the title bar. The
+     clip-path also clips this element's own box-shadow, so the drop shadow is
+     drawn by `.settings-window-frame::before` instead. */
   border: 1px solid rgba(255, 255, 255, 0.14);
   border-radius: var(--window-radius);
   clip-path: inset(0 round var(--window-radius));
   background: var(--app-bg);
-  /* The shadow must fit inside the 12px transparent gutter above, because the
-     WebView has no canvas beyond it — anything wider is cut off by the window
-     edge and reads as a straight-edged rectangle, which is exactly the "square
-     shadow" this frame is supposed to avoid.
-     A box-shadow extends |offset| + blur/2 past the box: the previous
-     `0 8px 24px` needed 20px below and got 12px. `0 4px 16px` needs 12px below,
-     4px above and 8px at the sides, so it fades out completely inside the
-     gutter. */
-  /* Reaches 6 + 28/2 = 20px down and 14px sideways — inside the 24px gutter
-     with room to spare, so it fades out completely instead of being cut. */
-  box-shadow:
-    0 6px 28px rgba(0, 0, 0, 0.34),
-    0 1px 3px rgba(0, 0, 0, 0.22);
   overflow: hidden;
 }
 
@@ -5715,9 +5714,10 @@ body:has(.settings-window-frame) #root {
 
 [data-theme="light"] .settings-window-frame .settings {
   border-color: rgba(0, 0, 0, 0.14);
-  box-shadow:
-    0 6px 28px rgba(0, 0, 0, 0.16),
-    0 1px 3px rgba(0, 0, 0, 0.10);
+}
+
+[data-theme="light"] .settings-window-frame::before {
+  box-shadow: 0 3px 3px rgba(0, 0, 0, 0.15);
 }
 
 /* Detached Settings lives inside `.settings-window-frame` with a 24px gutter.
@@ -7561,11 +7561,6 @@ body:has(.tray-panel-reveal) #root {
     opacity 112.5ms linear;
 }
 
-.tray-panel-reveal--ready {
-  opacity: 1;
-  transform: translateY(0);
-}
-
 /* The flyout WebView is retained between opens. Park it while hidden, then
    replay the two native-menu tracks on each reveal: movement follows the
    ease-out cubic and alpha reaches 100% after 1.6x progress. */
@@ -7631,6 +7626,8 @@ body:has(.tray-panel-reveal) #root {
 
   .tray-panel-reveal--opening {
     animation: none;
+    opacity: 1;
+    transform: translateY(0);
   }
 
   .tray-panel-reveal--closing {

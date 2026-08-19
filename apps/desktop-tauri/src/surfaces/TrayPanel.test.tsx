@@ -4,22 +4,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const tauriMocks = vi.hoisted(() => ({
   getCachedProviders: vi.fn(),
   getOutputSpeedSnapshot: vi.fn().mockResolvedValue({
-    codex: {
-      providerId: "codex",
-      status: "recent",
-      tokensPerSecond: 24.5,
-      outputTokens: 120,
-      updatedAtMs: 1,
-      approximate: true,
-    },
-    claude: {
-      providerId: "claude",
-      status: "recent",
-      tokensPerSecond: 18.2,
-      outputTokens: 90,
-      updatedAtMs: 1,
-      approximate: true,
-    },
+    codex: { providerId: "codex", status: "recent", tokensPerSecond: 24.5, outputTokens: 120, updatedAtMs: 1, approximate: true },
+    claude: { providerId: "claude", status: "recent", tokensPerSecond: 18.2, outputTokens: 90, updatedAtMs: 1, approximate: true },
   }),
   refreshProviders: vi.fn(),
   refreshProvidersIfStale: vi.fn(),
@@ -83,8 +69,8 @@ function rateWindow(used: number) {
   return {
     usedPercent: used,
     remainingPercent: 100 - used,
-kind: null,
-        windowMinutes: null,
+    kind: null,
+    windowMinutes: null,
     resetsAt: null,
     resetDescription: null,
     isExhausted: false,
@@ -187,35 +173,26 @@ function settings(overrides: Partial<SettingsSnapshot> = {}): SettingsSnapshot {
   };
 }
 
-function bootstrap(
-  settingsOverrides: Partial<SettingsSnapshot> = {},
-  catalog: ProviderCatalogEntry[] = [],
-): BootstrapState {
-  return {
-    contractVersion: "v1",
-    providers: catalog,
-    settings: settings(settingsOverrides),
-  };
-}
-
 function renderTrayPanel(
   providers: ProviderUsageSnapshot[],
   settingsOverrides: Partial<SettingsSnapshot> = {},
   catalog: ProviderCatalogEntry[] = [],
 ) {
   const effectiveSettings = settings({
-    enabledProviders: providers.map((provider) => provider.providerId),
+    enabledProviders: providers.map((p) => p.providerId),
     ...settingsOverrides,
   });
   tauriMocks.getCachedProviders.mockResolvedValue(providers);
   tauriMocks.getSettingsSnapshot.mockResolvedValue(effectiveSettings);
   return render(
     <LocaleProvider>
-      <TrayPanel state={{
-        contractVersion: "v1",
-        providers: catalog,
-        settings: effectiveSettings,
-      }} />
+      <TrayPanel
+        state={{
+          contractVersion: "v1",
+          providers: catalog,
+          settings: effectiveSettings,
+        }}
+      />
     </LocaleProvider>,
   );
 }
@@ -240,22 +217,8 @@ describe("TrayPanel provider grid", () => {
     });
     tauriMocks.getSettingsSnapshot.mockResolvedValue(settings());
     tauriMocks.getOutputSpeedSnapshot.mockResolvedValue({
-      codex: {
-        providerId: "codex",
-        status: "recent",
-        tokensPerSecond: 24.5,
-        outputTokens: 120,
-        updatedAtMs: 1,
-        approximate: true,
-      },
-      claude: {
-        providerId: "claude",
-        status: "recent",
-        tokensPerSecond: 18.2,
-        outputTokens: 90,
-        updatedAtMs: 1,
-        approximate: true,
-      },
+      codex: { providerId: "codex", status: "recent", tokensPerSecond: 24.5, outputTokens: 120, updatedAtMs: 1, approximate: true },
+      claude: { providerId: "claude", status: "recent", tokensPerSecond: 18.2, outputTokens: 90, updatedAtMs: 1, approximate: true },
     });
     tauriMocks.updateSettings.mockResolvedValue(settings());
     tauriMocks.getUpdateState.mockResolvedValue({
@@ -287,6 +250,11 @@ describe("TrayPanel provider grid", () => {
         PanelShowAllProviders: "Show all providers",
         PanelShowFewerProviders: "Show fewer providers",
         PanelUsedSuffix: "used",
+        PanelSevenDayUsage: "Last 7 days",
+        OutputSpeedTitle: "Rate",
+        PanelApiEquivalentValue: "API value",
+        ActionUsageDashboard: "Usage dashboard",
+        ActionStatusPage: "Status page",
         ResetsInHoursMinutes: "Resets in {}h {}m",
         ResetsInDaysHours: "Resets in {}d {}h",
         TodayAt: "Today at {}",
@@ -303,48 +271,32 @@ describe("TrayPanel provider grid", () => {
     );
   });
   afterEach(() => {
-    // Unmount while the Tauri bridge mocks still retain their Promise-returning
-    // implementations. Restoring first can race pending MenuCard effects in the
-    // full suite and turn getProviderChartData() into undefined during cleanup.
     cleanup();
     vi.restoreAllMocks();
   });
 
-  it("reveals regardless of the shared surface-mode snapshot (TrayPanel now runs in its own dedicated window)", async () => {
-    // TrayPanel is now hosted exclusively in the dedicated `flyout` OS
-    // window (see App.tsx's isFlyoutWindow() routing), so it must not depend
-    // on `main`'s surface-mode machine to know it's "open" — that machine
-    // can never report "trayPanel" anymore (main only holds
-    // Hidden/PopOut/Settings post-refactor). Overriding the snapshot mock to
-    // something else confirms the native-size restore + reveal gate
-    // is no longer wired to useSurfaceMode() at all.
+  it("reveals regardless of the shared surface-mode snapshot", async () => {
     tauriMocks.getCurrentSurfaceState.mockResolvedValue({
       mode: "popOut",
       target: { kind: "dashboard" },
     });
-
     const { container } = renderTrayPanel([provider("claude", "Claude", 35)]);
-
-    await waitFor(() => {
-      expect(container.querySelector(".tray-panel-reveal--ready")).not.toBeNull();
-    });
+    await waitFor(() =>
+      expect(tauriMocks.revealTrayPanelWindow).toHaveBeenCalledTimes(1),
+    );
+    expect(container.querySelector(".tray-panel-reveal--parked")).not.toBeNull();
+    act(() => emitEvent("tray-panel-revealed", undefined));
+    expect(container.querySelector(".tray-panel-reveal--opening")).not.toBeNull();
   });
 
   it("reveals before the first provider refresh completes", async () => {
-    // The native flyout starts hidden. A slow cache/network response must not
-    // leave it invisible: data is content, not the window reveal handshake.
     tauriMocks.getCachedProviders.mockReturnValue(new Promise(() => {}));
-
     const { container } = renderTrayPanel([]);
-
-    await waitFor(() => {
-      expect(container.querySelector(".tray-panel-reveal--ready")).not.toBeNull();
-    });
-    // The retained DOM is ready for the native reveal handshake. The base
-    // class must not also carry `--parked`: that selector is intentionally
-    // mutually exclusive with `--ready`, otherwise the later parked rule
-    // wins and the first show stays transparent forever.
-    expect(container.querySelector(".tray-panel-reveal--ready.tray-panel-reveal--parked")).toBeNull();
+    await waitFor(() =>
+      expect(tauriMocks.revealTrayPanelWindow).toHaveBeenCalledTimes(1),
+    );
+    expect(container.querySelector(".tray-panel-reveal--parked")).not.toBeNull();
+    expect(container.querySelector(".tray-panel-reveal--opening")).toBeNull();
   });
 
   it("does not arm the native drag guard for an ordinary provider click", async () => {
@@ -352,7 +304,6 @@ describe("TrayPanel provider grid", () => {
       provider("codex", "Codex", 35),
       provider("claude", "Claude", 20),
     ]);
-
     const claude = await waitFor(() => {
       const item = container.querySelector<HTMLButtonElement>(
         '.provider-grid__item[aria-label="Claude"]',
@@ -360,32 +311,24 @@ describe("TrayPanel provider grid", () => {
       expect(item).not.toBeNull();
       return item!;
     });
-
     fireEvent.click(claude);
-
     await waitFor(() => {
-      expect(container.querySelector(".menu-stack__item--selected")).not.toBeNull();
+      expect(container.querySelector(".tray-panel-reveal--detail")).not.toBeNull();
     });
     expect(tauriMocks.beginFlyoutGesture).not.toHaveBeenCalled();
   });
 
-  it("renders a hero quota row plus a one-line summary in minimal mode", async () => {
-    // Minimal density always renders inside the normal .menu-stack card
-    // list (MenuCard's densityMode="minimal"), not a separate flat list —
-    // only the secondary metric row is dropped, folded into the summary
-    // line instead alongside speed/pace.
+  it("renders a two-row streamlined card in minimal mode", async () => {
     const { container } = renderTrayPanel(
       [provider("claude", "Claude", 35)],
       { menuBarDisplayMode: "minimal" },
     );
-
     await waitFor(() => {
-      expect(container.querySelector(".menu-stack")).not.toBeNull();
+      expect(container.querySelector(".minimal-streamlined")).not.toBeNull();
     });
-    expect(container.querySelector(".menu-card__name")?.textContent).toBe("Claude");
-    expect(container.querySelector(".provider-quota__hero-pct")?.textContent).toBe("35%");
-    expect(container.querySelector(".menu-card__minimal-line")).not.toBeNull();
-    expect(container.querySelector(".tray-minimal-summary")).toBeNull();
+    expect(container.querySelector(".minimal-streamlined__metric")?.textContent).toBe("35%");
+    expect(container.querySelector(".minimal-streamlined__title")?.textContent).toContain("Claude");
+    expect(container.querySelector(".card-header")).toBeNull();
   });
 
   it("shows the balance amount instead of a meaningless 0% for balance-only providers in minimal mode", async () => {
@@ -397,23 +340,19 @@ describe("TrayPanel provider grid", () => {
       },
     };
     const { container } = renderTrayPanel([deepseek], { menuBarDisplayMode: "minimal" });
-
     await waitFor(() => {
-      expect(container.querySelector(".provider-balance__amount")).not.toBeNull();
+      expect(container.querySelector(".minimal-streamlined")).not.toBeNull();
     });
-    expect(container.querySelector(".provider-balance__amount")?.textContent).toBe("¥38.81");
-    expect(container.querySelector(".provider-quota__hero-pct")).toBeNull();
+    expect(container.querySelector(".minimal-streamlined__metric")?.textContent).toBe("¥38.81");
+    expect(container.querySelector(".quota-row__hero-pct")).toBeNull();
   });
 
   it("dismisses the tray panel on unmodified Escape", async () => {
     const { container } = renderTrayPanel([provider("claude", "Claude", 35)]);
-
     await waitFor(() => {
-      expect(container.querySelector(".tray-panel-reveal--ready")).not.toBeNull();
+      expect(container.querySelector(".tray-panel-reveal--native-size")).not.toBeNull();
     });
-
     fireEvent.keyDown(window, { key: "Escape" });
-
     await waitFor(() => {
       expect(tauriMocks.dismissTrayPanel).toHaveBeenCalledTimes(1);
     });
@@ -421,29 +360,23 @@ describe("TrayPanel provider grid", () => {
 
   it("does not dismiss the tray panel on modified Escape", async () => {
     const { container } = renderTrayPanel([provider("claude", "Claude", 35)]);
-
     await waitFor(() => {
-      expect(container.querySelector(".tray-panel-reveal--ready")).not.toBeNull();
+      expect(container.querySelector(".tray-panel-reveal--native-size")).not.toBeNull();
     });
-
     fireEvent.keyDown(window, { key: "Escape", ctrlKey: true });
     fireEvent.keyDown(window, { key: "Escape", shiftKey: true });
     fireEvent.keyDown(window, { key: "Escape", altKey: true });
     fireEvent.keyDown(window, { key: "Escape", metaKey: true });
-
     expect(tauriMocks.dismissTrayPanel).not.toHaveBeenCalled();
   });
 
   it("keeps the existing Ctrl+R tray shortcut", async () => {
     const { container } = renderTrayPanel([provider("claude", "Claude", 35)]);
-
     await waitFor(() => {
-      expect(container.querySelector(".tray-panel-reveal--ready")).not.toBeNull();
+      expect(container.querySelector(".tray-panel-reveal--native-size")).not.toBeNull();
     });
     tauriMocks.refreshProviders.mockClear();
-
     fireEvent.keyDown(window, { key: "r", ctrlKey: true });
-
     await waitFor(() => {
       expect(tauriMocks.refreshProviders).toHaveBeenCalledTimes(1);
     });
@@ -461,8 +394,7 @@ describe("TrayPanel provider grid", () => {
           PanelSevenDayUsage: "過去7日間",
           PanelThirtyDayUsage: "過去30日間",
           PanelApiEquivalentValue: "API換算額",
-          PanelTokenUnit: "Token",
-          PanelLocalEstimateShort: "ローカルログによる参考値",
+          OutputSpeedTitle: "出力速度",
           PanelTopModelPrefix: "トップモデル",
           UpdatedDaysAgo: "{}日前",
         },
@@ -487,9 +419,7 @@ describe("TrayPanel provider grid", () => {
         estimateNote: "Estimated from local logs",
       },
     });
-
     const { container } = renderTrayPanel([provider("codex", "Codex", 35)]);
-
     await waitFor(() => {
       expect(
         container.querySelector('.provider-grid__item[aria-label="すべてのプロバイダー"]'),
@@ -501,15 +431,8 @@ describe("TrayPanel provider grid", () => {
     expect(screen.getByText("終了")).toBeInTheDocument();
     expect(await screen.findByText("過去7日間")).toBeInTheDocument();
     expect(screen.queryByText("過去30日間")).not.toBeInTheDocument();
-    expect(container.querySelector(".menu-card__subtitle")?.textContent).toContain("日前");
+    expect(container.querySelector(".card-header__updated")?.textContent).toContain("日前");
     expect(screen.getByText("1,200")).toBeInTheDocument();
-    // The tray density card prints the count without a "Token" unit word, as
-    // the reference card does (design/floatbar-reference.html shows
-    // "921,605  ≈92.2万"). The legacy Settings/PopOut card still labels it.
-    expect(screen.queryByText("Token")).not.toBeInTheDocument();
-    expect(screen.getByText("トップモデル: gpt-5.5")).toBeInTheDocument();
-    // The local-estimate note line was removed from the token usage block.
-    expect(screen.queryByText("ローカルログによる参考値")).not.toBeInTheDocument();
   });
 
   it("localizes the expanded dense grid collapse label in Japanese", async () => {
@@ -527,19 +450,15 @@ describe("TrayPanel provider grid", () => {
     const providers = TEST_PROVIDER_CATALOG.map(([id, displayName], index) =>
       provider(id, displayName, (index * 7) % 100),
     );
-
     const { container } = renderTrayPanel(providers);
-
     await waitFor(() => {
       expect(container.querySelector(".provider-grid--compact")).not.toBeNull();
     });
-
     fireEvent.click(
       container.querySelector<HTMLButtonElement>(
         '.provider-grid__item--more[aria-label="すべてのプロバイダーを表示"]',
       )!,
     );
-
     expect(await screen.findByText("表示を減らす")).toBeInTheDocument();
   });
 
@@ -550,33 +469,27 @@ describe("TrayPanel provider grid", () => {
     [6, false],
     [12, false],
   ])("uses expected density for %i providers plus overview", async (providerCount, shouldBeSparse) => {
-      const providers = [
-        provider("codex", "Codex"),
-        provider("claude", "Claude"),
-        provider("copilot", "GitHub Copilot"),
-        provider("cursor", "Cursor"),
-        provider("gemini", "Gemini"),
-        provider("kiro", "Kiro"),
-        provider("zai", "z.ai"),
-        provider("minimax", "MiniMax"),
-        provider("vertexai", "Vertex AI"),
-        provider("augment", "Augment"),
-        provider("opencode", "OpenCode"),
-        provider("kimi", "Kimi"),
-      ].slice(0, providerCount);
-
-      const { container } = renderTrayPanel(providers);
-
-      await waitFor(() => {
-        expect(container.querySelector(".provider-grid")).not.toBeNull();
-      });
-
-      const grid = container.querySelector(".provider-grid");
-      expect(grid?.classList.contains("provider-grid--sparse")).toBe(
-        shouldBeSparse,
-      );
-    },
-  );
+    const all = [
+      provider("codex", "Codex"),
+      provider("claude", "Claude"),
+      provider("copilot", "GitHub Copilot"),
+      provider("cursor", "Cursor"),
+      provider("gemini", "Gemini"),
+      provider("kiro", "Kiro"),
+      provider("zai", "z.ai"),
+      provider("minimax", "MiniMax"),
+      provider("vertexai", "Vertex AI"),
+      provider("augment", "Augment"),
+      provider("opencode", "OpenCode"),
+      provider("kimi", "Kimi"),
+    ];
+    const { container } = renderTrayPanel(all.slice(0, providerCount));
+    await waitFor(() => {
+      expect(container.querySelector(".provider-grid")).not.toBeNull();
+    });
+    const grid = container.querySelector(".provider-grid");
+    expect(grid?.classList.contains("provider-grid--sparse")).toBe(shouldBeSparse);
+  });
 
   it("only requests chart data for providers that can render charts", async () => {
     renderTrayPanel([
@@ -586,11 +499,9 @@ describe("TrayPanel provider grid", () => {
       provider("cursor", "Cursor"),
       provider("deepseek", "DeepSeek"),
     ]);
-
     await waitFor(() => {
       expect(tauriMocks.getProviderChartData).toHaveBeenCalledTimes(2);
     });
-
     expect(tauriMocks.getProviderChartData).toHaveBeenCalledWith("codex", undefined);
     expect(tauriMocks.getProviderChartData).toHaveBeenCalledWith("claude", undefined);
   });
@@ -610,17 +521,14 @@ describe("TrayPanel provider grid", () => {
       provider("factory", "Factory", 30),
       { ...provider("claude", "Claude", 40), error: "Claude sign-in missing" },
     ];
-
     const { container } = renderTrayPanel(
       providers,
       { enabledProviders: catalog.map((entry) => entry.id) },
       catalog,
     );
-
     await waitFor(() => {
       expect(container.querySelectorAll(".provider-grid__item")).toHaveLength(6);
     });
-
     const labels = Array.from(container.querySelectorAll(".provider-grid__item"))
       .map((node) => node.getAttribute("aria-label"));
     expect(labels).toEqual([
@@ -631,11 +539,14 @@ describe("TrayPanel provider grid", () => {
       "Factory",
       "Gemini",
     ]);
-    expect(
-      Array.from(container.querySelectorAll(".menu-card__name")).map(
-        (node) => node.textContent,
-      ),
-    ).toEqual(["Codex", "Claude", "Cursor", "Factory", "Gemini"]);
+    const names = Array.from(container.querySelectorAll(".tray-card .card-header__name"));
+    expect(names.map((node) => node.textContent)).toEqual([
+      "Codex",
+      "Claude",
+      "Cursor",
+      "Factory",
+      "Gemini",
+    ]);
   });
 
   it("keeps vertically stacked cards while native sizing owns the panel width", async () => {
@@ -645,69 +556,44 @@ describe("TrayPanel provider grid", () => {
       provider("antigravity", "Antigravity"),
       provider("copilot", "GitHub Copilot"),
     ];
-
     const { container } = renderTrayPanel(providers, {
       enabledProviders: providers.map((snapshot) => snapshot.providerId),
     });
-
     await waitFor(() => {
       expect(container.querySelector(".tray-panel-reveal--native-size")).not.toBeNull();
     });
-
-    // The frontend must not resize the native flyout. Its default/remembered
-    // dimensions come from the Rust window builder so a user drag persists.
     expect(windowMocks.PhysicalSize).not.toHaveBeenCalled();
     expect(
-      Array.from(container.querySelectorAll(".menu-stack__item")).map((item) => item.id),
-    ).toEqual([
-      "card-codex",
-      "card-claude",
-      "card-antigravity",
-      "card-copilot",
-    ]);
-    expect(container.querySelector(".menu-stack__column")).toBeNull();
-    expect(container.querySelectorAll(".menu-stack__sep")).toHaveLength(3);
+      Array.from(container.querySelectorAll(".tray-card")).map((item) => item.id),
+    ).toEqual(["card-codex", "card-claude", "card-antigravity", "card-copilot"]);
+    expect(container.querySelectorAll(".provider-stack-divider")).toHaveLength(3);
   });
 
   it("collapses and expands the full provider catalog in the dense tray grid", async () => {
     const providers = TEST_PROVIDER_CATALOG.map(([id, displayName], index) =>
       provider(id, displayName, (index * 7) % 100),
     );
-
     const { container } = renderTrayPanel(providers);
-
     await waitFor(() => {
-      expect(container.querySelectorAll(".provider-grid__item")).toHaveLength(
-        20,
-      );
+      expect(container.querySelectorAll(".provider-grid__item")).toHaveLength(20);
     });
-
     const grid = container.querySelector(".provider-grid");
     expect(grid?.classList.contains("provider-grid--sparse")).toBe(false);
     expect(grid?.classList.contains("provider-grid--compact")).toBe(true);
     expect(grid?.getAttribute("data-expanded")).toBe("false");
-    expect(grid?.getAttribute("data-provider-count")).toBe(
-      String(providers.length + 1),
-    );
-    expect(container.querySelectorAll(".menu-stack__item")).toHaveLength(4);
-
+    expect(grid?.getAttribute("data-provider-count")).toBe(String(providers.length + 1));
+    expect(container.querySelectorAll(".tray-card")).toHaveLength(4);
     const expand = container.querySelector<HTMLButtonElement>(
       '.provider-grid__item--more[aria-label="Show all providers"]',
     );
     expect(expand).not.toBeNull();
     expect(expand?.textContent).toContain(`+${providers.length - 18}`);
-
     fireEvent.click(expand!);
-
     await waitFor(() => {
-      expect(container.querySelectorAll(".provider-grid__item")).toHaveLength(
-        providers.length + 2,
-      );
+      expect(container.querySelectorAll(".provider-grid__item")).toHaveLength(providers.length + 2);
     });
     expect(grid?.getAttribute("data-expanded")).toBe("true");
-    expect(container.querySelectorAll(".menu-stack__item")).toHaveLength(
-      providers.length,
-    );
+    expect(container.querySelectorAll(".tray-card")).toHaveLength(providers.length);
     for (const [id, displayName] of TEST_PROVIDER_CATALOG) {
       expect(
         container.querySelector(`.provider-grid__item[aria-label="${displayName}"]`),
@@ -720,41 +606,26 @@ describe("TrayPanel provider grid", () => {
     const providers = TEST_PROVIDER_CATALOG.slice(0, 36).map(
       ([id, displayName], index) => provider(id, displayName, (index * 7) % 100),
     );
-
     const { container } = renderTrayPanel(providers);
-
     await waitFor(() => {
       expect(container.querySelector(".provider-grid--compact")).not.toBeNull();
     });
-
     const expand = container.querySelector<HTMLButtonElement>(
       '.provider-grid__item--more[aria-label="Show all providers"]',
     );
     expect(expand).not.toBeNull();
-
     fireEvent.click(expand!);
-
     await waitFor(() => {
       expect(
         container.querySelector('.provider-grid__item[aria-label="Copilot"]'),
       ).not.toBeNull();
     });
-
-    const copilot = container.querySelector(
-      '.provider-grid__item[aria-label="Copilot"]',
-    );
+    const copilot = container.querySelector('.provider-grid__item[aria-label="Copilot"]');
     expect(copilot).not.toBeNull();
     expect(copilot?.getAttribute("aria-label")).toBe("Copilot");
-    expect(copilot?.querySelector(".provider-grid__label")?.textContent).toBe(
-      "Copi",
-    );
+    expect(copilot?.querySelector(".provider-grid__label")?.textContent).toBe("Copi");
   });
 
-  /**
-   * The switcher grid no longer paints a per-icon quota strip. Cards still
-   * honour dashboardShowAsUsed; that is asserted on the card surface, not
-   * under each icon.
-   */
   it("draws no per-icon quota track in the provider switcher", async () => {
     const informational = provider("sub2api", "Sub2API", 0);
     informational.primary = {
@@ -762,19 +633,13 @@ describe("TrayPanel provider grid", () => {
       isInformational: true,
       resetDescription: "Subscription active",
     };
-    const quota = provider("claude", "Claude", 35);
-
-    const { container } = renderTrayPanel([quota, informational], {
+    const { container } = renderTrayPanel([provider("claude", "Claude", 35), informational], {
       dashboardShowAsUsed: true,
     });
-
     await waitFor(() => {
       expect(container.querySelector(".provider-grid")).not.toBeNull();
     });
-
-    expect(
-      container.querySelectorAll(".provider-grid__weekly-track").length,
-    ).toBe(0);
+    expect(container.querySelectorAll(".provider-grid__weekly-track").length).toBe(0);
   });
 
   it("hides provider grid icons when the display setting is disabled", async () => {
@@ -782,38 +647,31 @@ describe("TrayPanel provider grid", () => {
       [provider("codex", "Codex"), provider("claude", "Claude")],
       { switcherShowsIcons: false },
     );
-
     await waitFor(() => {
       expect(container.querySelector(".provider-grid")).not.toBeNull();
     });
-
     const grid = container.querySelector(".provider-grid");
     expect(grid?.getAttribute("data-show-icons")).toBe("false");
     expect(grid?.classList.contains("provider-grid--no-icons")).toBe(true);
-    expect(container.querySelector(".provider-icon")).toBeNull();
+    expect(container.querySelector(".provider-grid .provider-icon")).toBeNull();
     expect(container.querySelector(".provider-grid__icon-overview")).toBeNull();
   });
 
   it("keeps tray content unscaled while native resizing owns the window", async () => {
-    const { container } = renderTrayPanel(
-      [provider("claude", "Claude", 35)],
-      { trayScalePercent: 150 },
-    );
-
-    await waitFor(() => {
-      expect(container.querySelector(".menu-surface--tray")).not.toBeNull();
+    const { container } = renderTrayPanel([provider("claude", "Claude", 35)], {
+      trayScalePercent: 150,
     });
-
+    await waitFor(() => {
+      expect(container.querySelector(".tray-panel")).not.toBeNull();
+    });
     expect(container.querySelector(".menu-surface__footer-zoom")).toBeNull();
-    const surface = container.querySelector<HTMLElement>(".menu-surface--tray")!;
+    const surface = container.querySelector<HTMLElement>(".tray-panel")!;
     expect(surface.style.getPropertyValue("zoom")).toBe("");
   });
 
   it("opens the full dashboard from the tray and then dismisses the flyout", async () => {
     renderTrayPanel([provider("claude", "Claude", 35)]);
-
     fireEvent.click(await screen.findByText("Open Dashboard"));
-
     await waitFor(() => {
       expect(tauriMocks.setSurfaceMode).toHaveBeenCalledWith("popOut", {
         kind: "dashboard",
@@ -831,13 +689,10 @@ describe("TrayPanel provider grid", () => {
       onResized: vi.fn().mockResolvedValue(() => {}),
       innerSize: vi.fn().mockResolvedValue({ width: 328, height: 200 }),
     });
-
     const { container } = renderTrayPanel([provider("claude", "Claude", 35)]);
-
     await waitFor(() => {
-      expect(container.querySelector(".tray-panel-reveal--ready")).not.toBeNull();
+      expect(container.querySelector(".tray-panel-reveal--native-size")).not.toBeNull();
     });
-
     warn.mockRestore();
   });
 
@@ -850,22 +705,18 @@ describe("TrayPanel provider grid", () => {
       onResized: vi.fn().mockResolvedValue(() => {}),
       innerSize: vi.fn().mockResolvedValue({ width: 328, height: 200 }),
     });
-
     const { container } = renderTrayPanel([provider("claude", "Claude", 35)]);
-
     await waitFor(() => {
-      expect(container.querySelector(".tray-panel-reveal--ready")).not.toBeNull();
+      expect(container.querySelector(".tray-panel-reveal--native-size")).not.toBeNull();
     });
     setSize.mockClear();
     tauriMocks.reanchorTrayPanel.mockClear();
-
     act(() => {
       emitEvent("provider-updated", provider("claude", "Claude", 52));
     });
     await act(async () => {
       await new Promise((resolve) => setTimeout(resolve, 200));
     });
-
     expect(setSize).not.toHaveBeenCalled();
     expect(tauriMocks.reanchorTrayPanel).not.toHaveBeenCalled();
   });
@@ -874,56 +725,42 @@ describe("TrayPanel provider grid", () => {
     const denseProviders = TEST_PROVIDER_CATALOG.slice(0, 36).map(([id, displayName]) =>
       provider(id, displayName),
     );
-
     const { container } = renderTrayPanel(denseProviders, {
       enabledProviders: denseProviders.map((snapshot) => snapshot.providerId),
     });
-
     await waitFor(() => {
       expect(container.querySelector(".tray-panel-reveal--native-size")).not.toBeNull();
     });
-    const body = container.querySelector(".menu-surface__body");
-    expect(body?.querySelectorAll(".menu-stack__item").length).toBeGreaterThan(1);
-    expect(container.querySelector(".menu-surface__fixed-header .provider-grid")).not.toBeNull();
-    expect(container.querySelector(".menu-surface__footer")).not.toBeNull();
+    const body = container.querySelector(".flyout-body");
+    expect(body?.querySelectorAll(".tray-card").length).toBeGreaterThan(1);
+    expect(container.querySelector(".tray-panel .provider-grid")).not.toBeNull();
+    expect(container.querySelector(".tray-panel .flyout-footer")).not.toBeNull();
   });
 
-  it("keeps switcher and command rows outside the selected provider scroll body", async () => {
+  it("keeps the grid and footer outside the selected provider scroll body", async () => {
     const errorProvider = {
       ...provider("abacus", "Abacus AI", 0),
-      error: "Source mode `Cli` not supported for this provider",
+      error: "Source mode Cli not supported for this provider",
     };
-
     const { container } = renderTrayPanel([errorProvider]);
-
     await waitFor(() => {
-      expect(container.querySelector(".tray-panel-reveal--ready")).not.toBeNull();
+      expect(container.querySelector(".tray-panel-reveal--native-size")).not.toBeNull();
     });
     fireEvent.click(
       container.querySelector<HTMLButtonElement>(
         '.provider-grid__item[aria-label="Abacus AI"]',
       )!,
     );
-
     await waitFor(() => {
-      expect(container.querySelector(".menu-stack__item--selected")).not.toBeNull();
+      expect(container.querySelector(".tray-panel-reveal--detail")).not.toBeNull();
     });
-    const body = container.querySelector(".menu-surface__body");
-    expect(body?.querySelector(".menu-surface__fixed-header")).toBeNull();
-    expect(body?.querySelector(".menu-surface__footer")).toBeNull();
-    expect(container.querySelector(".menu-surface__fixed-header")).not.toBeNull();
-    expect(container.querySelector(".menu-surface__footer")).not.toBeNull();
+    const body = container.querySelector(".flyout-body");
+    expect(body?.querySelector(".provider-grid")).toBeNull();
+    expect(body?.querySelector(".flyout-footer")).toBeNull();
+    expect(container.querySelector(".tray-panel .provider-grid")).not.toBeNull();
+    expect(container.querySelector(".tray-panel .flyout-footer")).not.toBeNull();
   });
 
-  /**
-   * The reset-time mode toggle, end to end.
-   *
-   * `dashboardResetTimeRelative` had unit coverage on both ends — Rust proved the
-   * patch persists, `quotaDisplay.test.ts` proved the formatter branches — and
-   * nothing proved the setting actually reaches a rendered card. That is the same
-   * gap that let the taskbar entry composer ship inert, so the assertion belongs
-   * here, on a real card built from a real settings snapshot.
-   */
   describe("reset time mode", () => {
     function providerWithReset(): ProviderUsageSnapshot {
       const base = provider("claude", "Claude", 35);
@@ -931,17 +768,12 @@ describe("TrayPanel provider grid", () => {
         ...base,
         primary: {
           ...base.primary,
-kind: "session",
-                    windowMinutes: 300,
-          // Far enough out to be unambiguous, close enough that the wording is
-          // either "today" or "tomorrow" — both carry the label, which is what
-          // this asserts. Anchoring to the real clock keeps the fake-timer
-          // machinery out of an async render.
+          kind: "session",
+          windowMinutes: 300,
           resetsAt: new Date(Date.now() + 4 * 3600_000 + 33 * 60_000).toISOString(),
         },
       };
     }
-
     async function resetTextWith(relative: boolean): Promise<string> {
       const { container, unmount } = renderTrayPanel([providerWithReset()], {
         dashboardResetTimeRelative: relative,
@@ -949,18 +781,16 @@ kind: "session",
         dashboardQuotaWindows: [],
       });
       await waitFor(() => {
-        expect(container.querySelector(".provider-quota__reset")).not.toBeNull();
+        expect(container.querySelector(".quota-row__reset")).not.toBeNull();
       });
-      const text = container.querySelector(".provider-quota__reset")!.textContent ?? "";
+      const text = container.querySelector(".quota-row__reset")!.textContent ?? "";
       unmount();
       return text;
     }
-
     it("counts down while the toggle is on", async () => {
       const text = await resetTextWith(true);
       expect(text).toMatch(/^Resets in \d+h \d+m$/);
     });
-
     it("switches the same row to a labelled wall-clock time when the toggle is off", async () => {
       const text = await resetTextWith(false);
       expect(text).toMatch(/^(Today|Tomorrow) at /);

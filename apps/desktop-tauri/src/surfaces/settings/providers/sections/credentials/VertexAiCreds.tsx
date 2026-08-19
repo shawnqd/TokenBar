@@ -57,13 +57,7 @@ export function VertexAiCreds({ providerId, t }: Props) {
         title={t("CredsVertexAiLabel")}
         badge={statusLabel}
         badgeTone={status.hasCredentials ? "ok" : "unset"}
-        meta={
-          status.credentialsPath ? (
-            <span className="provider-detail-grid__mono">
-              {status.credentialsPath}
-            </span>
-          ) : null
-        }
+        meta={null}
         actions={
           <>
             {status.hasCredentials && status.credentialsPath && (

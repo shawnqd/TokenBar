@@ -48,14 +48,16 @@ export default function AboutTab({}: TabProps) {
   return (
     <section className="settings-section about-section">
       <div className="about-header">
-        <img className="about-icon" src={codexbarIcon} alt="CodexBar" />
+        <img className="about-icon" src={codexbarIcon} alt="" />
         <div className="about-title-block">
           <h2 className="about-title">{appInfo.name}</h2>
           <p className="about-version">
             {t("Version")} {appInfo.version}
-            {appInfo.buildNumber !== "dev" && ` (${appInfo.buildNumber})`}
+            {appInfo.buildNumber ? ` · ${appInfo.buildNumber}` : ""}
           </p>
-          <p className="about-tagline">{appInfo.tagline}</p>
+          {appInfo.tagline ? (
+            <p className="about-tagline">{appInfo.tagline}</p>
+          ) : null}
         </div>
       </div>
 

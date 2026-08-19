@@ -8,4 +8,10 @@ describe("provider icon registry", () => {
       expect(PROVIDER_ICON_REGISTRY[id], id).toBeDefined();
     }
   });
+
+  it("ships an SVG mark for every catalog provider", () => {
+    for (const [id] of TEST_PROVIDER_CATALOG) {
+      expect(PROVIDER_ICON_REGISTRY[id]?.svgPath, id).toBeTruthy();
+    }
+  });
 });

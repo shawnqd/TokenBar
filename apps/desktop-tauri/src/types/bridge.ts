@@ -8,6 +8,10 @@ export type SettingsTabId =
   | "dashboard"
   | "floatBar"
   | "menu"
+  | "trayPanel"
+  | "taskbarStatus"
+  | "appearance"
+  | "privacy"
   | "advanced"
   | "about";
 
@@ -115,6 +119,56 @@ export interface TaskbarPreviewLine {
   /** The provider's brand mark, or `null` when `text` carries its name. */
   glyph: string | null;
   /** The mark's colour as `#rrggbb`. Colour is what identifies the provider. */
+  color: string | null;
+  text: string;
+}
+
+/**
+ * Per-cell badge metadata the native taskbar strip reports, so the settings
+ * preview can draw the official brand SVG from the same registry the strip
+ * rasterises (`providerIcons.ts`) instead of hunting by colour.
+ */
+export interface TaskbarStripIcon {
+  providerId: string;
+  /** Registry key — matches the `ProviderIcon-*.svg` / `providerIcons.ts` entry. */
+  assetId: string;
+  /** The mark's colour as `#rrggbb`. */
+  brandColor: string;
+  /** Single-character fallback when no SVG exists; `null` on the main path. */
+  fallbackGlyph: string | null;
+}
+
+/**
+ * One cell of the taskbar strip, exactly as the native renderer is painting it.
+ *
+ * `get_taskbar_preview_lines` returns the visible 0-4 cells in user-entry order
+ * so the settings preview shows the strip verbatim and cannot drift. The cell is
+ * a brand mark + short tag + value kept as a left-packed cluster, with a
+ * lifecycle `state` that tells the preview how to treat a node that is not a
+ * simple live percentage.
+ */
+export interface TaskbarStripCell {
+  providerId: string;
+  window: TaskbarWindowKind;
+  /** Short cycle / balance label, already localised (e.g. "5h" / "周" / "余"). */
+  tag: string;
+  /** Displayable value ("82%" / "¥38" / "48.2 t/s" / "—" / reason). */
+  value: string;
+  state:
+    | "ready"
+    | "loading"
+    | "refreshing"
+    | "stale"
+    | "error"
+    | "notConfigured"
+    | "unsupported"
+    | "unknown";
+  /** Readable reason for error / unsupported / notConfigured cells. */
+  reason: string | null;
+  /** Official badge metadata, or `null` when the cell carries no icon. */
+  icon: TaskbarStripIcon | null;
+  /** Legacy fields, kept so older callers and fixtures keep compiling. */
+  glyph: string | null;
   color: string | null;
   text: string;
 }
@@ -325,6 +379,7 @@ export interface SettingsSnapshot {
   floatBarClickThrough: boolean;
   /** Empty array = show all enabled providers. */
   floatBarProviderIds: string[];
+  floatBarEntries?: TaskbarEntry[];
   /** When true, render with dark text/glass for light desktops. */
   floatBarDarkText: boolean;
   /** When true, render the next primary reset inline in each provider pill. */
@@ -353,6 +408,10 @@ export interface SettingsSnapshot {
   taskbarWidgetFontSize: number;
   taskbarWidgetWidth: number;
   taskbarWidgetTextAlign: TaskbarWidgetTextAlign;
+  taskbarWidgetIconSize?: number;
+  taskbarWidgetIconStyle?: "pure" | "badge" | "solid";
+  taskbarWidgetIconGapPx?: number;
+  taskbarWidgetValueGapPx?: number;
 
   // ── Per-component quota presentation ───────────────────────────────
   //
@@ -440,6 +499,7 @@ export interface SettingsUpdate {
   floatBarStyle?: FloatBarStyle;
   floatBarClickThrough?: boolean;
   floatBarProviderIds?: string[];
+  floatBarEntries?: TaskbarEntry[];
   floatBarDarkText?: boolean;
   floatBarShowResetInline?: boolean;
   floatBarResetWindows?: FloatBarResetWindow[];
@@ -456,6 +516,10 @@ export interface SettingsUpdate {
   taskbarWidgetFontSize?: number;
   taskbarWidgetWidth?: number;
   taskbarWidgetTextAlign?: TaskbarWidgetTextAlign;
+  taskbarWidgetIconSize?: number;
+  taskbarWidgetIconStyle?: "pure" | "badge" | "solid";
+  taskbarWidgetIconGapPx?: number;
+  taskbarWidgetValueGapPx?: number;
   floatBarShowAsUsed?: boolean;
   floatBarResetTimeRelative?: boolean;
   dashboardShowAsUsed?: boolean;

@@ -15,20 +15,21 @@ use codexbar::settings::{ApiKeys, Language, ManualCookies, Settings};
 
 #[test]
 fn validate_surface_target_accepts_matching_target() {
-    let target = validate_surface_target(
+    let target = validate_surface_target(SurfaceMode::PopOut, SurfaceTarget::Dashboard).unwrap();
+    assert_eq!(target, SurfaceTarget::Dashboard);
+}
+
+#[test]
+fn validate_surface_target_rejects_settings_mode() {
+    let error = validate_surface_target(
         SurfaceMode::Settings,
         SurfaceTarget::Settings {
-            tab: "apiKeys".into(),
+            tab: "general".into(),
         },
     )
-    .unwrap();
+    .unwrap_err();
 
-    assert_eq!(
-        target,
-        SurfaceTarget::Settings {
-            tab: "apiKeys".into()
-        }
-    );
+    assert!(error.contains("open_settings_window"));
 }
 
 #[test]

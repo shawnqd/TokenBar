@@ -4,6 +4,25 @@ import { describe, expect, it, vi } from "vitest";
 vi.mock("../../../hooks/useLocale", () => ({
   useLocale: () => ({ t: (key: string) => key, language: "english" }),
 }));
+vi.mock("../../../hooks/useProviders", () => ({
+  useProviders: () => ({
+    providers: [],
+    isRefreshing: false,
+    refresh: () => {},
+    lastRefresh: null,
+    hasCachedData: false,
+    hasLoadedCache: true,
+  }),
+}));
+vi.mock("../../../hooks/useOutputSpeedSnapshot", () => ({
+  useOutputSpeedSnapshot: () => null,
+}));
+vi.mock("../../../lib/tauri", () => ({
+  getProviderChartData: vi.fn().mockResolvedValue(null),
+}));
+vi.mock("@tauri-apps/api/event", () => ({
+  listen: vi.fn().mockResolvedValue(() => {}),
+}));
 
 import DashboardTab from "./DashboardTab";
 import type { SettingsSnapshot } from "../../../types/bridge";
@@ -23,7 +42,7 @@ const baseSettings = {
 } as unknown as SettingsSnapshot;
 
 describe("DashboardTab", () => {
-  it("does not offer a window-scale control", () => {
+  it("follows the HTML tray page: content + tray-grid groups and a live preview", () => {
     render(
       <DashboardTab
         settings={baseSettings}
@@ -31,7 +50,10 @@ describe("DashboardTab", () => {
         saving={false}
       />,
     );
-    expect(screen.queryByRole("slider")).not.toBeInTheDocument();
     expect(screen.queryByText("WindowScaleLabel")).not.toBeInTheDocument();
+    expect(screen.getByText("卡片内容")).toBeInTheDocument();
+    expect(screen.getByText("通知区与网格")).toBeInTheDocument();
+    expect(screen.getByText("PanelZoom")).toBeInTheDocument();
+    expect(screen.getByLabelText("实时预览")).toBeInTheDocument();
   });
 });

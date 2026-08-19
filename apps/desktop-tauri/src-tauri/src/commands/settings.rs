@@ -48,6 +48,7 @@ pub struct SettingsUpdate {
     pub float_bar_style: Option<String>,
     pub float_bar_click_through: Option<bool>,
     pub float_bar_provider_ids: Option<Vec<String>>,
+    pub float_bar_entries: Option<Vec<TaskbarEntryBridge>>,
     pub float_bar_dark_text: Option<bool>,
     pub float_bar_show_reset_inline: Option<bool>,
     pub float_bar_reset_windows: Option<Vec<String>>,
@@ -66,6 +67,10 @@ pub struct SettingsUpdate {
     pub taskbar_widget_font_size: Option<u8>,
     pub taskbar_widget_width: Option<u16>,
     pub taskbar_widget_text_align: Option<String>,
+    pub taskbar_widget_icon_size: Option<u8>,
+    pub taskbar_widget_icon_style: Option<String>,
+    pub taskbar_widget_icon_gap_px: Option<u8>,
+    pub taskbar_widget_value_gap_px: Option<u8>,
     // Per-component quota presentation. Each surface owns its own pair; the
     // legacy `show_as_used` / `reset_time_relative` above are migration-only.
     pub float_bar_show_as_used: Option<bool>,
@@ -91,6 +96,7 @@ impl SettingsUpdate {
             || self.critical_usage_threshold.is_some()
             || self.float_bar_show_as_used.is_some()
             || self.float_bar_reset_time_relative.is_some()
+            || self.float_bar_entries.is_some()
     }
 
     fn rebuilds_tray_menu(&self) -> bool {
@@ -123,6 +129,10 @@ impl SettingsUpdate {
             || self.taskbar_widget_font_size.is_some()
             || self.taskbar_widget_width.is_some()
             || self.taskbar_widget_text_align.is_some()
+            || self.taskbar_widget_icon_size.is_some()
+            || self.taskbar_widget_icon_style.is_some()
+            || self.taskbar_widget_icon_gap_px.is_some()
+            || self.taskbar_widget_value_gap_px.is_some()
             || self.taskbar_widget_position.is_some()
             || self.taskbar_widget_enabled.is_some()
             || self.taskbar_tooltip_entries.is_some()
@@ -229,6 +239,12 @@ impl SettingsUpdate {
         }
         if let Some(v) = self.float_bar_reset_time_relative {
             settings.float_bar_reset_time_relative = v;
+        }
+        if let Some(ref entries) = self.float_bar_entries {
+            let requested: Vec<codexbar::settings::TaskbarEntry> =
+                entries.iter().map(Into::into).collect();
+            settings.float_bar_entries =
+                codexbar::settings::normalize_float_bar_entries(&requested, &settings.float_bar_provider_ids);
         }
         if let Some(v) = self.dashboard_show_as_used {
             settings.dashboard_show_as_used = v;
@@ -359,6 +375,21 @@ impl SettingsUpdate {
                 _ => "left".to_string(),
             };
         }
+        if let Some(v) = self.taskbar_widget_icon_size {
+            settings.taskbar_widget_icon_size = v.clamp(10, 18);
+        }
+        if let Some(ref v) = self.taskbar_widget_icon_style {
+            settings.taskbar_widget_icon_style = match v.as_str() {
+                "badge" | "solid" => v.clone(),
+                _ => "pure".to_string(),
+            };
+        }
+        if let Some(v) = self.taskbar_widget_icon_gap_px {
+            settings.taskbar_widget_icon_gap_px = v.min(12);
+        }
+        if let Some(v) = self.taskbar_widget_value_gap_px {
+            settings.taskbar_widget_value_gap_px = v.min(8);
+        }
         if let Some(ref entries) = self.taskbar_widget_entries {
             // Normalized here rather than trusted: the request can name an
             // unknown window or repeat a pair, and the strip must never be left
@@ -487,40 +518,85 @@ pub fn get_taskbar_window_availability(
 }
 
 /// One cell of the taskbar strip, exactly as it is being painted right now.
+/// A superset of the old `TaskbarPreviewLine` (kept the three legacy fields for
+/// compatibility) plus the split tag/value run, the render state and the icon
+/// the frontend should draw.
 #[derive(Debug, Clone, serde::Serialize)]
-pub struct TaskbarPreviewLine {
-    /// The provider's brand mark, or `None` when the text carries its name.
+#[serde(rename_all = "camelCase")]
+pub struct TaskbarStripCell {
+    /// The provider id the icon assets are registered under.
+    pub provider_id: String,
+    /// The window kind (`session|weekly|daily|monthly|balance|speed|primary`).
+    pub window: String,
+    /// The short dimmed tag (cycle count, window word, …).
+    pub tag: String,
+    /// The bold value run (54% / ¥38 / a speed / the reason text).
+    pub value: String,
+    /// Render state.
+    pub state: String,
+    /// Readable reason text when the cell could not resolve to real data.
+    pub reason: Option<String>,
+    /// The official brand SVG descriptor, or `None` for the glyph fallback.
+    pub icon: Option<TaskbarStripIcon>,
+    /// Legacy: the brand mark glyph (fallback only).
     pub glyph: Option<String>,
-    /// The mark's own colour as `#rrggbb`; the identity is in the colour, not
-    /// the shape, so the preview has to reproduce it to be worth anything.
+    /// Legacy: the mark colour as `#rrggbb`.
     pub color: Option<String>,
+    /// Legacy: the combined `tag value` text.
     pub text: String,
 }
 
+/// The official brand SVG the frontend should render for a cell.
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TaskbarStripIcon {
+    pub provider_id: String,
+    /// Registry key, matching `ProviderIcon-<id>.svg`.
+    pub asset_id: String,
+    /// Brand colour as `#rrggbb`.
+    pub brand_color: String,
+    /// The single-character fallback glyph when there is no SVG.
+    pub fallback_glyph: Option<String>,
+}
+
 /// What the strip is printing, for the settings page to show back to the user.
-///
-/// Reads the renderer's own line buffer instead of rebuilding an approximation
-/// in TypeScript. The preview used to do the latter and was wrong in two
-/// visible ways at once: it printed fixed sample percentages (a Grok entry read
-/// 18% while the strip beside it read 47%) and it printed "unsupported" for
-/// every balance entry, months after balances started rendering properly.
-///
-/// A preview that re-derives its content will drift from the thing it previews
-/// every time either side changes. Reading the buffer makes drift impossible
-/// rather than merely unlikely.
-///
-/// `update_settings` refreshes the tray presentation before it returns, so the
-/// buffer is already current when the frontend re-fetches after an edit.
+//
+// Reads the renderer's own line buffer instead of rebuilding an approximation
+// in TypeScript. Reading the buffer makes drift impossible rather than merely
+// unlikely. `update_settings` refreshes the tray presentation before it
+// returns, so the buffer is already current when the frontend re-fetches.
 #[tauri::command]
-pub fn get_taskbar_preview_lines() -> Vec<TaskbarPreviewLine> {
+pub fn get_taskbar_preview_lines() -> Vec<TaskbarStripCell> {
     #[cfg(windows)]
     {
         crate::taskbar_widget::current_entries()
             .into_iter()
-            .map(|line| TaskbarPreviewLine {
-                glyph: line.mark.map(|mark| mark.glyph.to_string()),
-                color: line.mark.map(|mark| format!("#{:06x}", mark.color_rgb)),
-                text: line.text,
+            .map(|line| {
+                let provider_id = line.icon_provider_id.unwrap_or_default();
+                let ready = line.state == "ready";
+                let reason = if ready { None } else { Some(line.value.clone()) };
+                let icon = if provider_id.is_empty() {
+                    None
+                } else {
+                    Some(TaskbarStripIcon {
+                        provider_id: provider_id.clone(),
+                        asset_id: provider_id.clone(),
+                        brand_color: format!("#{:06x}", crate::taskbar_icons::brand_color(&provider_id)),
+                        fallback_glyph: line.mark.map(|mark| mark.glyph.to_string()),
+                    })
+                };
+                TaskbarStripCell {
+                    provider_id: provider_id.clone(),
+                    window: line.window_kind.clone(),
+                    tag: line.tag.clone(),
+                    value: line.value.clone(),
+                    state: line.state.clone(),
+                    reason,
+                    icon,
+                    glyph: line.mark.map(|mark| mark.glyph.to_string()),
+                    color: line.mark.map(|mark| format!("#{:06x}", mark.color_rgb)),
+                    text: format!("{} {}", line.tag, line.value),
+                }
             })
             .collect()
     }
@@ -594,6 +670,14 @@ pub async fn update_settings(
     let taskbar_widget_width = patch.taskbar_widget_width;
     #[cfg(windows)]
     let taskbar_widget_text_align = patch.taskbar_widget_text_align.clone();
+    #[cfg(windows)]
+    let taskbar_widget_icon_size = patch.taskbar_widget_icon_size;
+    #[cfg(windows)]
+    let taskbar_widget_icon_style = patch.taskbar_widget_icon_style.clone();
+    #[cfg(windows)]
+    let taskbar_widget_icon_gap_px = patch.taskbar_widget_icon_gap_px;
+    #[cfg(windows)]
+    let taskbar_widget_value_gap_px = patch.taskbar_widget_value_gap_px;
 
     patch.validate_shortcut_change(&app, &settings.global_shortcut)?;
     let float_bar_patch = patch.apply_to(&mut settings)?;
@@ -653,6 +737,22 @@ pub async fn update_settings(
     if let Some(text_align) = taskbar_widget_text_align {
         crate::taskbar_widget::set_text_align(&text_align);
     }
+    #[cfg(windows)]
+    if let Some(icon_size) = taskbar_widget_icon_size {
+        crate::taskbar_widget::set_icon_size(icon_size);
+    }
+    #[cfg(windows)]
+    if let Some(ref icon_style) = taskbar_widget_icon_style {
+        crate::taskbar_widget::set_icon_style(icon_style);
+    }
+    #[cfg(windows)]
+    if let Some(icon_gap) = taskbar_widget_icon_gap_px {
+        crate::taskbar_widget::set_icon_gap(icon_gap);
+    }
+    #[cfg(windows)]
+    if let Some(value_gap) = taskbar_widget_value_gap_px {
+        crate::taskbar_widget::set_value_gap(value_gap);
+    }
     if rebuild_tray_menu {
         crate::tray_bridge::rebuild_tray_menu(&app);
     }
@@ -667,6 +767,14 @@ pub async fn update_settings(
 
     Ok(SettingsSnapshot::from(settings))
 }
+
+#[tauri::command]
+pub fn reset_settings() -> Result<SettingsSnapshot, String> {
+    let settings = Settings::default();
+    settings.save().map_err(|e| e.to_string())?;
+    Ok(SettingsSnapshot::from(settings))
+}
+
 
 #[cfg(test)]
 mod tests {

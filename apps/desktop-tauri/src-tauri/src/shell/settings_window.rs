@@ -22,24 +22,43 @@ pub const SETTINGS_REVEALED_EVENT: &str = "settings-window-revealed";
 // step with `.settings-surface--full.settings-window-frame`'s padding —
 // widening the gutter alone would shrink the usable area.
 const SETTINGS_GUTTER: f64 = 24.0;
-const SETTINGS_WIDTH: f64 = 912.0 + SETTINGS_GUTTER * 2.0;
-const SETTINGS_HEIGHT: f64 = 580.0 + SETTINGS_GUTTER * 2.0;
+const SETTINGS_WIDTH: f64 = 1120.0 + SETTINGS_GUTTER * 2.0;
+const SETTINGS_HEIGHT: f64 = 780.0 + SETTINGS_GUTTER * 2.0;
 // Keep the window usable when the user makes it smaller than the reference
 // design. The native frame owns this constraint; the React surface must be
 // allowed to reflow inside it instead of resetting the size on every tab.
-const SETTINGS_MIN_WIDTH: f64 = 640.0 + SETTINGS_GUTTER * 2.0;
-const SETTINGS_MIN_HEIGHT: f64 = 420.0 + SETTINGS_GUTTER * 2.0;
+const SETTINGS_MIN_WIDTH: f64 = 720.0 + SETTINGS_GUTTER * 2.0;
+const SETTINGS_MIN_HEIGHT: f64 = 480.0 + SETTINGS_GUTTER * 2.0;
+
+fn apply_design_size_if_stale(window: &tauri::WebviewWindow) {
+    let Ok(size) = window.inner_size() else {
+        return;
+    };
+    let scale = window.scale_factor().unwrap_or(1.0).max(1.0);
+    let logical_w = size.width as f64 / scale;
+    let logical_h = size.height as f64 / scale;
+    if (logical_w - SETTINGS_WIDTH).abs() < 48.0 && (logical_h - SETTINGS_HEIGHT).abs() < 48.0 {
+        return;
+    }
+    let _ = window.set_size(tauri::LogicalSize::new(SETTINGS_WIDTH, SETTINGS_HEIGHT));
+}
 
 fn remembered_size() -> (f64, f64) {
+    // HTML card is 1120×780. Old remembered sizes (912-era or a stretched
+    // proof-mode window) made the field column too narrow and wrapped labels
+    // into a vertical strip. Only keep a stored size if it is still the V5
+    // card (plus gutter), otherwise snap back to the design size.
     let stored = crate::geometry_store::load_entry(SETTINGS_LABEL);
     let width = stored
         .and_then(|geometry| geometry.width)
         .map(|value| value as f64)
+        .filter(|value| (*value - SETTINGS_WIDTH).abs() < 48.0)
         .unwrap_or(SETTINGS_WIDTH)
         .max(SETTINGS_MIN_WIDTH);
     let height = stored
         .and_then(|geometry| geometry.height)
         .map(|value| value as f64)
+        .filter(|value| (*value - SETTINGS_HEIGHT).abs() < 48.0)
         .unwrap_or(SETTINGS_HEIGHT)
         .max(SETTINGS_MIN_HEIGHT);
     (width, height)
@@ -202,8 +221,7 @@ pub fn open_or_focus(app: &tauri::AppHandle, tab: &str) -> Result<(), String> {
         // replaying a fade over a window the user is reading is noise, not
         // polish — so the visibility is sampled BEFORE `show()` makes it true.
         let was_hidden = !window.is_visible().unwrap_or(false);
-        // Keep only the usable minimum on reveal. Never call set_size here:
-        // doing so animates a Win32 resize and fights the user's chosen size.
+        apply_design_size_if_stale(&window);
         let _ = window.set_min_size(Some(tauri::LogicalSize::new(
             SETTINGS_MIN_WIDTH,
             SETTINGS_MIN_HEIGHT,

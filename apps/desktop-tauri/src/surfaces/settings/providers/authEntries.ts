@@ -16,6 +16,38 @@ export interface AuthEntryAvailability {
 
 export type PrimaryAuthKind = "bespoke" | "cookie" | "signIn" | "apiKey";
 
+/** User-visible login methods. `bespoke` is never a fourth choice. */
+export type UserAuthKind = "cookie" | "signIn" | "apiKey";
+
+export function mapBespokeToUserKind(providerId: string): UserAuthKind {
+  switch (providerId) {
+    case "claude":
+      return "cookie";
+    case "gemini":
+    case "jetbrains":
+    case "kiro":
+      return "signIn";
+    default:
+      return "apiKey";
+  }
+}
+
+export function userFacingAuthMethods(
+  methods: PrimaryAuthKind[],
+  providerId: string,
+): UserAuthKind[] {
+  const out: UserAuthKind[] = [];
+  for (const method of methods) {
+    const mapped: UserAuthKind =
+      method === "bespoke" ? mapBespokeToUserKind(providerId) : method;
+    if (!out.includes(mapped)) {
+      out.push(mapped);
+    }
+  }
+  if (out.length === 0) out.push("apiKey");
+  return out;
+}
+
 /** The subset of `ProviderAuthCapabilitiesBridge` this decision reads. */
 export interface AuthCapabilityInput {
   supportsOAuth: boolean;

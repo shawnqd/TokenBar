@@ -232,25 +232,14 @@ function SurfaceRouter({
         </Suspense>
       );
     }
+    // Settings is the detached `settings` WebView only. Putting it on `main`
+    // produced the blank title-bar window (`CodexBar 设置` with no body).
     case "settings":
-      return (
-        <Suspense fallback={<SurfaceFallback />}>
-          <SettingsLayout state={state} />
-        </Suspense>
-      );
     default:
       // Unknown or future modes must fail closed. Falling back to TrayPanel
       // here would silently recreate a second tray UI inside the main window.
       return null;
   }
-}
-
-function SettingsLayout({ state }: { state: BootstrapState }) {
-  return (
-    <main className="settings-surface settings-surface--full">
-      <Settings state={state} />
-    </main>
-  );
 }
 
 function DetachedSettingsApp({ state }: { state: BootstrapState }) {

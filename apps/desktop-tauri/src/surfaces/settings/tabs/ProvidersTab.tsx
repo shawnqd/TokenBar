@@ -14,7 +14,9 @@ import {
 } from "../providers/ProvidersSidebar";
 import { ProviderDetailPane } from "../providers/ProviderDetailPane";
 import { CookieFileImport, COOKIE_IMPORT_ID } from "../providers/CookieFileImport";
-import { quotaDisplayContext } from "../../../lib/quotaDisplay";
+import { primaryQuotaState, quotaDisplayContext } from "../../../lib/quotaDisplay";
+import { getProviderBalance } from "../../../lib/providerBalance";
+import { formatRelativeUpdated } from "../../../lib/relativeTime";
 import { reorderProviders } from "../../../lib/tauri";
 import { useProviders } from "../../../hooks/useProviders";
 
@@ -201,86 +203,37 @@ function deriveProviderStatus(
  * "Not detected" / "Disabled" copy.
  */
 function providerSidebarSubtitle(
-  providerId: string,
+  _providerId: string,
   isEnabled: boolean,
   snap: ProviderUsageSnapshot | null,
   t: (key: LocaleKey) => string,
 ): string {
   if (!isEnabled) {
-    return `${t("ProviderDisabled")} — ${providerSourceHintShort(providerId, t)}`;
+    return t("ProviderDisabled");
   }
-  if (!snap) {
-    return t("ProviderUsageNotFetchedYet");
+  if (!snap || snap.error) {
+    // TODO(lane-s-i18n): 未配置
+    return "未配置";
   }
-  const source = snap.sourceLabel || providerSourceHintShort(providerId, t);
-  return source;
-}
-
-function providerSourceHintShort(
-  providerId: string,
-  t: (key: LocaleKey) => string,
-): string {
-  const id = providerId.toLowerCase();
-  switch (id) {
-    case "cursor":
-    case "factory":
-    case "droid":
-    case "kimi":
-    case "kimik2":
-    case "augment":
-    case "opencode":
-    case "amp":
-    case "ollama":
-    case "alibaba":
-    case "infini":
-    case "manus":
-    case "mimo":
-    case "commandcode":
-      return t("ProviderSourceWebShort");
-    case "mimoapi":
-      return t("ProviderSourceApiShort");
-    case "gemini":
-    case "antigravity":
-    case "jetbrains":
-      return t("ProviderSourceCliShort");
-    case "copilot":
-      return t("ProviderSourceOauthShort");
-    case "zai":
-    case "vertexai":
-    case "openrouter":
-    case "bedrock":
-    case "nanogpt":
-    case "warp":
-    case "doubao":
-    case "arkcodingplan":
-    case "arkagentplan":
-    case "crof":
-    case "stepfun":
-    case "venice":
-    case "openaiapi":
-    case "elevenlabs":
-    case "deepgram":
-    case "groq":
-    case "llmproxy":
-      return t("ProviderSourceApiShort");
-    case "kiro":
-      return t("ProviderSourceKiroEnvShort");
-    case "claude":
-    case "codex":
-    case "minimax":
-    default:
-      return t("ProviderSourceAutoShort");
-  }
+  const updatedMs = new Date(snap.updatedAt).getTime();
+  const time = Number.isFinite(updatedMs)
+    ? formatRelativeUpdated(updatedMs, t)
+    : t("UpdatedJustNow");
+  // TODO(lane-s-i18n): 已登录 · 时间
+  return `已登录 · ${time}`;
 }
 
 function providerSidebarMetric(
   snap: ProviderUsageSnapshot | null,
 ): string | undefined {
-  if (!snap) return undefined;
-  const rate = snap.primary;
-  if (!rate) return undefined;
-  if (Number.isFinite(rate.usedPercent)) {
-    return `${Math.round(Math.max(0, rate.usedPercent))}%`;
+  if (!snap?.primary) return undefined;
+  if (primaryQuotaState(snap) !== "quota") {
+    const balance = getProviderBalance(snap).balance;
+    if (balance?.kind === "balance" && !balance.unavailable) {
+      return balance.amount;
+    }
+    return undefined;
   }
-  return undefined;
+  if (!Number.isFinite(snap.primary.usedPercent)) return undefined;
+  return `${Math.round(Math.max(0, snap.primary.usedPercent))}%`;
 }

@@ -345,35 +345,58 @@ function ProviderPill({
  * refresh cycle as the rest of the app via `useProviders`, and reacts to
  * setting changes (filter list, orientation) live without a reload.
  */
-export default function FloatBar({ state }: { state: BootstrapState }) {
+export default function FloatBar({
+  state,
+  preview,
+}: {
+  state: BootstrapState;
+  /**
+   * Settings-page preview: reuse the real pills without window drag, refresh,
+   * or native resize side effects.
+   */
+  preview?: {
+    settings: SettingsSnapshot;
+    providers: ProviderUsageSnapshot[];
+  };
+}) {
   const { t } = useLocale();
-  const { providers } = useProviders({
+  const isPreview = Boolean(preview);
+  const { providers: liveProviders } = useProviders({
     refreshOnMount: false,
   });
+  const providers = preview?.providers ?? liveProviders;
   const startDrag = useCallback((event: MouseEvent<HTMLElement>) => {
-    if (event.button !== 0) return;
+    if (isPreview || event.button !== 0) return;
     void getCurrentWindow().startDragging().catch(() => {});
-  }, []);
+  }, [isPreview]);
 
   // Mark the body so our CSS can strip the dark theme background — the
   // floatbar window is meant to be fully transparent around the pills.
   useEffect(() => {
+    if (isPreview) return;
     document.body.classList.add("floatbar-window");
     return () => {
       document.body.classList.remove("floatbar-window");
     };
-  }, []);
+  }, [isPreview]);
 
   // The floatbar window is detached, so it doesn't share React state
   // with the Settings tab. Listen for the Rust-side config-changed event
   // and re-pull the snapshot when fired.
-  const [settings, setSettings] = useState<SettingsSnapshot>(state.settings);
+  const [settings, setSettings] = useState<SettingsSnapshot>(
+    preview?.settings ?? state.settings,
+  );
   const [localCosts, setLocalCosts] = useState<Record<string, FloatBarCostSummary>>({});
+
+  useEffect(() => {
+    if (preview?.settings) setSettings(preview.settings);
+  }, [preview?.settings]);
 
   // The detached floatbar should keep usage fresh, but it must not open or
   // focus any other surface. Refresh data only; provider-updated events feed
   // this window when the backend completes.
   useEffect(() => {
+    if (isPreview) return;
     const intervalMs = Math.max(60_000, settings.refreshIntervalSecs * 1000);
     const tick = () => {
       void refreshProvidersIfStale().catch(() => {});
@@ -381,23 +404,24 @@ export default function FloatBar({ state }: { state: BootstrapState }) {
     tick();
     const id = setInterval(tick, intervalMs);
     return () => clearInterval(id);
-  }, [settings.refreshIntervalSecs]);
+  }, [isPreview, settings.refreshIntervalSecs]);
 
   useEffect(() => {
+    if (isPreview) return;
     const unlisten = listen(FLOAT_BAR_CONFIG_CHANGED_EVENT, () => {
       void getSettingsSnapshot().then(setSettings).catch(() => {});
     });
     return () => {
       void unlisten.then((fn) => fn());
     };
-  }, []);
+  }, [isPreview]);
 
   // Orientation flips re-lay-out the bar without recreating the window.
   const orientation: "horizontal" | "vertical" =
     settings.floatBarOrientation === "vertical" ? "vertical" : "horizontal";
   const style = settings.floatBarStyle === "taskbar" ? "taskbar" : "floating";
   const filterIds = settings.floatBarProviderIds;
-  const scale = Math.max(0.75, Math.min(2, settings.floatBarScale / 100));
+  const scale = Math.max(0.75, Math.min(2, (settings.floatBarScale ?? 100) / 100));
   const showResetInline = settings.floatBarShowResetInline;
   // Default to the pre-setting behaviour when the key is absent, so an older
   // settings file keeps showing exactly the reset it showed yesterday.
@@ -439,6 +463,10 @@ export default function FloatBar({ state }: { state: BootstrapState }) {
   );
 
   useEffect(() => {
+    if (isPreview) {
+      setLocalCosts({});
+      return;
+    }
     let cancelled = false;
     const targets = visibleCostTargets;
 
@@ -479,7 +507,7 @@ export default function FloatBar({ state }: { state: BootstrapState }) {
     return () => {
       cancelled = true;
     };
-  }, [visibleCostTargets]);
+  }, [isPreview, visibleCostTargets]);
 
   const visibleCosts = visible
     .map((provider) => localCosts[providerCostKey(provider)])
@@ -491,6 +519,7 @@ export default function FloatBar({ state }: { state: BootstrapState }) {
   const lastResizeRef = useRef<{ w: number; h: number } | null>(null);
   const resizeRafRef = useRef<number | null>(null);
   const resizeToContent = useCallback(() => {
+    if (isPreview) return;
     const el = document.querySelector<HTMLElement>(".floatbar");
     if (!el) return;
     if (resizeRafRef.current !== null) {
@@ -507,7 +536,7 @@ export default function FloatBar({ state }: { state: BootstrapState }) {
       lastResizeRef.current = { w, h };
       void resizeFloatBar(w, h).catch(() => {});
     });
-  }, []);
+  }, [isPreview]);
 
   useEffect(() => {
     resizeToContent();
@@ -524,12 +553,13 @@ export default function FloatBar({ state }: { state: BootstrapState }) {
   ]);
 
   useEffect(() => {
+    if (isPreview) return;
     const el = document.querySelector<HTMLElement>(".floatbar");
     if (!el || typeof ResizeObserver === "undefined") return;
     const observer = new ResizeObserver(resizeToContent);
     observer.observe(el);
     return () => observer.disconnect();
-  }, [resizeToContent]);
+  }, [isPreview, resizeToContent]);
 
   useEffect(
     () => () => {
@@ -540,7 +570,10 @@ export default function FloatBar({ state }: { state: BootstrapState }) {
     [],
   );
 
-  const opacityFraction = Math.max(0.3, Math.min(1, settings.floatBarOpacity / 100));
+  const opacityFraction = Math.max(
+    0.3,
+    Math.min(1, (Number.isFinite(settings.floatBarOpacity) ? settings.floatBarOpacity : 100) / 100),
+  );
 
   return (
     <div

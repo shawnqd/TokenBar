@@ -238,6 +238,18 @@ pub fn activate(app: &AppHandle) {
         return;
     }
 
+    // Settings is a dedicated WebView, same as the flyout. Driving `main` into
+    // SurfaceMode::Settings paints the empty title-bar-only chrome the user
+    // sees as a blank settings page.
+    if target == SurfaceMode::Settings {
+        let tab = config.settings_tab.as_deref().unwrap_or("general");
+        match shell::settings_window::open_or_focus(app, tab) {
+            Ok(()) => tracing::info!("proof-harness: settings open succeeded"),
+            Err(err) => tracing::error!("proof-harness: settings open FAILED: {err}"),
+        }
+        return;
+    }
+
     match shell::transition_to_target(app, target, config.surface_target(), position) {
         Ok(mode) => tracing::info!("proof-harness: transition succeeded → {mode:?}"),
         Err(err) => tracing::error!("proof-harness: transition FAILED: {err}"),
@@ -460,18 +472,7 @@ fn clear_menu_snapshot() {
 }
 
 fn transition_about_path(app: &AppHandle) -> Result<(), String> {
-    let _suppression = suppress_surface_transition_sync();
-    persist_about_path_snapshot(
-        shell::transition_to_target(
-            app,
-            SurfaceMode::Settings,
-            SurfaceTarget::Settings {
-                tab: "about".into(),
-            },
-            None,
-        )
-        .map(|_| ()),
-    )
+    persist_about_path_snapshot(shell::settings_window::open_or_focus(app, "about"))
 }
 
 fn persist_about_path_snapshot(result: Result<(), String>) -> Result<(), String> {

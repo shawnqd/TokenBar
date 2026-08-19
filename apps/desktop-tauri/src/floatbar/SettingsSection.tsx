@@ -1,10 +1,9 @@
 import { useCallback, useEffect, useState } from "react";
-import { Field, Select, Toggle } from "../components/FormControls";
+import { Field, Toggle } from "../components/FormControls";
 import { useLocale } from "../hooks/useLocale";
+import BinaryChoiceField from "../surfaces/settings/BinaryChoiceField";
 import type {
-  FloatBarOrientation,
   FloatBarResetWindow,
-  FloatBarStyle,
   SettingsSnapshot,
   SettingsUpdate,
 } from "../types/bridge";
@@ -77,7 +76,9 @@ export default function FloatBarSettingsSection({ settings, saving, set }: Props
 
   return (
     <section className="settings-section">
-      <h3 className="settings-section__title">{t("FloatBarSectionTitle")}</h3>
+      <div className="settings-section-heading">
+        <h3 className="settings-section__title">窗口</h3>
+      </div>
       <div className="settings-section__group">
         <Field
           label={t("FloatBarShowLabel")}
@@ -89,34 +90,28 @@ export default function FloatBarSettingsSection({ settings, saving, set }: Props
             onChange={(v) => set({ floatBarEnabled: v })}
           />
         </Field>
-        <Field
+        <BinaryChoiceField
           label={t("FloatBarOrientationLabel")}
           description={t("FloatBarOrientationHelper")}
-        >
-          <Select
-            value={settings.floatBarOrientation}
-            disabled={saving || !settings.floatBarEnabled}
-            options={[
-              { value: "horizontal", label: t("FloatBarOrientationHorizontal") },
-              { value: "vertical", label: t("FloatBarOrientationVertical") },
-            ]}
-            onChange={(v) => set({ floatBarOrientation: v as FloatBarOrientation })}
-          />
-        </Field>
-        <Field
+          onLabel={t("FloatBarOrientationHorizontal")}
+          offLabel={t("FloatBarOrientationVertical")}
+          value={settings.floatBarOrientation !== "vertical"}
+          disabled={saving || !settings.floatBarEnabled}
+          onChange={(horizontal) =>
+            set({ floatBarOrientation: horizontal ? "horizontal" : "vertical" })
+          }
+        />
+        <BinaryChoiceField
           label={t("FloatBarStyleLabel")}
           description={t("FloatBarStyleHelper")}
-        >
-          <Select
-            value={settings.floatBarStyle}
-            disabled={saving || !settings.floatBarEnabled}
-            options={[
-              { value: "floating", label: t("FloatBarStyleFloating") },
-              { value: "taskbar", label: t("FloatBarStyleTaskbar") },
-            ]}
-            onChange={(v) => set({ floatBarStyle: v as FloatBarStyle })}
-          />
-        </Field>
+          onLabel={t("FloatBarStyleFloating")}
+          offLabel={t("FloatBarStyleTaskbar")}
+          value={settings.floatBarStyle !== "taskbar"}
+          disabled={saving || !settings.floatBarEnabled}
+          onChange={(floating) =>
+            set({ floatBarStyle: floating ? "floating" : "taskbar" })
+          }
+        />
         <Field
           label={`${t("FloatBarOpacityLabel")} (${opacity.draft}%)`}
           description={t("FloatBarOpacityHelper")}

@@ -912,5 +912,5 @@ fn main_surface_layout_does_not_restore_tray_panel_geometry() {
 
     let size = logical_size_from_geometry(SurfaceMode::TrayPanel, &props, Some(stored));
 
-    assert_eq!(size, (328.0, 776.0));
+    assert_eq!(size, (348.0, 796.0));
 }

@@ -210,6 +210,10 @@ pub struct Settings {
     #[serde(default)]
     pub float_bar_provider_ids: Vec<String>,
 
+    /// Ordered floating-bar entries (provider + window). Empty = all enabled.
+    #[serde(default)]
+    pub float_bar_entries: Vec<TaskbarEntry>,
+
     /// When true, the floating bar uses a dark-on-light palette so it
     /// stays legible on light desktop backgrounds. Defaults to false
     /// (light-on-dark, the original look).
@@ -312,6 +316,22 @@ pub struct Settings {
     /// Taskbar status text alignment: left, center, or right.
     #[serde(default = "default_taskbar_widget_text_align")]
     pub taskbar_widget_text_align: String,
+
+    /// Taskbar strip icon size in logical pixels (10..=18).
+    #[serde(default = "default_taskbar_widget_icon_size")]
+    pub taskbar_widget_icon_size: u8,
+
+    /// Taskbar strip icon render style: "pure", "badge", or "solid".
+    #[serde(default = "default_taskbar_widget_icon_style")]
+    pub taskbar_widget_icon_style: String,
+
+    /// Taskbar strip gap between icon and tag in logical pixels (0..=12).
+    #[serde(default = "default_taskbar_widget_icon_gap_px")]
+    pub taskbar_widget_icon_gap_px: u8,
+
+    /// Taskbar strip gap between tag and value in logical pixels (0..=8).
+    #[serde(default = "default_taskbar_widget_value_gap_px")]
+    pub taskbar_widget_value_gap_px: u8,
 
     // ── Per-component quota presentation ─────────────────────────────
     //
@@ -421,6 +441,16 @@ fn default_taskbar_widget_content() -> String {
     "usage".to_string()
 }
 
+fn default_taskbar_widget_icon_size() -> u8 {
+    14
+}
+
+fn default_taskbar_widget_icon_gap_px() -> u8 { 5 }
+fn default_taskbar_widget_value_gap_px() -> u8 { 2 }
+fn default_taskbar_widget_icon_style() -> String {
+    "pure".to_string()
+}
+
 /// One taskbar strip entry: a provider and which of its quota windows to show.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TaskbarEntry {
@@ -503,6 +533,53 @@ pub fn normalize_taskbar_entries(requested: &[TaskbarEntry]) -> Vec<TaskbarEntry
     out
 }
 
+/// Build ordered floating-bar entries from the legacy provider-id list.
+pub fn float_bar_entries_from_ids(ids: &[String]) -> Vec<TaskbarEntry> {
+    ids.iter()
+        .map(|id| TaskbarEntry {
+            provider_id: id.clone(),
+            window: "primary".to_string(),
+        })
+        .collect()
+}
+
+/// Canonicalize floating-bar entries. Empty is meaningful (all enabled), so
+/// unlike the taskbar strip we do not inject a default when nothing survives.
+/// When no explicit entries exist yet, seed from the legacy provider-id list.
+pub fn normalize_float_bar_entries(
+    requested: &[TaskbarEntry],
+    legacy_ids: &[String],
+) -> Vec<TaskbarEntry> {
+    let source = if requested.is_empty() {
+        float_bar_entries_from_ids(legacy_ids)
+    } else {
+        requested.to_vec()
+    };
+    let mut seen = HashSet::new();
+    let mut out = Vec::new();
+    for entry in source {
+        let provider = entry.provider_id.trim();
+        if provider.is_empty() {
+            continue;
+        }
+        let Some(window) = normalize_taskbar_window(&entry.window) else {
+            continue;
+        };
+        let key = (provider.to_ascii_lowercase(), window.clone());
+        if !seen.insert(key) {
+            continue;
+        }
+        out.push(TaskbarEntry {
+            provider_id: provider.to_string(),
+            window,
+        });
+        if out.len() >= TASKBAR_MAX_ENTRIES {
+            break;
+        }
+    }
+    out
+}
+
 /// Normalize the legacy dashboard quota setting for old configuration files.
 /// The dashboard no longer exposes or consumes this setting; keeping the
 /// canonical representation avoids breaking older settings migrations.
@@ -548,7 +625,7 @@ fn default_taskbar_widget_font_size() -> u8 {
 }
 
 fn default_taskbar_widget_width() -> u16 {
-    132
+    136
 }
 
 fn default_taskbar_widget_text_align() -> String {
@@ -767,6 +844,7 @@ impl Default for Settings {
             float_bar_style: default_float_bar_style(),
             float_bar_click_through: false,
             float_bar_provider_ids: Vec::new(),
+            float_bar_entries: Vec::new(),
             float_bar_dark_text: false,
             float_bar_show_reset_inline: false,
             float_bar_reset_windows: default_float_bar_reset_windows(),
@@ -781,6 +859,10 @@ impl Default for Settings {
             taskbar_widget_content: default_taskbar_widget_content(),
             taskbar_widget_entries: default_taskbar_widget_entries(),
             taskbar_widget_font_size: default_taskbar_widget_font_size(),
+            taskbar_widget_icon_size: default_taskbar_widget_icon_size(),
+            taskbar_widget_icon_style: default_taskbar_widget_icon_style(),
+            taskbar_widget_icon_gap_px: default_taskbar_widget_icon_gap_px(),
+            taskbar_widget_value_gap_px: default_taskbar_widget_value_gap_px(),
             taskbar_widget_width: default_taskbar_widget_width(),
             taskbar_widget_text_align: default_taskbar_widget_text_align(),
             float_bar_show_as_used: true,

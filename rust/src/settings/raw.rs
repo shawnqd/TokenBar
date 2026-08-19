@@ -158,6 +158,8 @@ pub(super) struct RawSettings {
     #[serde(default)]
     float_bar_provider_ids: Vec<String>,
     #[serde(default)]
+    float_bar_entries: Option<Vec<TaskbarEntry>>,
+    #[serde(default)]
     float_bar_dark_text: bool,
     #[serde(default)]
     float_bar_show_reset_inline: bool,
@@ -191,6 +193,14 @@ pub(super) struct RawSettings {
     taskbar_widget_width: u16,
     #[serde(default = "default_taskbar_widget_text_align")]
     taskbar_widget_text_align: String,
+    #[serde(default = "default_taskbar_widget_icon_size")]
+    taskbar_widget_icon_size: u8,
+    #[serde(default = "default_taskbar_widget_icon_style")]
+    taskbar_widget_icon_style: String,
+    #[serde(default = "default_taskbar_widget_icon_gap_px")]
+    taskbar_widget_icon_gap_px: u8,
+    #[serde(default = "default_taskbar_widget_value_gap_px")]
+    taskbar_widget_value_gap_px: u8,
 
     // ── Per-component quota presentation ─────────────────────────────
     //
@@ -261,6 +271,16 @@ fn default_taskbar_widget_width() -> u16 {
 
 fn default_taskbar_widget_text_align() -> String {
     "left".to_string()
+}
+
+fn default_taskbar_widget_icon_size() -> u8 {
+    14
+}
+
+fn default_taskbar_widget_icon_gap_px() -> u8 { 5 }
+fn default_taskbar_widget_value_gap_px() -> u8 { 2 }
+fn default_taskbar_widget_icon_style() -> String {
+    "pure".to_string()
 }
 
 impl Default for RawSettings {
@@ -337,6 +357,7 @@ impl Default for RawSettings {
             float_bar_style: s.float_bar_style,
             float_bar_click_through: s.float_bar_click_through,
             float_bar_provider_ids: s.float_bar_provider_ids,
+            float_bar_entries: Some(s.float_bar_entries.clone()),
             float_bar_dark_text: s.float_bar_dark_text,
             float_bar_show_reset_inline: s.float_bar_show_reset_inline,
             float_bar_reset_windows: s.float_bar_reset_windows,
@@ -355,6 +376,10 @@ impl Default for RawSettings {
             taskbar_widget_font_size: s.taskbar_widget_font_size,
             taskbar_widget_width: s.taskbar_widget_width,
             taskbar_widget_text_align: s.taskbar_widget_text_align,
+            taskbar_widget_icon_size: s.taskbar_widget_icon_size,
+            taskbar_widget_icon_style: s.taskbar_widget_icon_style.clone(),
+            taskbar_widget_icon_gap_px: s.taskbar_widget_icon_gap_px,
+            taskbar_widget_value_gap_px: s.taskbar_widget_value_gap_px,
             float_bar_show_as_used: Some(s.float_bar_show_as_used),
             float_bar_reset_time_relative: Some(s.float_bar_reset_time_relative),
             dashboard_show_as_used: Some(s.dashboard_show_as_used),
@@ -620,6 +645,10 @@ impl From<RawSettings> for Settings {
             float_bar_orientation: normalize_float_bar_orientation(&raw.float_bar_orientation),
             float_bar_style: normalize_float_bar_style(&raw.float_bar_style),
             float_bar_click_through: raw.float_bar_click_through,
+            float_bar_entries: normalize_float_bar_entries(
+                raw.float_bar_entries.as_deref().unwrap_or(&[]),
+                &raw.float_bar_provider_ids,
+            ),
             float_bar_provider_ids: raw.float_bar_provider_ids,
             float_bar_dark_text: raw.float_bar_dark_text,
             float_bar_show_reset_inline: raw.float_bar_show_reset_inline,
@@ -661,6 +690,13 @@ impl From<RawSettings> for Settings {
             taskbar_widget_text_align: match raw.taskbar_widget_text_align.as_str() {
                 "center" | "right" => raw.taskbar_widget_text_align,
                 _ => "left".to_string(),
+            },
+            taskbar_widget_icon_size: raw.taskbar_widget_icon_size.clamp(10, 18),
+            taskbar_widget_icon_gap_px: raw.taskbar_widget_icon_gap_px.min(12),
+            taskbar_widget_value_gap_px: raw.taskbar_widget_value_gap_px.min(8),
+            taskbar_widget_icon_style: match raw.taskbar_widget_icon_style.as_str() {
+                "badge" | "solid" => raw.taskbar_widget_icon_style,
+                _ => "pure".to_string(),
             },
             // One-time seeding from the legacy globals. A file written by this
             // version stores all six keys, so this only fires for older files.

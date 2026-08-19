@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useLocale } from "../../../hooks/useLocale";
 import {
   Field,
@@ -22,10 +22,11 @@ import type {
   TaskbarWindowKind,
   TaskbarWidgetPosition,
   TaskbarWidgetTextAlign,
-  TrayIconMode,
 } from "../../../types/bridge";
 import type { TabProps } from "../../Settings";
 import BinaryChoiceField from "../BinaryChoiceField";
+import PreviewFrame from "../PreviewFrame";
+import TaskbarStripPreview from "../previews/TaskbarStripPreview";
 import TaskbarEntryList from "../TaskbarEntryList";
 
 /** OpenType `wght` axis bounds. */
@@ -195,25 +196,6 @@ export default function TaskbarTab({ settings, set, saving }: TabProps) {
     };
   }, [entries, settings]);
 
-  /**
-   * Same grid geometry as `taskbar_widget::cell_rects`:
-   * - at most 2 rows × 2 columns
-   * - column-major fill (1,2 left; 3,4 right)
-   * - row count = ceil(n / columns), so a lone third entry sits in the *top*
-   *   half of the right column — not vertically centred in the full strip
-   *   (which is what a flex column with `justify-content: center` did).
-   */
-  const previewLayout = useMemo(() => {
-    const visible = previewLines.slice(0, VISIBLE_LINES);
-    const count = Math.max(visible.length, 0);
-    if (count === 0) {
-      return { columns: 1, rows: 1, cells: [] as typeof visible };
-    }
-    const columns = Math.max(1, Math.ceil(count / 2));
-    const rows = Math.max(1, Math.ceil(count / columns));
-    return { columns, rows, cells: visible };
-  }, [previewLines]);
-
   useEffect(() => {
     setFontWeightDraft(fontWeight);
   }, [fontWeight]);
@@ -225,7 +207,14 @@ export default function TaskbarTab({ settings, set, saving }: TabProps) {
     }
   }, [fontWeight, fontWeightDraft, set]);
 
+  // S14/S15 are specified but not on SettingsSnapshot / SettingsUpdate.
+  // Preview-only until those keys exist; do not invent a persisted schema.
+  const [iconSize, setIconSize] = useState(14);
+  const [iconStyle, setIconStyle] = useState<"pure" | "badge" | "solid">("pure");
+
   const resetAppearance = () => {
+    setIconSize(14);
+    setIconStyle("pure");
     set({
       taskbarWidgetFontSize: 12,
       taskbarWidgetWidth: 132,
@@ -240,66 +229,9 @@ export default function TaskbarTab({ settings, set, saving }: TabProps) {
   };
 
   return (
-    <>
-      <header className="settings-page-head">
-        <div>
-          <span className="settings-page-head__eyebrow">
-            {t("TaskbarSettingsEyebrow")}
-          </span>
-          <h2 className="settings-page-head__title">{t("TaskbarSettingsTitle")}</h2>
-          <p className="settings-page-head__description">
-            {t("TaskbarSettingsDescription")}
-          </p>
-        </div>
-        <div className="taskbar-preview" aria-label={t("TaskbarWidgetPreviewLabel")}>
-          <span className="taskbar-preview__label">{t("TaskbarWidgetPreviewLabel")}</span>
-          <div
-            className={`taskbar-preview__strip${enabled ? "" : " is-disabled"}`}
-            style={{
-              width: `${Math.max(120, Math.min(240, width))}px`,
-              fontSize: `${fontSize}px`,
-              // `font-variation-settings` drives the `wght` axis directly and is
-              // the CSS analogue of the renderer's `SetFontAxisValues`. Plain
-              // `font-weight` lets the engine round to the nearest 100, so on a
-              // variable font 9 of every 10 slider steps looked identical while
-              // dragging. Both are set: the axis for variable families, the
-              // keyword for static ones that have no axis to drive.
-              fontWeight: fontWeightDraft,
-              fontVariationSettings: `"wght" ${fontWeightDraft}`,
-              fontFamily,
-              textAlign,
-              gridTemplateColumns: `repeat(${previewLayout.columns}, minmax(0, 1fr))`,
-              gridTemplateRows: `repeat(${previewLayout.rows}, 1fr)`,
-            }}
-          >
-            {previewLayout.cells.map((line, index) => {
-              const column = Math.floor(index / previewLayout.rows) + 1;
-              const row = (index % previewLayout.rows) + 1;
-              return (
-                <span
-                  key={`${line.text}-${index}`}
-                  className="taskbar-preview__line"
-                  style={{ gridColumn: column, gridRow: row }}
-                >
-                  {line.glyph ? (
-                    // The mark is drawn in its own colour by the renderer —
-                    // shapes repeat across providers, so the colour is what
-                    // identifies one. A monochrome preview would not be one.
-                    <span
-                      className="taskbar-preview__mark"
-                      style={{ color: line.color ?? undefined }}
-                    >
-                      {line.glyph}
-                    </span>
-                  ) : null}
-                  {line.text}
-                </span>
-              );
-            })}
-          </div>
-        </div>
-      </header>
-
+    <div className="settings-surf-page">
+      <div className="settings-surf-split">
+      <div className="settings-surf-fields">
       <section className="settings-section">
         <h3 className="settings-section__title">{t("TaskbarWidgetSection")}</h3>
         <div className="settings-section__group">
@@ -491,10 +423,66 @@ export default function TaskbarTab({ settings, set, saving }: TabProps) {
               }
             />
           </Field>
+          <Field
+            label="图标尺寸"
+            description="10 到 18 像素，默认 14"
+          >
+            {/* TODO(lane-s-i18n): S14 — taskbarWidgetIconSize is not persisted. */}
+            <div className="settings-value-with-unit">
+              <NumberInput
+                value={iconSize}
+                min={10}
+                max={18}
+                step={1}
+                disabled={saving || !enabled}
+                onChange={setIconSize}
+              />
+              <span>px</span>
+            </div>
+          </Field>
+          <Field
+            label="图标渲染样式"
+            description="三种都要做进产品和预览"
+          >
+            {/* TODO(lane-s-i18n): S15 — taskbarWidgetIconStyle is not persisted. */}
+            <SegmentedControl
+              value={iconStyle}
+              disabled={saving || !enabled}
+              options={[
+                { value: "pure", label: "纯彩色图标" },
+                { value: "badge", label: "微底色胶囊" },
+                { value: "solid", label: "实色徽章" },
+              ]}
+              onChange={(value) =>
+                setIconStyle(value as "pure" | "badge" | "solid")
+              }
+            />
+          </Field>
         </div>
         <p className="settings-section__hint">{t("TaskbarWidgetSystemStyleHint")}</p>
       </section>
+      </div>
 
-    </>
+      <PreviewFrame
+        kind="taskbar"
+        label={t("TaskbarWidgetPreviewLabel")}
+        dimmed={!enabled}
+      >
+        <TaskbarStripPreview
+          lines={previewLines}
+          entries={entries}
+          enabled={enabled}
+          width={width}
+          fontSize={fontSize}
+          fontWeight={fontWeightDraft}
+          fontFamily={fontFamily}
+          textAlign={textAlign}
+          iconSize={iconSize}
+          iconStyle={iconStyle}
+          label={t("TaskbarWidgetPreviewLabel")}
+        />
+      </PreviewFrame>
+      </div>
+    </div>
   );
 }

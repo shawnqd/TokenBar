@@ -226,6 +226,14 @@ pub(crate) fn validate_surface_target(
         );
     }
 
+    if mode == SurfaceMode::Settings {
+        return Err(
+            "set_surface_mode does not support 'settings': Settings is a dedicated window \
+             now — call open_settings_window instead"
+                .into(),
+        );
+    }
+
     Ok(target)
 }
 

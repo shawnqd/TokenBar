@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useState } from "react";
 import type { LocaleKey } from "../../../i18n/keys";
 import type {
   CookieSourceOption,
@@ -12,7 +12,12 @@ import type {
   SettingsUpdate,
 } from "../../../types/bridge";
 import { SegmentedControl } from "../../../components/FormControls";
-import { resolveAuthEntries, type PrimaryAuthKind } from "./authEntries";
+import {
+  mapBespokeToUserKind,
+  resolveAuthEntries,
+  userFacingAuthMethods,
+  type UserAuthKind,
+} from "./authEntries";
 import { useLocale } from "../../../hooks/useLocale";
 import {
   getCredentialStorageStatus,
@@ -325,7 +330,24 @@ export function ProviderDetailPane({
     >
       {/* 1. Provider header — same shell whether or not a live snapshot exists */}
       {detail ? (
-        <IdentitySection provider={detail} subtitle={subtitle} t={t} />
+        <IdentitySection
+          provider={detail}
+          subtitle={subtitle}
+          t={t}
+          actions={
+            <QuickActionsSection
+              provider={detail}
+              busy={busy}
+              onRefresh={handleRefresh}
+              onSwitchAccount={handleSwitchAccount}
+              onOpenDashboard={handleOpenDashboard}
+              onOpenStatusPage={handleOpenStatusPage}
+              onCopyError={handleCopyError}
+              onBuyCredits={handleBuyCredits}
+              t={t}
+            />
+          }
+        />
       ) : showSkeleton ? (
         <ProviderHeaderSkeleton />
       ) : error ? (
@@ -341,21 +363,6 @@ export function ProviderDetailPane({
           detail={detail}
           message={detail.lastError}
           onCopy={handleCopyError}
-          t={t}
-        />
-      )}
-
-      {/* Keep provider actions visible before the long quota/credential stack. */}
-      {detail && (
-        <QuickActionsSection
-          provider={detail}
-          busy={busy}
-          onRefresh={handleRefresh}
-          onSwitchAccount={handleSwitchAccount}
-          onOpenDashboard={handleOpenDashboard}
-          onOpenStatusPage={handleOpenStatusPage}
-          onCopyError={handleCopyError}
-          onBuyCredits={handleBuyCredits}
           t={t}
         />
       )}
@@ -406,7 +413,6 @@ export function ProviderDetailPane({
           cookieDomain={cookieDomain}
           capabilities={authCapabilities}
           credentialRevision={credentialRevision}
-          hasTokenAccounts={hasTokenAccounts}
           credentialStatus={credentialStatus}
           busy={busy}
           cookieSource={detail.cookieSource}
@@ -416,6 +422,23 @@ export function ProviderDetailPane({
           onSignIn={handleSwitchAccount}
           t={t}
         />
+      )}
+
+      {detail && hasTokenAccounts && (
+        <section className="provider-detail-section">
+          <div className="provider-detail-section__header">
+            <h4>{t("SectionSavedAccounts")}</h4>
+          </div>
+          <p className="provider-detail-helper">
+            {/* TODO(lane-s-i18n): 账号卡与登录方式分开 */}
+            工作号、个人号可以都存着。上面是进门方式，这里是进门之后用哪一条。
+          </p>
+          <TokenAccountsPanel
+            key={`token-${detail.id}-${credentialRevision}`}
+            providerId={detail.id}
+            compact
+          />
+        </section>
       )}
 
       {/* 5. The provider's remaining per-provider settings: which quota metric
@@ -479,7 +502,6 @@ function AuthWorkspace({
   cookieDomain,
   capabilities,
   credentialRevision,
-  hasTokenAccounts,
   credentialStatus,
   busy,
   cookieSource,
@@ -494,7 +516,6 @@ function AuthWorkspace({
   cookieDomain: string | null;
   capabilities: ProviderAuthCapabilitiesBridge | null;
   credentialRevision: number;
-  hasTokenAccounts: boolean;
   credentialStatus: CredentialStorageStatus | null;
   busy: boolean;
   cookieSource: string | null | undefined;
@@ -561,27 +582,20 @@ function AuthWorkspace({
   // like. The zone used to render a lead card plus a collapsed "其他认证方式"
   // drawer, which implied a hierarchy that does not exist and hid a provider's
   // only real option behind a disclosure triangle.
-  const nodeFor: Record<PrimaryAuthKind, ReactNode> = {
-    bespoke: bespokeNode,
-    cookie: cookieNode,
-    signIn: signInNode,
-    apiKey: apiKeyNode,
-  };
-  const labelFor: Record<PrimaryAuthKind, LocaleKey> = {
-    bespoke: "CredentialsSectionTitle",
-    cookie: "CredentialManualCookies",
-    // Not the bare "OAuth": the entry covers a browser sign-in *and* a CLI
-    // login, and "OAuth" names a protocol rather than the thing the user does.
-    signIn: "ProviderAuthMethodSignIn",
-    apiKey: "CredentialApiKeys",
+  const userMethods = userFacingAuthMethods(methods, providerId);
+  const userPrimary: UserAuthKind =
+    primary === "bespoke" ? mapBespokeToUserKind(providerId) : primary;
+  const userLabel: Record<UserAuthKind, string> = {
+    // TODO(lane-s-i18n): 打开登录 / 网页会话 / 密钥
+    signIn: "打开登录",
+    cookie: "网页会话",
+    apiKey: "密钥",
   };
 
-  // Reset to the provider's own default when the pane switches providers —
-  // "cookie" selected on one provider means nothing on the next, and may not
-  // even be offered there.
-  const [chosen, setChosen] = useState<PrimaryAuthKind>(primary);
-  useEffect(() => setChosen(primary), [primary, providerId]);
-  const method = methods.includes(chosen) ? chosen : primary;
+  const [chosen, setChosen] = useState<UserAuthKind>(userPrimary);
+  useEffect(() => setChosen(userPrimary), [userPrimary, providerId]);
+  const method = userMethods.includes(chosen) ? chosen : userPrimary;
+  const mappedBespoke = isBespoke ? mapBespokeToUserKind(providerId) : null;
 
   return (
     <div className="provider-detail-auth-zone" data-auth-sources="true">
@@ -589,53 +603,42 @@ function AuthWorkspace({
         <h3 className="provider-detail-auth-zone__title">
           {t("ProviderAuthSourcesTitle")}
         </h3>
-        {/* Says what is true of *this* provider rather than listing every
-            method the app knows about. The old helper — "supports Cookie,
-            browser login, CLI, API Key and Token Plan; only supported ones are
-            shown" — named five things without saying which applied here, so it
-            answered nothing and still had to be read. */}
-        <p className="provider-detail-auth-zone__helper">
-          {methods.length > 1
-            ? t("ProviderAuthPickMethod")
-            : t("ProviderAuthUsingMethod").replace("{}", t(labelFor[method]))}
-        </p>
+        {userMethods.length > 1 ? (
+          <p className="provider-detail-auth-zone__helper">
+            {t("ProviderAuthPickMethod")}
+          </p>
+        ) : null}
       </div>
-      {/* One option is not a choice. A single-method provider — Codex, whose
-          only route is a browser sign-in — gets its controls directly, with no
-          control that can only be set to what it already is; the line above
-          has already named the method. */}
-      {methods.length > 1 && (
+      {userMethods.length > 1 && (
         <SegmentedControl
           value={method}
-          options={methods.map((kind) => ({
+          options={userMethods.map((kind) => ({
             value: kind,
-            label: t(labelFor[kind]),
+            label: userLabel[kind],
           }))}
-          onChange={(value) => setChosen(value as PrimaryAuthKind)}
+          onChange={(value) => setChosen(value as UserAuthKind)}
         />
       )}
-      <div className="provider-detail-auth-primary">{nodeFor[method]}</div>
-      {/* Preferred source mode (auto / web / cli / …) stays with credentials,
-          not under Display — TASK-021 item 2. Shown under the cookie method
-          because that is the only one it governs. */}
+      <div className="provider-detail-auth-primary">
+        {mappedBespoke === method
+          ? bespokeNode
+          : method === "cookie"
+            ? cookieNode
+            : method === "signIn"
+              ? signInNode
+              : apiKeyNode}
+      </div>
       {showCookieSource && method === "cookie" && (
-        <CookieSourceSection
-          providerId={providerId}
-          currentValue={cookieSource ?? null}
-          options={cookieOptions}
-          t={t}
-          onChanged={onCookieSourceChanged}
-        />
-      )}
-      {/* Below the picker, not inside it: neither is an authentication
-          *method*. Token accounts are a roster the chosen method fills, and
-          credential storage is a status readout plus the revoke action. */}
-      {hasTokenAccounts && (
-        <TokenAccountsPanel
-          key={`token-${providerId}-${credentialRevision}`}
-          providerId={providerId}
-          compact
-        />
+        <details className="provider-detail-auth-advanced">
+          <summary>{t("TabAdvanced")}</summary>
+          <CookieSourceSection
+            providerId={providerId}
+            currentValue={cookieSource ?? null}
+            options={cookieOptions}
+            t={t}
+            onChanged={onCookieSourceChanged}
+          />
+        </details>
       )}
       <CredentialStorageSection
         status={credentialStatus}

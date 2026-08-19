@@ -102,7 +102,9 @@ const SHADOW_BLUR_DIP: i32 = 3;
 /// A small downward offset only — the old shadow read as bottom-*right*
 /// because the system draws it diagonally. Horizontally this one is symmetric.
 const SHADOW_OFFSET_Y_DIP: i32 = 3;
-const CORNER_RADIUS_DIP: i32 = 8;
+/// Keep the app-owned popup silhouette aligned with `--window-radius` in the
+/// frontend. This is a DIP value and is scaled once in `Metrics::new`.
+const CORNER_RADIUS_DIP: i32 = 12;
 const ROW_HEIGHT_DIP: i32 = 30;
 const SEPARATOR_BLOCK_DIP: i32 = 7;
 /// Vertical padding inside the card, above the first row and below the last.

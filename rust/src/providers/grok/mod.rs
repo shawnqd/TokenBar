@@ -386,7 +386,25 @@ fn parse_grpc_web_response(data: &[u8]) -> Result<GrokBillingSnapshot, ProviderE
                 .then_with(|| a.order.cmp(&b.order))
         })
         .map(|field| field.value as f64)
-        .ok_or_else(|| ProviderError::Parse("Could not parse Grok billing percent".to_string()))?;
+        // A billing response without a usable used-percent (quota just
+        // refreshed, or the payload shape changed) used to fail the whole
+        // parse; the stale lastGood snapshot (often a full quota) stayed on
+        // screen together with the error. Degrade to 0.0 (0% used = full
+        // quota) and warn, keeping the diagnostic so the real response shape
+        // can be located later.
+        .unwrap_or_else(|| {
+            let ending_at_field_1 = scan
+                .fixed32
+                .iter()
+                .filter(|field| field.path.last() == Some(&1))
+                .count();
+            tracing::warn!(
+                "Grok billing has no usable used-percent (fixed32 ending at field 1, value in 0..=100); fixed32 total={} ending_at_field_1={}; treating used_percent as 0.0",
+                scan.fixed32.len(),
+                ending_at_field_1
+            );
+            0.0
+        });
 
     let resets_at = scan
         .varints
@@ -599,5 +617,101 @@ mod tests {
     fn the_slot_name_agrees_with_the_declared_length() {
         assert_eq!(GrokProvider::new().metadata.session_label, "Weekly");
         assert_eq!(CYCLE_WINDOW_MINUTES, 7 * 24 * 60);
+    }
+
+    /// Encode a protobuf varint the same way the wire scanner decodes it.
+    fn encode_varint(mut value: u64) -> Vec<u8> {
+        let mut out = Vec::new();
+        loop {
+            let mut byte = (value & 0x7f) as u8;
+            value >>= 7;
+            if value != 0 {
+                byte |= 0x80;
+            }
+            out.push(byte);
+            if value == 0 {
+                break;
+            }
+        }
+        out
+    }
+
+    /// Protobuf field key, matching `read_key` in the scanner.
+    fn field_key(field: u64, wire: u64) -> Vec<u8> {
+        encode_varint((field << 3) | wire)
+    }
+
+    /// A fixed32 field with the bit pattern `value`, little-endian.
+    fn fixed32_field(field: u64, value: u32) -> Vec<u8> {
+        let mut out = field_key(field, 5);
+        out.extend_from_slice(&value.to_le_bytes());
+        out
+    }
+
+    /// A varint field (wire type 0) with `value`.
+    fn varint_field(field: u64, value: u64) -> Vec<u8> {
+        let mut out = field_key(field, 0);
+        out.extend_from_slice(&encode_varint(value));
+        out
+    }
+
+    /// Wrap protobuf `message` bytes in one grpc-web data frame.
+    fn grpc_web_frame(message: Vec<u8>) -> Vec<u8> {
+        let mut out = Vec::with_capacity(5 + message.len());
+        out.push(0);
+        out.push((message.len() >> 24) as u8);
+        out.push((message.len() >> 16) as u8);
+        out.push((message.len() >> 8) as u8);
+        out.push(message.len() as u8);
+        out.extend_from_slice(&message);
+        out
+    }
+
+    /// A reset-timestamp varint (field 2, three days in the future).
+    fn future_reset_varint() -> Vec<u8> {
+        let ts = Utc::now().timestamp() as u64 + 3 * 24 * 60 * 60;
+        varint_field(2, ts)
+    }
+
+    /// Billing response with no usable used-percent must degrade to 0.0
+    /// instead of erroring the whole parse (the bug: quota just refreshed,
+    /// or the payload shape changed, kept the stale full lastGood snapshot).
+    #[test]
+    fn missing_percent_degrades_to_zero() {
+        let data = grpc_web_frame(future_reset_varint());
+        let snapshot = parse_grpc_web_response(&data)
+            .unwrap_or_else(|e| panic!("missing percent must not error: {e}"));
+        assert_eq!(snapshot.used_percent, 0.0);
+        assert!(snapshot.resets_at.is_some());
+    }
+
+    /// NaN, negative and >100 fixed32 percent fields are all unusable and
+    /// must also degrade to 0.0 instead of erroring.
+    #[test]
+    fn out_of_range_percent_degrades_to_zero() {
+        let bad_bits = [
+            f32::to_bits(f32::NAN),
+            f32::to_bits(-1.0),
+            f32::to_bits(101.0),
+        ];
+        for bits in bad_bits {
+            let mut message = fixed32_field(1, bits);
+            message.extend_from_slice(&future_reset_varint());
+            let data = grpc_web_frame(message);
+            let snapshot = parse_grpc_web_response(&data)
+                .unwrap_or_else(|e| panic!("out-of-range percent {bits} must not error: {e}"));
+            assert_eq!(snapshot.used_percent, 0.0);
+        }
+    }
+
+    /// A real 0% (full quota) fixed32 with a future reset parses unchanged.
+    #[test]
+    fn full_quota_parses_zero_percent_and_reset() {
+        let mut message = fixed32_field(1, f32::to_bits(0.0));
+        message.extend_from_slice(&future_reset_varint());
+        let data = grpc_web_frame(message);
+        let snapshot = parse_grpc_web_response(&data).unwrap();
+        assert_eq!(snapshot.used_percent, 0.0);
+        assert!(snapshot.resets_at.is_some());
     }
 }
