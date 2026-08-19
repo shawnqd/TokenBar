@@ -499,13 +499,17 @@ impl AntigravityProvider {
                 continue;
             }
             let Some(reset_only) = pool.iter().find(|config| {
-                let quota = config.quota_info.as_ref().unwrap();
+                let Some(quota) = config.quota_info.as_ref() else {
+                    return false;
+                };
                 quota.remaining_fraction.is_none()
                     && (quota.reset_time.is_some() || quota.reset_description.is_some())
             }) else {
                 continue;
             };
-            let quota = reset_only.quota_info.as_ref().unwrap();
+            let Some(quota) = reset_only.quota_info.as_ref() else {
+                continue;
+            };
             let named = NamedRateWindow::new(pool_id, pool_title, unavailable_window(quota))
                 .with_usage_known(false);
             snapshot = snapshot.with_named_rate_window(named);
@@ -537,7 +541,7 @@ impl AntigravityProvider {
                 continue;
             };
             let known = quota.remaining_fraction.is_some();
-            let consumed = known && quota.remaining_fraction.unwrap() < 0.999;
+            let consumed = known && quota.remaining_fraction.unwrap_or(1.0) < 0.999;
             let reset_only = !known
                 && (quota.reset_time.is_some() || quota.reset_description.is_some());
             if !consumed && !reset_only {
@@ -1046,12 +1050,18 @@ fn best_pool_representative<'a>(pool: &[&'a ModelConfig]) -> Option<&'a ModelCon
                 .is_some_and(|q| q.remaining_fraction.is_some())
         })
         .min_by(|a, b| {
-            let a_quota = a.quota_info.as_ref().unwrap();
-            let b_quota = b.quota_info.as_ref().unwrap();
-            a_quota
-                .remaining_fraction
-                .unwrap()
-                .partial_cmp(&b_quota.remaining_fraction.unwrap())
+            let a_quota = match a.quota_info.as_ref() {
+                Some(q) => q,
+                None => return std::cmp::Ordering::Equal,
+            };
+            let b_quota = match b.quota_info.as_ref() {
+                Some(q) => q,
+                None => return std::cmp::Ordering::Equal,
+            };
+            let a_frac = a_quota.remaining_fraction.unwrap_or(1.0);
+            let b_frac = b_quota.remaining_fraction.unwrap_or(1.0);
+            a_frac
+                .partial_cmp(&b_frac)
                 .unwrap_or(std::cmp::Ordering::Equal)
                 .then_with(|| reset_time_cmp(a_quota, b_quota))
                 .then_with(|| {
@@ -1076,12 +1086,18 @@ fn fallback_representative<'a>(all: &[&'a ModelConfig]) -> Option<&'a ModelConfi
                 .is_some_and(|q| q.remaining_fraction.is_some())
         })
         .min_by(|a, b| {
-            let a_quota = a.quota_info.as_ref().unwrap();
-            let b_quota = b.quota_info.as_ref().unwrap();
-            a_quota
-                .remaining_fraction
-                .unwrap()
-                .partial_cmp(&b_quota.remaining_fraction.unwrap())
+            let a_quota = match a.quota_info.as_ref() {
+                Some(q) => q,
+                None => return std::cmp::Ordering::Equal,
+            };
+            let b_quota = match b.quota_info.as_ref() {
+                Some(q) => q,
+                None => return std::cmp::Ordering::Equal,
+            };
+            let a_frac = a_quota.remaining_fraction.unwrap_or(1.0);
+            let b_frac = b_quota.remaining_fraction.unwrap_or(1.0);
+            a_frac
+                .partial_cmp(&b_frac)
                 .unwrap_or(std::cmp::Ordering::Equal)
                 .then_with(|| {
                     model_label(a)
@@ -2092,5 +2108,26 @@ mod tests {
         let error = ProviderError::NotInstalled(NOT_RUNNING_MESSAGE.to_string()).to_string();
 
         assert!(error.contains("Start Google Antigravity and sign in"));
+    }
+
+    #[test]
+    fn parse_user_status_with_none_quota_info_does_not_panic() {
+        // Configs with quota_info: None should not cause unwrap panics
+        let config_no_quota = serde_json::json!({
+            "label": "Gemini 2.5 Pro",
+            "modelId": "gemini-2.5-pro",
+        });
+        let config_with_quota = serde_json::json!({
+            "label": "Claude 3.5 Sonnet",
+            "modelId": "claude-3.5-sonnet",
+            "quotaInfo": {
+                "remainingFraction": 0.5,
+                "resetTime": "2026-08-20T00:00:00Z",
+            },
+        });
+        let resp = make_response_with_configs(vec![config_no_quota, config_with_quota]);
+        let provider = AntigravityProvider::new();
+        let result = provider.parse_user_status(resp);
+        assert!(result.is_ok(), "quota_info=None should not panic");
     }
 }

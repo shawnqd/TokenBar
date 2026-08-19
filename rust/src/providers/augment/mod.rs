@@ -375,12 +375,14 @@ fn parse_auggie_account_status(output: &str) -> Result<UsageSnapshot, ProviderEr
         }
     }
 
-    let remaining = remaining.ok_or_else(|| {
-        ProviderError::Parse("Could not extract Augment remaining credits".to_string())
-    })?;
-    let total = total.or(max_credits).ok_or_else(|| {
-        ProviderError::Parse("Could not extract Augment credit limit".to_string())
-    })?;
+    let remaining = remaining.unwrap_or_else(|| {
+        tracing::warn!("Could not extract Augment remaining credits from CLI output; using 0.0");
+        0.0
+    });
+    let total = total.or(max_credits).unwrap_or_else(|| {
+        tracing::warn!("Could not extract Augment credit limit from CLI output; using 0.0");
+        0.0
+    });
     let used = used.unwrap_or_else(|| (total - remaining).max(0.0));
     let used_percent = if total > 0.0 {
         (used / total) * 100.0
@@ -448,5 +450,12 @@ mod tests {
 
         assert!((usage.primary.used_percent - 98.79).abs() < 0.01);
         assert_eq!(usage.login_method.as_deref(), Some("450,000 credits/month"));
+    }
+
+    #[test]
+    fn parse_auggie_account_status_missing_remaining_and_total_degraded() {
+        let usage = parse_auggie_account_status("unrelated output without credit info").unwrap();
+        assert_eq!(usage.primary.used_percent, 0.0);
+        assert_eq!(usage.login_method.as_deref(), Some("Augment"));
     }
 }

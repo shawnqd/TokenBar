@@ -13,6 +13,9 @@ use crate::core::{
     ProviderMetadata, RateWindow, SourceMode, UsageSnapshot,
 };
 
+#[allow(unused_imports)]
+use tracing;
+
 const COMMAND_CODE_API_BASE: &str = "https://api.commandcode.ai";
 const COMMAND_CODE_CREDITS_PATH: &str = "/internal/billing/credits";
 const COMMAND_CODE_SUBSCRIPTIONS_PATH: &str = "/internal/billing/subscriptions";
@@ -178,11 +181,21 @@ fn result_from_payloads(
     credits_payload: &Value,
     subscription_payload: Option<&Value>,
 ) -> Result<ProviderFetchResult, ProviderError> {
-    let credits = credits_payload
-        .get("credits")
-        .ok_or_else(|| ProviderError::Parse("Command Code credits object missing".into()))?;
-    let monthly = number(credits.get("monthlyCredits"))
-        .ok_or_else(|| ProviderError::Parse("Command Code monthlyCredits missing".into()))?;
+    let credits = match credits_payload.get("credits") {
+        Some(c) => c,
+        None => {
+            tracing::warn!("Command Code credits object missing; returning empty result");
+            let empty = RateWindow::new(0.0);
+            return Ok(ProviderFetchResult::new(
+                UsageSnapshot::new(empty).with_secondary(RateWindow::new(0.0)),
+                "web",
+            ));
+        }
+    };
+    let monthly = number(credits.get("monthlyCredits")).unwrap_or_else(|| {
+        tracing::warn!("Command Code monthlyCredits missing; using 0.0");
+        0.0
+    });
     let purchased = number(credits.get("purchasedCredits")).unwrap_or(0.0);
     let premium = number(credits.get("premiumMonthlyCredits")).unwrap_or(0.0);
     let open_source = number(credits.get("opensourceMonthlyCredits")).unwrap_or(0.0);
@@ -341,5 +354,24 @@ mod tests {
         )
         .unwrap();
         assert_eq!(result.usage.primary.used_percent, 75.0);
+    }
+
+    #[test]
+    fn command_code_result_missing_credits_object_degraded() {
+        let result = result_from_payloads(&json!({}), None);
+        assert!(result.is_ok(), "missing credits object should degrade, not error");
+        let fetch_result = result.unwrap();
+        assert_eq!(fetch_result.usage.primary.used_percent, 0.0);
+    }
+
+    #[test]
+    fn command_code_result_missing_monthly_credits_degraded() {
+        let result = result_from_payloads(
+            &json!({"credits":{"purchasedCredits":2,"premiumMonthlyCredits":100}}),
+            None,
+        )
+        .unwrap();
+        // monthlyCredits defaults to 0.0, so used_percent = (100-0)/100*100 = 100%
+        assert_eq!(result.usage.primary.used_percent, 100.0);
     }
 }
