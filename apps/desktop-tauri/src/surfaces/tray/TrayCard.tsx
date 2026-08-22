@@ -116,7 +116,7 @@ function gatherWindows(
     // Date-only markers are not quota windows: OpenCode Go's "Renews" row
     // (0% used, no cycle length, only a renewal timestamp) must never render
     // as a tile with a fake bar — a real cycle always has a length to measure.
-    if (snap.windowMinutes == null && snap.usedPercent === 0) return;
+    if (snap.windowMinutes == null && snap.usedPercent === 0 && snap.resetsAt != null) return;
     windows.push({ id, label, snap, fullWidth: false });
   };
   if (!exclude.has("primary")) {
@@ -132,7 +132,7 @@ function gatherWindows(
     add("tertiary", provider.tertiary, quotaWindowLabel("monthly", provider.tertiary, t));
   }
   for (const extra of provider.extraRateWindows ?? []) {
-    if (extra.id === "reset-credits") continue;
+    if (extra.id === "reset-credits" || extra.id === "zen-balance") continue;
     add(`extra-${extra.id}`, extra.window, extra.title, extra.usageKnown);
   }
   return windows;
@@ -437,6 +437,24 @@ function StatusBlock({ provider }: { provider: ProviderUsageSnapshot }) {
 
 /* ── Minimal streamlined tier ─────────────────────────────────────────── */
 
+/** Condensed "周58%·月45%" chip text for the minimal tier's secondary +
+ *  extra windows on one line; null when there is nothing to summarize. */
+function condensedChipText(
+  windows: TrayWindowView[],
+  display: QuotaDisplayContext,
+): string | null {
+  if (windows.length === 0) return null;
+  const parts = windows.map((w) => {
+    const name = w.snap.kind === "weekly" ? "周"
+      : w.snap.kind === "monthly" ? "月"
+      : w.snap.kind === "daily" ? "日"
+      : w.snap.kind === "session" ? "5h"
+      : w.label.trim();
+    return `${name}${quotaPercentDisplay(w.snap, display).rounded}%`;
+  });
+  return parts.join("·");
+}
+
 function MinimalCard({
   provider,
   display,
@@ -445,6 +463,7 @@ function MinimalCard({
   language,
   balanceText,
   hero,
+  condensedChip,
   showProviderIcon,
 }: {
   provider: ProviderUsageSnapshot;
@@ -454,6 +473,7 @@ function MinimalCard({
   language: Language;
   balanceText: string | null;
   hero: TrayWindowView | null;
+  condensedChip: string | null;
   showProviderIcon: boolean;
 }) {
   const { t } = useLocale();
@@ -517,6 +537,7 @@ function MinimalCard({
       <div className="minimal-streamlined__row2">
         <span className="minimal-streamlined__badges">
           {paceBadge ? <span className={`soft-badge soft-badge--${paceTone} soft-badge--mini`}>{paceBadge}</span> : null}
+          {condensedChip ? <span className="soft-badge soft-badge--neutral soft-badge--mini">{condensedChip}</span> : null}
           {usageLead && usageLead.tokens != null && usageLead.tokens > 0 ? (
             <span className="soft-badge soft-badge--neutral soft-badge--mini">
               {t(usageLead.labelKey)} {formatApproxTokens(usageLead.tokens, language)}
@@ -572,16 +593,17 @@ export default function TrayCard({
     () => sortWindows(gatherWindows(provider, balanceInfo.excludeWindows, t)),
     [provider, balanceInfo.excludeWindows, t],
   );
+  const opencodeGo = provider.providerId === "opencodego";
   const hero = windows[0] ?? null;
-  const secondary = windows[1] ?? null;
+  const secondary = opencodeGo ? null : (windows[1] ?? null);
   const extraTiles = useMemo(() => {
-    const rest = windows.slice(2);
+    const rest = windows.slice(opencodeGo ? 1 : 2);
     const count = rest.length;
     return rest.map((w, idx) => ({
       ...w,
-      fullWidth: count > 1 && idx === count - 1 && count % 2 === 1,
+      fullWidth: count === 1 || (count > 1 && idx === count - 1 && count % 2 === 1),
     }));
-  }, [windows]);
+  }, [windows, opencodeGo]);
 
   const localUsage = provider.error ? null : chartData?.localUsage ?? null;
   const usageLead =
@@ -601,6 +623,11 @@ export default function TrayCard({
   const canStatus = detail && HAS_STATUS_PAGE.has(provider.providerId);
   const hasContext = canDashboard || canStatus;
 
+  const condensedChip = condensedChipText(
+    [secondary, ...extraTiles].filter((w): w is TrayWindowView => w != null),
+    display,
+  );
+
   // Minimal tier: no card-header / card-zone split — a two-row streamlined
   // card (spec 5.4).
   if (densityMode === "minimal") {
@@ -614,6 +641,7 @@ export default function TrayCard({
           language={language}
           balanceText={balanceText}
           hero={hero}
+          condensedChip={condensedChip}
           showProviderIcon={showProviderIcon}
         />
         {hasContext && (
@@ -698,7 +726,7 @@ export default function TrayCard({
           </div>
         )}
 
-        {!hero && balanceInfo.balance && (
+        {balanceInfo.balance && (
           <div className={`modular-section${sectionClass()}`}>
             <BalanceBlock provider={provider} />
           </div>

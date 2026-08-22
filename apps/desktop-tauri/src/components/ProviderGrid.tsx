@@ -1,4 +1,5 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import Sortable from "sortablejs";
 import type { QuotaPercentContext } from "../lib/quotaDisplay";
 import type { ProviderUsageSnapshot } from "../types/bridge";
 import { ProviderIcon } from "./providers/ProviderIcon";
@@ -34,25 +35,46 @@ export default function ProviderGrid({
 }) {
   const { t } = useLocale();
   const [uncontrolledExpanded, setUncontrolledExpanded] = useState(false);
-  const [dragId, setDragId] = useState<string | null>(null);
-  const [overId, setOverId] = useState<string | null>(null);
   const canReorder = typeof onReorder === "function";
+  const gridRef = useRef<HTMLDivElement>(null);
 
-  const applyReorder = (targetId: string) => {
-    if (!onReorder || !dragId || dragId === targetId) return;
-    const ids = providers.map((provider) => provider.providerId);
-    const from = ids.indexOf(dragId);
-    const to = ids.indexOf(targetId);
-    if (from < 0 || to < 0) return;
-    const next = ids.slice();
-    next.splice(from, 1);
-    next.splice(to, 0, dragId);
-    onReorder(next);
-  };
-  const endDrag = () => {
-    setDragId(null);
-    setOverId(null);
-  };
+  useEffect(() => {
+    if (!canReorder) return;
+    const el = gridRef.current;
+    if (!el) return;
+    // 用成熟排序库 sortablejs（项目既有依赖），不自研动画：
+    // 1:1 跟手 + 让位过渡 + 松手归位都由库实现。
+    const sortable = Sortable.create(el, {
+      animation: 150,
+      draggable: ".provider-grid__item[data-provider-id]",
+      handle: ".provider-grid__item[data-provider-id]",
+      ghostClass: "provider-grid__item--ghost",
+      chosenClass: "provider-grid__item--dragging",
+      onStart: () => onGestureStart?.(),
+      onEnd: () => onGestureEnd?.(),
+      onUpdate: () => {
+        const ordered = Array.from(
+          el.querySelectorAll(':scope > .provider-grid__item[data-provider-id]'),
+        ).map((node) => (node as HTMLElement).getAttribute("data-provider-id") ?? "");
+        const nextVisible = ordered.filter(Boolean);
+        if (!onReorder) return;
+        const full = providers.map((p) => p.providerId);
+        if (full.length === nextVisible.length) {
+          onReorder(nextVisible);
+          return;
+        }
+        const visibleSet = new Set(nextVisible);
+        const merged: string[] = [];
+        let vi = 0;
+        for (const id of full) {
+          if (visibleSet.has(id)) merged.push(nextVisible[vi++] ?? id);
+          else merged.push(id);
+        }
+        onReorder(merged);
+      },
+    });
+    return () => sortable.destroy();
+  }, [canReorder, onGestureStart, onGestureEnd, providers, onReorder]);
   const isExpanded = expanded ?? uncontrolledExpanded;
   const setExpanded = (next: boolean) => {
     if (expanded === undefined) setUncontrolledExpanded(next);
@@ -83,6 +105,7 @@ export default function ProviderGrid({
 
   return (
     <div
+      ref={gridRef}
       className={`provider-grid${densityClass}${showProviderIcons ? "" : " provider-grid--no-icons"}`}
       data-provider-count={totalItems}
       data-expanded={isExpanded ? "true" : "false"}
@@ -96,7 +119,7 @@ export default function ProviderGrid({
       >
         {showProviderIcons && (
           <span className="provider-grid__icon-overview provider-grid__icon-overview--brand">
-            <TokenBarIcon size={18} />
+            <TokenBarIcon size={20} />
           </span>
         )}
         <span className="provider-grid__label">{t("PanelAllProvidersShort")}</span>
@@ -105,50 +128,10 @@ export default function ProviderGrid({
         <button
           key={p.providerId}
           type="button"
-          className={`provider-grid__item${p.providerId === selectedProviderId ? " provider-grid__item--active" : ""}${dragId === p.providerId ? " provider-grid__item--dragging" : ""}${canReorder && overId === p.providerId && dragId && dragId !== p.providerId ? " provider-grid__item--drop-target" : ""}`}
+          data-provider-id={p.providerId}
+          className={`provider-grid__item${p.providerId === selectedProviderId ? " provider-grid__item--active" : ""}`}
           onClick={() => onSelect(p.providerId)}
           aria-label={p.displayName}
-          draggable={canReorder}
-          onDragStart={
-            canReorder
-              ? (e) => {
-                  // Do not arm the native blur guard on mousedown: a normal
-                  // provider click is not a drag, and the async IPC guard used
-                  // to race the WebView2 Focused(false) event. Only an actual
-                  // HTML5 drag gets the gesture guard.
-                  onGestureStart?.();
-                  setDragId(p.providerId);
-                  e.dataTransfer.effectAllowed = "move";
-                }
-              : undefined
-          }
-          onDragOver={
-            canReorder
-              ? (e) => {
-                  if (!dragId) return;
-                  e.preventDefault();
-                  e.dataTransfer.dropEffect = "move";
-                  if (overId !== p.providerId) setOverId(p.providerId);
-                }
-              : undefined
-          }
-          onDrop={
-            canReorder
-              ? (e) => {
-                  e.preventDefault();
-                  applyReorder(p.providerId);
-                  endDrag();
-                }
-              : undefined
-          }
-          onDragEnd={
-            canReorder
-              ? () => {
-                  onGestureEnd?.();
-                  endDrag();
-                }
-              : undefined
-          }
         >
           {showProviderIcons && <ProviderIcon providerId={p.providerId} size={16} />}
           <span className="provider-grid__label">{labelFor(p.displayName)}</span>

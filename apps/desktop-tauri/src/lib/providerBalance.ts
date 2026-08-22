@@ -128,6 +128,25 @@ export function getProviderBalance(
     };
   }
 
+  if (provider.providerId === "opencodego") {
+    const amount = provider.cost?.formattedUsed
+      ?? provider.extraRateWindows.find((w) => w.id === "zen-balance")?.window.resetDescription
+      ?? null;
+    if (!amount) return NONE;
+    return {
+      balance: {
+        kind: "balance",
+        title: BALANCE_TITLE,
+        amount,
+        breakdown: null,
+        unavailable: false,
+        raw: amount,
+      },
+      excludeWindows: new Set<BalanceWindow>(),
+      suppressPlanBadge: false,
+    };
+  }
+
   return NONE;
 }
 

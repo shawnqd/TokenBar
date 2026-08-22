@@ -56,11 +56,11 @@ impl SurfaceMode {
                 visible: true,
                 decorations: false,
                 resizable: true,
-                // 20 DIP wider/taller than the 328x776 panel: the CSS keeps a
-                // 10 DIP transparent gutter on every side so the unified
+                // 12 DIP wider/taller than the 328x776 panel: the CSS keeps a
+                // 6 DIP transparent gutter on every side so the unified
                 // flyout shadow (settings-window style) has room to paint.
-                width: 348.0,
-                height: 796.0,
+                width: 340.0,
+                height: 788.0,
                 min_width: Some(320.0),
                 min_height: Some(380.0),
                 max_width: None,
@@ -278,8 +278,8 @@ mod tests {
     #[test]
     fn tray_panel_properties() {
         let props = SurfaceMode::TrayPanel.window_properties();
-        assert_eq!(props.width, 348.0);
-        assert_eq!(props.height, 796.0);
+        assert_eq!(props.width, 340.0);
+        assert_eq!(props.height, 788.0);
     }
 
     #[test]

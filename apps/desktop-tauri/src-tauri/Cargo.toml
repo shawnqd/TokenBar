@@ -21,3 +21,6 @@ tracing = "0.1"
 uuid = { version = "1", features = ["v4"] }
 windows-numerics = { version = "0.3", features = [] }
 windows = { version = "0.62.2", features = ["Foundation", "Win32_Foundation", "Win32_Graphics_Direct2D", "Win32_Graphics_Direct2D_Common", "Win32_Graphics_DirectWrite", "Win32_Graphics_Gdi", "Win32_Graphics_Dxgi_Common"] }
+resvg = "0.48.1"
+usvg = "0.48.1"
+tiny-skia = "0.12.0"

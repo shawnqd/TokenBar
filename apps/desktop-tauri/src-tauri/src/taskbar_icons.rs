@@ -1,5 +1,6 @@
 //! Rasterise the official provider brand SVGs onto the taskbar strip with
-//! Direct2D — no SVG crate, no new dependency.
+//! Direct2D, rendering the source through `resvg` (usvg + tiny-skia) so every
+//! bundled SVG feature works the same way the frontend `ProviderIcon` does.
 //!
 //! # Where the icons come from
 //!
@@ -21,43 +22,54 @@
 //! in the reference HTML: its SVG already carries the black rounded badge +
 //! white glyph, so it is never recoloured and gets no backing tile in any mode.
 //!
-//! # A deliberately small SVG parser
+//! # Rasterisation
 //!
-//! The assets are single/few-path icons, so the parser recognises only
-//! `path` (`d` + `fill-rule`) and `rect` (`x y width height rx fill`). Path
-//! commands cover `M/L/H/V/C/S/Q/T/A/Z`, their relative forms, implicit
-//! command repetition, and arcs turned into cubic beziers via the SVG
-//! endpoint-to-centre expansion (SVG 1.1 § F.6.5).
+//! The SVGs are drawn with the full-fidelity resvg pipeline: `<circle>`,
+//! strokes, gradients, `<clipPath>`, CSS `<style>` classes, groups and
+//! transforms all work, so circle-only and stroke-only marks that the legacy
+//! path parser renders blank or malformed now look like the reference asset.
 //!
 //! # Fill resolution
 //!
-//! An element's `fill` decides its colour: an explicit non-white `#rrggbb` is
-//! kept verbatim (multi-colour marks keep their real palette); `white`/`#fff`/
-//! `#ffffff`/`currentColor`/absent fill use the INK colour passed in (brand in
-//! pure/badge, white in solid) — the same single-colour-to-brand treatment the
-//! frontend's `tint()` applies. Grok keeps every element fill unchanged.
+//! Before parsing, the SVG text receives the same single-colour-to-brand
+//! treatment the frontend's `tint()` applies ([`tint_svg`]): white/`#fff`/
+//! `#ffffff`, `currentColor` and the named `black` fills, plus
+//! white/`currentColor` strokes, become the INK colour passed in (brand in
+//! pure/badge, white in solid) — including `style="fill:…"` CSS declarations
+//! like jetbrains'. Explicit non-white hex colours are kept verbatim and
+//! `fill="none"` is preserved, so multi-colour marks keep their palette and
+//! stroke-only marks stay stroke-only. Grok inserts no replacement — its SVG
+//! already carries the black rounded badge + white glyph.
 //!
-//! # Geometry caching
+//! # Bitmap caching
 //!
-//! Turning a path string into an `ID2D1PathGeometry` is too expensive to
-//! repeat on a strip that repaints every second, and the geometry of a given
-//! provider at a given size never changes. Parsed results are cached per
-//! `(provider_id, slot_size_px)` so a steady-state strip does zero parsing.
+//! A strip repaints every second, and re-rasterising the same provider at the
+//! same style/size repeatedly would be wasteful. The premultiplied RGBA result
+//! is cached per `(provider_id, style, size_px)` and copied into an
+//! `ID2D1Bitmap` on each paint. The legacy hand-rolled path parser below is
+//! retained (its tests still exercise it) and waits in PENDING_CLEANUP.
 
 #![cfg(windows)]
+// The legacy path parser/geometry section is dead outside of `cfg(test)` and
+// is kept compiling for PENDING_CLEANUP; silence its per-build dead-code
+// warnings so a check stays readable.
+#![allow(dead_code)]
 
 use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
 
 use windows_numerics::Vector2; // via the windows-numerics crate (transitive of `windows`)
 use windows::Win32::Graphics::Direct2D::Common::{
-    D2D1_BEZIER_SEGMENT, D2D1_COLOR_F, D2D1_FIGURE_BEGIN_FILLED, D2D1_FIGURE_END_CLOSED,
-    D2D1_FILL_MODE_ALTERNATE, D2D1_FILL_MODE_WINDING, D2D_RECT_F,
+    D2D1_ALPHA_MODE_PREMULTIPLIED, D2D1_BEZIER_SEGMENT, D2D1_COLOR_F, D2D1_FIGURE_BEGIN_FILLED,
+    D2D1_FIGURE_END_CLOSED, D2D1_FILL_MODE_ALTERNATE, D2D1_FILL_MODE_WINDING, D2D1_PIXEL_FORMAT,
+    D2D_SIZE_U, D2D_RECT_F,
 };
 use windows::Win32::Graphics::Direct2D::{
-    D2D1CreateFactory, D2D1_FACTORY_TYPE_SINGLE_THREADED, D2D1_QUADRATIC_BEZIER_SEGMENT,
-    D2D1_ROUNDED_RECT, ID2D1DCRenderTarget, ID2D1Factory, ID2D1GeometrySink, ID2D1PathGeometry,
+    D2D1_BITMAP_INTERPOLATION_MODE_LINEAR, D2D1_BITMAP_PROPERTIES,
+    D2D1_QUADRATIC_BEZIER_SEGMENT, D2D1_ROUNDED_RECT, ID2D1Bitmap, ID2D1DCRenderTarget,
+    ID2D1Factory, ID2D1GeometrySink, ID2D1PathGeometry,
 };
+use windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_B8G8R8A8_UNORM;
 
 // `provider_id -> svg source`, scanned at build time into OUT_DIR.
 include!(concat!(env!("OUT_DIR"), "/provider_icon_table.rs"));
@@ -71,8 +83,8 @@ const SVG_ALIASES: &[(&str, &str)] = &[
 ];
 
 const WIDE_WORDMARK_IDS: &[&str] = &["deepseek", "kimi", "minimax", "mistral"];
-const PATH_TYPE_INSET: f32 = 0.82;
-const WIDE_WORDMARK_INSET: f32 = 0.72;
+const PATH_TYPE_INSET: f32 = 0.9;
+const WIDE_WORDMARK_INSET: f32 = 0.8;
 const GROK_INSET: f32 = 1.0;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -583,38 +595,174 @@ fn parsed_logo(provider_id: &str) -> Option<std::sync::Arc<ParsedLogo>> {
     Some(logo)
 }
 
+// ── Resvg raster path (live) ────────────────────────────────────────
+
+/// A resvg-rendered logo: premultiplied RGBA pixels (`data`) in a square
+/// (`size_px` × `size_px`) canvas, ready to be copied into an ID2D1Bitmap.
+struct RenderedLogo { size_px: u32, data: std::sync::Arc<Vec<u8>> }
+
+static RENDER_CACHE: OnceLock<Mutex<HashMap<String, std::sync::Arc<RenderedLogo>>>> = OnceLock::new();
+
+/// Case-insensitive replace of `needle` with `replacement` (the frontend
+/// `tint()` substitutions are `/gi`, so `#FFFFFF` must match like `#ffffff`).
+fn replace_ci(haystack: &str, needle: &str, replacement: &str) -> String {
+    let lower = haystack.to_ascii_lowercase();
+    let lower_needle = needle.to_ascii_lowercase();
+    let mut out = String::with_capacity(haystack.len());
+    let mut cursor = 0usize;
+    while let Some(rel) = lower[cursor..].find(&lower_needle) {
+        let at = cursor + rel;
+        out.push_str(&haystack[cursor..at]);
+        out.push_str(replacement);
+        cursor = at + needle.len();
+    }
+    out.push_str(&haystack[cursor..]);
+    out
+}
+
+/// Apply the frontend-`tint()` colour policy to the SVG text before resvg
+/// parses it, resolving the generic colours to the concrete `ink` hex because
+/// usvg has no CSS `color` context: white/`currentColor`/`black` fills and
+/// white/`currentColor` strokes — both `fill="…"` attributes and CSS
+/// `style="fill:…"` declarations (jetbrains) — become `ink` (brand in
+/// pure/badge, white in solid). Explicit non-white hex colours are kept
+/// verbatim and `fill="none"` is preserved so stroke-only marks stay
+/// stroke-only. Grok is never recoloured: its SVG already carries the black
+/// rounded badge + white glyph.
+fn tint_svg(svg: &str, provider_id: &str, ink: u32) -> String {
+    if is_grok(provider_id) { return svg.to_owned(); }
+    let six = format!("{:06X}", ink & 0xFF_FFFF);
+    let attr_fill = format!("fill=\"#{six}\"");
+    let attr_stroke = format!("stroke=\"#{six}\"");
+    let css_fill = format!("fill:#{six}");
+    // Longest needles first so `fill:#fff` cannot match inside `fill:#ffffff`.
+    const ATTR_FILL_NEEDLES: [&str; 5] = [
+        "fill=\"#ffffff\"", "fill=\"#fff\"", "fill=\"white\"",
+        "fill=\"currentcolor\"", "fill=\"black\"",
+    ];
+    const ATTR_STROKE_NEEDLES: [&str; 3] = [
+        "stroke=\"white\"", "stroke=\"currentcolor\"", "stroke=\"black\"",
+    ];
+    const CSS_FILL_NEEDLES: [&str; 10] = [
+        "fill:#ffffff", "fill: #ffffff",
+        "fill:#fff", "fill: #fff",
+        "fill:white", "fill: white",
+        "fill:currentcolor", "fill: currentcolor",
+        "fill:black", "fill: black",
+    ];
+    let mut out = svg.to_owned();
+    for needle in ATTR_FILL_NEEDLES { out = replace_ci(&out, needle, &attr_fill); }
+    for needle in ATTR_STROKE_NEEDLES { out = replace_ci(&out, needle, &attr_stroke); }
+    for needle in CSS_FILL_NEEDLES { out = replace_ci(&out, needle, &css_fill); }
+    out
+}
+
+/// Rasterise `provider_id` into a square `size_px` logo with resvg, cached per
+/// `(provider_id, style, size_px)` so a steady-state strip does not re-render
+/// the SVG on every one-second repaint. The artwork keeps the optical inset
+/// the legacy path applied (`inset_fraction`), centred in the canvas.
+fn rendered_logo(provider_id: &str, style: IconStyle, size_px: f32) -> Option<std::sync::Arc<RenderedLogo>> {
+    let px = size_px.max(1.0).round() as u32;
+    let key = format!("{provider_id}|{style:?}|{px}");
+    if let Some(m) = RENDER_CACHE.get()
+        && let Ok(guard) = m.lock()
+        && let Some(logo) = guard.get(&key)
+    {
+        return Some(logo.clone());
+    }
+    let src = provider_svg_source(provider_id)?;
+    let ink = match style { IconStyle::Solid => 0xFF_FFFFu32, _ => brand_color(provider_id) };
+    let tinted = tint_svg(src, provider_id, ink);
+    let opt = usvg::Options::default();
+    let tree = usvg::Tree::from_str(&tinted, &opt).ok()?;
+    let mut pixmap = tiny_skia::Pixmap::new(px, px)?;
+    // usvg normalises the viewBox into Tree::size (its min sits at the
+    // origin), so a scale + translate maps the SVG canvas onto the centred
+    // artwork area of the slot — the same geometry the legacy code computed.
+    let size = tree.size();
+    let side = size.width().max(size.height()).max(1e-3);
+    let scale = px as f32 * inset_fraction(provider_id) / side;
+    let art_w = size.width() * scale;
+    let art_h = size.height() * scale;
+    let off_x = (px as f32 - art_w) * 0.5;
+    let off_y = (px as f32 - art_h) * 0.5;
+    let transform = tiny_skia::Transform::from_scale(scale, scale).post_translate(off_x, off_y);
+    resvg::render(&tree, transform, &mut pixmap.as_mut());
+    let logo = std::sync::Arc::new(RenderedLogo {
+        size_px: px,
+        data: std::sync::Arc::new(pixmap.data().to_vec()),
+    });
+    RENDER_CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+        .lock()
+        .map(|mut m| m.insert(key, logo.clone()))
+        .ok();
+    Some(logo)
+}
+
+/// Copy premultiplied RGBA `data` into an ID2D1Bitmap on `target`. D2D
+/// DCRenderTargets (and the offscreen test harness) are B8G8R8A8, so the
+/// red/blue channels are swapped; alpha stays PREMULTIPLIED because the resvg
+/// pixmap is premultiplied. Tries the target's own pixel format first, then
+/// falls back to B8G8R8A8 for targets that report an odd format.
+fn bitmap_from_rgba(target: &ID2D1DCRenderTarget, data: &[u8], size: u32) -> Option<ID2D1Bitmap> {
+    let fmt = unsafe { target.GetPixelFormat() };
+    let formats = [
+        D2D1_PIXEL_FORMAT { format: fmt.format, alphaMode: D2D1_ALPHA_MODE_PREMULTIPLIED },
+        D2D1_PIXEL_FORMAT { format: DXGI_FORMAT_B8G8R8A8_UNORM, alphaMode: D2D1_ALPHA_MODE_PREMULTIPLIED },
+    ];
+    let mut swapped: Vec<u8> = Vec::with_capacity(data.len());
+    for format in formats {
+        let src: &[u8] = if format.format == DXGI_FORMAT_B8G8R8A8_UNORM {
+            swapped.clear();
+            for px in data.chunks_exact(4) {
+                swapped.extend_from_slice(&[px[2], px[1], px[0], px[3]]);
+            }
+            &swapped
+        } else {
+            data
+        };
+        let props = D2D1_BITMAP_PROPERTIES {
+            pixelFormat: format,
+            dpiX: 96.0,
+            dpiY: 96.0,
+        };
+        if let Ok(bitmap) = unsafe {
+            target.CreateBitmap(
+                D2D_SIZE_U { width: size, height: size },
+                Some(src.as_ptr().cast::<std::ffi::c_void>()),
+                size * 4,
+                &props,
+            )
+        } {
+            return Some(bitmap);
+        }
+    }
+    None
+}
+
 /// Fill the provider's official logo into `slot` on the given render target.
-/// Draws the style tile (badge/solid) first when applicable, then each layer.
-/// Returns true when an SVG was drawn; false means the caller should fall back
-/// to the legacy glyph in the same slot.
+/// Draws the style tile (badge/solid) first when applicable, then the
+/// resvg-rendered bitmap via DrawBitmap. Returns true when the logo was
+/// rasterised; false means the caller should fall back to the legacy glyph in
+/// the same slot.
 pub fn draw_icon(
     target: &ID2D1DCRenderTarget,
     provider_id: &str,
     style: IconStyle,
     slot: IconSlot,
 ) -> bool {
-    let Some(logo) = parsed_logo(provider_id) else { return false; };
-    // Direct2D requires every resource to come from the same factory as the
-    // render target it is used with; a geometry built on a different factory
-    // is undefined behaviour (observed as 0xc000041d in the WM_PAINT path).
-    // target.GetFactory() returns the target's own factory, so the cached
-    // thread-local factory is not used here.
-    let factory = match unsafe { target.GetFactory() } {
-        Ok(factory) => factory,
-        Err(_) => return false,
+    let Some(rendered) = rendered_logo(provider_id, style, slot.size_px) else { return false; };
+    // Create the bitmap before painting anything: if the target rejects the
+    // buffer we return false and the caller paints the glyph fallback (with
+    // its own tile) on a clean slot instead of over a half-drawn icon.
+    let Some(bitmap) = bitmap_from_rgba(target, &rendered.data, rendered.size_px) else {
+        return false;
     };
     let brand = brand_color(provider_id);
-    let parsed = &logo.parsed;
     let slot_size = slot.size_px.max(1.0);
-    let inset = inset_fraction(provider_id);
-    let side = parsed.size.x.max(parsed.size.y).max(1e-3);
-    let scale = slot_size * inset / side;
-    let art_w = parsed.size.x * scale;
-    let art_h = parsed.size.y * scale;
-    let off = P2 { x: slot.left + (slot_size - art_w) * 0.5, y: slot.top + (slot_size - art_h) * 0.5 };
 
     // Backing tile: never for grok (its SVG already carries the badge).
-    if !logo.grok {
+    if !is_grok(provider_id) {
         let rounded = D2D1_ROUNDED_RECT {
             rect: D2D_RECT_F {
                 left: slot.left, top: slot.top,
@@ -638,23 +786,12 @@ pub fn draw_icon(
         }
     }
 
-    let ink = match style { IconStyle::Solid => 0xFF_FFFFu32, _ => brand };
-    let mut drew = false;
-    for item in &parsed.items {
-        let rgb = if logo.grok {
-            item.fill.unwrap_or(0xFF_FFFF)
-        } else {
-            match item.fill { Some(hex) => hex, None => ink }
-        };
-        let Ok(geometry) = (unsafe { build_item_geometry(&factory, item, parsed.origin, scale, off) }) else {
-            continue;
-        };
-        if let Ok(brush) = unsafe { target.CreateSolidColorBrush(&d2d_color(rgb, 1.0), None) } {
-            unsafe { target.FillGeometry(&geometry, &brush, None) };
-            drew = true;
-        }
-    }
-    drew
+    let dest = D2D_RECT_F {
+        left: slot.left, top: slot.top,
+        right: slot.left + slot_size, bottom: slot.top + slot_size,
+    };
+    unsafe { target.DrawBitmap(&bitmap, Some(&dest), 1.0, D2D1_BITMAP_INTERPOLATION_MODE_LINEAR, None) };
+    true
 }
 
 
@@ -757,6 +894,150 @@ mod tests {
         assert!(provider_svg_source("arkcodingplan").is_some(), "arkcodingplan aliases volcengine-ark");
     }
 
+    #[test]
+    fn usvg_renders_every_bundled_icon() {
+        // Every asset in the build-time table must parse through the same
+        // usvg pipeline the strip uses. Before resvg, the legacy path parser
+        // rejected circle-only (nanogpt), stroke-only (commandcode/mimo/
+        // sakana/crossmodel) and clipPath/CSS style assets, degrading them to
+        // blank tiles or letter marks.
+        assert!(!PROVIDER_ICON_TABLE.is_empty(), "icon table must be populated by build.rs");
+        // ProviderIcon-manus.svg is corrupted in the repo baseline
+        // (f40e2a420): its path data literally ends with
+        // " (line truncated to 2000 chars)", so strict XML parsing rejects it.
+        // This is an asset defect (the frontend renders the same broken file),
+        // not a resvg regression; the strip degrades manus to the glyph mark
+        // until the asset is repaired.
+        const KNOWN_CORRUPT_ASSETS: &[&str] = &["manus"];
+        let opt = usvg::Options::default();
+        let mut failures: Vec<(String, String)> = Vec::new();
+        for (id, src) in PROVIDER_ICON_TABLE {
+            if KNOWN_CORRUPT_ASSETS.contains(id) { continue; }
+            let tinted = tint_svg(src, id, 0x123456);
+            if let Err(err) = usvg::Tree::from_str(&tinted, &opt) {
+                failures.push(((*id).to_string(), err.to_string()));
+            }
+        }
+        assert!(failures.is_empty(), "resvg could not parse: {failures:?}");
+    }
+
+    #[test]
+    fn alias_assets_parse_as_usvg_too() {
+        let opt = usvg::Options::default();
+        for (id, _target) in SVG_ALIASES {
+            let src = provider_svg_source(id).expect("alias artwork");
+            let tinted = tint_svg(src, id, 0x123456);
+            assert!(
+                usvg::Tree::from_str(&tinted, &opt).is_ok(),
+                "alias {id} failed usvg parse"
+            );
+        }
+    }
+
+    #[test]
+    fn tint_replaces_white_current_colour_and_black_with_ink() {
+        // Mirrors the frontend tint() set (white/#fff/#ffffff, both cases)
+        // plus currentColor and named black, which resolve to INK in the
+        // legacy colour_from_attr too.
+        let s = tint_svg(
+            r##"<svg><path fill="white" stroke="white"/>
+                 <path fill="currentColor"/>
+                 <path fill="#fff"/><path fill="#FFFFFF"/>
+                 <path fill="black" stroke="currentColor"/></svg>"##,
+            "qoder",
+            0x12AB34,
+        );
+        assert_eq!(s.matches("fill=\"#12AB34\"").count(), 5, "all white/current/black fills become ink: {s}");
+        assert_eq!(s.matches("stroke=\"#12AB34\"").count(), 2, "white + currentColor strokes become ink: {s}");
+    }
+
+    #[test]
+    fn tint_handles_css_style_fill_like_jetbrains() {
+        // jetbrains paints via style="fill:#fff;" — the strip must map that
+        // CSS declaration to brand ink exactly like an attribute fill, and
+        // keep the rest of the declaration intact.
+        let s = tint_svg(
+            r##"<path d="M0 0z" style="fill:#fff;fill-rule:nonzero;"/><rect style="fill: #FFFFFF"/> <path style="fill:white;"/>"##,
+            "jetbrains",
+            0x5D87FF,
+        );
+        assert_eq!(s.matches("fill:#5D87FF").count(), 3, "css fills (hash, uppercase, named) become ink: {s}");
+        assert!(s.contains("style=\"fill:#5D87FF;fill-rule:nonzero;\""), "css fill replaced, rest kept: {s}");
+    }
+
+    #[test]
+    fn tint_keeps_explicit_non_white_hex_and_none() {
+        // Explicit hex palette (vertexai blue, grok badge black, CSS grey)
+        // must survive; fill="none" keeps stroke-only marks stroke-only.
+        let s = tint_svg(
+            r##"<svg><path fill="#4285F4"/><path fill="#111827"/><path fill="none"/>
+                 <style>.a { fill: #999999; }</style></svg>"##,
+            "vertexai",
+            0x0000FF,
+        );
+        assert!(s.contains("fill=\"#4285F4\""), "explicit blue kept: {s}");
+        assert!(s.contains("fill=\"#111827\""), "explicit near-black kept: {s}");
+        assert!(s.contains("fill=\"none\""), "fill none kept: {s}");
+        assert!(s.contains("fill: #999999"), "css grey kept: {s}");
+        assert!(!s.contains("fill=\"#0000FF\""), "nothing recoloured unless white/current/black: {s}");
+    }
+
+    #[test]
+    fn grok_asset_is_never_recoloured() {
+        let src = provider_svg_source("grok").expect("grok artwork");
+        assert_eq!(tint_svg(src, "grok", 0x12AB34), src, "grok keeps its own palette");
+    }
+
+    #[test]
+    fn qoder_real_asset_black_fill_becomes_brand() {
+        let src = provider_svg_source("qoder").expect("qoder artwork");
+        let brand = brand_color("qoder");
+        let tinted = tint_svg(src, "qoder", brand);
+        let needle = format!("fill=\"#{brand:06X}\"");
+        assert!(tinted.contains(&needle), "qoder named black fill not converted to brand: {tinted}");
+    }
+
+    /// Icons the legacy path parser could not rasterise must still put real
+    /// ink on an offscreen slot through the resvg pipeline: nanogpt is
+    /// circle-only (was letter-mark fallback), sakana/commandcode are
+    /// stroke-only (were filled blobs), openrouter uses a clipPath (was a
+    /// solid brand square from the clip rect).
+    #[test]
+    fn resvg_icon_path_paints_previously_blank_or_malformed_marks() {
+        for provider in ["nanogpt", "sakana", "commandcode", "openrouter"] {
+            if let Some((total, _, _)) = unsafe { render_icon_regions(provider) } {
+                assert!(total > 0, "{provider} icon rendered no ink via resvg");
+            } else {
+                eprintln!("Direct2D unavailable; skipping {provider} ink check");
+            }
+        }
+    }
+
+    /// The resvg logo must be centred in its slot canvas. The centring
+    /// transform is `scale * point + offset` (post_translate); the previous
+    /// `pre_translate` composed the other way and pulled the artwork toward
+    /// the top-left corner, which the user reported on the live strip.
+    #[test]
+    fn resvg_logo_is_centred_and_fills_the_slot() {
+        let logo = rendered_logo("codex", IconStyle::Pure, 32.0)
+            .expect("codex must rasterise through usvg/resvg");
+        let px = logo.size_px as usize;
+        let data: &[u8] = &logo.data;
+        let alpha_at = |x: usize, y: usize| -> u8 { data[(y * px + x) * 4 + 3] };
+        let corner_sum = [alpha_at(0, 0), alpha_at(1, 1), alpha_at(2, 2)]
+            .iter()
+            .fold(0u16, |a, v| a + u16::from(*v));
+        assert!(
+            corner_sum < 40,
+            "logo must keep a transparent gutter at the corner"
+        );
+        assert!(alpha_at(px / 2, px / 2) > 0, "logo must reach the slot centre");
+        let left_edge = [alpha_at(0, px / 2), alpha_at(1, px / 2)]
+            .iter()
+            .fold(0u16, |a, v| a + u16::from(*v));
+        assert!(left_edge < 40, "logo must not touch the left edge");
+    }
+
     /// Rendering onto an offscreen DIB to confirm a real logo fills a slot.
     #[test]
     fn logo_renders_ink_into_an_offscreen_slot() {
@@ -820,8 +1101,9 @@ mod tests {
         std::ptr::write_bytes(bits.cast::<u8>(), 0, (S * S * 4) as usize);
 
         use windows::Win32::Graphics::Direct2D::{
-            D2D1_RENDER_TARGET_PROPERTIES, D2D1_RENDER_TARGET_TYPE_SOFTWARE,
-            D2D1_RENDER_TARGET_USAGE_GDI_COMPATIBLE, D2D1_FEATURE_LEVEL_DEFAULT, ID2D1DCRenderTarget,
+            D2D1CreateFactory, D2D1_FACTORY_TYPE_SINGLE_THREADED, D2D1_RENDER_TARGET_PROPERTIES,
+            D2D1_RENDER_TARGET_TYPE_SOFTWARE, D2D1_RENDER_TARGET_USAGE_GDI_COMPATIBLE,
+            D2D1_FEATURE_LEVEL_DEFAULT, ID2D1DCRenderTarget, ID2D1Factory,
         };
         use windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_B8G8R8A8_UNORM;
         use windows::Win32::Foundation::RECT;
@@ -904,8 +1186,9 @@ mod tests {
         std::ptr::write_bytes(bits.cast::<u8>(), 0, (S * S * 4) as usize);
 
         use windows::Win32::Graphics::Direct2D::{
-            D2D1_RENDER_TARGET_PROPERTIES, D2D1_RENDER_TARGET_TYPE_SOFTWARE,
-            D2D1_RENDER_TARGET_USAGE_GDI_COMPATIBLE, D2D1_FEATURE_LEVEL_DEFAULT, ID2D1DCRenderTarget,
+            D2D1CreateFactory, D2D1_FACTORY_TYPE_SINGLE_THREADED, D2D1_RENDER_TARGET_PROPERTIES,
+            D2D1_RENDER_TARGET_TYPE_SOFTWARE, D2D1_RENDER_TARGET_USAGE_GDI_COMPATIBLE,
+            D2D1_FEATURE_LEVEL_DEFAULT, ID2D1DCRenderTarget, ID2D1Factory,
         };
         use windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_B8G8R8A8_UNORM;
         use windows::Win32::Foundation::RECT;
