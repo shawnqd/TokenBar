@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import Sortable from "sortablejs";
 import { ProviderIcon } from "../../../components/providers/ProviderIcon";
 import { getProviderIcon } from "../../../components/providers/providerIcons";
 import { useProviders } from "../../../hooks/useProviders";
@@ -44,7 +45,7 @@ import {
   type AuthMethod,
   type FixtureProvider,
 } from "./htmlFixture";
-import { ConfirmDialog, V5Seg, V5Toggle } from "./v5Controls";
+import { ConfirmDialog, V5Seg, V5Select, V5Toggle } from "./v5Controls";
 
 function listUpdatedLabel(updatedMs: number, nowMs: number): string {
   const diffSecs = Math.max(0, Math.floor((nowMs - updatedMs) / 1000));
@@ -361,7 +362,6 @@ export default function ProvidersPage({
   const [apiKeys, setApiKeys] = useState<ApiKeyInfoBridge[]>([]);
     const [manualCookies, setManualCookies] = useState<CookieInfoBridge[]>([]);
   const [detail, setDetail] = useState<ProviderDetail | null>(null);
-    const [dragIndex, setDragIndex] = useState<number | null>(null);
 
     const reloadCredentials = useCallback(async () => {
       try {
@@ -403,18 +403,32 @@ export default function ProvidersPage({
     return p.name.toLowerCase().includes(q) || p.id.toLowerCase().includes(q);
   });
 
-    const handleDrop = (targetIndex: number) => {
-      if (dragIndex === null || dragIndex === targetIndex) return;
-      const next = [...visible];
-      const [moved] = next.splice(dragIndex, 1);
-      next.splice(targetIndex, 0, moved);
-      const visibleIds = new Set(visible.map((p) => p.id));
-      const nextIds = catalog
-        .map((p) => p.id)
-        .map((id) => (visibleIds.has(id) ? (next.shift()?.id ?? id) : id));
-      void reorderProviders(nextIds).catch(() => setNote("排序保存失败"));
-      setDragIndex(null);
-    };
+    const rowsRef = useRef<HTMLDivElement>(null);
+
+    useEffect(() => {
+      const el = rowsRef.current;
+      if (!el || saving) return;
+      // 用成熟排序库 sortablejs，不自研动画：跟手 + 让位 + 归位全靠库。
+      const sortable = Sortable.create(el, {
+        animation: 150,
+        draggable: ".s5-prow",
+        ghostClass: "s5-prow--ghost",
+        chosenClass: "s5-prow--dragging",
+        onUpdate: () => {
+          const ordered = Array.from(
+            el.querySelectorAll<HTMLElement>(":scope > .s5-prow[data-prow-id]"),
+          ).map((node) => node.getAttribute("data-prow-id") ?? "");
+          const nextVisible = ordered.filter(Boolean);
+          if (nextVisible.length === 0) return;
+          const visibleIds = new Set(nextVisible);
+          const nextIds = catalog
+            .map((p) => p.id)
+            .map((id) => (visibleIds.has(id) ? (nextVisible.shift() ?? id) : id));
+          void reorderProviders(nextIds).catch(() => setNote("排序保存失败"));
+        },
+      });
+      return () => sortable.destroy();
+    }, [saving, catalog]);
 
   const selectedProvider = catalog.find((p) => p.id === selected);
   const method =
@@ -515,7 +529,7 @@ export default function ProvidersPage({
         >
           批量导入网页会话
         </button>
-        <div className="s5-prov-rows">
+        <div ref={rowsRef} className="s5-prov-rows">
           {visible.length === 0 ? (
             <p className="s5-hint">没有匹配的服务商</p>
           ) : (
@@ -524,6 +538,7 @@ export default function ProvidersPage({
               return (
               <div
                 key={provider.id}
+                data-prow-id={provider.id}
                 className={`s5-prow${selected === provider.id ? " on" : ""}${
                   provider.enabled ? "" : " off"
                 }${meta.problem ? " problem" : ""}`}
@@ -531,11 +546,6 @@ export default function ProvidersPage({
                   setSelected(provider.id);
                   setLoginOpen(false);
                 }}
-                  draggable
-                  onDragStart={() => setDragIndex(index)}
-                  onDragOver={(event) => event.preventDefault()}
-                  onDrop={() => handleDrop(index)}
-                  onDragEnd={() => setDragIndex(null)}
               >
                 <span
                   className="s5-prow-icon"
@@ -752,35 +762,38 @@ export default function ProvidersPage({
                     只影响通知区那个点，不是卡片密度
                   </div>
                 </div>
-                <select
-                  className="s5-select"
+                <V5Select
                   value={settings.providerMetrics[selectedProvider.id] ?? "automatic"}
                   disabled={saving}
-                  onChange={(event) =>
+                  options={[
+                    { value: "automatic", label: "自动" },
+                    { value: "session", label: "会话" },
+                    { value: "weekly", label: "周" },
+                    ...(selectedProvider.quota === "hybrid"
+                      ? [{ value: "extraUsage", label: "额外用量" }]
+                      : []),
+                  ]}
+                  onChange={(value) =>
                     set({
                       providerMetrics: {
                         ...settings.providerMetrics,
-                        [selectedProvider.id]:
-                          event.target.value as MetricPreference,
+                        [selectedProvider.id]: value as MetricPreference,
                       },
                     })
                   }
-                >
-                  <option value="automatic">自动</option>
-                  <option value="session">会话</option>
-                  <option value="weekly">周</option>
-                  {selectedProvider.quota === "hybrid" ? (
-                    <option value="extraUsage">额外用量</option>
-                  ) : null}
-                </select>
+                />
               </div>
               {selectedProvider.region ? (
                 <div className="s5-pd-row">
                   <div className="s5-field-label">区域</div>
-                  <select className="s5-select" defaultValue="美国东部">
-                    <option>美国东部</option>
-                    <option>美国西部</option>
-                  </select>
+                  <V5Select
+                    value="美国东部"
+                    options={[
+                      { value: "美国东部", label: "美国东部" },
+                      { value: "美国西部", label: "美国西部" },
+                    ]}
+                    onChange={() => {}}
+                  />
                 </div>
               ) : null}
               <div className="s5-pd-row">
