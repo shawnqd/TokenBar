@@ -870,11 +870,13 @@ mod tests {
 
     #[test]
     fn optical_insets_follow_the_class() {
-        assert_eq!(inset_fraction("claude"), 0.82);
-        assert_eq!(inset_fraction("deepseek"), 0.72);
-        assert_eq!(inset_fraction("kimi"), 0.72);
+        // 2026-08-22: raised from 0.82/0.72 per user feedback that strip
+        // icons read too small; grok keeps its full-bleed badge asset.
+        assert_eq!(inset_fraction("claude"), 0.9);
+        assert_eq!(inset_fraction("deepseek"), 0.8);
+        assert_eq!(inset_fraction("kimi"), 0.8);
         assert_eq!(inset_fraction("grok"), 1.0);
-        assert_eq!(inset_fraction("codex"), 0.82);
+        assert_eq!(inset_fraction("codex"), 0.9);
     }
 
     #[test]
@@ -1031,7 +1033,29 @@ mod tests {
             corner_sum < 40,
             "logo must keep a transparent gutter at the corner"
         );
-        assert!(alpha_at(px / 2, px / 2) > 0, "logo must reach the slot centre");
+        // Centring means the inked bounding box is centred, not that the exact
+        // geometric pixel is inked — ring logos (codex) leave the middle hollow.
+        let mut min_x = px;
+        let mut max_x = 0usize;
+        let mut min_y = px;
+        let mut max_y = 0usize;
+        for y in 0..px {
+            for x in 0..px {
+                if alpha_at(x, y) > 0 {
+                    min_x = min_x.min(x);
+                    max_x = max_x.max(x);
+                    min_y = min_y.min(y);
+                    max_y = max_y.max(y);
+                }
+            }
+        }
+        assert!(max_x > min_x && max_y > min_y, "logo must paint some ink");
+        let centre_drift_x = ((min_x + max_x) as f32 / 2.0 - px as f32 / 2.0).abs();
+        let centre_drift_y = ((min_y + max_y) as f32 / 2.0 - px as f32 / 2.0).abs();
+        assert!(
+            centre_drift_x < 3.0 && centre_drift_y < 3.0,
+            "logo bounding box must be centred: drift=({centre_drift_x},{centre_drift_y})"
+        );
         let left_edge = [alpha_at(0, px / 2), alpha_at(1, px / 2)]
             .iter()
             .fold(0u16, |a, v| a + u16::from(*v));
