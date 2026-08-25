@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import { Select } from "../../../components/FormControls";
 
 export function V5Section({
   title,
@@ -107,6 +108,29 @@ export function V5Seg({
           {option.label}
         </button>
       ))}
+    </div>
+  );
+}
+
+export function V5Select({
+  value,
+  options,
+  onChange,
+  disabled,
+}: {
+  value: string;
+  options: { value: string; label: string }[];
+  onChange: (value: string) => void;
+  disabled?: boolean;
+}) {
+  return (
+    <div className="s5-dropdown">
+      <Select
+        value={value}
+        options={options}
+        onChange={onChange}
+        disabled={disabled}
+      />
     </div>
   );
 }

@@ -57,7 +57,7 @@ pub fn apply_window_layout(
     if !props.decorations {
         if props.resizable {
             // Transparent, not the solid-brush variant. `main` is the only
-            // window this function lays out, and PopOut (the dashboard) is its
+            // window this function lays out, and Settings is its
             // borderless *resizable* mode. Hidden is never shown through this
             // path. The solid-brush variant
             // this replaced painted the corner regions the frontend clips away
@@ -79,7 +79,7 @@ pub fn apply_window_layout(
         // it is its own dedicated window now, never `main`, so this function
         // (which only ever runs against `main`'s window; see callers in
         // `shell/transition.rs`) needs no special-case for it. `main`'s
-        // surface machine only ever holds Hidden/PopOut/Settings, none of
+        // surface machine only ever holds Hidden/Settings, none of
         // which race a frontend-owned size the way the old shared-window
         // TrayPanel mode did — so the backend is the sole size-setter here,
         // unconditionally, for every mode this function can be called with.

@@ -1,5 +1,6 @@
 import { useLocale } from "../../../hooks/useLocale";
 import { Field, SegmentedControl, Toggle } from "../../../components/FormControls";
+import { FONT_WHITELIST_DEFAULT } from "../../../lib/fontWhitelist";
 import FontSettingsBlock from "../FontSettingsBlock";
 import type { ThemePreference } from "../../../types/bridge";
 import type { TabProps } from "../../Settings";
@@ -50,7 +51,7 @@ export default function AppearanceTab({ settings, set, saving }: TabProps) {
           <FontSettingsBlock
             value={{
               size: settings.menuFontSize ?? 12,
-              family: settings.menuFontFamily || "Microsoft YaHei UI",
+              family: settings.menuFontFamily || FONT_WHITELIST_DEFAULT,
               weight: settings.menuFontWeight ?? 300,
             }}
             disabled={saving}

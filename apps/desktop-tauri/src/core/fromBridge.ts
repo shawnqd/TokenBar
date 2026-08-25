@@ -52,17 +52,21 @@ export function fromBridge(
   const hasTelemetry = telemetry != null;
   const hasExtraWindows = windows.some((window) => window.role === "additional");
 
+  // Backend-reported flags win when present (the bridge lists which providers
+  // the parsers actually cover); older cached snapshots fall back to a false
+  // default so a slot is never shown for something the backend cannot fill.
+  const backend = model.capabilities;
   const inferred: ProviderCapability = {
     hasQuota,
     hasBalance,
     hasTelemetry,
     hasExtraWindows,
-    supportsCharts: false,
-    supportsLocalCost: false,
-    supportsOutputSpeed: false,
-    supportsProviderDashboard: false,
-    supportsStatusPage: false,
-    supportsLogin: false,
+    supportsCharts: backend?.localUsage ?? false,
+    supportsLocalCost: backend?.localUsage ?? false,
+    supportsOutputSpeed: backend?.outputSpeed ?? false,
+    supportsProviderDashboard: backend?.providerDashboard ?? false,
+    supportsStatusPage: backend?.statusPage ?? false,
+    supportsLogin: backend?.login ?? false,
     snapshotShape: snapshotShape({
       realQuotaCount,
       hasQuota,

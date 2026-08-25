@@ -26,12 +26,12 @@ function opencodeSnapshot(): ProviderUsageSnapshot {
   return {
     providerId: "opencodego",
     displayName: "OpenCode Go",
-    primary: rw(72, 300, "session"),
+    primary: rw(72, 300, "session", "2026-08-16T17:00:00Z"),
     primaryLabel: "rolling",
-    secondary: rw(58, 10080, "weekly"),
+    secondary: rw(58, 10080, "weekly", "2026-08-22T00:00:00Z"),
     secondaryLabel: "weekly",
     modelSpecific: null,
-    tertiary: rw(45, 43200, "monthly"),
+    tertiary: rw(45, 43200, "monthly", "2026-09-10T00:00:00Z"),
     extraRateWindows: [
       { id: "renewal", title: "Renews", window: rw(0, null, null, "2026-08-22T00:00:00Z"), usageKnown: true },
       { id: "zen-balance", title: "Zen balance", window: rw(0, null, null, null, "$38.80"), usageKnown: true },
@@ -49,6 +49,8 @@ describe("TrayCard OpenCode Go projection", () => {
       ProviderWeeklyLabel: "周额度",
       ProviderMonthlyLabel: "月额度",
       DetailWindowModelSpecific: "模型专属",
+      ResetsInDaysHours: "{}d {}h",
+      ResetsInHoursMinutes: "{}h {}m",
     }));
   });
 
@@ -68,7 +70,8 @@ describe("TrayCard OpenCode Go projection", () => {
     const labels = Array.from(container.querySelectorAll(".quota-row__label, .quota-tile__label"))
       .map((el) => el.textContent);
     // OpenCode Go layout: weekly is now a full tile in the grid, not the hero secondary.
-    expect(labels).toEqual(["5 小时额度", "周额度", "月额度"]);
+    // Tiles use the short cycle labels (周/月) so label + reset share a line.
+    expect(labels).toEqual(["5 小时额度", "周", "月"]);
     const heroPct = container.querySelector(".quota-row__hero-pct");
     expect(heroPct?.textContent).toBe("72%");
     // Zen balance surfaces through the balance block, not as a quota tile.
@@ -78,6 +81,15 @@ describe("TrayCard OpenCode Go projection", () => {
     expect(container.textContent).not.toContain("Renews");
     // The zen-balance row's own title stays out of the UI; only 余额 amount renders.
     expect(container.textContent).not.toContain("Zen balance");
+    const tileResets = Array.from(container.querySelectorAll(".quota-tile__reset"))
+      .map((el) => el.textContent);
+    expect(tileResets).toHaveLength(2);
+    expect(tileResets.every((text) => text && text.length > 0)).toBe(true);
+    // OpenCode Go has no local session-log scanner and no output-speed parser,
+    // so the insight footer (speed | usage) must be hidden entirely — never an
+    // empty slot. Capability comes from the stable snapshot, not fetch state,
+    // so the card does not flicker the footer in and out while data loads.
+    expect(container.querySelector(".meta-well")).toBeNull();
   });
 
   it("lone extra tile spans full width", async () => {
@@ -93,8 +105,12 @@ describe("TrayCard OpenCode Go projection", () => {
     await waitFor(() => {
       if (!container.querySelector(".tray-card")) throw new Error("card not rendered");
     });
-    // A single leftover tile must take both grid columns.
-    expect(container.querySelector(".quota-tile--full")).not.toBeNull();
+    // A single leftover tile must take both grid columns and keep label +
+    // reset together on the title row of the full-width head.
+    const fullTile = container.querySelector(".quota-tile--full");
+    expect(fullTile).not.toBeNull();
+    expect(fullTile?.querySelector(".quota-tile__title")).not.toBeNull();
+    expect(fullTile?.querySelector(".quota-tile__reset")).not.toBeNull();
   });
 
   it("minimal tier keeps the hero metric and never invents a bar", async () => {

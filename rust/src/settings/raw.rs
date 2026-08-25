@@ -246,7 +246,7 @@ fn default_menu_font_weight() -> u16 {
 }
 
 fn default_menu_font_family() -> String {
-    "Microsoft YaHei UI".to_string()
+    "MiSans VF".to_string()
 }
 
 fn default_menu_font_size() -> u8 {
@@ -258,7 +258,7 @@ fn default_taskbar_widget_content() -> String {
 }
 
 fn default_taskbar_widget_font_family() -> String {
-    "Microsoft YaHei UI".to_string()
+    "MiSans VF".to_string()
 }
 
 fn default_taskbar_widget_font_size() -> u8 {

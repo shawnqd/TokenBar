@@ -424,6 +424,24 @@ mod tests {
         }
     }
 
+    fn test_capabilities(id: &str) -> codexbar::core::ProviderCapabilities {
+        let provider_id = codexbar::core::ProviderId::from_cli_name(id)
+            .unwrap_or(codexbar::core::ProviderId::Codex);
+        let provider_metadata = codexbar::core::ProviderMetadata {
+            id: provider_id,
+            display_name: "test",
+            session_label: "Session",
+            weekly_label: "Weekly",
+            supports_opus: false,
+            supports_credits: false,
+            default_enabled: false,
+            is_primary: false,
+            dashboard_url: None,
+            status_page_url: None,
+        };
+        codexbar::core::ProviderCapabilities::for_provider(provider_id, &provider_metadata)
+    }
+
     fn snapshot(id: &str, name: &str) -> ProviderUsageSnapshot {
         ProviderUsageSnapshot {
             provider_id: id.to_string(),
@@ -446,6 +464,7 @@ mod tests {
             tray_status_label: None,
             fetch_duration_ms: None,
             wayfinder_usage: None,
+            capabilities: test_capabilities(id),
         }
     }
 

@@ -75,23 +75,6 @@ pub fn transition_to_target(
     )
 }
 
-pub fn reopen_to_target(
-    app: &AppHandle,
-    mode: SurfaceMode,
-    target: SurfaceTarget,
-    position: Option<(i32, i32)>,
-) -> Result<SurfaceMode, String> {
-    apply_transition_request_with_strategy(
-        app,
-        ShellTransitionRequest {
-            mode,
-            target,
-            position,
-        },
-        true,
-    )
-}
-
 fn apply_transition_request_with_strategy(
     app: &AppHandle,
     request: ShellTransitionRequest,
@@ -466,7 +449,7 @@ pub(super) fn apply_transition(
             // "revealed by the frontend after first layout" behavior lives
             // entirely in `shell::flyout_window` + the frontend's
             // `useTrayPanelLayout` now — `main`'s transitions here can only
-            // ever target Hidden/PopOut/Settings, none of which defer their
+            // ever target Hidden/Settings, none of which defer their
             // own reveal.)
             if needs_show {
                 let _ = show_window(window);

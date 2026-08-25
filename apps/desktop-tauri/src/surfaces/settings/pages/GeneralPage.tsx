@@ -9,7 +9,7 @@ import {
 import type { Language, LanguageOption } from "../../../types/bridge";
 import type { LocaleKey } from "../../../i18n/keys";
 import type { SettingsPageProps } from "./pageTypes";
-import { V5Field, V5Section, V5Toggle } from "./v5Controls";
+import { V5Field, V5Section, V5Select, V5Toggle } from "./v5Controls";
 
 const FALLBACK_LANGUAGE_OPTIONS: LanguageOption[] = [
   { value: "english", display: "English" },
@@ -73,20 +73,15 @@ export default function GeneralPage({
     <>
       <V5Section title={t("SectionLanguage")}>
         <V5Field label={t("InterfaceLanguage")} help="切换后只换文案，不改变窗口大小">
-          <select
-            className="s5-select"
+          <V5Select
             value={settings.uiLanguage}
             disabled={saving}
-            onChange={(event) =>
-              set({ uiLanguage: event.target.value as Language })
-            }
-          >
-            {languageOptions.map((opt) => (
-              <option key={opt.value} value={opt.value}>
-                {opt.display}
-              </option>
-            ))}
-          </select>
+            options={languageOptions.map((opt) => ({
+              value: opt.value,
+              label: opt.display,
+            }))}
+            onChange={(value) => set({ uiLanguage: value as Language })}
+          />
         </V5Field>
       </V5Section>
 
@@ -114,20 +109,15 @@ export default function GeneralPage({
           label={t("RefreshIntervalLabel")}
           help={t("RefreshIntervalHelper")}
         >
-          <select
-            className="s5-select"
+          <V5Select
             value={String(settings.refreshIntervalSecs)}
             disabled={saving}
-            onChange={(event) =>
-              set({ refreshIntervalSecs: Number(event.target.value) })
-            }
-          >
-            {REFRESH_CADENCE.map((opt) => (
-              <option key={opt.value} value={opt.value}>
-                {t(opt.labelKey)}
-              </option>
-            ))}
-          </select>
+            options={REFRESH_CADENCE.map((opt) => ({
+              value: String(opt.value),
+              label: t(opt.labelKey),
+            }))}
+            onChange={(value) => set({ refreshIntervalSecs: Number(value) })}
+          />
         </V5Field>
         <V5Field
           label={t("ProviderTimeoutRecovery")}

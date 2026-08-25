@@ -390,7 +390,6 @@ mod tests {
         assert!(items[status].disabled);
 
         // Nothing from the old fixed list survives.
-        assert!(ids.iter().any(|id| id == "show_panel"), "dashboard row");
         assert!(ids.iter().any(|id| id == "toggle_float_bar"), "float bar row");
         assert!(ids.iter().any(|id| id == "about"), "about row");
     }

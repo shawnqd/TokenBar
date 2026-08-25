@@ -146,10 +146,6 @@ pub(crate) fn build_tray_menu_with(
         "pop_out",
         text(LocaleKey::TrayOpenPanel),
     ));
-    menu.push(TrayMenuEntry::item(
-        "show_panel",
-        text(LocaleKey::TrayOpenDashboard),
-    ));
     menu.push(TrayMenuEntry::separator());
 
     menu.push(TrayMenuEntry::check_item(
@@ -305,7 +301,6 @@ mod tests {
             vec![
                 "Refresh All",
                 "Open Tray Panel",
-                "Open Dashboard",
                 "Show Floating Bar",
                 "Providers",
                 "Settings...",

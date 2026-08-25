@@ -28,6 +28,7 @@ vi.mock("@tauri-apps/api/window", () => ({
 }));
 vi.mock("../../../lib/tauri", () => ({
   getTaskbarFontFamilies: vi.fn().mockResolvedValue([]),
+  openExternalUrl: vi.fn(),
   // Empty rather than absent: this suite is about which settings keys each page
   // writes, not about the composer, so every window kind stays offered.
   getTaskbarWindowAvailability: vi.fn().mockResolvedValue({}),
@@ -43,7 +44,6 @@ vi.mock("../../../lib/tauri", () => ({
   getSettingsSnapshot: vi.fn().mockResolvedValue({}),
 }));
 
-import DashboardTab from "./DashboardTab";
 import FloatBarTab from "./FloatBarTab";
 import TaskbarTab from "./TaskbarTab";
 import type { SettingsSnapshot, SettingsUpdate } from "../../../types/bridge";
@@ -88,10 +88,11 @@ const settings = {
  * must that page's "restore defaults".
  */
 describe("settings component isolation", () => {
+  // DashboardTab was removed as dead code (V5 ten-page nav replaced it with
+  // TrayPanelPage); FloatBar/Taskbar isolation remains the live check.
   const cases = [
-    { name: "dashboard", Tab: DashboardTab, own: /^dashboard/, foreign: [/^floatBar/, /^taskbar/] },
-    { name: "floatBar", Tab: FloatBarTab, own: /^floatBar/, foreign: [/^dashboard/, /^taskbar/] },
-    { name: "taskbar", Tab: TaskbarTab, own: /^taskbar/, foreign: [/^dashboard/, /^floatBar/] },
+    { name: "floatBar", Tab: FloatBarTab, own: /^floatBar/, foreign: [/^taskbar/] },
+    { name: "taskbar", Tab: TaskbarTab, own: /^taskbar/, foreign: [/^floatBar/] },
   ];
 
   for (const { name, Tab, own, foreign } of cases) {
@@ -146,14 +147,4 @@ describe("settings component isolation", () => {
     });
   }
 
-  it("uses provider switches and provider data for dashboard content", () => {
-    render(<DashboardTab settings={settings} set={() => {}} saving={false} />);
-
-    expect(screen.queryByText("DashboardProvidersLabel")).not.toBeInTheDocument();
-    expect(screen.queryByText("DashboardQuotaWindowsLabel")).not.toBeInTheDocument();
-    expect(screen.queryByText("DashboardQuotaModeSessionWeekly")).not.toBeInTheDocument();
-    expect(screen.queryByText("DashboardQuotaModeWeeklyOnly")).not.toBeInTheDocument();
-    expect(screen.queryByText("TaskbarWindowDaily")).not.toBeInTheDocument();
-    expect(screen.queryByText("TaskbarWindowMonthly")).not.toBeInTheDocument();
-  });
 });

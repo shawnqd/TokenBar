@@ -14,9 +14,19 @@ use codexbar::host::session::launch_block_reason;
 use codexbar::settings::{ApiKeys, Language, ManualCookies, Settings};
 
 #[test]
-fn validate_surface_target_accepts_matching_target() {
-    let target = validate_surface_target(SurfaceMode::PopOut, SurfaceTarget::Dashboard).unwrap();
-    assert_eq!(target, SurfaceTarget::Dashboard);
+fn validate_surface_target_rejects_tray_panel_hosted_provider_target() {
+    // Provider deep links live in the tray panel, so a `trayPanel`-hosted
+    // request is well-formed but must still be rejected by set_surface_mode —
+    // the panel is a dedicated window now.
+    let error = validate_surface_target(
+        SurfaceMode::TrayPanel,
+        SurfaceTarget::Provider {
+            provider_id: "codex".into(),
+        },
+    )
+    .unwrap_err();
+
+    assert!(error.contains("open_flyout_window"));
 }
 
 #[test]

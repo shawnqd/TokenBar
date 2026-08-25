@@ -3,7 +3,7 @@ import { BarChart } from "../../../../components/charts/BarChart";
 import { LocalUsageBlock } from "../../../../components/MenuCard";
 import { useLocale } from "../../../../hooks/useLocale";
 import { getProviderChartData, getSettingsSnapshot } from "../../../../lib/tauri";
-import { providerSupportsChartData } from "../../../../lib/providerCharts";
+import { providerCapabilities } from "../../../../lib/providerCapabilities";
 import type {
   CostSnapshotBridge,
   LocalUsagePeriod,
@@ -68,6 +68,7 @@ export function StatsSection({
   localUsagePeriod,
 }: Props) {
   const { t } = useLocale();
+  const caps = providerCapabilities({ providerId, capabilities: undefined });
   const [data, setData] = useState<ProviderChartData | null>(null);
   const [active, setActive] = useState<TabKey | null>(null);
   const [range, setRange] = useState<RangeKey>("30d");
@@ -76,11 +77,6 @@ export function StatsSection({
   useEffect(() => {
     let cancelled = false;
     setData(null);
-    if (!providerSupportsChartData(providerId)) {
-      return () => {
-        cancelled = true;
-      };
-    }
     getProviderChartData(providerId, accountEmail ?? undefined)
       .then((d) => {
         if (!cancelled) setData(d);
@@ -113,8 +109,8 @@ export function StatsSection({
   const usageBreakdown = useMemo(() => data?.usageBreakdown ?? [], [data]);
 
   const available: TabKey[] = [];
-  if (hasLocalUsage(localUsage)) available.push("tokens");
-  if (speed) available.push("speed");
+  if (hasLocalUsage(localUsage) && caps.localUsage) available.push("tokens");
+  if (speed && caps.outputSpeed) available.push("speed");
   if (cost || costHistory.length > 0) available.push("cost");
   if (creditsHistory.length > 0) available.push("credits");
   if (usageBreakdown.length > 0) available.push("usage");

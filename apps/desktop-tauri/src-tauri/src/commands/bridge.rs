@@ -169,6 +169,7 @@ pub struct ProviderUsageSnapshot {
     pub tray_status_label: Option<String>,
     pub fetch_duration_ms: Option<u128>,
     pub wayfinder_usage: Option<codexbar::core::WayfinderUsageSnapshot>,
+    pub capabilities: codexbar::core::ProviderCapabilities,
 }
 
 pub(crate) fn pace_stage_str(stage: codexbar::core::PaceStage) -> &'static str {
@@ -297,6 +298,7 @@ impl ProviderUsageSnapshot {
             tray_status_label: None,
             fetch_duration_ms: None,
             wayfinder_usage: result.wayfinder_usage.clone(),
+            capabilities: codexbar::core::ProviderCapabilities::for_provider(id, metadata),
         }
     }
 
@@ -338,6 +340,7 @@ impl ProviderUsageSnapshot {
             tray_status_label: None,
             fetch_duration_ms: None,
             wayfinder_usage: None,
+            capabilities: codexbar::core::ProviderCapabilities::for_provider(id, metadata),
         }
     }
 }

@@ -10,6 +10,7 @@ import type { SettingsSnapshot } from "../../../types/bridge";
 
 vi.mock("../../../lib/tauri", () => ({
   getTaskbarFontFamilies: () => Promise.resolve([]),
+  openExternalUrl: vi.fn(),
 }));
 
 const baseSettings = {

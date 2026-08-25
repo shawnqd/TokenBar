@@ -1,5 +1,6 @@
 import { TASKBAR_PROVIDER_AUTO } from "../../../types/bridge";
 import type { TaskbarEntry, TaskbarWindowKind } from "../../../types/bridge";
+import { V5Select } from "./v5Controls";
 
 const WINDOWS: { value: TaskbarWindowKind; label: string }[] = [
   { value: "session", label: "会话" },
@@ -72,37 +73,31 @@ export function V5EntryList({
               className={`s5-entry${hidden ? " ghosted" : ""}`}
             >
               <span className="s5-idx">{index + 1}</span>
-              <select
-                className="s5-select"
+              <V5Select
                 value={entry.providerId}
                 disabled={disabled}
-                onChange={(event) =>
-                  replace(index, { providerId: event.target.value })
-                }
-              >
-                <option value={TASKBAR_PROVIDER_AUTO}>{followLabel}</option>
-                {providers.map((provider) => (
-                  <option key={provider.id} value={provider.id}>
-                    {provider.label}
-                  </option>
-                ))}
-              </select>
-              <select
-                className="s5-select"
+                options={[
+                  { value: TASKBAR_PROVIDER_AUTO, label: followLabel },
+                  ...providers.map((provider) => ({
+                    value: provider.id,
+                    label: provider.label,
+                  })),
+                ]}
+                onChange={(value) => replace(index, { providerId: value })}
+              />
+              <V5Select
                 value={entry.window}
                 disabled={disabled}
-                onChange={(event) =>
+                options={WINDOWS.map((window) => ({
+                  value: window.value,
+                  label: window.label,
+                }))}
+                onChange={(value) =>
                   replace(index, {
-                    window: event.target.value as TaskbarWindowKind,
+                    window: value as TaskbarWindowKind,
                   })
                 }
-              >
-                {WINDOWS.map((window) => (
-                  <option key={window.value} value={window.value}>
-                    {window.label}
-                  </option>
-                ))}
-              </select>
+              />
               <span>{hidden ? "条带不可见" : ""}</span>
               <span className="s5-entry-actions">
                 <button

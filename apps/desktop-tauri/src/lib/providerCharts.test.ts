@@ -2,17 +2,22 @@ import { describe, expect, it } from "vitest";
 import { providerSupportsChartData } from "./providerCharts";
 
 describe("providerSupportsChartData", () => {
-  it("keeps chart fetches limited to providers with chart/local usage data", () => {
-    expect(providerSupportsChartData("codex")).toBe(true);
-    expect(providerSupportsChartData("claude")).toBe(true);
-    expect(providerSupportsChartData("openai")).toBe(true);
-    expect(providerSupportsChartData("OpenAI")).toBe(true);
-    // Grok has a local session-log scanner in Rust. It was absent here for a
-    // release: the backend produced the data and the card never asked for it.
-    expect(providerSupportsChartData("grok")).toBe(true);
-
-    expect(providerSupportsChartData("copilot")).toBe(false);
-    expect(providerSupportsChartData("cursor")).toBe(false);
-    expect(providerSupportsChartData("deepseek")).toBe(false);
+  it("treats every provider uniformly so the UI always fetches backend data", () => {
+    // The UI asks for chart/local-usage data for every provider through the
+    // same path; the backend (scan_local_cost / get_daily_cost_history /
+    // load_openai_dashboard_chart_data) returns real data where it has a
+    // parser and empty/zero otherwise. No provider hides the slots by list.
+    for (const id of [
+      "codex",
+      "claude",
+      "openai",
+      "grok",
+      "copilot",
+      "cursor",
+      "deepseek",
+      "opencodego",
+    ]) {
+      expect(providerSupportsChartData(id)).toBe(true);
+    }
   });
 });

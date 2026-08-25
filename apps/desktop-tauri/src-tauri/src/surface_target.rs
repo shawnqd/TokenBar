@@ -25,7 +25,6 @@ const SETTINGS_TAB_IDS: &[&str] = &[
 pub enum SurfaceTarget {
     #[default]
     Summary,
-    Dashboard,
     Provider {
         #[serde(rename = "providerId")]
         provider_id: String,
@@ -40,7 +39,6 @@ impl SurfaceTarget {
     pub fn parse(s: &str) -> Option<Self> {
         match s {
             "summary" => Some(Self::Summary),
-            "dashboard" => Some(Self::Dashboard),
             _ => {
                 if let Some(provider_id) = s.strip_prefix("provider:")
                     && !provider_id.is_empty()
@@ -66,17 +64,19 @@ impl SurfaceTarget {
     pub fn default_for_mode(mode: SurfaceMode) -> Self {
         match mode {
             SurfaceMode::Hidden | SurfaceMode::TrayPanel => Self::Summary,
-            SurfaceMode::PopOut => Self::Dashboard,
             SurfaceMode::Settings => Self::Settings {
                 tab: "general".into(),
             },
         }
     }
 
+    /// The surface that hosts a target. Provider deep links (and the summary)
+    /// live in the tray panel: `main`'s surface machine can only host
+    /// Settings — a host mode of TrayPanel tells the dispatch layer to open
+    /// the dedicated flyout window instead of transitioning `main`.
     pub fn mode(&self) -> SurfaceMode {
         match self {
-            Self::Summary => SurfaceMode::TrayPanel,
-            Self::Dashboard | Self::Provider { .. } => SurfaceMode::PopOut,
+            Self::Summary | Self::Provider { .. } => SurfaceMode::TrayPanel,
             Self::Settings { .. } => SurfaceMode::Settings,
         }
     }
@@ -149,15 +149,11 @@ mod tests {
             crate::surface::SurfaceMode::TrayPanel
         );
         assert_eq!(
-            SurfaceTarget::Dashboard.mode(),
-            crate::surface::SurfaceMode::PopOut
-        );
-        assert_eq!(
             SurfaceTarget::Provider {
                 provider_id: "claude".into()
             }
             .mode(),
-            crate::surface::SurfaceMode::PopOut
+            crate::surface::SurfaceMode::TrayPanel
         );
         assert_eq!(
             SurfaceTarget::Settings {

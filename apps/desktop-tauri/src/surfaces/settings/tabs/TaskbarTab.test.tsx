@@ -9,12 +9,12 @@ const tauriMocks = vi.hoisted(() => ({
   // does: continuous weight ahead of static, curated ahead of the ~400 symbol
   // and script faces a real Windows install carries.
   getTaskbarFontFamilies: vi.fn().mockResolvedValue([
+    { name: "MiSans VF", variableWeight: true, hasCjk: true, recommended: true },
     { name: "Bahnschrift", variableWeight: true, hasCjk: false, recommended: true },
     {
       name: "Microsoft YaHei UI",
       variableWeight: false,
       hasCjk: true,
-      // Static multi-face families are never recommended now.
       recommended: false,
     },
     { name: "Wingdings", variableWeight: false, hasCjk: false, recommended: false },
@@ -31,6 +31,7 @@ const tauriMocks = vi.hoisted(() => ({
   // rather than composing an imitation, so the mock is shaped like real painted
   // output — a brand mark in its own colour, and a balance printed as money
   // rather than as the "unsupported" the old imitation always showed.
+  openExternalUrl: vi.fn(),
   getTaskbarPreviewLines: vi.fn().mockResolvedValue([
     { glyph: "◆", color: "#49a3b0", text: "周 18%" },
     { glyph: "◈", color: "#cc7c5e", text: "5小时 59%" },
@@ -144,15 +145,14 @@ describe("TaskbarTab", () => {
       name: /Microsoft YaHei UI/,
     });
     fireEvent.click(trigger);
-    const option = await screen.findByText(/Bahnschrift/);
+    const option = await screen.findByText(/^MiSans VF$/);
     fireEvent.click(option);
-    expect(set).toHaveBeenCalledWith({ taskbarWidgetFontFamily: "Bahnschrift" });
+    expect(set).toHaveBeenCalledWith({ taskbarWidgetFontFamily: "MiSans VF" });
   });
 
-  /// The picker only offers fonts with a genuine continuous `wght` axis.
-  /// Static multi-face families (Wingdings, Microsoft YaHei as a non-selected
-  /// option) must not appear — the weight slider is a lie on those faces.
-  it("lists only true continuous-weight families", async () => {
+  /// The picker is the design-system five-font whitelist, not every installed
+  /// variable face (Bahnschrift / Segoe Variable / Cascadia stay out).
+  it("lists only the five confirmed design-system families", async () => {
     const set = vi.fn();
     render(<TaskbarTab settings={settings} set={set} saving={false} />);
 
@@ -164,11 +164,10 @@ describe("TaskbarTab", () => {
       name: /Microsoft YaHei UI/,
     });
     fireEvent.click(trigger);
-    // Current (static) selection stays so the control does not rewrite itself.
     expect(screen.getByRole("option", { name: /Microsoft YaHei UI/ })).toBeTruthy();
-    // Real variable face is offered and tagged.
-    expect(screen.getByText(/Bahnschrift · TaskbarFontVariableTag/)).toBeTruthy();
-    // Symbol / static faces never enter the continuous list.
+    expect(screen.getByRole("option", { name: /^MiSans VF$/ })).toBeTruthy();
+    expect(screen.getByRole("option", { name: /Source Han Sans VF/ })).toBeTruthy();
+    expect(screen.queryByText(/Bahnschrift/)).toBeNull();
     expect(screen.queryByText(/Wingdings/)).toBeNull();
   });
 
@@ -187,7 +186,7 @@ describe("TaskbarTab", () => {
       taskbarWidgetFontWeight: 400,
       // The best family this machine has, not a name hardcoded in the UI —
       // the backend already ranked continuous weight ahead of static.
-      taskbarWidgetFontFamily: "Bahnschrift",
+      taskbarWidgetFontFamily: "MiSans VF",
       taskbarWidgetTextAlign: "left",
     });
   });

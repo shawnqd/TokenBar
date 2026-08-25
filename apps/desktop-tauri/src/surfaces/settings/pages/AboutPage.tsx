@@ -39,7 +39,7 @@ export default function AboutPage(_props: SettingsPageProps) {
   };
 
   return (
-    <section className="s5-section" style={{ padding: 16 }}>
+    <section className="s5-section">
       <div className="s5-about">
         {appInfo ? (
           <img

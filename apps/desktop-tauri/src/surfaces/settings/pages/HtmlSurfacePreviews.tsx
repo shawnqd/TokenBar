@@ -43,7 +43,7 @@ export function SurfacePreviewFrame({
   children: ReactNode;
 }) {
   return (
-    <aside className="s5-stage" aria-label="实时预览">
+    <aside className={`s5-stage s5-stage--${kind}`} aria-label="实时预览">
       <div className="s5-preview-label">实时预览</div>
       <div className={`s5-stage-frame s5-stage-frame--${kind}`}>{children}</div>
     </aside>

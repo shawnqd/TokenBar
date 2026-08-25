@@ -44,37 +44,6 @@ fn current_tray_anchor(app: &AppHandle) -> Option<crate::state::TrayAnchor> {
     st.lock().ok()?.tray_anchor
 }
 
-fn visible_surface_position_for_mode(app: &AppHandle, mode: SurfaceMode) -> Option<(i32, i32)> {
-    let window = app.get_webview_window("main")?;
-    let monitor_placements = window
-        .available_monitors()
-        .ok()
-        .map(|monitors| monitors.iter().map(monitor_placement).collect::<Vec<_>>());
-    let current_monitor = window
-        .current_monitor()
-        .ok()
-        .flatten()
-        .map(|monitor| monitor_placement(&monitor));
-    let current_window_bounds = match (window.outer_position(), window.outer_size()) {
-        (Ok(position), Ok(size)) => Some(((position.x, position.y), (size.width, size.height))),
-        _ => None,
-    };
-    let primary_monitor = window
-        .primary_monitor()
-        .ok()
-        .flatten()
-        .map(|monitor| monitor_placement(&monitor));
-
-    visible_surface_position_for_mode_with_fallbacks(
-        mode,
-        monitor_placements.as_deref(),
-        current_tray_anchor(app),
-        current_monitor,
-        current_window_bounds,
-        primary_monitor,
-    )
-}
-
 pub(super) fn visible_surface_position_for_mode_with_fallbacks(
     mode: SurfaceMode,
     monitor_placements: Option<&[MonitorPlacement]>,
@@ -138,8 +107,6 @@ pub fn default_surface_position(app: &AppHandle, mode: SurfaceMode) -> Option<(i
         SurfaceMode::TrayPanel => tray_panel_position(app)
             .or_else(|| inferred_tray_panel_position(app))
             .or_else(|| shortcut_panel_position(app)),
-        SurfaceMode::PopOut => remembered_surface_position(app, mode)
-            .or_else(|| visible_surface_position_for_mode(app, mode)),
         SurfaceMode::Settings => {
             remembered_surface_position(app, mode).or_else(|| centered_settings_position(app))
         }

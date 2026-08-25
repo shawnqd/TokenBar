@@ -1,3 +1,4 @@
+import { useMemo, useState } from "react";
 import { useLocale } from "../../../hooks/useLocale";
 import type {
   LocalUsagePeriod,
@@ -6,10 +7,23 @@ import type {
 } from "../../../types/bridge";
 import type { SettingsPageProps } from "./pageTypes";
 import TrayCard from "../../../surfaces/tray/TrayCard";
+import ProviderGrid from "../../../components/ProviderGrid";
 import { SurfacePreviewFrame } from "./HtmlSurfacePreviews";
 import { catalogPreviewSnapshots } from "../previews/catalogFixtures";
 import { quotaDisplayContext } from "../../../lib/quotaDisplay";
 import { V5Field, V5Num, V5Section, V5Seg, V5Toggle } from "./v5Controls";
+
+const footerIconProps = {
+  width: 14,
+  height: 14,
+  viewBox: "0 0 24 24",
+  fill: "none",
+  stroke: "currentColor",
+  strokeWidth: 1.85,
+  strokeLinecap: "round" as const,
+  strokeLinejoin: "round" as const,
+  "aria-hidden": true,
+};
 
 const TRAY_DEFAULTS = {
   menuBarDisplayMode: "detailed" as MenuBarDisplayMode,
@@ -39,12 +53,26 @@ export default function TrayPanelPage({
 }: SettingsPageProps) {
   const { t } = useLocale();
   const scale = settings.trayScalePercent ?? 100;
-
-  const preview = catalogPreviewSnapshots().filter((row) =>
-    PREVIEW_PROVIDERS.includes(row.providerId),
+  const [selectedProviderId, setSelectedProviderId] = useState<string | null>(
+    null,
   );
+
+  const preview = useMemo(() => {
+    const rows = catalogPreviewSnapshots().filter((row) =>
+      PREVIEW_PROVIDERS.includes(row.providerId),
+    );
+    if (!settings.menuBarShowsHighestUsage) return rows;
+    return [...rows].sort(
+      (left, right) => right.primary.usedPercent - left.primary.usedPercent,
+    );
+  }, [settings.menuBarShowsHighestUsage]);
   const display = quotaDisplayContext(settings, "dashboard");
-  const density = settings.menuBarDisplayMode;
+  const isDetail = selectedProviderId !== null;
+  const density = isDetail ? "detailed" : settings.menuBarDisplayMode;
+  const visible = isDetail
+    ? preview.filter((row) => row.providerId === selectedProviderId)
+    : preview;
+  const scaleRatio = Math.max(1, Math.min(2, scale / 100));
 
   return (
     <div className="s5-surf-split">
@@ -177,18 +205,76 @@ export default function TrayPanelPage({
       </div>
 
       <SurfacePreviewFrame kind="tray">
-        <div className="s5-tray-stack">
-          {preview.map((snapshot) => (
-            <TrayCard
-              key={snapshot.providerId}
-              provider={snapshot}
-              densityMode={density}
+        <div
+          className="tray-panel-reveal s5-tray-flyout"
+          style={{ transform: `scale(${scaleRatio})` }}
+        >
+          <div className="tray-panel">
+            <ProviderGrid
+              providers={preview}
+              selectedProviderId={selectedProviderId}
               display={display}
-              showProviderIcon={settings.switcherShowsIcons}
-              localUsagePeriod={settings.localUsagePeriod}
-              outputSpeed={null}
+              showProviderIcons={settings.switcherShowsIcons}
+              onSelect={setSelectedProviderId}
             />
-          ))}
+            <div className="flyout-body">
+              {visible.map((snapshot, idx) => (
+                <div key={snapshot.providerId}>
+                  {idx > 0 && <div className="provider-stack-divider" />}
+                  <TrayCard
+                    provider={snapshot}
+                    densityMode={density}
+                    display={display}
+                    showProviderIcon={settings.switcherShowsIcons}
+                    localUsagePeriod={settings.localUsagePeriod}
+                    outputSpeed={null}
+                    detail={isDetail}
+                  />
+                </div>
+              ))}
+            </div>
+            <footer className="flyout-footer" aria-label={t("PanelMenu")}>
+
+              <button type="button" className="footer-row">
+                <span className="footer-row__left">
+                  <span className="footer-row__icon">
+                    <svg {...footerIconProps}>
+                      <path d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" />
+                      <path d="M3 3v5h5" />
+                      <path d="M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16" />
+                      <path d="M21 21v-5h-5" />
+                    </svg>
+                  </span>
+                  <span className="footer-row__label">{t("ActionRefresh")}</span>
+                </span>
+                <span className="footer-row__shortcut">Ctrl+R</span>
+              </button>
+              <button type="button" className="footer-row">
+                <span className="footer-row__left">
+                  <span className="footer-row__icon">
+                    <svg {...footerIconProps}>
+                      <circle cx="12" cy="12" r="3" />
+                      <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0 1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 2-2 2 2 0 0 1 2 2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z" />
+                    </svg>
+                  </span>
+                  <span className="footer-row__label">{t("MenuSettings")}</span>
+                </span>
+                <span className="footer-row__shortcut">Ctrl+,</span>
+              </button>
+              <button type="button" className="footer-row">
+                <span className="footer-row__left">
+                  <span className="footer-row__icon">
+                    <svg {...footerIconProps}>
+                      <path d="M18.36 6.64a9 9 0 1 1-12.73 0" />
+                      <line x1="12" y1="2" x2="12" y2="12" />
+                    </svg>
+                  </span>
+                  <span className="footer-row__label">{t("MenuQuit")}</span>
+                </span>
+                <span className="footer-row__shortcut">Ctrl+Q</span>
+              </button>
+            </footer>
+          </div>
         </div>
       </SurfacePreviewFrame>
     </div>

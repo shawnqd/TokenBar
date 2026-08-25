@@ -171,7 +171,11 @@ describe("V5 settings pages from HTML", () => {
     expect(screen.getByText("通知区与网格")).toBeInTheDocument();
     expect(screen.getByText("显示密度")).toBeInTheDocument();
     expect(screen.getByText("实时预览")).toBeInTheDocument();
-    expect(screen.getByText("Claude")).toBeInTheDocument();
+    expect(screen.getAllByText("Claude").length).toBeGreaterThan(0);
+    expect(document.querySelector(".tray-panel-reveal")).not.toBeNull();
+    expect(document.querySelector(".tray-panel")).not.toBeNull();
+    expect(document.querySelector(".provider-grid")).not.toBeNull();
+    expect(document.querySelector(".flyout-footer")).not.toBeNull();
     expect(document.querySelector(".menu-card")).toBeNull();
     expect(document.querySelector(".settings-surf-page")).toBeNull();
   });

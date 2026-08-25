@@ -39,6 +39,9 @@
   "bundle": {
     "active": true,
     "targets": "all",
+    "resources": {
+      "../public/fonts": "fonts"
+    },
     "icon": [
       "../../../rust/icons/icon.ico",
       "../../../rust/icons/icon.png"

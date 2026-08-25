@@ -2,9 +2,25 @@
    never leaks into the real tray flyout or other surfaces. */
 
 .settings-v5 .s5-stage-frame--tray {
-  width: 328px;
-  height: 256px;
-  overflow-y: auto;
+  width: 340px;
+  height: 520px;
+  overflow: visible;
+}
+
+/* Full flyout chrome in the settings preview: 6 DIP gutter + 1px stroke +
+   drop shadow (same recipe as the live .tray-panel-reveal). */
+.settings-v5 .s5-tray-flyout {
+  width: 340px;
+  height: 520px;
+  transform-origin: top left;
+}
+
+.settings-v5 .s5-tray-flyout .tray-panel {
+  min-height: 0;
+}
+
+.settings-v5 .s5-tray-flyout .flyout-body {
+  min-height: 0;
 }
 
 /* Real TrayCard stack (TRAY_PANEL_SPECIFICATION 7.3): one card per archetype

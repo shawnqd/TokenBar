@@ -849,7 +849,7 @@ fn taskbar_font_weight_clamps_to_the_axis_range() {
 fn taskbar_font_family_defaults_when_blank() {
     let settings: Settings =
         serde_json::from_str(r#"{"taskbar_widget_font_family":"   "}"#).unwrap();
-    assert_eq!(settings.taskbar_widget_font_family, "Microsoft YaHei UI");
+    assert_eq!(settings.taskbar_widget_font_family, "MiSans VF");
 
     let settings: Settings =
         serde_json::from_str(r#"{"taskbar_widget_font_family":"Bahnschrift"}"#).unwrap();

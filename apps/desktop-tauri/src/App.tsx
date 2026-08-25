@@ -7,8 +7,8 @@ import {
   downloadUpdate,
   getBootstrapState,
   getSettingsSnapshot,
+  openFlyoutWindow,
   revealSettingsWindow,
-  setSurfaceMode,
 } from "./lib/tauri";
 import { useSurfaceSnapshot } from "./hooks/useSurfaceSnapshot";
 import { useTheme } from "./hooks/useTheme";
@@ -22,7 +22,6 @@ import type { SurfaceSnapshot } from "./hooks/useSurfaceSnapshot";
 const SETTINGS_REVEALED_EVENT = "settings-window-revealed";
 
 const Settings = lazy(() => import("./surfaces/Settings"));
-const PopOutPanel = lazy(() => import("./surfaces/PopOutPanel"));
 const FloatBar = lazy(() => import("./floatbar/FloatBar"));
 
 function SurfaceFallback() {
@@ -103,10 +102,10 @@ function AppInner() {
 
     // Listen for user-registered global shortcut events from the
     // `register_global_shortcut` command. The persistent shortcut (bound via
-    // shortcut_bridge::plugin) already opens the PopOut dashboard natively;
-    // this listener is the fallback for ad-hoc capture-mode registrations.
+    // shortcut_bridge::plugin) already opens the tray panel natively; this
+    // listener is the fallback for ad-hoc capture-mode registrations.
     const unlistenPromise = listen<string>("global-shortcut-triggered", () => {
-      void setSurfaceMode("popOut", { kind: "dashboard" }).catch(() => {});
+      void openFlyoutWindow().catch(() => {});
     });
 
     const unlistenSettingsChangePromise = isSettingsWindow()
@@ -124,7 +123,7 @@ function AppInner() {
     // Every Tauri surface is its own WebView. A DOM CustomEvent only reaches
     // the window that changed the setting, while Rust broadcasts this event to
     // every open surface after persistence. Subscribe here, at the app root,
-    // so the tray panel, pop-out dashboard and detached flyout immediately
+    // so the tray panel and detached flyout immediately
     // apply the selected light/dark/auto theme as well.
     const unlistenThemeSyncPromise = listen("settings-changed", () => {
       void getSettingsSnapshot()
@@ -221,17 +220,8 @@ function SurfaceRouter({
     // `isFlyoutWindow()` above), `commands::set_surface_mode` rejects a
     // `trayPanel` request outright, and proof mode routes it to the flyout
     // window too. This case was therefore unreachable dead code.
-    case "popOut": {
-      const providerId =
-        surface.target.kind === "provider"
-          ? surface.target.providerId
-          : undefined;
-      return (
-        <Suspense fallback={<SurfaceFallback />}>
-          <PopOutPanel state={state} providerId={providerId} />
-        </Suspense>
-      );
-    }
+    // Similarly, "popOut" is gone entirely: the internal PopOut dashboard
+    // window was removed in V5-07, and the backend never reports that mode.
     // Settings is the detached `settings` WebView only. Putting it on `main`
     // produced the blank title-bar window (`CodexBar 设置` with no body).
     case "settings":

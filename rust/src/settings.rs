@@ -409,7 +409,7 @@ fn default_menu_font_weight() -> u16 {
 }
 
 fn default_menu_font_family() -> String {
-    "Microsoft YaHei UI".to_string()
+    "MiSans VF".to_string()
 }
 
 fn default_menu_font_size() -> u8 {
@@ -429,12 +429,10 @@ pub fn normalize_taskbar_widget_font_weight(value: u16) -> u16 {
 
 /// Default taskbar font family.
 ///
-/// Microsoft YaHei UI is the safe default because the strip routinely renders
-/// Chinese labels and it is present on every target machine. It is a *static*
-/// family, so the weight control is stepped rather than continuous until the
-/// user picks a variable family — the UI says so rather than pretending.
+/// MiSans VF is bundled with the app (DESIGN_SYSTEM.md §2), so a fresh install
+/// gets a real `wght` axis without depending on the host font list.
 fn default_taskbar_widget_font_family() -> String {
-    "Microsoft YaHei UI".to_string()
+    "MiSans VF".to_string()
 }
 
 fn default_taskbar_widget_content() -> String {
