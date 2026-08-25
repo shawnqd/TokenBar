@@ -1,3 +1,4 @@
+@import "./fonts.css";
 /*
  * Theme tokens (Phase 12).
  *
@@ -5486,6 +5487,10 @@ body:has(.menu-surface--popout) .popout-scale-shell,
   background: rgba(10, 132, 255, 0.14);
   box-shadow: inset 0 0 0 2px rgba(10, 132, 255, 0.65);
 }
+.provider-grid__item--ghost {
+  opacity: 0.3;
+}
+
 
 .provider-grid__label {
   font-size: 10px;
@@ -7515,13 +7520,17 @@ body:has(.settings-window-frame) #root {
    component rules above.
    -------------------------------------------------------------------------- */
 
+
+:root:has(.tray-panel-reveal),
 html:has(.tray-panel-reveal),
 body:has(.tray-panel-reveal) {
   width: 100%;
   height: 100%;
   min-height: 0;
+  margin: 0;
+  padding: 0;
   overflow: hidden;
-  background: transparent;
+  background: transparent !important;
 }
 
 /* The detached flyout is the viewport. Give #root the same definite height
@@ -7532,13 +7541,15 @@ body:has(.tray-panel-reveal) #root {
   width: 100%;
   height: 100%;
   min-height: 0;
+  margin: 0;
+  padding: 0;
   overflow: hidden;
-  background: transparent;
+  background: transparent !important;
 }
 
 .tray-panel-reveal {
-  /* Keep this in lockstep with taskbar_menu.rs::ANIM_DURATION_MS and
-     ANIM_TRAVEL_DIP. The native right-click menu is composed at rest, then
+  /* Keep this in lockstep with shell::popup_chrome (ANIM_DURATION_MS /
+     ANIM_TRAVEL_DIP). The native right-click menu is composed at rest, then
      moves its whole window upward 22 DIP over 180 ms with an ease-out cubic;
      the flyout must use the same gesture instead of a fade-only reveal. */
   --tray-menu-animation-duration: 180ms;
@@ -7553,7 +7564,10 @@ body:has(.tray-panel-reveal) #root {
   opacity: 0;
   transform: translateY(var(--tray-menu-animation-travel));
   transform-origin: bottom right;
-  will-change: opacity, transform;
+  /* No will-change: a standing hint pins the whole panel to a composited
+     layer, where text is moved as a resampled texture and reads blurry while
+     scrolling. The reveal animation promotes itself for its 180 ms run and
+     demotes again when it ends. */
   /* Native slide_frame() uses ease-out cubic for movement and a linear alpha
      ramp that reaches full opacity at 1.6x progress (180 / 1.6 = 112.5 ms). */
   transition:
@@ -7561,6 +7575,81 @@ body:has(.tray-panel-reveal) #root {
     opacity 112.5ms linear;
 }
 
+/* This file is imported after tray-v5.css. The flyout HWND is the card;
+   DWM draws Modern Acrylic, rounded corners and the drop shadow. */
+
+.tray-panel-reveal .tray-panel {
+  --flyout-inset-x: 14px;
+  --flyout-inset-y: 12px;
+}
+
+.tray-panel-reveal .flyout-body {
+  padding: 12px 14px !important;
+  gap: 0 !important;
+}
+
+.tray-panel-reveal .provider-grid {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px !important;
+  grid-template-columns: none;
+  border: none !important;
+  border-bottom: 1px solid var(--flyout-divider) !important;
+}
+
+[data-theme="light"] .tray-panel-reveal .provider-grid {
+  border: none !important;
+  border-bottom: 1px solid var(--flyout-divider) !important;
+}
+
+.tray-panel-reveal .flyout-footer {
+  /* Keep in lockstep with tray-v5.css .flyout-footer (2/4 slim rows). */
+  padding: 2px 4px !important;
+}
+
+.tray-panel-reveal .footer-row {
+  padding: 0 8px !important;
+  margin: 0 !important;
+  appearance: none;
+  -webkit-appearance: none;
+  border: none;
+  box-sizing: border-box;
+}
+
+/* Legacy `.tray-card { padding: 10px 12px }` in this file loads after
+   tray-v5.css and was adding a second inset only on the card stack —
+   grid and footer stayed at 5px, content sat at 17px. */
+.tray-panel-reveal .tray-card {
+  padding: 0 !important;
+  margin: 0 !important;
+  border: none !important;
+  background: transparent !important;
+  box-shadow: none !important;
+  gap: 0 !important;
+  cursor: default;
+}
+.tray-panel-reveal .tray-card:hover,
+.tray-panel-reveal .tray-card--selected {
+  background: transparent !important;
+  border: none !important;
+}
+
+.tray-panel-reveal .provider-grid__item,
+.tray-panel-reveal .provider-grid--sparse .provider-grid__item,
+.tray-panel-reveal .provider-grid--compact .provider-grid__item {
+  width: 34px;
+  height: 34px;
+  min-width: 34px;
+  max-width: 34px;
+  min-height: 34px;
+  max-height: 34px;
+  padding: 0;
+  border-radius: 9px;
+  flex-direction: row;
+  box-shadow: none;
+}
 /* The flyout WebView is retained between opens. Park it while hidden, then
    replay the two native-menu tracks on each reveal: movement follows the
    ease-out cubic and alpha reaches 100% after 1.6x progress. */
@@ -7574,6 +7663,15 @@ body:has(.tray-panel-reveal) #root {
     tray-panel-menu-slide var(--tray-menu-animation-duration)
       cubic-bezier(0.215, 0.61, 0.355, 1) both,
     tray-panel-menu-fade 112.5ms linear both;
+}
+
+/* Once the opening animation finishes, TrayPanel adds --settled: drop the
+   fill-mode transform so the resting panel leaves the composited layer and
+   text paints through the normal path instead of living as a GPU texture. */
+.tray-panel-reveal--opening.tray-panel-reveal--settled {
+  animation: none;
+  opacity: 1;
+  transform: none;
 }
 
 .tray-panel-reveal--closing {
@@ -9028,3 +9126,4 @@ body:has(.tray-panel-reveal) #root {
     min-width: 0;
   }
 }
+

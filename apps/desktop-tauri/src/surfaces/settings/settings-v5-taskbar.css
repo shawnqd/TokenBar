@@ -1,11 +1,29 @@
 /* Mini taskbar settings preview styles. Scoped under .settings-v5 so this
    never leaks into the real taskbar strip or other surfaces. */
 
-.settings-v5 .s5-stage-frame--taskbar {
+.settings-v5 .s5-surf-split--taskbar {
+  align-items: start;
+}
+
+.settings-v5 .s5-stage--taskbar {
+  border: 0;
+  padding: 0;
+  position: sticky;
+  top: 0;
+}
+
+.settings-v5 .s5-stage--taskbar .s5-preview-label {
+  margin-bottom: 8px;
+}
+
+.settings-v5 .s5-stage--taskbar .s5-stage-frame--taskbar {
   width: 248px;
   height: 52px;
+  flex: none;
+  border: 1px solid var(--flyout-divider);
   display: flex;
   align-items: center;
+  justify-content: flex-start;
 }
 
 .settings-v5 .s5-strip {

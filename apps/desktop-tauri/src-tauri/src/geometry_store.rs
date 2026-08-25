@@ -1,7 +1,7 @@
 //! Persistent window-geometry store for the Tauri desktop shell.
 //!
-//! Remembers position (and size where applicable) for detached user surfaces:
-//! PopOut, Settings, and the last user-chosen TrayPanel size.
+//! Remembers position (and size wherever applicable) for the detached user
+//! Settings window, and the last user-chosen TrayPanel size.
 //!
 //! The flyout position stays computed from the tray anchor/work-area because it
 //! is a temporary anchored panel, not a user-movable standalone window. Its
@@ -55,9 +55,9 @@ fn geometry_path() -> Option<PathBuf> {
 /// - `TrayPanel`: not loaded through the surface-mode helper because its
 ///   position is always re-anchored; the flyout module stores its size through
 ///   `load_entry`/`save_entry`.
-/// - `PopOut` / `Settings`: user-movable, position + size remembered.
+/// - `Settings`: user-movable, position + size remembered.
 pub fn should_remember(mode: SurfaceMode) -> bool {
-    matches!(mode, SurfaceMode::PopOut | SurfaceMode::Settings)
+    matches!(mode, SurfaceMode::Settings)
 }
 
 fn load_file() -> GeometryFile {
@@ -137,8 +137,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn pop_out_and_settings_are_remembered() {
-        assert!(should_remember(SurfaceMode::PopOut));
+    fn settings_is_remembered() {
         assert!(should_remember(SurfaceMode::Settings));
     }
 

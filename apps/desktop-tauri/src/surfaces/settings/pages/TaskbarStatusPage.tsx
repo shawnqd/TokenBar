@@ -1,12 +1,9 @@
 import { useEffect, useMemo, useState } from "react";
+import { useFontPicker } from "../../../hooks/useFontPicker";
 import { useLocale } from "../../../hooks/useLocale";
-import {
-  getTaskbarFontFamilies,
-  getTaskbarPreviewLines,
-} from "../../../lib/tauri";
+import { getTaskbarPreviewLines } from "../../../lib/tauri";
 import type {
   TaskbarEntry,
-  TaskbarFontFamily,
   TaskbarStripCell,
   TaskbarWidgetPosition,
   TaskbarWidgetTextAlign,
@@ -17,7 +14,8 @@ import TaskbarStripPreview from "../previews/TaskbarStripPreview";
 import { SurfacePreviewFrame, type HtmlIconStyle } from "./HtmlSurfacePreviews";
 import { catalogChoices } from "./htmlFixture";
 import { V5EntryList } from "./V5EntryList";
-import { V5Field, V5Num, V5Section, V5Seg, V5Toggle } from "./v5Controls";
+import { V5Field, V5Num, V5Section, V5Seg, V5Select, V5Toggle } from "./v5Controls";
+import FontInstallDialog from "../FontInstallDialog";
 
 const DEFAULT_ENTRIES: TaskbarEntry[] = [
   { providerId: TASKBAR_PROVIDER_AUTO, window: "session" },
@@ -38,15 +36,20 @@ export default function TaskbarStatusPage({
     settings.taskbarWidgetFontWeight ?? 400,
   );
   const [previewLines, setPreviewLines] = useState<TaskbarStripCell[]>([]);
-  const [families, setFamilies] = useState<TaskbarFontFamily[]>([]);
   const entries = settings.taskbarWidgetEntries ?? DEFAULT_ENTRIES;
   const width = settings.taskbarWidgetWidth ?? 136;
-
-  useEffect(() => {
-    getTaskbarFontFamilies()
-      .then(setFamilies)
-      .catch(() => {});
-  }, []);
+  const currentFamily = settings.taskbarWidgetFontFamily || "";
+  const {
+    options: fontOptions,
+    isContinuous: selectedIsVariable,
+    defaultFamily,
+    install,
+    installMiss,
+    chooseFamily,
+    cancelInstall,
+    openInstallPage,
+    confirmInstalled,
+  } = useFontPicker(currentFamily);
 
   useEffect(() => {
     let cancelled = false;
@@ -82,10 +85,10 @@ export default function TaskbarStatusPage({
     [settings.enabledProviders],
   );
 
-    const tooltip = settings.taskbarTooltipEntries ?? [];
+  const tooltip = settings.taskbarTooltipEntries ?? [];
   
   return (
-    <div className="s5-surf-split">
+    <div className="s5-surf-split s5-surf-split--taskbar">
       <div className="s5-surf-fields">
         <V5Section title="开关与位置">
           <V5Field label="显示小型状态栏">
@@ -191,7 +194,7 @@ export default function TaskbarStatusPage({
             
             set({
               taskbarWidgetFontSize: 12,
-              taskbarWidgetFontFamily: "Microsoft YaHei UI",
+              taskbarWidgetFontFamily: defaultFamily,
               taskbarWidgetFontWeight: 400,
               taskbarWidgetWidth: 136,
               taskbarWidgetTextAlign: "left",
@@ -212,37 +215,38 @@ export default function TaskbarStatusPage({
           </V5Field>
           <V5Field
             label="字体"
-            help="只列出字重可以连续调的字体。以前存过的普通字体仍能选"
+            help="只内置 MiSans VF。其余四种未安装时会引导到官方下载页，装好后点「我已安装」。以前保存的其他字体仍可选"
             off={off}
           >
-            <select
-              className="s5-select"
-              value={settings.taskbarWidgetFontFamily}
-              disabled={saving || off}
-              onChange={(event) =>
-                set({ taskbarWidgetFontFamily: event.target.value })
+            <V5Select
+              value={currentFamily}
+              disabled={saving || off || fontOptions.length === 0}
+              options={fontOptions}
+              onChange={(value) =>
+                chooseFamily(value, (family) => set({ taskbarWidgetFontFamily: family }))
               }
-            >
-              {(families.length
-                ? families
-                : [
-                    {
-                      name: "Microsoft YaHei UI",
-                      variableWeight: false,
-                      hasCjk: true,
-                      recommended: true,
-                    },
-                  ]
-              ).map((family) => (
-                <option key={family.name} value={family.name}>
-                  {family.name}
-                </option>
-              ))}
-            </select>
+            />
+            {install ? (
+              <FontInstallDialog
+                guide={install}
+                miss={installMiss}
+                onCancel={cancelInstall}
+                onOpenDownload={openInstallPage}
+                onRecheck={() =>
+                  void confirmInstalled((family) =>
+                    set({ taskbarWidgetFontFamily: family }),
+                  )
+                }
+              />
+            ) : null}
           </V5Field>
           <V5Field
             label={`字重（${weightDraft}）`}
-            help="100 到 1000，松开鼠标再保存"
+            help={
+              selectedIsVariable
+                ? t("TaskbarWidgetFontWeightHelperVariable")
+                : t("TaskbarWidgetFontWeightHelperStatic")
+            }
             off={off}
           >
             <div>

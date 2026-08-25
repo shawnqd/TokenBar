@@ -387,16 +387,6 @@ mod tests {
     }
 
     #[test]
-    fn transition_applies_dashboard_target_for_pop_out() {
-        let mut state = AppState::new();
-
-        let transition = state.transition_surface(SurfaceMode::PopOut, SurfaceTarget::Dashboard);
-
-        assert!(transition.is_some());
-        assert_eq!(state.current_target, SurfaceTarget::Dashboard);
-    }
-
-    #[test]
     fn same_mode_settings_retarget_updates_target() {
         let mut state = AppState::new();
         state.transition_surface(
@@ -425,10 +415,10 @@ mod tests {
     #[test]
     fn same_mode_provider_retarget_updates_target() {
         let mut state = AppState::new();
-        state.transition_surface(SurfaceMode::PopOut, SurfaceTarget::Dashboard);
+        state.transition_surface(SurfaceMode::TrayPanel, SurfaceTarget::Summary);
 
         let transition = state.transition_surface(
-            SurfaceMode::PopOut,
+            SurfaceMode::TrayPanel,
             SurfaceTarget::Provider {
                 provider_id: "claude".into(),
             },
@@ -464,13 +454,13 @@ mod tests {
         let mut state = AppState::new();
 
         state.transition_surface(
-            SurfaceMode::PopOut,
+            SurfaceMode::TrayPanel,
             SurfaceTarget::Settings {
                 tab: "general".into(),
             },
         );
 
-        assert_eq!(state.current_target, SurfaceTarget::Dashboard);
+        assert_eq!(state.current_target, SurfaceTarget::Summary);
     }
 
     #[test]

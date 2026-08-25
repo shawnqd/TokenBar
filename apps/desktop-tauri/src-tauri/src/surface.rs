@@ -1,13 +1,15 @@
 use serde::{Deserialize, Serialize};
 
-/// The four surfaces the desktop shell can present.
+/// The surfaces the desktop shell can present. PopOut (the internal dashboard
+/// window) was removed in V5-07; the shared `main` window only ever holds
+/// Hidden or Settings now, and TrayPanel survives as a data key for the
+/// dedicated flyout window's size/properties.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub enum SurfaceMode {
     #[default]
     Hidden,
     TrayPanel,
-    PopOut,
     Settings,
 }
 
@@ -16,7 +18,6 @@ impl SurfaceMode {
         match self {
             Self::Hidden => "hidden",
             Self::TrayPanel => "trayPanel",
-            Self::PopOut => "popOut",
             Self::Settings => "settings",
         }
     }
@@ -25,7 +26,6 @@ impl SurfaceMode {
         match s {
             "hidden" => Some(Self::Hidden),
             "trayPanel" => Some(Self::TrayPanel),
-            "popOut" => Some(Self::PopOut),
             "settings" => Some(Self::Settings),
             _ => None,
         }
@@ -56,11 +56,10 @@ impl SurfaceMode {
                 visible: true,
                 decorations: false,
                 resizable: true,
-                // 12 DIP wider/taller than the 328x776 panel: the CSS keeps a
-                // 6 DIP transparent gutter on every side so the unified
-                // flyout shadow (settings-window style) has room to paint.
-                width: 340.0,
-                height: 788.0,
+                // Card is the HWND. Chrome is homemade CSS (no Win32
+                // caption). 328×776 is the design card.
+                width: 328.0,
+                height: 776.0,
                 min_width: Some(320.0),
                 min_height: Some(380.0),
                 max_width: None,
@@ -68,26 +67,6 @@ impl SurfaceMode {
                 always_on_top: true,
                 blur_dismiss: true,
                 skip_taskbar: true,
-            },
-            // PopOut is the default "window mode": a normal, draggable,
-            // resizable window that shows in the taskbar. This app draws its
-            // own chrome (borderless + DWM dark caption + frontend drag
-            // region), so PopOut must use `decorations: false` like the
-            // working Settings window — native decorations are cancelled by
-            // the WM_NCCALCSIZE subclass and produce no usable title bar.
-            Self::PopOut => WindowProperties {
-                visible: true,
-                decorations: false,
-                resizable: true,
-                width: 420.0,
-                height: 680.0,
-                min_width: Some(320.0),
-                min_height: Some(240.0),
-                max_width: None,
-                max_height: None,
-                always_on_top: false,
-                blur_dismiss: false,
-                skip_taskbar: false,
             },
             Self::Settings => WindowProperties {
                 visible: true,
@@ -124,7 +103,7 @@ pub struct WindowProperties {
     #[allow(dead_code)]
     pub blur_dismiss: bool,
     /// Whether the window should be hidden from the Windows taskbar. Widget
-    /// surfaces (TrayPanel) stay hidden; the PopOut window mode shows there.
+    /// surfaces (TrayPanel) stay hidden; the Settings window shows there.
     pub skip_taskbar: bool,
 }
 
@@ -212,31 +191,6 @@ mod tests {
     }
 
     #[test]
-    fn tray_panel_to_pop_out() {
-        let mut sm = SurfaceStateMachine::new();
-        sm.transition(SurfaceMode::TrayPanel);
-        let t = sm.transition(SurfaceMode::PopOut).unwrap();
-        assert_eq!(t.from, SurfaceMode::TrayPanel);
-        // PopOut is borderless (custom DWM chrome), resizable, shows in the
-        // taskbar, and never blur-dismisses.
-        assert!(!t.properties.decorations);
-        assert!(t.properties.resizable);
-        assert!(!t.properties.blur_dismiss);
-        assert!(!t.properties.skip_taskbar);
-    }
-
-    #[test]
-    fn pop_out_to_settings() {
-        let mut sm = SurfaceStateMachine::new();
-        sm.transition(SurfaceMode::PopOut);
-        let t = sm.transition(SurfaceMode::Settings).unwrap();
-        assert_eq!(t.from, SurfaceMode::PopOut);
-        assert_eq!(t.to, SurfaceMode::Settings);
-        assert!(t.properties.decorations);
-        assert!(t.properties.resizable);
-    }
-
-    #[test]
     fn settings_to_hidden() {
         let mut sm = SurfaceStateMachine::new();
         sm.transition(SurfaceMode::Settings);
@@ -249,7 +203,6 @@ mod tests {
         let mut sm = SurfaceStateMachine::new();
         for mode in [
             SurfaceMode::TrayPanel,
-            SurfaceMode::PopOut,
             SurfaceMode::Settings,
             SurfaceMode::Hidden,
         ] {
@@ -263,7 +216,6 @@ mod tests {
         for mode in [
             SurfaceMode::Hidden,
             SurfaceMode::TrayPanel,
-            SurfaceMode::PopOut,
             SurfaceMode::Settings,
         ] {
             assert_eq!(SurfaceMode::parse(mode.as_str()), Some(mode));
@@ -278,8 +230,8 @@ mod tests {
     #[test]
     fn tray_panel_properties() {
         let props = SurfaceMode::TrayPanel.window_properties();
-        assert_eq!(props.width, 340.0);
-        assert_eq!(props.height, 788.0);
+        assert_eq!(props.width, 328.0);
+        assert_eq!(props.height, 776.0);
     }
 
     #[test]
@@ -310,12 +262,5 @@ mod tests {
         let props = SurfaceMode::Settings.window_properties();
         assert_eq!(props.width, 1120.0);
         assert_eq!(props.height, 780.0);
-    }
-
-    #[test]
-    fn pop_out_min_size() {
-        let props = SurfaceMode::PopOut.window_properties();
-        assert_eq!(props.min_width, Some(320.0));
-        assert_eq!(props.min_height, Some(240.0));
     }
 }

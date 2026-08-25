@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import type {
   ApiKeyInfoBridge,
   ApiKeyProviderInfoBridge,
@@ -107,6 +108,32 @@ export function setSurfaceMode<M extends VisibleSurfaceMode>(
   target: SurfaceTargetForMode<M>,
 ): Promise<SurfaceMode> {
   return invoke<SurfaceMode>("set_surface_mode", { mode, target });
+}
+
+const TRAY_RESIZE_DIR = {
+  n: "North",
+  s: "South",
+  e: "East",
+  w: "West",
+  ne: "NorthEast",
+  nw: "NorthWest",
+  se: "SouthEast",
+  sw: "SouthWest",
+} as const;
+
+/**
+ * Start a native edge/corner resize from a tray-panel handle.
+ *
+ * Uses Tauri's `startResizeDragging` (ReleaseCapture + WM_NCLBUTTONDOWN)
+ * instead of the custom begin_tray_panel_resize command: WebView2 already
+ * owns mouse capture on mousedown, and the custom path never released it.
+ */
+export function beginTrayPanelResize(dir: string): Promise<void> {
+  const mapped = TRAY_RESIZE_DIR[dir as keyof typeof TRAY_RESIZE_DIR];
+  if (!mapped) {
+    return Promise.reject(new Error(`unknown resize direction: ${dir}`));
+  }
+  return getCurrentWindow().startResizeDragging(mapped);
 }
 
 export function dismissTrayPanel(): Promise<void> {

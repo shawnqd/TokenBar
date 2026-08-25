@@ -46,13 +46,13 @@ use windows::Win32::Graphics::Direct2D::{
     ID2D1DCRenderTarget, ID2D1Factory, ID2D1SolidColorBrush,
 };
 use windows::Win32::Graphics::DirectWrite::{
-    DWRITE_FACTORY_TYPE_SHARED, DWRITE_FONT_AXIS_ATTRIBUTES_VARIABLE,
+    DWRITE_FONT_AXIS_ATTRIBUTES_VARIABLE,
     DWRITE_FONT_AXIS_RANGE, DWRITE_FONT_AXIS_TAG_WEIGHT, DWRITE_FONT_AXIS_VALUE,
     DWRITE_FONT_STRETCH_NORMAL, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_WEIGHT,
     DWRITE_MEASURING_MODE_NATURAL, DWRITE_PARAGRAPH_ALIGNMENT_CENTER, DWRITE_TEXT_ALIGNMENT, DWRITE_TEXT_ALIGNMENT_CENTER,
     DWRITE_TEXT_METRICS, DWRITE_TRIMMING, DWRITE_TRIMMING_GRANULARITY_CHARACTER,
     DWRITE_TEXT_ALIGNMENT_LEADING, DWRITE_TEXT_ALIGNMENT_TRAILING, DWRITE_WORD_WRAPPING_NO_WRAP,
-    DWriteCreateFactory, IDWriteFactory, IDWriteFontCollection, IDWriteFontFace5,
+    IDWriteFactory, IDWriteFontCollection, IDWriteFontFace5,
     IDWriteFontFamily2, IDWriteTextFormat, IDWriteTextFormat3,
 };
 use windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_B8G8R8A8_UNORM;
@@ -129,8 +129,7 @@ impl Renderer {
     fn new() -> windows::core::Result<Self> {
         let d2d: ID2D1Factory =
             unsafe { D2D1CreateFactory(D2D1_FACTORY_TYPE_SINGLE_THREADED, None)? };
-        let dwrite: IDWriteFactory =
-            unsafe { DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED)? };
+        let dwrite = crate::bundled_fonts::shared().factory.clone();
 
         // `D2D1_ALPHA_MODE_IGNORE` keeps this an opaque draw onto the DC, which
         // is what the colour-key transparency downstream expects: the strip
@@ -236,13 +235,7 @@ pub fn measure_width(text: &str, style: &TextStyle<'_>) -> Option<f32> {
     MEASURER.with(|cell| {
         let mut slot = cell.borrow_mut();
         if slot.is_none() {
-            match unsafe { DWriteCreateFactory::<IDWriteFactory>(DWRITE_FACTORY_TYPE_SHARED) } {
-                Ok(factory) => *slot = Some(factory),
-                Err(err) => {
-                    tracing::warn!("taskbar text: DirectWrite unavailable for measurement: {err}");
-                    return None;
-                }
-            }
+            *slot = Some(crate::bundled_fonts::shared().factory.clone());
         }
         let dwrite = slot.as_ref()?;
         let format = unsafe { create_format(dwrite, style) }.ok()?;
@@ -585,7 +578,9 @@ unsafe fn create_format(
     dwrite: &IDWriteFactory,
     style: &TextStyle<'_>,
 ) -> windows::core::Result<IDWriteTextFormat> {
-    let family: Vec<u16> = style.family.encode_utf16().chain(std::iter::once(0)).collect();
+    let shared = crate::bundled_fonts::shared();
+    let (family_name, collection) = crate::bundled_fonts::resolve(shared, style.family);
+    let family: Vec<u16> = family_name.encode_utf16().chain(std::iter::once(0)).collect();
     let locale: Vec<u16> = "en-us".encode_utf16().chain(std::iter::once(0)).collect();
 
     // The static weight passed here is the fallback DirectWrite uses when the
@@ -596,7 +591,7 @@ unsafe fn create_format(
     let format = unsafe {
         dwrite.CreateTextFormat(
             windows::core::PCWSTR(family.as_ptr()),
-            None,
+            collection,
             static_weight,
             DWRITE_FONT_STYLE_NORMAL,
             DWRITE_FONT_STRETCH_NORMAL,
@@ -735,20 +730,40 @@ static FAMILY_CACHE: std::sync::OnceLock<Vec<FontFamilyInfo>> = std::sync::OnceL
 /// this machine cannot render. Sorted, with the variable-weight families first
 /// so the honest "continuous" choices are the easy ones to find.
 pub fn font_families() -> &'static [FontFamilyInfo] {
-    FAMILY_CACHE.get_or_init(|| match unsafe { enumerate_families() } {
-        Ok(mut families) => {
-            families.sort_by(|a, b| {
-                family_rank(a)
-                    .cmp(&family_rank(b))
-                    .then_with(|| a.name.cmp(&b.name))
-            });
-            families
-        }
-        Err(err) => {
-            tracing::warn!("taskbar text: font enumeration failed: {err}");
-            Vec::new()
-        }
+    FAMILY_CACHE.get_or_init(|| {
+        let mut families = match unsafe { enumerate_families() } {
+            Ok(families) => families,
+            Err(err) => {
+                tracing::warn!("taskbar text: font enumeration failed: {err}");
+                Vec::new()
+            }
+        };
+        prepend_bundled(&mut families);
+        families.sort_by(|a, b| {
+            family_rank(a)
+                .cmp(&family_rank(b))
+                .then_with(|| a.name.cmp(&b.name))
+        });
+        families
     })
+}
+
+fn prepend_bundled(families: &mut Vec<FontFamilyInfo>) {
+    if !crate::bundled_fonts::files_present() {
+        return;
+    }
+    families.retain(|family| crate::bundled_fonts::match_face(&family.name).is_none());
+    let mut bundled: Vec<FontFamilyInfo> = crate::bundled_fonts::BUNDLED_FACES
+        .iter()
+        .map(|face| FontFamilyInfo {
+            name: face.picker_name.to_string(),
+            variable_weight: true,
+            has_cjk: true,
+            recommended: true,
+        })
+        .collect();
+    bundled.append(families);
+    *families = bundled;
 }
 
 // NOTE: there is deliberately no `best_default_family()` here. The list this
@@ -757,7 +772,7 @@ pub fn font_families() -> &'static [FontFamilyInfo] {
 // preference order in Rust could drift from the one the user sees.
 
 unsafe fn enumerate_families() -> windows::core::Result<Vec<FontFamilyInfo>> {
-    let dwrite: IDWriteFactory = unsafe { DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED)? };
+    let dwrite = crate::bundled_fonts::shared().factory.clone();
     let mut collection: Option<IDWriteFontCollection> = None;
     unsafe { dwrite.GetSystemFontCollection(&mut collection, false)? };
     let Some(collection) = collection else {
@@ -1105,6 +1120,25 @@ mod tests {
             red_with > 0,
             "a red mark beside blue text rendered no red at all — it was either skipped \
              or drawn with the text brush"
+        );
+    }
+
+    #[test]
+    fn bundled_whitelist_families_are_enumerated() {
+        if !crate::bundled_fonts::files_present() {
+            eprintln!("bundled fonts missing; skipping");
+            return;
+        }
+        let families = font_families();
+        assert!(
+            families
+                .iter()
+                .any(|family| family.name == "MiSans VF" && family.variable_weight),
+            "bundled MiSans VF missing from {:?}",
+            families
+                .iter()
+                .map(|family| family.name.as_str())
+                .collect::<Vec<_>>()
         );
     }
 

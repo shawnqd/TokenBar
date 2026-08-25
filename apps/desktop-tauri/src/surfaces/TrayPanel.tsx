@@ -1,4 +1,4 @@
-import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
+﻿import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type AnimationEvent, type MouseEvent as ReactMouseEvent } from "react";
 import { listen } from "@tauri-apps/api/event";
 import type {
   BootstrapState,
@@ -7,6 +7,7 @@ import type {
 } from "../types/bridge";
 import {
   beginFlyoutGesture,
+  beginTrayPanelResize,
   dismissTrayPanel,
   endFlyoutGesture,
   openSettingsWindow,
@@ -36,11 +37,15 @@ const DENSE_OVERVIEW_THRESHOLD = 32;
 const TRAY_PANEL_REVEALED_EVENT = "tray-panel-revealed";
 const TRAY_PANEL_CLOSING_EVENT = "tray-panel-closing";
 const TRAY_PANEL_HIDDEN_EVENT = "tray-panel-hidden";
+const TRAY_PANEL_FROST_EVENT = "tray-panel-frost";
+
+/** The eight resize directions, matching shell::flyout_window::begin_resize. */
+const RESIZE_DIRECTIONS = ["n", "s", "e", "w", "ne", "nw", "se", "sw"] as const;
 
 /** Stroke-width / cap / join shared by every footer action glyph. */
 const footerIconProps = {
-  width: 14,
-  height: 14,
+  width: 12,
+  height: 12,
   viewBox: "0 0 24 24",
   fill: "none",
   stroke: "currentColor",
@@ -49,14 +54,6 @@ const footerIconProps = {
   strokeLinejoin: "round" as const,
   "aria-hidden": true,
 };
-const DashboardIcon = () => (
-  <svg {...footerIconProps}>
-    <rect x="3" y="3" width="7" height="7" rx="1.5" />
-    <rect x="14" y="3" width="7" height="7" rx="1.5" />
-    <rect x="14" y="14" width="7" height="7" rx="1.5" />
-    <rect x="3" y="14" width="7" height="7" rx="1.5" />
-  </svg>
-);
 const RefreshIcon = () => (
   <svg {...footerIconProps}>
     <path d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" />
@@ -79,7 +76,7 @@ const PowerIcon = () => (
 );
 
 /**
- * Tray popover surface — native 328 DIP flyout with three density tiers
+ * Tray popover surface 鈥?native 328 DIP flyout with three density tiers
  * (overview obeys the setting; a single provider's detail view is always
  * detailed). The card stack is driven by TrayCard (the unified modular port
  * of design/density-preview.html); the footer holds the four actions as
@@ -102,7 +99,7 @@ export default function TrayPanel({ state }: { state: BootstrapState }) {
     settings.outputSpeedEnabled !== false,
   );
   // The tray flyout and the PopOut dashboard share the "dashboard" component's
-  // settings — they render the same cards from the same snapshot.
+  // settings 鈥?they render the same cards from the same snapshot.
   const display = useMemo(
     () => quotaDisplayContext(settings, "dashboard"),
     [settings],
@@ -155,6 +152,11 @@ export default function TrayPanel({ state }: { state: BootstrapState }) {
   const [revealPhase, setRevealPhase] = useState<
     "parked" | "opening" | "closing"
   >("parked");
+  /** True once the opening animation has played. The reveal keyframes use
+   *  fill-mode `both`, which would otherwise hold a transform on the panel
+   *  forever and keep the whole tree on a composited layer 鈥?the source of
+   *  the blurry-while-scrolling text. --settled drops it (styles.css). */
+  const [revealSettled, setRevealSettled] = useState(false);
   const expectsDenseOverview =
     selectedProviderId === null &&
     !gridExpanded &&
@@ -176,7 +178,7 @@ export default function TrayPanel({ state }: { state: BootstrapState }) {
     return [match];
   }, [denseTrayProviders, sorted, selectedProviderId, gridExpanded]);
 
-  // Detail is an explicit "show me everything" action → always detailed.
+  // Detail is an explicit "show me everything" action 鈫?always detailed.
   const densityMode: MenuBarDisplayMode =
     selectedProviderId !== null ? "detailed" : settings.menuBarDisplayMode;
   useTrayPanelLayout({ canMeasure: true });
@@ -192,6 +194,13 @@ export default function TrayPanel({ state }: { state: BootstrapState }) {
       unlisteners.push(await listen(TRAY_PANEL_REVEALED_EVENT, replayReveal));
       unlisteners.push(await listen(TRAY_PANEL_CLOSING_EVENT, replayClose));
       unlisteners.push(await listen(TRAY_PANEL_HIDDEN_EVENT, parkReveal));
+      unlisteners.push(
+        await listen<string>(TRAY_PANEL_FROST_EVENT, (event) => {
+          if (typeof event.payload === "string" && event.payload.startsWith("url(")) {
+            document.documentElement.style.setProperty("--tray-frost", event.payload);
+          }
+        }),
+      );
       if (disposed) {
         for (const unlisten of unlisteners) unlisten();
       }
@@ -203,23 +212,23 @@ export default function TrayPanel({ state }: { state: BootstrapState }) {
     };
   }, []);
 
+  useEffect(() => {
+    if (revealPhase !== "opening") setRevealSettled(false);
+  }, [revealPhase]);
+  // Only the wrapper's own reveal animation counts; child SVGs animate too
+  // and animationend bubbles.
+  const handleRevealAnimationEnd = useCallback((event: AnimationEvent<HTMLDivElement>) => {
+    if (event.target === event.currentTarget) setRevealSettled(true);
+  }, []);
+
   const openSettings = useCallback(() => {
     void openSettingsWindow("general").catch(() => {});
-  }, []);
-  const openDashboard = useCallback(() => {
-    void (async () => {
-      try {
-        await setSurfaceMode("popOut", { kind: "dashboard" });
-      } finally {
-        void dismissTrayPanel().catch(() => {});
-      }
-    })();
   }, []);
   const quitApp = useCallback(() => {
     void quitApplication();
   }, []);
 
-  // Keyboard shortcuts — Esc dismiss, Ctrl+R refresh, Ctrl+, settings, Ctrl+Q quit.
+  // Keyboard shortcuts 鈥?Esc dismiss, Ctrl+R refresh, Ctrl+, settings, Ctrl+Q quit.
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       if (
@@ -266,8 +275,43 @@ export default function TrayPanel({ state }: { state: BootstrapState }) {
     void endFlyoutGesture().catch(() => {});
   }, []);
 
-  const revealClassName = `tray-panel-reveal tray-panel-reveal--native-size tray-panel-reveal--${revealPhase}${expectsDenseOverview ? " tray-panel-reveal--dense" : ""}${selectedProviderId !== null ? " tray-panel-reveal--detail" : ""}`;
+  const revealClassName = `tray-panel-reveal tray-panel-reveal--native-size tray-panel-reveal--${revealPhase}${revealSettled && revealPhase === "opening" ? " tray-panel-reveal--settled" : ""}${expectsDenseOverview ? " tray-panel-reveal--dense" : ""}${selectedProviderId !== null ? " tray-panel-reveal--detail" : ""}`;
   const isDetailView = selectedProviderId !== null;
+  const revealRef = useRef<HTMLDivElement>(null);
+
+  // HTML's 6px flyout-chrome sits on the page, not inside the 328px card.
+  // A leftover gutter (or :root app-bg) in this HWND reads as extra inset
+  // from the window edge to the icons. Pin padding/background on the
+  // elements styles.css cannot always beat in a retained WebView.
+  useEffect(() => {
+    const html = document.documentElement;
+    const body = document.body;
+    const root = document.getElementById("root");
+    // The reveal element itself keeps its 6 DIP padding: that gutter is the
+    // popup_chrome shadow budget (blur 3 + offset-y 3) and must survive, or
+    // the shared down-only shadow falls outside the HWND and is clipped.
+    const remembered: Array<[HTMLElement, string]> = [
+      [html, html.style.cssText],
+      [body, body.style.cssText],
+    ];
+    if (root) remembered.push([root, root.style.cssText]);
+    const zeroBox = (el: HTMLElement | null) => {
+      if (!el) return;
+      el.style.setProperty("padding", "0px", "important");
+      el.style.setProperty("margin", "0px", "important");
+    };
+    zeroBox(html);
+    zeroBox(body);
+    zeroBox(root);
+    html.style.setProperty("background", "transparent", "important");
+    body.style.setProperty("background", "transparent", "important");
+    root?.style.setProperty("background", "transparent", "important");
+    return () => {
+      for (const [el, css] of remembered) {
+        el.style.cssText = css;
+      }
+    };
+  }, []);
 
   const renderProviderCard = (p: ProviderUsageSnapshot) => {
     const speedId = outputSpeedProviderId(p.providerId);
@@ -313,12 +357,6 @@ export default function TrayPanel({ state }: { state: BootstrapState }) {
 
   const footer = (
     <footer className="flyout-footer" aria-label={t("PanelMenu")}>
-      <button type="button" className="footer-row" onClick={openDashboard}>
-        <span className="footer-row__left">
-          <span className="footer-row__icon"><DashboardIcon /></span>
-          <span className="footer-row__label">{t("TrayOpenDashboard")}</span>
-        </span>
-      </button>
       <button type="button" className="footer-row" onClick={() => refresh()}>
         <span className="footer-row__left">
           <span className={`footer-row__icon${isRefreshing ? " is-spinning" : ""}`}><RefreshIcon /></span>
@@ -343,9 +381,47 @@ export default function TrayPanel({ state }: { state: BootstrapState }) {
     </footer>
   );
 
+  // Native resize affordance. WebView2 covers the whole client HWND, so the
+  // card's visible edges never reach WM_NCHITTEST; these strips sit on the
+  // card stroke and call startResizeDragging (ReleaseCapture + HT*). Keep
+  // the blur guard armed until pointerup — PostMessage returns immediately.
+  const handleResizeDown = useCallback(
+    (dir: string) => (event: ReactMouseEvent<HTMLDivElement>) => {
+      event.preventDefault();
+      event.stopPropagation();
+      void Promise.resolve(beginFlyoutGesture()).catch(() => {});
+      const end = () => {
+        window.removeEventListener("pointerup", end, true);
+        void Promise.resolve(endFlyoutGesture()).catch(() => {});
+      };
+      window.addEventListener("pointerup", end, true);
+      void Promise.resolve(beginTrayPanelResize(dir)).catch(() => {
+        end();
+      });
+    },
+    [],
+  );
+  const resizeHandles = (
+    <div className="tray-resize-hits" aria-hidden="true">
+      {RESIZE_DIRECTIONS.map((dir) => (
+        <div
+          key={dir}
+          data-resize-dir={dir}
+          className={`tray-resize-hit tray-resize-hit--${dir}`}
+          onMouseDown={handleResizeDown(dir)}
+        />
+      ))}
+    </div>
+  );
+
   if (sorted.length === 0) {
     return (
-      <div className={revealClassName}>
+      <div
+        ref={revealRef}
+        className={revealClassName}
+        style={{ margin: 0, boxSizing: "border-box" }}
+        onAnimationEnd={handleRevealAnimationEnd}
+      >
         <div className="tray-panel">
           {grid}
           <div className="flyout-body">
@@ -355,13 +431,19 @@ export default function TrayPanel({ state }: { state: BootstrapState }) {
             />
           </div>
           {footer}
+          {resizeHandles}
         </div>
       </div>
     );
   }
 
   return (
-    <div className={revealClassName}>
+    <div
+      ref={revealRef}
+      className={revealClassName}
+      style={{ margin: 0, boxSizing: "border-box" }}
+      onAnimationEnd={handleRevealAnimationEnd}
+    >
       <div className="tray-panel">
         {grid}
         <div className="flyout-body">
@@ -373,6 +455,7 @@ export default function TrayPanel({ state }: { state: BootstrapState }) {
           ))}
         </div>
         {footer}
+        {resizeHandles}
       </div>
     </div>
   );

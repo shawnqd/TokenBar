@@ -21,6 +21,7 @@ const tauriMocks = vi.hoisted(() => ({
   dismissTrayPanel: vi.fn(),
   beginFlyoutGesture: vi.fn().mockResolvedValue(undefined),
   endFlyoutGesture: vi.fn().mockResolvedValue(undefined),
+  beginTrayPanelResize: vi.fn().mockResolvedValue(undefined),
   openSettingsWindow: vi.fn(),
   quitApp: vi.fn(),
   reanchorTrayPanel: vi.fn(),
@@ -45,6 +46,7 @@ const windowMocks = vi.hoisted(() => ({
     scaleFactor: vi.fn().mockResolvedValue(1),
     onResized: vi.fn().mockResolvedValue(() => {}),
     innerSize: vi.fn().mockResolvedValue({ width: 328, height: 200 }),
+    startResizeDragging: vi.fn().mockResolvedValue(undefined),
   })),
   LogicalSize: vi.fn((width: number, height: number) => ({ width, height })),
   PhysicalSize: vi.fn((width: number, height: number) => ({ width, height })),
@@ -210,6 +212,9 @@ describe("TrayPanel provider grid", () => {
     tauriMocks.refreshProviders.mockResolvedValue(undefined);
     tauriMocks.refreshProvidersIfStale.mockResolvedValue(undefined);
     tauriMocks.dismissTrayPanel.mockResolvedValue(undefined);
+    tauriMocks.beginFlyoutGesture.mockResolvedValue(undefined);
+    tauriMocks.endFlyoutGesture.mockResolvedValue(undefined);
+    tauriMocks.beginTrayPanelResize.mockResolvedValue(undefined);
     tauriMocks.reanchorTrayPanel.mockResolvedValue(undefined);
     tauriMocks.getCurrentSurfaceState.mockResolvedValue({
       mode: "trayPanel",
@@ -241,7 +246,6 @@ describe("TrayPanel provider grid", () => {
     tauriMocks.getLocaleStrings.mockResolvedValue(
       buildBundle({
         ActionRefresh: "Refresh",
-        TrayOpenDashboard: "Open Dashboard",
         MenuQuit: "Quit",
         MenuSettings: "Settings...",
         PanelAllProviders: "All providers",
@@ -491,7 +495,7 @@ describe("TrayPanel provider grid", () => {
     expect(grid?.classList.contains("provider-grid--sparse")).toBe(shouldBeSparse);
   });
 
-  it("only requests chart data for providers that can render charts", async () => {
+  it("requests chart data for every enabled provider through the unified path", async () => {
     renderTrayPanel([
       provider("codex", "Codex"),
       provider("claude", "Claude"),
@@ -500,10 +504,13 @@ describe("TrayPanel provider grid", () => {
       provider("deepseek", "DeepSeek"),
     ]);
     await waitFor(() => {
-      expect(tauriMocks.getProviderChartData).toHaveBeenCalledTimes(2);
+      expect(tauriMocks.getProviderChartData).toHaveBeenCalledTimes(5);
     });
     expect(tauriMocks.getProviderChartData).toHaveBeenCalledWith("codex", undefined);
     expect(tauriMocks.getProviderChartData).toHaveBeenCalledWith("claude", undefined);
+    expect(tauriMocks.getProviderChartData).toHaveBeenCalledWith("copilot", undefined);
+    expect(tauriMocks.getProviderChartData).toHaveBeenCalledWith("cursor", undefined);
+    expect(tauriMocks.getProviderChartData).toHaveBeenCalledWith("deepseek", undefined);
   });
 
   it("renders providers in settings catalog order instead of fetch completion order", async () => {
@@ -669,14 +676,17 @@ describe("TrayPanel provider grid", () => {
     expect(surface.style.getPropertyValue("zoom")).toBe("");
   });
 
-  it("opens the full dashboard from the tray and then dismisses the flyout", async () => {
-    renderTrayPanel([provider("claude", "Claude", 35)]);
-    fireEvent.click(await screen.findByText("Open Dashboard"));
+  it("no longer offers the dashboard action in the footer (user removal)", async () => {
+    const { container } = renderTrayPanel([provider("claude", "Claude", 35)]);
     await waitFor(() => {
-      expect(tauriMocks.setSurfaceMode).toHaveBeenCalledWith("popOut", {
-        kind: "dashboard",
-      });
-      expect(tauriMocks.dismissTrayPanel).toHaveBeenCalledTimes(1);
+      expect(container.querySelector(".flyout-footer")).not.toBeNull();
+    });
+    // The footer keeps refresh / settings / quit; the dashboard row was
+    // removed at the user's call and must not come back.
+    expect(screen.queryByText("Open Dashboard")).toBeNull();
+    expect(container.querySelectorAll(".flyout-footer .footer-row")).toHaveLength(3);
+    expect(tauriMocks.setSurfaceMode).not.toHaveBeenCalledWith("popOut", {
+      kind: "dashboard",
     });
   });
 
@@ -688,12 +698,44 @@ describe("TrayPanel provider grid", () => {
       scaleFactor: vi.fn().mockResolvedValue(1),
       onResized: vi.fn().mockResolvedValue(() => {}),
       innerSize: vi.fn().mockResolvedValue({ width: 328, height: 200 }),
+      startResizeDragging: vi.fn().mockResolvedValue(undefined),
     });
     const { container } = renderTrayPanel([provider("claude", "Claude", 35)]);
     await waitFor(() => {
       expect(container.querySelector(".tray-panel-reveal--native-size")).not.toBeNull();
     });
     warn.mockRestore();
+  });
+
+  it("keeps the popup_chrome shadow gutter: page flush, reveal keeps its `6px` padding", async () => {
+    const { container } = renderTrayPanel([provider("claude", "Claude", 35)]);
+    await waitFor(() => {
+      expect(container.querySelector(".tray-panel-reveal--native-size")).not.toBeNull();
+    });
+    // html/body/root must stay flush (transparent page), but the reveal
+    // element keeps its 6 DIP gutter: the shared down-only shadow
+    // (popup_chrome blur 3 + offset-y 3) paints there. Zeroing it would clip
+    // the shadow at the HWND edge like the pre-gutter regression.
+    expect(document.documentElement.style.padding).toBe("0px");
+    expect(document.body.style.padding).toBe("0px");
+    const reveal = container.querySelector<HTMLElement>(".tray-panel-reveal--native-size")!;
+    expect(reveal.style.padding).toBe('');
+    expect(reveal.style.margin).toBe("0px");
+    expect(container.querySelector(".flyout-body")).not.toBeNull();
+    expect(container.querySelector(".flyout-footer")).not.toBeNull();
+    const card = container.querySelector<HTMLElement>(".tray-panel .tray-card");
+    expect(card).not.toBeNull();
+  });
+
+  it("starts a native edge resize from the card-stroke handle", async () => {
+    const { container } = renderTrayPanel([provider("claude", "Claude", 35)]);
+    await waitFor(() => {
+      expect(container.querySelector("[data-resize-dir='e']")).not.toBeNull();
+    });
+    const east = container.querySelector<HTMLElement>("[data-resize-dir='e']")!;
+    fireEvent.mouseDown(east);
+    expect(tauriMocks.beginFlyoutGesture).toHaveBeenCalled();
+    expect(tauriMocks.beginTrayPanelResize).toHaveBeenCalledWith("e");
   });
 
   it("does not resize the native tray window for usage-only provider updates", async () => {
@@ -704,10 +746,7 @@ describe("TrayPanel provider grid", () => {
       scaleFactor: vi.fn().mockResolvedValue(1),
       onResized: vi.fn().mockResolvedValue(() => {}),
       innerSize: vi.fn().mockResolvedValue({ width: 328, height: 200 }),
-    });
-    const { container } = renderTrayPanel([provider("claude", "Claude", 35)]);
-    await waitFor(() => {
-      expect(container.querySelector(".tray-panel-reveal--native-size")).not.toBeNull();
+      startResizeDragging: vi.fn().mockResolvedValue(undefined),
     });
     setSize.mockClear();
     tauriMocks.reanchorTrayPanel.mockClear();
@@ -789,11 +828,12 @@ describe("TrayPanel provider grid", () => {
     }
     it("counts down while the toggle is on", async () => {
       const text = await resetTextWith(true);
-      expect(text).toMatch(/^Resets in \d+h \d+m$/);
+            // TrayCard may prepend the localized label; tolerate both forms.
+      expect(text).toMatch(/^(\u91cd\u7f6e\uff1a)?Resets in \d+h \d+m$/);
     });
     it("switches the same row to a labelled wall-clock time when the toggle is off", async () => {
       const text = await resetTextWith(false);
-      expect(text).toMatch(/^(Today|Tomorrow) at /);
+      expect(text).toMatch(/^(\u91cd\u7f6e\uff1a)?(Today|Tomorrow) at /);
       expect(text).not.toContain("Resets in");
     });
   });

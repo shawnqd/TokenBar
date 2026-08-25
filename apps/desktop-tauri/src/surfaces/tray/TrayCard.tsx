@@ -5,6 +5,7 @@ import type {
   LocalUsagePeriod,
   MenuBarDisplayMode,
   PaceSnapshot,
+  ProviderCapabilitiesSnapshot,
   ProviderChartData,
   ProviderLocalUsageSummary,
   ProviderOutputSpeed,
@@ -30,6 +31,7 @@ import {
 } from "../../components/ProviderQuotaBlock";
 import type { LocaleKey } from "../../i18n/keys";
 import { HAS_DASHBOARD, HAS_STATUS_PAGE } from "./providerCapabilities";
+import { providerCapabilities as resolveCapabilities } from "../../lib/providerCapabilities";
 import "./tray-v5.css";
 
 /* ── Public contract (imported by the Settings tray-panel preview) ─────── */
@@ -223,6 +225,79 @@ function formatApiEquivalentValue(amount: number): string {
   return `${formatCurrency(amount, "USD")} · ¥${cnyEstimate.toFixed(2)}`;
 }
 
+/** Short cycle label used inside quota tiles over the full translated word:
+ *  周额度 → 周, 月额度 → 月, 5 小时额度 → 5h. Exact matches only — we must not
+ *  truncate an unrelated label that happens to share a first character. */
+function shortTileLabel(raw: string): string {
+  const trimmed = raw.trim();
+  if (trimmed === "5h" || trimmed === "5 小时额度" || trimmed === "5h 额度") return "5h";
+  if (trimmed === "周额度") return "周";
+  if (trimmed === "月额度") return "月";
+  return trimmed;
+}
+
+/** Map the app's UI language to a BCP-47 code for date/number formatting. */
+function localeCodeFor(language: Language): string {
+  switch (language) {
+    case "chinese": return "zh-CN";
+    case "chinesetraditional": return "zh-TW";
+    case "japanese": return "ja-JP";
+    case "korean": return "ko-KR";
+    case "spanish": return "es-MX";
+    default: return "en-US";
+  }
+}
+
+/** Compact absolute reset for tiles — "8/24 7:59" in the UI language's locale,
+ *  no day words and no "重置于" text, so label + reset share one line. */
+function compactResetText(resetsAt: string | null, language: Language): string | null {
+  if (!resetsAt) return null;
+  const target = new Date(resetsAt);
+  if (Number.isNaN(target.getTime())) return null;
+  try {
+    const date = new Intl.DateTimeFormat(localeCodeFor(language), {
+      month: "numeric",
+      day: "numeric",
+      hour: "numeric",
+      minute: "2-digit",
+    }).format(target);
+    return date;
+  } catch {
+    return target.toISOString().slice(0, 16).replace("T", " ");
+  }
+}
+
+/** The hero/deficit pace badge tail — "· 够用到重置" (reserve) or
+ *  "· 约可用 81h" (deficit), built once so every surface shares one wording.
+ *
+ *  The zh-CN/zh-TW strings carry the wordy "按当前速度" prefix and a "小时"
+ *  unit; the compact forms strip the prefix and switch to a short "h" so the
+ *  hero line fits. Other locales keep their intact FTL string ("Lasts to reset
+ *  at this rate" / "At this rate, about 81h") — the substring trims are
+ *  language-specific and must not run on translations that lack them. */
+function paceRunwayText(
+  tone: PaceTone,
+  forecast: ReturnType<typeof quotaForecastDisplay>,
+  t: (key: LocaleKey) => string,
+  language: Language,
+): string | null {
+  const isCjk = language === "chinese" || language === "chinesetraditional";
+  if (tone === "reserve" && forecast.lastsToReset) {
+    const phrase = t("DetailPaceWillLastToReset");
+    return ` · ${isCjk ? phrase.replace("按当前速度", "") : phrase}`;
+  }
+  if (tone === "deficit" && forecast.etaSeconds != null && forecast.etaSeconds > 0) {
+    const etaHours = forecast.etaSeconds / 3600;
+    const hours =
+      etaHours < 1
+        ? (isCjk ? t("PanelForecastLessThanHour").replace("小时", "h") : t("PanelForecastLessThanHour"))
+        : `${etaHours < 10 ? Math.round(etaHours * 10) / 10 : Math.round(etaHours)}h`;
+    const phrase = t("DetailPaceRunsOutIn");
+    return ` · ${isCjk ? phrase.replace("按当前速度", "") : phrase} ${hours}`;
+  }
+  return null;
+}
+
 interface LocalUsageLead {
   labelKey: LocaleKey;
   tokens: number | null;
@@ -270,19 +345,6 @@ const iconCommon = {
   viewBox: "0 0 24 24",
 };
 interface IconProps { width?: number; height?: number; }
-const SpeedIcon = ({ width = 13, height = 13 }: IconProps) => (
-  <svg {...iconCommon} width={width} height={height}>
-    <circle cx="12" cy="12" r="9" />
-    <path d="M12 7v5l3 2" />
-  </svg>
-);
-const UsageIcon = ({ width = 13, height = 13 }: IconProps) => (
-  <svg {...iconCommon} width={width} height={height}>
-    <path d="M12 2L2 7l10 5 10-5-10-5z" />
-    <path d="M2 17l10 5 10-5" />
-    <path d="M2 12l10 5 10-5" />
-  </svg>
-);
 const ChartIcon = ({ width = 12, height = 12 }: IconProps) => (
   <svg {...iconCommon} width={width} height={height}>
     <rect x="3" y="12" width="4" height="9" />
@@ -311,7 +373,7 @@ function HeroRow({
   pace: PaceSnapshot | null;
   windowKind: RateWindowSnapshot["kind"];
 }) {
-  const { t } = useLocale();
+  const { t, language } = useLocale();
   const reset = useResetDisplay(snap.resetsAt, snap.resetDescription, display.resetTimeRelative);
   const forecast = quotaForecastDisplay(windowKind === "weekly" ? pace : null, snap);
   const percent = quotaPercentDisplay(snap, display);
@@ -323,7 +385,8 @@ function HeroRow({
     if (tone === "onpace") badge = t("QuotaPaceOnPace");
     else {
       badge = `${delta.toFixed(1)}% ${tone === "reserve" ? t("QuotaPaceInReserve") : t("QuotaPaceInDeficit")}`;
-      if (tone === "reserve" && forecast.lastsToReset) badge += ` · ${t("DetailPaceWillLastToReset")}`;
+      const runway = paceRunwayText(tone, forecast, t, language);
+      if (runway) badge += runway;
     }
   }
   return (
@@ -331,7 +394,9 @@ function HeroRow({
       <div className="quota-row__head">
         <span className="quota-row__label">{title}</span>
         {reset.text && (
-          <span className="quota-row__reset" data-reset-state={reset.kind}>{reset.text}</span>
+          <span className="quota-row__reset" data-reset-state={reset.kind}>
+            {reset.text.includes("重置") ? reset.text : `重置：${reset.text}`}
+          </span>
         )}
       </div>
       <div className="quota-row__hero-line">
@@ -366,18 +431,67 @@ function QuotaTile({
   label,
   snap,
   display,
+  pace,
   fullWidth = false,
 }: {
   label: string;
   snap: RateWindowSnapshot;
   display: QuotaDisplayContext;
+  pace: PaceSnapshot | null;
   fullWidth?: boolean;
 }) {
+  const { t, language } = useLocale();
   const percent = quotaPercentDisplay(snap, display);
+  const reset = useResetDisplay(snap.resetsAt, snap.resetDescription, display.resetTimeRelative);
+  // Weekly tile gets the bridge's weekly pace; other cycles project linearly.
+  // Only the bar notch is drawn (no text badge) so the forecast is a visual
+  // hint, not another line of copy. On-pace windows draw nothing — the notch
+  // exists to call out 结余/超支, an invisible onpace marker is noise.
+  const forecast = quotaForecastDisplay(snap.kind === "weekly" ? pace : null, snap);
+  const notchTone = forecast.available ? paceToneOf(forecast) : null;
+  const notch =
+    notchTone !== null && notchTone !== "onpace" ? forecastMarkerPercent(forecast, display) : null;
+  // Full-width tiles (the secondary cycle): label + reset share the head line
+  // (weight tells them apart), bar below — density-preview.html full row.
+  if (fullWidth) {
+    return (
+      <div className="quota-tile quota-tile--full">
+        <div className="quota-tile__head">
+          <span className="quota-tile__title">
+            <span className="quota-tile__label" title={label}>{shortTileLabel(label)}</span>
+            <span className="quota-tile__reset" data-reset-state={reset.kind}>
+              {compactResetText(snap.resetsAt, language) ?? (reset.kind !== "unknown" ? reset.text : "")}
+            </span>
+          </span>
+          <strong className="quota-tile__val">{percent.rounded}%</strong>
+        </div>
+        <div className="progress-bar progress-bar--tile">
+          <div
+            className="progress-fill"
+            data-level={percent.level}
+            style={{ width: `${percent.fillPercent}%` } as CSSProperties}
+          />
+          {notch != null && notchTone && (
+            <div
+              className={`progress-notch progress-notch--${notchTone}`}
+              style={{ left: `${notch}%` } as CSSProperties}
+              title={t("PanelExpected")}
+            />
+          )}
+        </div>
+      </div>
+    );
+  }
+  // Half-width extras: label + pct on the head line, reset below the bar.
   return (
-    <div className={`quota-tile${fullWidth ? " quota-tile--full" : ""}`}>
+    <div className="quota-tile">
       <div className="quota-tile__head">
-        <span className="quota-tile__label" title={label}>{label}</span>
+        <span className="quota-tile__title">
+          <span className="quota-tile__label" title={label}>{shortTileLabel(label)}</span>
+          <span className="quota-tile__reset" data-reset-state={reset.kind}>
+            {compactResetText(snap.resetsAt, language) ?? (reset.kind !== "unknown" ? reset.text : "")}
+          </span>
+        </span>
         <strong className="quota-tile__val">{percent.rounded}%</strong>
       </div>
       <div className="progress-bar progress-bar--tile">
@@ -386,6 +500,13 @@ function QuotaTile({
           data-level={percent.level}
           style={{ width: `${percent.fillPercent}%` } as CSSProperties}
         />
+        {notch != null && notchTone && (
+          <div
+            className={`progress-notch progress-notch--${notchTone}`}
+            style={{ left: `${notch}%` } as CSSProperties}
+            title={t("PanelExpected")}
+          />
+        )}
       </div>
     </div>
   );
@@ -393,14 +514,30 @@ function QuotaTile({
 
 /* ── Balance / status blocks (never fabricate) ────────────────────────── */
 
-function BalanceBlock({ provider }: { provider: ProviderUsageSnapshot }) {
+function BalanceBlock({ provider, isCompact }: { provider: ProviderUsageSnapshot; isCompact?: boolean }) {
   const { balance } = getProviderBalance(provider);
   if (!balance) return null;
+  if (isCompact) {
+    return (
+      <div className="balance-compact-row" data-balance-kind={balance.kind}>
+        <div className="balance-compact-row__left">
+          <span className="balance-compact-row__label">{balance.title}:</span>
+          <span
+            className="balance-compact-row__amount"
+            data-unavailable={balance.unavailable ? "true" : undefined}
+          >
+            {balance.amount}
+          </span>
+          {balance.breakdown ? <span className="balance-compact-row__sub">{balance.breakdown}</span> : null}
+        </div>
+        <span className="soft-badge soft-badge--reserve">正常</span>
+      </div>
+    );
+  }
   return (
     <div className="balance-block" data-balance-kind={balance.kind}>
       <div className="balance-block__head">
         <span>{balance.title}</span>
-        {balance.breakdown ? <span className="soft-badge soft-badge--neutral">{balance.breakdown}</span> : null}
       </div>
       <div className="balance-block__body">
         <span
@@ -409,7 +546,9 @@ function BalanceBlock({ provider }: { provider: ProviderUsageSnapshot }) {
         >
           {balance.amount}
         </span>
-        {balance.breakdown && <span className="balance-block__sub">{balance.breakdown}</span>}
+        {balance.breakdown && (
+          <span className="balance-block__sub soft-badge soft-badge--neutral">{balance.breakdown}</span>
+        )}
       </div>
     </div>
   );
@@ -459,22 +598,20 @@ function MinimalCard({
   provider,
   display,
   outputSpeedText,
-  usageLead,
-  language,
   balanceText,
   hero,
   condensedChip,
   showProviderIcon,
+  caps,
 }: {
   provider: ProviderUsageSnapshot;
   display: QuotaDisplayContext;
   outputSpeedText: string | null;
-  usageLead: LocalUsageLead | null;
-  language: Language;
   balanceText: string | null;
   hero: TrayWindowView | null;
   condensedChip: string | null;
   showProviderIcon: boolean;
+  caps: ProviderCapabilitiesSnapshot;
 }) {
   const { t } = useLocale();
   const name = provider.displayName.split(" ")[0];
@@ -492,8 +629,12 @@ function MinimalCard({
   // Pace badge from the hero forecast.
   let paceBadge: string | null = null;
   let paceTone: PaceTone = "onpace";
+  // Pace notch on the minimal bar (HTML renderMinimalStreamlined's notchLeft).
+  let notchLeft: number | null = null;
   if (heroIsReal) {
     const forecast = quotaForecastDisplay(hero!.snap.kind === "weekly" ? provider.pace : null, hero!.snap);
+    const marker = forecastMarkerPercent(forecast, display);
+    notchLeft = marker;
     paceTone = paceToneOf(forecast);
     if (forecast.available) {
       const delta = Math.abs(forecast.deltaPercent ?? 0);
@@ -532,19 +673,20 @@ function MinimalCard({
       {hasBar && hero && (
         <div className="minimal-streamlined__bar-wrap">
           <div className="progress-fill" style={{ width: `${quotaPercentDisplay(hero.snap, display).fillPercent}%` } as CSSProperties} />
+          {notchLeft != null && (
+            <div
+              className={`progress-notch progress-notch--${paceTone}`}
+              style={{ left: `${notchLeft}%` } as CSSProperties}
+            />
+          )}
         </div>
       )}
       <div className="minimal-streamlined__row2">
         <span className="minimal-streamlined__badges">
-          {paceBadge ? <span className={`soft-badge soft-badge--${paceTone} soft-badge--mini`}>{paceBadge}</span> : null}
-          {condensedChip ? <span className="soft-badge soft-badge--neutral soft-badge--mini">{condensedChip}</span> : null}
-          {usageLead && usageLead.tokens != null && usageLead.tokens > 0 ? (
-            <span className="soft-badge soft-badge--neutral soft-badge--mini">
-              {t(usageLead.labelKey)} {formatApproxTokens(usageLead.tokens, language)}
-            </span>
-          ) : null}
+          {paceBadge ? <span className={`soft-badge soft-badge--${paceTone}`}>{paceBadge}</span> : null}
+          {condensedChip ? <span className="soft-badge soft-badge--neutral">{condensedChip}</span> : null}
         </span>
-        {outputSpeedText && (
+        {caps.outputSpeed && outputSpeedText && (
           <span className="minimal-streamlined__speed">{outputSpeedText}</span>
         )}
       </div>
@@ -568,6 +710,11 @@ export default function TrayCard({
   const [isChartDataLoading, setIsChartDataLoading] = useState(false);
 
   const supportsChart = providerSupportsChartData(provider.providerId);
+  // Stable, provider-level capability flags (backend-reported; deterministic
+  // fallback for older snapshots). Slot visibility must depend on these, not
+  // on whether chart data has finished loading — otherwise a card flickers its
+  // speed/usage rows in and out as fetches settle.
+  const caps = resolveCapabilities(provider);
   useEffect(() => {
     if (!supportsChart) {
       setChartData(null);
@@ -637,12 +784,11 @@ export default function TrayCard({
           provider={provider}
           display={display}
           outputSpeedText={outputSpeedText}
-          usageLead={usageLead}
-          language={language}
           balanceText={balanceText}
           hero={hero}
           condensedChip={condensedChip}
           showProviderIcon={showProviderIcon}
+          caps={caps}
         />
         {hasContext && (
           <div className={`context-actions${canDashboard && canStatus ? "" : " context-actions--single"}`}>
@@ -692,13 +838,13 @@ export default function TrayCard({
               <ProviderIcon providerId={provider.providerId} size={20} className="card-header__icon" />
             )}
             <span className="card-header__name">{provider.displayName}</span>
+            <span className="card-header__updated">{updatedText}</span>
           </div>
-          <span className="card-header__updated">{updatedText}</span>
       </div>
 
       <div className={`card-zone${zoneTone}`}>
         {hero && (
-          <div className={`modular-section${sectionClass()}`}>
+          <div className={`modular-section quota-stage${sectionClass()}`}>
             <HeroRow
               title={hero.label}
               snap={hero.snap}
@@ -707,9 +853,7 @@ export default function TrayCard({
               windowKind={hero.snap.kind}
             />
             {secondary && (
-              <div className="quota-tile quota-tile--full">
-                <QuotaTile label={secondary.label} snap={secondary.snap} display={display} fullWidth />
-              </div>
+              <QuotaTile label={secondary.label} snap={secondary.snap} display={display} pace={provider.pace} fullWidth />
             )}
           </div>
         )}
@@ -718,9 +862,14 @@ export default function TrayCard({
           <div className={`modular-section${sectionClass()}`}>
             <div className="tiles-grid-2col">
               {extraTiles.map((tile) => (
-                <div className={`quota-tile${tile.fullWidth ? " quota-tile--full" : ""}`} key={tile.id}>
-                  <QuotaTile label={tile.label} snap={tile.snap} display={display} fullWidth={tile.fullWidth} />
-                </div>
+                <QuotaTile
+                  key={tile.id}
+                  label={tile.label}
+                  snap={tile.snap}
+                  display={display}
+                  pace={provider.pace}
+                  fullWidth={tile.fullWidth}
+                />
               ))}
             </div>
           </div>
@@ -728,7 +877,7 @@ export default function TrayCard({
 
         {balanceInfo.balance && (
           <div className={`modular-section${sectionClass()}`}>
-            <BalanceBlock provider={provider} />
+            <BalanceBlock provider={provider} isCompact={isCompact} />
           </div>
         )}
 
@@ -738,39 +887,61 @@ export default function TrayCard({
           </div>
         )}
 
-        {/* Unified insight footer: speed / near usage / API-value subline. */}
-        <div className={`modular-section${sectionClass()}`}>
+        {/* Unified insight footer: speed / near usage / API-value subline.
+            Detailed = HTML meta-well (filled, two centered halves + note);
+            compact = dual chips. Only renders when the provider actually has
+            one of these capabilities — no empty slot for providers we cannot
+            measure. */}
+        {caps.outputSpeed || caps.localUsage ? (
+        <div className={`modular-section${isCompact ? sectionClass() : ""}`}>
           {!isCompact ? (
-            <div className="insight-section">
-              <div className="insight-row">
-                <span className="insight-row__label"><SpeedIcon />{t("OutputSpeedTitle")}</span>
-                <span className="insight-row__value" data-slot="speed">{outputSpeedText ?? ""}</span>
+            <div className="meta-well">
+              {caps.outputSpeed || caps.localUsage ? (
+              <div className="meta-well__line">
+                {caps.outputSpeed && (
+                  <div className="meta-well__item">
+                    <span className="meta-well__label">{t("TaskbarWidgetPreviewSpeed")}</span>
+                    <span className="meta-well__value" data-slot="speed">{outputSpeedText ?? ""}</span>
+                  </div>
+                )}
+                {caps.outputSpeed && caps.localUsage && (
+                  <span className="meta-well__rule" aria-hidden="true" />
+                )}
+                {caps.localUsage && (
+                  <div className="meta-well__item">
+                    <span className="meta-well__label">{t(usageLead ? usageLead.labelKey : "PanelSevenDayUsage").replace(/使用$/, "")}</span>
+                    <span className="meta-well__value" data-slot="usage">
+                      {usageLead && usageLead.tokens != null && usageLead.tokens > 0
+                        ? formatApproxTokens(usageLead.tokens, language)
+                        : ""}
+                    </span>
+                  </div>
+                )}
               </div>
-              <div className="insight-row">
-                <span className="insight-row__label"><UsageIcon />{t(usageLead ? usageLead.labelKey : "PanelSevenDayUsage")}</span>
-                <span className="insight-row__value" data-slot="usage">
-                  {usageLead && usageLead.tokens != null && usageLead.tokens > 0
-                    ? formatApproxTokens(usageLead.tokens, language)
-                    : ""}
-                </span>
-              </div>
-              {usageLead && usageLead.cost != null && (
-                <div className="insight-subline">
+              ) : null}
+              {caps.localUsage && usageLead && usageLead.cost != null && (
+                <div className="meta-well__note">
                   {t("PanelApiEquivalentValue")} ≈ {formatApiEquivalentValue(usageLead.cost)}
+                  {usageLead.topModel ? ` · ${usageLead.topModel}` : ""}
                 </div>
               )}
             </div>
           ) : (
             <div className="compact-chips-row">
-              <span className="compact-chip"><SpeedIcon /> {t("OutputSpeedTitle")} <strong>{outputSpeedText ?? ""}</strong></span>
-              <span className="compact-chip"><UsageIcon /> {t(usageLead ? usageLead.labelKey : "PanelSevenDayUsage")} <strong>
-                {usageLead && usageLead.tokens != null && usageLead.tokens > 0
-                  ? formatCompactTokens(usageLead.tokens, language) ?? formatTokenCount(usageLead.tokens)
-                  : ""}
-              </strong></span>
+              {caps.outputSpeed && (
+                <span className="compact-chip">{t("TaskbarWidgetPreviewSpeed")} <strong>{outputSpeedText ?? ""}</strong></span>
+              )}
+              {caps.localUsage && (
+                <span className="compact-chip">{t(usageLead ? usageLead.labelKey : "PanelSevenDayUsage").replace(/使用$/, "")} <strong>
+                  {usageLead && usageLead.tokens != null && usageLead.tokens > 0
+                    ? formatCompactTokens(usageLead.tokens, language) ?? formatTokenCount(usageLead.tokens)
+                    : ""}
+                </strong></span>
+              )}
             </div>
           )}
         </div>
+        ) : null}
       </div>
 
       {hasContext && (

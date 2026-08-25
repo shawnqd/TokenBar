@@ -1,5 +1,6 @@
 import { useLocale } from "../../../hooks/useLocale";
 import type { ThemePreference } from "../../../types/bridge";
+import { FONT_WHITELIST_DEFAULT } from "../../../lib/fontWhitelist";
 import FontSettingsBlock from "../FontSettingsBlock";
 import type { SettingsPageProps } from "./pageTypes";
 import { V5Field, V5Section, V5Seg, V5Toggle } from "./v5Controls";
@@ -44,7 +45,7 @@ export default function AppearancePage({
           <FontSettingsBlock
             value={{
               size: settings.menuFontSize ?? 12,
-              family: settings.menuFontFamily || "Microsoft YaHei UI",
+              family: settings.menuFontFamily || FONT_WHITELIST_DEFAULT,
               weight: settings.menuFontWeight ?? 300,
             }}
             disabled={saving}

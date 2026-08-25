@@ -472,6 +472,59 @@ impl SourceMode {
     }
 }
 
+/// Where the bridge's per-provider capability report is computed from.
+///
+/// The frontend uses this to decide whether a slot (output speed, recent
+/// usage, a dashboard/status button, login) exists for a provider at all.
+/// The data source is OUR parser inventory, not the provider: a provider only
+/// reports `output_speed: true` once we have actually decoded its session
+/// logs, and `local_usage: true` once a local-usage scanner covers it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProviderCapabilities {
+    /// We have an output-speed parser for this provider's session logs
+    /// (mirrors `commands::output_speed`).
+    pub output_speed: bool,
+    /// We have a local-usage scanner or a hosted chart source for this
+    /// provider (mirrors `commands::chart`).
+    pub local_usage: bool,
+    /// The provider exposes an external usage dashboard URL.
+    pub provider_dashboard: bool,
+    /// The provider exposes an external status page URL.
+    pub status_page: bool,
+    /// The provider has at least one user-facing login/credential flow.
+    pub login: bool,
+}
+
+impl ProviderCapabilities {
+    /// Providers whose CLI session logs we parse for output speed.
+    fn has_output_speed_parser(id: ProviderId) -> bool {
+        matches!(id, ProviderId::Codex | ProviderId::Claude | ProviderId::Grok)
+    }
+
+    /// Providers whose local session logs we scan for recent usage, plus the
+    /// OpenAI-family hosted dashboard charts.
+    fn has_local_usage_source(id: ProviderId) -> bool {
+        matches!(
+            id,
+            ProviderId::Codex | ProviderId::Claude | ProviderId::Grok
+        )
+    }
+
+    pub fn for_provider(id: ProviderId, metadata: &ProviderMetadata) -> Self {
+        Self {
+            output_speed: Self::has_output_speed_parser(id),
+            local_usage: Self::has_local_usage_source(id),
+            provider_dashboard: metadata.dashboard_url.is_some(),
+            status_page: metadata.status_page_url.is_some(),
+            // Every provider has at least one user-facing credential path
+            // (API key, cookie import, OAuth, or CLI login). `cookie_domain`
+            // only models the cookie path, so it under-reports here.
+            login: true,
+        }
+    }
+}
+
 /// Metadata about a provider
 #[derive(Debug, Clone)]
 pub struct ProviderMetadata {

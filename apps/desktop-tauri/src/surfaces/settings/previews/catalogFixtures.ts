@@ -1,5 +1,6 @@
 import { TEST_PROVIDER_CATALOG } from "../../../test/providerCatalog";
 import type {
+  ProviderCapabilitiesSnapshot,
   ProviderUsageSnapshot,
   QuotaCycleKind,
   RateWindowSnapshot,
@@ -24,6 +25,17 @@ function rateWindow(
     isExhausted: false,
     reservePercent: null,
     reserveDescription: null,
+  };
+}
+
+function snapshotCapabilities(providerId: string): ProviderCapabilitiesSnapshot {
+  const localLog = ["codex", "claude", "grok"].includes(providerId);
+  return {
+    outputSpeed: localLog,
+    localUsage: localLog,
+    providerDashboard: true,
+    statusPage: false,
+    login: true,
   };
 }
 
@@ -52,6 +64,7 @@ function baseSnapshot(
     accountOrganization: null,
     trayStatusLabel: null,
     fetchDurationMs: null,
+    capabilities: snapshotCapabilities(providerId),
     ...rest,
   };
 }

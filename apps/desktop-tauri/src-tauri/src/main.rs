@@ -4,6 +4,8 @@ use std::time::Duration;
 
 mod auto_refresh;
 mod boot;
+#[cfg(windows)]
+mod bundled_fonts;
 mod commands;
 mod events;
 mod floatbar;
@@ -37,7 +39,6 @@ use std::sync::Mutex;
 
 use state::AppState;
 use surface::SurfaceMode;
-use surface_target::SurfaceTarget;
 use tauri::Manager;
 
 const PROOF_ACTIVATION_DELAY: Duration = Duration::from_millis(0);
@@ -52,16 +53,8 @@ struct LaunchBehavior {
 fn should_hide_close_request(mode: SurfaceMode) -> bool {
     matches!(
         mode,
-        SurfaceMode::TrayPanel | SurfaceMode::PopOut | SurfaceMode::Settings
+        SurfaceMode::TrayPanel | SurfaceMode::Settings
     )
-}
-
-fn primary_window_request() -> shell::ShellTransitionRequest {
-    shell::ShellTransitionRequest {
-        mode: SurfaceMode::PopOut,
-        target: SurfaceTarget::Dashboard,
-        position: None,
-    }
 }
 
 fn should_open_primary_window_from_args<I, S>(args: I) -> bool
@@ -115,9 +108,10 @@ where
 
     LaunchBehavior {
         // The app is tray-first: a regular launch stays in the tray unless
-        // the user explicitly opted into opening the full dashboard. The
+        // the user explicitly opted into opening the tray panel. The
         // persisted setting retains its legacy `start_minimized` field name;
-        // Settings presents it as "Open dashboard on launch".
+        // Settings presents it as "Open dashboard on launch" — since the
+        // internal dashboard window was removed, it now opens the tray panel.
         open_primary_window_at_start: force_visible
             || explicit_primary_launch
             || (plain_desktop_launch && open_dashboard_on_launch),
@@ -150,9 +144,10 @@ fn main() {
         .plugin(shortcut_bridge::plugin())
         .plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
             if should_reopen_primary_window_from_instance_args(args.iter().skip(1)) {
-                let request = primary_window_request();
-                let _ =
-                    shell::reopen_to_target(app, request.mode, request.target, request.position);
+                // A second instance launch surfaces the tray panel (the
+                // removal of the PopOut dashboard made the flyout the only
+                // in-app open target for launch args).
+                let _ = shell::flyout_window::open_or_focus(app, None);
             }
         }))
         .invoke_handler(tauri::generate_handler![
@@ -168,6 +163,7 @@ fn main() {
             commands::dismiss_tray_panel,
             commands::begin_flyout_gesture,
             commands::end_flyout_gesture,
+            commands::begin_tray_panel_resize,
             commands::reveal_tray_panel_window,
             commands::reveal_settings_window,
             commands::open_settings_window,
@@ -326,13 +322,7 @@ fn main() {
                 let app = app.handle().clone();
                 tauri::async_runtime::spawn(async move {
                     tokio::time::sleep(VISIBLE_START_ACTIVATION_DELAY).await;
-                    let request = primary_window_request();
-                    let _ = shell::reopen_to_target(
-                        &app,
-                        request.mode,
-                        request.target,
-                        request.position,
-                    );
+                    let _ = shell::flyout_window::open_or_focus(&app, None);
                 });
             }
 
@@ -439,21 +429,12 @@ mod tests {
     #[test]
     fn close_request_hides_tray_first_surfaces() {
         assert!(should_hide_close_request(SurfaceMode::TrayPanel));
-        assert!(should_hide_close_request(SurfaceMode::PopOut));
         assert!(should_hide_close_request(SurfaceMode::Settings));
     }
 
     #[test]
     fn close_request_leaves_hidden_surface_alone() {
         assert!(!should_hide_close_request(SurfaceMode::Hidden));
-    }
-
-    #[test]
-    fn primary_window_request_targets_popout_dashboard() {
-        let request = primary_window_request();
-        assert_eq!(request.mode, SurfaceMode::PopOut);
-        assert_eq!(request.target, SurfaceTarget::Dashboard);
-        assert_eq!(request.position, None);
     }
 
     #[test]

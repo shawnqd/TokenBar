@@ -372,7 +372,6 @@ locale_keys! {
 
     // Tray - Single icon mode
     TrayOpenPanel,
-    TrayOpenDashboard,
     TrayShowFloatBar,
     TrayRefreshAll,
     TrayProviders,
@@ -777,7 +776,6 @@ locale_keys! {
     OpenSettingsButton,
     TooltipRefresh,
     TooltipSettings,
-    TooltipPopOut,
     TooltipBackToTray,
     TrayCardErrorBadge,
     SummaryProvidersLabel,

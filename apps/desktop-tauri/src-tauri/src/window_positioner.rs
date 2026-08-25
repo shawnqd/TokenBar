@@ -17,9 +17,22 @@ pub struct PanelSize {
     pub height: u32,
 }
 
-/// Margin kept between the panel edge and the monitor work-area edge.
+/// Margin kept between the panel edge and the monitor work-area edge
+/// (sides and top). The bottom uses [`above_taskbar_hwnd_y`] so the visible
+/// card matches the right-click menu's 6 DIP taskbar gap.
 const MARGIN: i32 = 8;
 const GAP: i32 = 8;
+
+fn dip(value: i32, scale_factor: f64) -> i32 {
+    (value as f64 * scale_factor).round() as i32
+}
+
+/// HWND top so the card (the window itself) sits `TASKBAR_GAP_DIP` above
+/// the work-area bottom. DWM paints the flyout shadow outside the HWND.
+fn above_taskbar_hwnd_y(work_area: &Rect, panel_h_phys: i32, scale_factor: f64) -> i32 {
+    let gap = dip(crate::shell::popup_chrome::TASKBAR_GAP_DIP, scale_factor);
+    work_area.y + work_area.height as i32 - gap - panel_h_phys
+}
 
 fn physical_panel_size(panel_size: &PanelSize, scale_factor: f64) -> (i32, i32) {
     let scale_factor = if scale_factor.is_finite() && scale_factor > 0.0 {
@@ -44,7 +57,8 @@ fn clamp_to_work_area(
     let min_x = monitor_rect.x + MARGIN;
     let min_y = monitor_rect.y + MARGIN;
     let max_x = (monitor_rect.x + monitor_rect.width as i32 - pw - MARGIN).max(min_x);
-    let max_y = (monitor_rect.y + monitor_rect.height as i32 - ph - MARGIN).max(min_y);
+    // Bottom clamp: card HWND sits TASKBAR_GAP_DIP above the work area.
+    let max_y = above_taskbar_hwnd_y(monitor_rect, ph, scale_factor).max(min_y);
 
     (target_x.clamp(min_x, max_x), target_y.clamp(min_y, max_y))
 }
@@ -61,7 +75,7 @@ fn calculate_anchored_position(
     let anchor_x = icon_rect.x + (icon_rect.width as i32) / 2;
     let target_x = anchor_x - pw / 2;
     let target_y = if open_above {
-        anchor_y - ph - GAP
+        above_taskbar_hwnd_y(monitor_rect, ph, scale_factor)
     } else {
         anchor_y + GAP
     };
@@ -121,7 +135,7 @@ pub fn calculate_panel_position(
         let (_, ph) = physical_panel_size(panel_size, scale_factor);
         (
             position.0,
-            work_area.y + work_area.height as i32 - ph - MARGIN,
+            above_taskbar_hwnd_y(work_area, ph, scale_factor),
         )
     } else {
         position
@@ -338,6 +352,29 @@ mod tests {
     }
 
     #[test]
+    fn bottom_taskbar_card_matches_menu_gap() {
+        let monitor = hd_monitor();
+        let work_area = Rect {
+            x: 0,
+            y: 0,
+            width: 1920,
+            height: 1040,
+        };
+        let icon = Rect {
+            x: 1800,
+            y: 1048,
+            width: 24,
+            height: 24,
+        };
+        let (_, y) = calculate_panel_position(&icon, &monitor, &work_area, &panel(), 1.0);
+        let hwnd_bottom = y + panel().height as i32;
+        assert_eq!(
+            hwnd_bottom,
+            work_area.y + work_area.height as i32 - crate::shell::popup_chrome::TASKBAR_GAP_DIP
+        );
+    }
+
+    #[test]
     fn left_taskbar_bottom_aligns_panel() {
         let monitor = hd_monitor();
         let work_area = Rect {
@@ -355,7 +392,7 @@ mod tests {
 
         let (_, y) = calculate_panel_position(&icon, &monitor, &work_area, &panel(), 1.0);
 
-        assert_eq!(y, 1080 - 560 - MARGIN);
+        assert_eq!(y, 1080 - 560 - crate::shell::popup_chrome::TASKBAR_GAP_DIP);
     }
 
     #[test]
@@ -381,7 +418,10 @@ mod tests {
 
         let (_, y) = calculate_panel_position(&icon, &monitor, &work_area, &panel(), 2.0);
 
-        assert_eq!(y, 2160 - (560 * 2) - MARGIN);
+        assert_eq!(
+            y,
+            2160 - (560 * 2) - crate::shell::popup_chrome::TASKBAR_GAP_DIP * 2
+        );
     }
 
     #[test]

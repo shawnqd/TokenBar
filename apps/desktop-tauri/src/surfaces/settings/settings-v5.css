@@ -2,6 +2,7 @@
    keep the previous styles.css rules. Tokens copy the frozen HTML. */
 
 .settings-v5 {
+  position: relative;
   display: flex;
   flex-direction: column;
   height: 100%;
@@ -62,9 +63,13 @@
 .settings-v5.settings-v5 .settings-titlebar {
   height: 36px;
   flex: 0 0 36px;
-  padding: 0 8px 0 14px;
+  padding: 0 0 0 14px;
   background: var(--flyout-bg);
   border-bottom: 1px solid var(--flyout-divider);
+}
+
+.settings-v5 .settings-titlebar__controls {
+  margin-right: 0;
 }
 
 .settings-v5 .settings-titlebar__title {

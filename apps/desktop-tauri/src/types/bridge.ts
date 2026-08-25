@@ -582,6 +582,20 @@ export interface PaceSnapshot {
   speedMultiplierToReset: number | null;
 }
 
+/**
+ * Backend-reported per-provider capability flags (mirror of
+ * `codexbar::core::ProviderCapabilities`). The frontend uses these to decide
+ * whether a slot exists for a provider at all — e.g. `outputSpeed: false`
+ * means the speed slot is hidden, not shown empty.
+ */
+export interface ProviderCapabilitiesSnapshot {
+  outputSpeed: boolean;
+  localUsage: boolean;
+  providerDashboard: boolean;
+  statusPage: boolean;
+  login: boolean;
+}
+
 export interface ProviderUsageSnapshot {
   providerId: string;
   displayName: string;
@@ -614,6 +628,12 @@ export interface ProviderUsageSnapshot {
   trayStatusLabel: string | null;
   fetchDurationMs?: number | null;
   wayfinderUsage?: WayfinderUsageSnapshot | null;
+  /**
+   * Backend-reported capability flags. Optional for backwards compatibility
+   * with cached/fixture snapshots; see `providerCapabilities()` for the
+   * derived default used when absent.
+   */
+  capabilities?: ProviderCapabilitiesSnapshot;
 }
 
 export interface WayfinderRouteSummary {

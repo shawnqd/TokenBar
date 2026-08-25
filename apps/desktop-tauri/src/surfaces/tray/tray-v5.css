@@ -1,10 +1,19 @@
 /* ──────────────────────────────────────────────────────────────────────
    tray-v5.css — the tray flyout's native-style design system.
-   Faithful port of design/density-preview.html's card / density / footer
-   structure, rendered over real provider snapshots. The HTML sandbox-only
-   archetype tabs, preset pills, lego composer and theme toggle never appear
-   in the product; this stylesheet only styles the product's provider grid,
-   three density tiers, the unified modular card, and the footer actions.
+   Faithful 1:1 port of design/density-preview.html's card / density /
+   footer structure, rendered over real provider snapshots. The HTML
+   sandbox-only archetype tabs, preset pills, lego composer and theme
+   toggle never appear in the product; this stylesheet only styles the
+   product's provider grid, three density tiers, the unified modular card,
+   and the footer actions.
+
+   Values mirror the current flyout section of density-preview.html line by
+   line:
+     - readable-dense type scale 32/16/14/13/12
+     - weights display 800 / strong 700 / medium 500 / body 400
+     - quota titles 12/500, resets 12/400
+     - detailed insights in a filled .meta-well (speed | 7d, centered note)
+     - full-width secondary tile keeps label + reset on one head line
    ────────────────────────────────────────────────────────────────────── */
 
 /* Design tokens for the tray flyout. Dark is the default (the flyout
@@ -15,7 +24,37 @@
 .tray-panel-reveal,
 .tray-card,
 .minimal-streamlined {
-  --flyout-bg: #1c1c20;
+  font-family: "Segoe UI Variable Text", "Segoe UI", "Microsoft YaHei UI", -apple-system, sans-serif;
+
+  /* styles.css forces grayscale "macOS-thin" text app-wide. Flyout text sits
+     on opaque card fills, so restore the platform default here: ClearType
+     keeps the 12-13px captions sharp, and the scroll blur is fixed by
+     leaving the composited layer (see --settled in styles.css), not by
+     thinner glyphs. */
+  -webkit-font-smoothing: auto;
+
+  /* Readable-dense scale + weights (density-preview.html .flyout tokens). */
+  --type-hero: 32px;
+  --type-name: 16px;
+  --type-value: 14px;
+  --type-body: 13px;
+  --type-meta: 12px;
+  --w-display: 800;
+  --w-strong: 700;
+  --w-medium: 500;
+  --w-body: 400;
+  --quota-title-size: var(--type-meta);
+  --quota-title-weight: var(--w-medium);
+  --quota-reset-size: var(--type-meta);
+  --quota-reset-weight: var(--w-body);
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+
+  /* Solid fallback only. Live frost is --tray-frost (homemade downsample
+     blur painted as a BMP). Keep this opaque so a failed capture is not a
+     hole. */
   --flyout-bg: #1c1c20;
   --flyout-text: #f5f5f8;
   --flyout-text-sub: #a2a2ad;
@@ -24,6 +63,7 @@
   --flyout-zone-bg: #242429;
   --flyout-zone-border: rgba(255, 255, 255, 0.06);
   --flyout-zone-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+  --flyout-well: rgba(255, 255, 255, 0.06);
 
   --track-bg: rgba(255, 255, 255, 0.12);
   --track-fill: var(--accent, #2b88d8);
@@ -40,12 +80,15 @@
 
   --soft-neutral-bg: rgba(128, 128, 128, 0.08);
   --soft-neutral-border: rgba(128, 128, 128, 0.12);
+
+  --btn-secondary-bg: #28282e;
+  --btn-secondary-border: rgba(255, 255, 255, 0.1);
 }
 
 [data-theme="light"] .tray-panel-reveal,
 [data-theme="light"] .tray-card,
 [data-theme="light"] .minimal-streamlined {
-  --flyout-bg: #ffffff;
+  --flyout-bg: #f3f3f6;
   --flyout-text: #1a1a1c;
   --flyout-text-sub: #5c5c64;
   --flyout-text-muted: #8c8c96;
@@ -53,6 +96,7 @@
   --flyout-zone-bg: #ffffff;
   --flyout-zone-border: rgba(0, 0, 0, 0.08);
   --flyout-zone-shadow: 0 2px 8px rgba(0, 0, 0, 0.03);
+  --flyout-well: rgba(0, 0, 0, 0.04);
 
   --track-bg: #ececee;
   --track-fill: var(--accent, #0078d4);
@@ -66,36 +110,29 @@
   --pace-onpace: #5c5c64;
   --pace-onpace-bg: rgba(92, 92, 100, 0.08);
   --pace-onpace-border: rgba(92, 92, 100, 0.15);
+
+  --btn-secondary-bg: #ffffff;
+  --btn-secondary-border: rgba(0, 0, 0, 0.12);
 }
 
 /* ── Flyout chrome ────────────────────────────────────────────────────── */
 
-/* Unified flyout shell (same recipe as the Settings window): a 6 DIP
-   transparent gutter on every side holds the drop shadow (painted by
-   ::before, unclipped) while the panel itself carries the 1px outline. The
-   native window is 340x788 so the 328x776 panel keeps its design size. */
+/* HWND is the card. Homemade frost is --tray-frost on the panel fill. */
 .tray-panel-reveal {
   position: relative;
-  padding: 6px;
+  padding: 0;
   box-sizing: border-box;
-}
-
-.tray-panel-reveal::before {
-  content: "";
-  position: absolute;
-  inset: 6px;
-  border-radius: var(--window-radius, 12px);
-  /* Matched to the native taskbar context menu and the Settings window
-     (taskbar_menu.rs: SHADOW_BLUR_DIP = 3, SHADOW_OFFSET_Y_DIP = 3). */
-  box-shadow: 0 3px 3px rgba(0, 0, 0, 0.32);
-  pointer-events: none;
-}
-
-[data-theme="light"] .tray-panel-reveal::before {
-  box-shadow: 0 3px 3px rgba(0, 0, 0, 0.15);
+  overflow: hidden;
+  background: transparent;
+  width: 100%;
+  height: 100%;
 }
 
 .tray-panel-reveal .tray-panel {
+  --flyout-inset-x: 14px;
+  --flyout-inset-y: 12px;
+  position: relative;
+  z-index: 1;
   display: flex;
   flex: 1 1 0;
   flex-direction: column;
@@ -105,18 +142,17 @@
   min-height: 0;
   box-sizing: border-box;
   overflow: hidden;
-  background: var(--flyout-bg);
+  background-color: var(--flyout-bg);
+  background-image: var(--tray-frost, none);
+  background-size: 100% 100%;
+  background-repeat: no-repeat;
   color: var(--flyout-text);
-  border: 1px solid rgba(255, 255, 255, 0.14);
-  /* The detached flyout keeps a rounded-corner clip identical to the native
-     window so the acrylic edge never shows a sharp rectangle. The clip also
-     trims this element's own box-shadow, which is why the drop shadow lives
-     on the wrapper's ::before instead (settings-window recipe). */
-  clip-path: inset(0 round 12px);
+  border: 1px solid rgba(255, 255, 255, 0.10);
+  border-radius: 8px;
 }
 
 [data-theme="light"] .tray-panel-reveal .tray-panel {
-  border-color: rgba(0, 0, 0, 0.14);
+  border-color: rgba(0, 0, 0, 0.08);
 }
 
 /* ── Provider grid (re-styles the existing ProviderGrid component) ────── */
@@ -124,12 +160,12 @@
 .tray-panel-reveal .provider-grid {
   display: flex;
   align-items: center;
-  gap: 6px;
-  padding: 9px 12px;
+  gap: 8px;
+  padding: 8px 12px;
   border-bottom: 1px solid var(--flyout-divider);
   overflow-x: auto;
   scrollbar-width: none;
-  background: var(--flyout-bg);
+  background: transparent;
   flex-shrink: 0;
 }
 .tray-panel-reveal .provider-grid::-webkit-scrollbar { display: none; }
@@ -138,10 +174,17 @@
   width: 34px;
   height: 34px;
   min-width: 34px;
+  max-width: 34px;
+  min-height: 34px;
+  max-height: 34px;
+  box-sizing: border-box;
+  aspect-ratio: 1;
   border-radius: 9px;
   border: 1px solid transparent;
   background: transparent;
+  box-shadow: none;
   display: inline-flex;
+  flex-direction: row;
   align-items: center;
   justify-content: center;
   gap: 0;
@@ -149,17 +192,23 @@
   cursor: pointer;
   position: relative;
   color: var(--flyout-text-sub);
-  transition: all 0.15s ease;
+  transition:
+    background-color 0.15s ease,
+    color 0.15s ease;
   flex: 0 0 auto;
+  overflow: hidden;
 }
 .tray-panel-reveal .provider-grid__item:hover {
   background: rgba(128, 128, 128, 0.1);
   color: var(--flyout-text);
+  box-shadow: none;
 }
-.tray-panel-reveal .provider-grid__item--active {
-  background: color-mix(in srgb, var(--accent) 12%, transparent);
-  border-color: color-mix(in srgb, var(--accent) 30%, transparent);
+.tray-panel-reveal .provider-grid__item--active,
+[data-theme="light"] .tray-panel-reveal .provider-grid__item--active {
+  background: rgba(0, 120, 212, 0.12);
+  border-color: rgba(0, 120, 212, 0.3);
   color: var(--accent);
+  box-shadow: none;
 }
 .tray-panel-reveal .provider-grid__item--dragging,
 .tray-panel-reveal .provider-grid__item--drop-target {
@@ -180,17 +229,32 @@
 }
 /* Bump the in-cell provider icon to the reference 20px. */
 .tray-panel-reveal .provider-grid__item .provider-icon,
-.tray-panel-reveal .provider-grid__item .provider-grid__icon-overview svg {
+.tray-panel-reveal .provider-grid__item .provider-grid__icon-overview,
+.tray-panel-reveal .provider-grid__item .provider-grid__icon-overview svg,
+.tray-panel-reveal .provider-grid__item .provider-grid__icon-overview img {
   width: 20px !important;
   height: 20px !important;
+  min-width: 20px;
+  min-height: 20px;
+  background: none !important;
+  box-shadow: none !important;
+  border-radius: 0 !important;
+  opacity: 1;
+}
+.tray-panel-reveal .provider-grid__item .provider-icon svg {
+  width: 100% !important;
+  height: 100% !important;
 }
 
 /* No-icons mode: fall back to labelled buttons, wider to fit text. */
 .tray-panel-reveal .provider-grid--no-icons .provider-grid__item {
   width: auto;
   min-width: 34px;
+  max-width: none;
+  height: 34px;
+  max-height: 34px;
   border-radius: 17px;
-  padding: 0 12px;
+  padding: 0 6px;
   color: var(--flyout-text);
 }
 .tray-panel-reveal .provider-grid--no-icons .provider-grid__label {
@@ -208,18 +272,19 @@
   padding: 12px 14px;
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 0;
   overflow-y: auto;
   overflow-x: hidden;
   scrollbar-width: none;
 }
 .tray-panel-reveal .flyout-body::-webkit-scrollbar { display: none; }
 
-/* Card stack divider (1px between cards in the overview). */
+/* Card stack divider (1px between cards in the overview). HTML pulls the
+   hairline 6px into the body padding so it sits closer to the stroke. */
 .tray-panel-reveal .provider-stack-divider {
   height: 1px;
   background: var(--flyout-divider);
-  margin: 0;
+  margin: 12px -6px;
   flex: 0 0 auto;
 }
 
@@ -230,60 +295,77 @@
   flex-direction: column;
   gap: 0;
   min-width: 0;
+  padding: 0;
+  margin: 0;
+  border: none;
+  background: transparent;
+  box-shadow: none;
 }
 
+/* The flyout is the only window. card-zone is a layout stack, not a
+   second rounded card — a matching 12px stroke inside the 12px panel
+   reads as 框套框. Tiles keep their own chip chrome. */
 .card-zone {
-  background: var(--flyout-zone-bg);
-  border: 1px solid var(--flyout-zone-border);
-  border-radius: 12px;
-  box-shadow: var(--flyout-zone-shadow);
-  padding: 14px 15px;
+  background: transparent;
+  border: none;
+  border-radius: 0;
+  box-shadow: none;
+  padding: 0;
   display: flex;
   flex-direction: column;
   gap: 12px;
 }
 .card-zone--compact {
-  padding: 9px 11px;
-  gap: 7px;
-  border-radius: 10px;
+  padding: 0;
+  gap: 8px;
+  border-radius: 0;
 }
 
 .card-header {
   display: flex;
   justify-content: space-between;
-  align-items: center;
-  margin-bottom: 7px;
-  padding: 0 2px;
+  align-items: baseline;
+  gap: 8px;
+  margin-bottom: 12px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--flyout-divider);
 }
-.card-header__left { display: flex; align-items: center; gap: 8px; min-width: 0; }
-.card-header__icon { flex-shrink: 0; }
+.card-header__left { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
+.card-header__icon { flex-shrink: 0; align-self: center; }
 .card-header__name {
-  font-size: 15px;
-  font-weight: 700;
-  letter-spacing: -0.02em;
+  font-size: var(--type-name);
+  font-weight: var(--w-strong);
+  letter-spacing: -0.04em;
   color: var(--flyout-text);
   overflow: hidden;
   white-space: nowrap;
   text-overflow: ellipsis;
 }
-.card-header__updated { font-size: 11px; color: var(--flyout-text-muted); flex-shrink: 0; }
+.card-header__updated {
+  font-size: 11px;
+  font-weight: var(--w-body);
+  color: var(--flyout-text-muted);
+  flex-shrink: 0;
+  white-space: nowrap;
+  line-height: 1.3;
+}
 
 /* Modular section blocks — bordered after the first block. */
 .modular-section {
   display: flex;
   flex-direction: column;
-  gap: 9px;
+  gap: 8px;
 }
 .modular-section--bordered {
   border-top: 1px solid var(--flyout-divider);
   padding-top: 12px;
 }
 .modular-section__title {
-  font-size: 11px;
-  font-weight: 700;
+  font-size: var(--type-meta);
+  font-weight: 600;
   color: var(--flyout-text-sub);
   text-transform: uppercase;
-  letter-spacing: 0.03em;
+  letter-spacing: 0.04em;
 }
 
 /* ── Hero quota row (Block A) ─────────────────────────────────────────── */
@@ -299,19 +381,37 @@
   align-items: baseline;
   gap: 8px;
 }
-.quota-row__label { font-size: 11.5px; color: var(--flyout-text-sub); font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.quota-row__reset { font-size: 11px; color: var(--flyout-text-muted); flex-shrink: 0; white-space: nowrap; }
+.quota-row__label,
+.quota-tile__label {
+  font-size: var(--quota-title-size);
+  font-weight: var(--quota-title-weight);
+  color: var(--flyout-text-sub);
+  letter-spacing: 0.04em;
+}
+.quota-row__label {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.quota-row__reset,
+.quota-tile__reset {
+  font-size: var(--quota-reset-size);
+  font-weight: var(--quota-reset-weight);
+  color: var(--flyout-text-muted);
+}
+.quota-row__reset { flex-shrink: 0; white-space: nowrap; }
 .quota-row__hero-line {
   display: flex;
   justify-content: space-between;
   align-items: baseline;
-  margin: 2px 0 4px;
+  margin: 4px 0 8px;
 }
 .quota-row__hero-pct {
-  font-size: 30px;
-  font-weight: 760;
-  letter-spacing: -0.05em;
+  font-size: var(--type-hero);
+  font-weight: var(--w-display);
+  letter-spacing: -0.06em;
   line-height: 1;
+  margin: 0;
   color: var(--accent);
   font-variant-numeric: tabular-nums;
 }
@@ -327,7 +427,7 @@
   position: relative;
   overflow: hidden;
 }
-.progress-bar--tile { height: 4px; }
+.progress-bar--compact { height: 4.5px; }
 .progress-fill {
   height: 100%;
   background: var(--track-fill);
@@ -342,34 +442,39 @@
   z-index: 2;
   border-radius: 1px;
 }
-.progress-notch--deficit { background: var(--pace-deficit); box-shadow: 0 0 3px rgba(0, 0, 0, 0.35); }
-.progress-notch--reserve { background: var(--flyout-bg); box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.15); }
+.progress-notch--deficit {
+  background: var(--pace-deficit);
+  box-shadow: 0 0 3px rgba(209, 52, 56, 0.6);
+}
+.progress-notch--reserve {
+  background: #ffffff;
+  box-shadow: 0 0 3px rgba(0, 0, 0, 0.4);
+}
 
 /* ── Soft (low-saturation) badge pills ────────────────────────────────── */
 
 .soft-badge {
-  font-size: 10px;
-  font-weight: 600;
-  padding: 1.5px 6px;
+  font-size: var(--type-meta);
+  font-weight: var(--w-medium);
+  padding: 2px 7px;
   border-radius: 4px;
   display: inline-flex;
   align-items: center;
-  gap: 3px;
-  line-height: 1.3;
+  gap: 4px;
+  line-height: 1.25;
   white-space: nowrap;
 }
 .soft-badge--reserve { background: var(--pace-reserve-bg); color: var(--pace-reserve); border: 1px solid var(--pace-reserve-border); }
 .soft-badge--deficit { background: var(--pace-deficit-bg); color: var(--pace-deficit); border: 1px solid var(--pace-deficit-border); }
 .soft-badge--onpace { background: var(--pace-onpace-bg); color: var(--pace-onpace); border: 1px solid var(--pace-onpace-border); }
 .soft-badge--neutral { background: var(--soft-neutral-bg); color: var(--flyout-text-sub); border: 1px solid var(--soft-neutral-border); }
-.soft-badge--mini { font-size: 9.5px; padding: 1px 5px; }
 
 /* ── 2-col tile grid (Block B extras) ─────────────────────────────────── */
 
 .tiles-grid-2col {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-  gap: 6px;
+  gap: 8px;
   width: 100%;
   box-sizing: border-box;
 }
@@ -377,7 +482,7 @@
   background: rgba(128, 128, 128, 0.05);
   border: 1px solid rgba(128, 128, 128, 0.09);
   border-radius: 7px;
-  padding: 6px 8px;
+  padding: 8px;
   display: flex;
   flex-direction: column;
   gap: 4px;
@@ -385,52 +490,126 @@
   box-sizing: border-box;
   overflow: hidden;
 }
-.quota-tile--full { grid-column: 1 / -1; width: 100%; padding: 8px 10px; gap: 5px; }
+.quota-tile--full {
+  grid-column: 1 / -1;
+  width: 100%;
+  padding: 8px 10px;
+}
+/* Tile head is an explicit 3-column grid — label | reset | pct — each column
+   sized to its content and the left pair tightly packed at 4px. This is the
+   layout, not a stack of flex workarounds: the reset can never be pushed away
+   from the cycle label by a greedy flexible column. */
 .quota-tile__head {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  font-size: 10.5px;
+  display: grid;
+  grid-template-columns: auto auto 1fr;
+  align-items: baseline;
+  column-gap: 4px;
+  font-size: var(--type-body);
   color: var(--flyout-text-sub);
-  font-weight: 500;
+  font-weight: var(--w-body);
+  letter-spacing: 0.02em;
   line-height: 1.3;
   min-width: 0;
-  gap: 4px;
 }
-.quota-tile__label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; flex: 1; }
-.quota-tile__val { font-weight: 750; font-size: 11.5px; letter-spacing: -0.02em; flex-shrink: 0; font-variant-numeric: tabular-nums; color: var(--flyout-text); }
+.quota-tile__title,
+.quota-tile--full .quota-tile__title {
+  display: contents;
+}
+.quota-tile__label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+.quota-tile__reset {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  /* One step smaller than the 12px meta label so "周 · 8/24 7:59" reads as
+     secondary metadata instead of competing with the cycle name. */
+  font-size: 10px;
+}
+.quota-tile__val {
+  grid-column: 3;
+  justify-self: end;
+  font-weight: var(--w-strong);
+  font-size: var(--type-value);
+  letter-spacing: -0.02em;
+  font-variant-numeric: tabular-nums;
+  /* HTML tints the full-width secondary's percent with a pace colour, but real
+     snapshots carry no per-window pace signal; the fill bar already conveys
+     quota level, so the number stays neutral. */
+  color: var(--flyout-text);
+}
+.quota-tile .progress-bar--tile {
+  margin-top: 4px;
+  height: 4px;
+}
 
 /* ── Balance block (Block C) ──────────────────────────────────────────── */
 
-.balance-block { display: flex; flex-direction: column; gap: 5px; }
+.balance-block { display: flex; flex-direction: column; gap: 8px; }
 .balance-block__head {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  font-size: 11px;
+  font-size: var(--type-body);
   color: var(--flyout-text-sub);
-  font-weight: 600;
+  font-weight: var(--w-body);
+  letter-spacing: 0.02em;
 }
-.balance-block__body { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; }
+.balance-block__body { display: flex; justify-content: space-between; align-items: baseline; gap: 6px; }
 .balance-block__amount {
-  font-size: 26px;
-  font-weight: 750;
-  letter-spacing: -0.04em;
+  font-size: 28px;
+  font-weight: var(--w-display);
+  letter-spacing: -0.06em;
   line-height: 1;
   color: var(--flyout-text);
   font-variant-numeric: tabular-nums;
 }
-.balance-block__sub { font-size: 11px; color: var(--flyout-text-muted); font-variant-numeric: tabular-nums; text-align: right; }
+.balance-block__sub { font-size: 13px; color: var(--flyout-text-muted); font-variant-numeric: tabular-nums; text-align: right; }
+
+/* Compact balance single-row strip. */
+.balance-compact-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: var(--type-body);
+  padding: 1px 0;
+}
+.balance-compact-row__left {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  min-width: 0;
+}
+.balance-compact-row__label {
+  color: var(--flyout-text-sub);
+  white-space: nowrap;
+}
+.balance-compact-row__amount {
+  font-size: var(--type-name);
+  font-weight: var(--w-strong);
+  color: var(--flyout-text);
+  font-variant-numeric: tabular-nums;
+}
+.balance-compact-row__sub {
+  font-size: var(--type-meta);
+  color: var(--flyout-text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 
 /* ── Status block (Block D) ───────────────────────────────────────────── */
 
-.status-block { display: flex; flex-direction: column; gap: 7px; }
+.status-block { display: flex; flex-direction: column; gap: 8px; }
 .status-headline {
   display: flex;
   align-items: center;
-  gap: 7px;
-  font-size: 12px;
-  font-weight: 650;
+  gap: 8px;
+  font-size: var(--type-body);
+  font-weight: var(--w-strong);
   color: var(--flyout-text);
 }
 .status-indicator-dot {
@@ -445,56 +624,96 @@
 .status-chip {
   background: rgba(128, 128, 128, 0.05);
   border: 1px solid rgba(128, 128, 128, 0.08);
-  border-radius: 5px;
-  padding: 3px 8px;
-  font-size: 11px;
+  border-radius: 4px;
+  padding: 4px 8px;
+  font-size: var(--type-body);
   color: var(--flyout-text-sub);
 }
+.status-chip strong { color: var(--flyout-text); font-weight: var(--w-strong); margin-left: 3px; }
 
 /* ── Unified insight footer (Block E) ─────────────────────────────────── */
 
-.insight-section {
+/* Detailed: filled well with two centered halves and a centered note —
+   HTML meta-well. */
+.meta-well {
+  background: var(--flyout-well);
+  border: none;
+  border-radius: 8px;
+  box-shadow: none;
+  padding: 8px 12px;
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 0;
 }
-.insight-row {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  font-size: 11.5px;
-  gap: 12px;
-}
-.insight-row__label {
-  color: var(--flyout-text-sub);
+.meta-well__line {
   display: flex;
   align-items: center;
+  min-width: 0;
+}
+.meta-well__item {
+  flex: 1;
+  display: flex;
+  align-items: baseline;
+  justify-content: center;
   gap: 6px;
   min-width: 0;
+}
+.meta-well__label {
+  font-size: var(--type-meta);
+  font-weight: var(--w-body);
+  color: var(--flyout-text-muted);
+  letter-spacing: 0.02em;
+  flex-shrink: 0;
+}
+.meta-well__value {
+  font-size: var(--type-value);
+  font-weight: var(--w-strong);
+  color: var(--flyout-text);
+  letter-spacing: -0.02em;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.25;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.meta-well__rule {
+  width: 1px;
+  height: 13px;
+  margin: 0 10px;
+  background: rgba(0, 0, 0, 0.22);
+  flex-shrink: 0;
+}
+.tray-panel-reveal .meta-well__rule,
+.tray-card .meta-well__rule,
+.minimal-streamlined .meta-well__rule {
+  background: rgba(255, 255, 255, 0.28);
+}
+[data-theme="light"] .tray-panel-reveal .meta-well__rule,
+[data-theme="light"] .tray-card .meta-well__rule,
+[data-theme="light"] .minimal-streamlined .meta-well__rule {
+  background: rgba(0, 0, 0, 0.22);
+}
+.meta-well__note {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--flyout-divider);
+  font-size: var(--type-meta);
+  font-weight: var(--w-body);
+  color: var(--flyout-text-muted);
+  line-height: 1.4;
+  text-align: center;
+  /* A long "等额 API 价值 ≈ $38.80 · ¥279.36 · opencode-go-with-a-long-model-name"
+     must ellipsize on one line, never wrap the note row taller. */
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-}
-.insight-row__label svg { width: 13px; height: 13px; opacity: 0.85; flex-shrink: 0; }
-.insight-row__value {
-  font-weight: 700;
-  font-size: 12.5px;
-  color: var(--flyout-text);
-  font-variant-numeric: tabular-nums;
-  flex-shrink: 0;
-  white-space: nowrap;
-}
-.insight-subline {
-  font-size: 10.5px;
-  color: var(--flyout-text-muted);
-  line-height: 1.45;
-  padding-left: 2px;
 }
 
 /* Compact dual chips. */
 .compact-chips-row {
   display: flex;
-  gap: 6px;
+  gap: 8px;
+  align-items: center;
 }
 .compact-chip {
   flex: 1;
@@ -505,67 +724,54 @@
   background: rgba(128, 128, 128, 0.05);
   border: 1px solid rgba(128, 128, 128, 0.08);
   border-radius: 5px;
-  padding: 4px 6px;
-  font-size: 10.5px;
+  padding: 4px 8px;
+  font-size: var(--type-body);
   color: var(--flyout-text-sub);
   white-space: nowrap;
   min-width: 0;
 }
-.compact-chip svg { width: 11px; height: 11px; flex-shrink: 0; }
 .compact-chip strong {
   color: var(--flyout-text);
   font-variant-numeric: tabular-nums;
-  font-weight: 600;
+  font-weight: var(--w-strong);
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
-/* Compact / detailed card variations. */
-.card-zone--compact .quota-row__hero-pct { font-size: 22px; }
-.card-zone--compact .quota-row__label { font-size: 11px; }
-.card-zone--compact .quota-row__reset { font-size: 10px; }
+/* Compact variations (density-preview.html .card-zone--compact). */
+.card-zone--compact .modular-section { gap: 8px; }
+.card-zone--compact .modular-section--bordered { padding-top: 8px; }
+.card-zone--compact .quota-row__hero-pct { font-size: 24px; margin: 0; }
+.card-zone--compact .quota-row__hero-line { margin: 4px 0 4px; }
 .card-zone--compact .progress-bar { height: 4.5px; }
 .card-zone--compact .progress-bar--tile { height: 3.5px; }
-.card-zone--compact .quota-tile { padding: 5px 8px; gap: 3px; border-radius: 6px; }
-.card-zone--compact .quota-tile--full { padding: 6px 9px; }
-.card-zone--compact .quota-tile__head { font-size: 10px; }
-.card-zone--compact .quota-tile__val { font-size: 11px; }
-.card-zone--compact .compact-chips-row { flex-wrap: wrap; }
-
-/* Balance as a single compact row. */
-.card-zone--compact .balance-block { flex-direction: column; gap: 5px; }
-.card-zone--compact .balance-block__amount { font-size: 20px; }
-.card-zone--compact .balance-block__sub { font-size: 10px; }
-
-/* Compact hero-line spacing (baseline keeps the badge aligned to the pct). */
-.card-zone--compact .quota-row__hero-line { margin: 1px 0 3px; }
+.card-zone--compact .quota-tile { padding: 8px; gap: 4px; border-radius: 6px; }
+.card-zone--compact .quota-tile .progress-bar--tile { margin-top: 4px; }
+.card-zone--compact .quota-tile--full { padding: 6px 8px; }
 
 /* ── Minimal streamlined tier ─────────────────────────────────────────── */
 
 .minimal-streamlined {
-  background: var(--flyout-zone-bg);
-  border: 1px solid var(--flyout-zone-border);
-  border-radius: 7px;
-  padding: 6px 9px;
+  background: transparent;
+  border: none;
+  border-radius: 0;
+  padding: 2px 0;
   display: flex;
   flex-direction: column;
-  gap: 3.5px;
-  transition: border-color 0.15s ease;
+  gap: 4px;
 }
-.minimal-streamlined:hover { border-color: rgba(128, 128, 128, 0.2); }
 .minimal-streamlined__row1 {
   display: flex;
   justify-content: space-between;
   align-items: center;
   line-height: 1.2;
-  gap: 8px;
 }
 .minimal-streamlined__title {
-  font-size: 12px;
-  font-weight: 700;
+  font-size: var(--type-value);
+  font-weight: var(--w-strong);
   display: flex;
   align-items: center;
-  gap: 5px;
+  gap: 6px;
   color: var(--flyout-text);
   overflow: hidden;
   white-space: nowrap;
@@ -597,16 +803,16 @@
   height: 100%;
 }
 .minimal-streamlined__sublabel {
-  font-size: 10px;
+  font-size: var(--type-body);
   color: var(--flyout-text-muted);
-  font-weight: 400;
+  font-weight: var(--w-body);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 .minimal-streamlined__metric {
-  font-size: 14.5px;
-  font-weight: 750;
+  font-size: var(--type-name);
+  font-weight: var(--w-strong);
   letter-spacing: -0.03em;
   font-variant-numeric: tabular-nums;
   flex-shrink: 0;
@@ -625,21 +831,21 @@
   display: flex;
   justify-content: space-between;
   align-items: center;
-  font-size: 10px;
+  font-size: var(--type-body);
   color: var(--flyout-text-muted);
-  line-height: 1.2;
-  gap: 8px;
+  line-height: 1.3;
 }
 .minimal-streamlined__badges {
   display: flex;
   align-items: center;
-  gap: 4px;
+  gap: 2px;
   overflow: hidden;
   white-space: nowrap;
   min-width: 0;
 }
+.minimal-streamlined__badges .soft-badge { white-space: nowrap; }
 .minimal-streamlined__speed {
-  font-size: 10px;
+  font-size: var(--type-body);
   color: var(--flyout-text-muted);
   font-variant-numeric: tabular-nums;
   flex-shrink: 0;
@@ -647,21 +853,26 @@
 
 /* ── Context action buttons (detail only) ─────────────────────────────── */
 
-.context-actions {
+/* The global styles.css defines `.context-actions { display: flex }`; this
+   tray card needs an even 1fr/1fr grid so both buttons tile the row instead
+   of hugging the left edge at natural width (flex would need per-button
+   flex-grow). Higher specificity keeps the tray's grid even though the global
+   sheet loads after this one. */
+.tray-card .context-actions {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: 10px;
-  margin-top: 10px;
+  gap: 8px;
+  margin-top: 12px;
 }
-.context-actions--single { grid-template-columns: 1fr; }
-.context-btn {
-  background: transparent;
-  border: 1px solid var(--flyout-zone-border);
+.tray-card .context-actions--single { grid-template-columns: 1fr; }
+.tray-card .context-btn {
+  background: var(--btn-secondary-bg);
+  border: 1px solid var(--btn-secondary-border);
   border-radius: 999px;
-  padding: 7px 12px;
+  padding: 8px 12px;
   color: var(--flyout-text);
-  font-size: 11.5px;
-  font-weight: 500;
+  font-size: var(--type-body);
+  font-weight: var(--w-medium);
   font-family: inherit;
   display: flex;
   align-items: center;
@@ -677,11 +888,12 @@
 
 .flyout-footer {
   border-top: 1px solid var(--flyout-divider);
-  padding: 4px 6px;
+  /* density-preview.html footer: 2px/4px chrome with gap-less 28px rows. */
+  padding: 2px 4px;
   display: flex;
   flex-direction: column;
-  gap: 1px;
-  background: var(--flyout-bg);
+  gap: 0;
+  background: transparent;
   flex-shrink: 0;
 }
 .footer-row {
@@ -690,53 +902,67 @@
   width: 100%;
   height: 28px;
   padding: 0 8px;
+  margin: 0;
+  appearance: none;
+  -webkit-appearance: none;
+  box-sizing: border-box;
   border-radius: 5px;
   display: flex;
   align-items: center;
   justify-content: space-between;
   cursor: pointer;
   color: var(--flyout-text);
-  font-size: 12px;
+  font-size: var(--type-body);
+  font-weight: var(--w-body);
   font-family: inherit;
   transition: background 0.1s ease;
 }
 .footer-row:hover { background: rgba(128, 128, 128, 0.1); }
-.footer-row__left { display: flex; align-items: center; gap: 8px; height: 100%; min-width: 0; }
+.footer-row__left {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
 .footer-row__icon {
-  width: 16px;
-  height: 16px;
+  width: 12px;
+  height: 12px;
   display: flex;
   align-items: center;
   justify-content: center;
   flex-shrink: 0;
   opacity: 0.75;
+  /* 12px stroke vs 13px CJK: geometric flex-center sits ~1px above the ink. */
+  transform: translateY(1px);
 }
-.footer-row__icon svg { width: 13px; height: 13px; display: block; }
+.footer-row__icon svg { width: 12px; height: 12px; display: block; }
 .footer-row__icon.is-spinning svg {
   animation: tray-icon-spin 0.65s linear infinite;
 }
+/* The refresh glyph's arcs run counter-clockwise (both SVG sweeps are 0:
+   3 o'clock -> 12 and 9 -> 6), so the spin must follow the arrows. */
 @keyframes tray-icon-spin {
   from { transform: rotate(0deg); }
-  to { transform: rotate(360deg); }
+  to { transform: rotate(-360deg); }
 }
 @media (prefers-reduced-motion: reduce) {
   .tray-panel-reveal .footer-row__icon.is-spinning svg { animation: none; }
 }
 .footer-row__label {
-  font-size: 12px;
-  line-height: 16px;
-  height: 16px;
-  display: flex;
-  align-items: center;
+  font-size: var(--type-body);
+  font-weight: var(--w-body);
+  line-height: var(--type-body);
+  height: auto;
+  display: block;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 .footer-row__shortcut {
-  font-size: 10.5px;
+  font-size: var(--type-meta);
   color: var(--flyout-text-muted);
   font-family: Consolas, "Cascadia Code", monospace;
-  line-height: 16px;
+  line-height: var(--type-body);
   flex-shrink: 0;
 }
 
@@ -766,4 +992,50 @@
   font-weight: 600;
   padding: 6px 16px;
   cursor: pointer;
+}
+
+/* Drag-active: only the place-holder neighbours glide; the dragged tile
+   itself is kept instant by usePointerReorder (inline transition:none). */
+.provider-grid[data-drag-reorder="true"] .provider-grid__item:not(.provider-grid__item--dragging) {
+  transition: all 0.15s ease;
+}
+@media (prefers-reduced-motion: reduce) {
+  .provider-grid[data-drag-reorder="true"] .provider-grid__item {
+    transition: none;
+  }
+}
+
+/* ── Frontend resize handles ─────────────────────────────────────────────
+   Mounted inside .tray-panel (the visible card), so inset 0 is the card
+   stroke — not the 22 DIP reveal gutter. Previous 16/22px offsets treated
+   this overlay as the HWND, so the bands sat in the header/footer and
+   missed the edge the user actually grabs. */
+.tray-panel-reveal .tray-resize-hits {
+  position: absolute;
+  inset: 0;
+  z-index: 4;
+  pointer-events: none;
+}
+.tray-resize-hit {
+  position: absolute;
+  pointer-events: auto;
+  background: transparent;
+  user-select: none;
+}
+.tray-resize-hit--n  { top: 0;    left: 14px; right: 14px; height: 8px; cursor: ns-resize; }
+.tray-resize-hit--s  { bottom: 0; left: 14px; right: 14px; height: 8px; cursor: ns-resize; }
+.tray-resize-hit--w  { left: 0;   top: 14px;  bottom: 14px; width: 8px; cursor: ew-resize; }
+.tray-resize-hit--e  { right: 0;  top: 14px;  bottom: 14px; width: 8px; cursor: ew-resize; }
+.tray-resize-hit--nw { left: 0;   top: 0;  width: 14px; height: 14px; cursor: nwse-resize; }
+.tray-resize-hit--ne { right: 0;  top: 0;  width: 14px; height: 14px; cursor: nesw-resize; }
+.tray-resize-hit--sw { left: 0;   bottom: 0; width: 14px; height: 14px; cursor: nesw-resize; }
+.tray-resize-hit--se { right: 0;  bottom: 0; width: 14px; height: 14px; cursor: nwse-resize; }
+
+@media (prefers-reduced-transparency: reduce) {
+  .tray-panel-reveal {
+    --flyout-bg: #1c1c20;
+  }
+  [data-theme="light"] .tray-panel-reveal {
+    --flyout-bg: #ffffff;
+  }
 }

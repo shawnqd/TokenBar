@@ -7,17 +7,17 @@ import {
   Toggle,
 } from "../../../components/FormControls";
 import {
-  getTaskbarFontFamilies,
   getTaskbarPreviewLines,
   getTaskbarWindowAvailability,
 } from "../../../lib/tauri";
+import { useFontPicker } from "../../../hooks/useFontPicker";
+import { FONT_WHITELIST_DEFAULT } from "../../../lib/fontWhitelist";
 import FontSettingsBlock, {
   normalizeFontWeight,
 } from "../FontSettingsBlock";
 import { TASKBAR_PROVIDER_AUTO } from "../../../types/bridge";
 import type {
   TaskbarEntry,
-  TaskbarFontFamily,
   TaskbarPreviewLine,
   TaskbarWindowKind,
   TaskbarWidgetPosition,
@@ -76,7 +76,7 @@ export default function TaskbarTab({ settings, set, saving }: TabProps) {
   const fontWeight = normalizeFontWeight(settings.taskbarWidgetFontWeight ?? 400);
   const [fontWeightDraft, setFontWeightDraft] = useState(fontWeight);
   const textAlign = settings.taskbarWidgetTextAlign ?? "left";
-  const fontFamily = settings.taskbarWidgetFontFamily ?? "Microsoft YaHei UI";
+  const fontFamily = settings.taskbarWidgetFontFamily ?? FONT_WHITELIST_DEFAULT;
   // Every row must show a provider. `auto` is the real default — it follows
   // whichever provider the tray icon is on — so an entry that arrives without
   // one falls back to it rather than rendering an empty dropdown.
@@ -93,10 +93,7 @@ export default function TaskbarTab({ settings, set, saving }: TabProps) {
 
   const commitEntries = (next: TaskbarEntry[]) =>
     set({ taskbarWidgetEntries: next });
-  /** Best continuous-weight family for "restore appearance" — not the full list. */
-  const [defaultVariableFamily, setDefaultVariableFamily] = useState<string | null>(
-    null,
-  );
+  const { defaultFamily } = useFontPicker(fontFamily);
   const [availability, setAvailability] = useState<Record<
     string,
     TaskbarWindowKind[]
@@ -148,27 +145,6 @@ export default function TaskbarTab({ settings, set, saving }: TabProps) {
     return offered;
   };
 
-  // Best continuous-weight family for restore-defaults. The full picker list
-  // lives inside FontSettingsBlock so this tab does not re-derive curation.
-  useEffect(() => {
-    let cancelled = false;
-    getTaskbarFontFamilies()
-      .then((list: TaskbarFontFamily[]) => {
-        if (cancelled) return;
-        const best =
-          list.find((f) => f.recommended && f.variableWeight)?.name ??
-          list.find((f) => f.variableWeight)?.name ??
-          null;
-        setDefaultVariableFamily(best);
-      })
-      .catch(() => {
-        if (!cancelled) setDefaultVariableFamily(null);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
   // The preview shows the renderer's OWN lines, fetched from the native strip,
   // rather than an imitation built from sample numbers here.
   //
@@ -219,11 +195,7 @@ export default function TaskbarTab({ settings, set, saving }: TabProps) {
       taskbarWidgetFontSize: 12,
       taskbarWidgetWidth: 132,
       taskbarWidgetFontWeight: 400,
-      // Prefer the best genuine continuous-weight face this machine has.
-      // Static Microsoft faces are no longer the default — the weight slider
-      // only does real work on a variable font.
-      taskbarWidgetFontFamily:
-        defaultVariableFamily ?? "Segoe UI Variable",
+      taskbarWidgetFontFamily: defaultFamily,
       taskbarWidgetTextAlign: "left",
     });
   };

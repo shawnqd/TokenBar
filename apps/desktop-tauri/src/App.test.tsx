@@ -28,6 +28,7 @@ const tauriMocks = vi.hoisted(() => ({
   checkForUpdates: vi.fn(),
   downloadUpdate: vi.fn(),
   setSurfaceMode: vi.fn(),
+  openFlyoutWindow: vi.fn(),
   revealSettingsWindow: vi.fn(),
   getLocaleStrings: vi.fn(),
   setUiLanguage: vi.fn(),
@@ -45,9 +46,6 @@ vi.mock("@tauri-apps/api/event", () => eventMocks);
 // Stand-in surfaces: assert routing, not each surface's own rendering.
 vi.mock("./surfaces/TrayPanel", () => ({
   default: () => <div data-testid="surface-tray-panel" />,
-}));
-vi.mock("./surfaces/PopOutPanel", () => ({
-  default: () => <div data-testid="surface-pop-out-panel" />,
 }));
 vi.mock("./surfaces/Settings", () => ({
   default: () => <div data-testid="surface-settings" />,
@@ -181,7 +179,6 @@ describe("App window-label routing", () => {
     await waitFor(() => {
       expect(queryByTestId("surface-tray-panel")).not.toBeNull();
     });
-    expect(queryByTestId("surface-pop-out-panel")).toBeNull();
     expect(queryByTestId("surface-settings")).toBeNull();
     expect(queryByTestId("surface-float-bar")).toBeNull();
   });
@@ -250,7 +247,7 @@ describe("App window-label routing", () => {
   });
 
   it("does not route the shared main window to TrayPanel while hidden", async () => {
-    // main's surface-mode machine only ever holds Hidden/PopOut/Settings
+    // main's surface-mode machine only ever holds Hidden/Settings
     // post-refactor — it can never report "trayPanel" — so the
     // isFlyoutWindow()/isSettingsWindow()/isFloatBarWindow() checks all miss
     // and control falls through to SurfaceRouter, which renders nothing for

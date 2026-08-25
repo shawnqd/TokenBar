@@ -1,8 +1,8 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
+import { useFontPicker } from "../../hooks/useFontPicker";
 import { useLocale } from "../../hooks/useLocale";
 import { Field, NumberInput, Select } from "../../components/FormControls";
-import { getTaskbarFontFamilies } from "../../lib/tauri";
-import type { TaskbarFontFamily } from "../../types/bridge";
+import FontInstallDialog from "./FontInstallDialog";
 
 export const MIN_FONT_WEIGHT = 100;
 export const MAX_FONT_WEIGHT = 1000;
@@ -27,63 +27,22 @@ interface Props {
 /**
  * Size / family / weight for one DirectWrite-rendered surface.
  *
- * The family list is restricted to fonts with a genuine continuous `wght`
- * axis (MiSans, Bahnschrift, Segoe UI Variable, …). Static multi-face
- * families like Microsoft YaHei look continuous on a stepped slider but
- * only snap between installed faces — the backend marks them
- * `variableWeight: false` and they stay out of this picker.
- *
- * A previously-saved static family remains selectable (so the control never
- * silently rewrites a persisted setting) but the helper text still says it
- * is not continuous.
+ * The picker is the design-system five-font whitelist only. A previously
+ * saved family outside that list stays selectable so the control never
+ * silently rewrites a persisted setting.
  */
 export default function FontSettingsBlock({ value, disabled, onChange }: Props) {
   const { t } = useLocale();
-  const [families, setFamilies] = useState<TaskbarFontFamily[]>([]);
-
-  useEffect(() => {
-    let cancelled = false;
-    getTaskbarFontFamilies()
-      .then((list) => {
-        if (!cancelled) setFamilies(list);
-      })
-      .catch(() => {
-        // A failed enumeration leaves the persisted family selectable on its
-        // own (see `fontOptions`), which is better than an empty dropdown.
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
-  const variableFamilies = useMemo(
-    () => families.filter((family) => family.variableWeight),
-    [families],
-  );
-
-  const selectedIsVariable =
-    families.find((f) => f.name === value.family)?.variableWeight ?? false;
-
-  const fontOptions = useMemo(() => {
-    return [
-      // Keep a previously-saved static family selectable so the control never
-      // appears to silently reset it — the weight helper still tells the truth.
-      ...(variableFamilies.some((family) => family.name === value.family) ||
-      !value.family
-        ? []
-        : [{ value: value.family, label: value.family }]),
-      ...variableFamilies.map((family) => {
-        const tags = [
-          t("TaskbarFontVariableTag"),
-          family.hasCjk ? null : t("TaskbarFontNoCjkTag"),
-        ].filter(Boolean);
-        return {
-          value: family.name,
-          label: tags.length ? `${family.name} · ${tags.join(" · ")}` : family.name,
-        };
-      }),
-    ];
-  }, [variableFamilies, value.family, t]);
+  const {
+    options: fontOptions,
+    isContinuous: selectedIsVariable,
+    install,
+    installMiss,
+    chooseFamily,
+    cancelInstall,
+    openInstallPage,
+    confirmInstalled,
+  } = useFontPicker(value.family);
 
   // The slider is driven from a draft and committed on release. Persisting on
   // every `input` event would fire a settings write per pixel dragged.
@@ -122,10 +81,19 @@ export default function FontSettingsBlock({ value, disabled, onChange }: Props) 
       >
         <Select
           value={value.family}
-          disabled={disabled || (families.length === 0 && !value.family)}
+          disabled={disabled}
           options={fontOptions}
-          onChange={(family) => onChange({ family })}
+          onChange={(family) => chooseFamily(family, (next) => onChange({ family: next }))}
         />
+        {install ? (
+          <FontInstallDialog
+            guide={install}
+            miss={installMiss}
+            onCancel={cancelInstall}
+            onOpenDownload={openInstallPage}
+            onRecheck={() => void confirmInstalled((next) => onChange({ family: next }))}
+          />
+        ) : null}
       </Field>
       <Field
         label={`${t("TaskbarWidgetFontWeightLabel")} (${weightDraft})`}

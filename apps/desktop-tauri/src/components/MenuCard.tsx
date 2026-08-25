@@ -27,9 +27,9 @@ import { formatRelativeUpdated } from "../lib/relativeTime";
 import type { LocaleKey } from "../i18n/keys";
 import { paceCategory } from "../surfaces/tray/paceCategory";
 import { SimpleBarChart, StackedBarChart } from "./MiniBarChart";
-import { providerSupportsChartData } from "../lib/providerCharts";
 import { dashboardShowsQuotaWindow } from "../lib/dashboardProviders";
 import { getProviderBalance } from "../lib/providerBalance";
+import { providerCapabilities } from "../lib/providerCapabilities";
 import { ProviderBalanceBlock } from "./ProviderBalanceBlock";
 import { ProviderIcon } from "./providers/ProviderIcon";
 import {
@@ -861,11 +861,6 @@ export default function MenuCard({
   );
 
   useEffect(() => {
-    if (!providerSupportsChartData(provider.providerId)) {
-      setChartData(null);
-      setIsChartDataLoading(false);
-      return;
-    }
     let cancelled = false;
     setChartData(null);
     setIsChartDataLoading(true);
@@ -997,7 +992,6 @@ export default function MenuCard({
     !compactMetrics &&
     !hideLocalUsage &&
     !provider.error &&
-    providerSupportsChartData(provider.providerId) &&
     isChartDataLoading;
   const localCostHistory = chartData?.costHistory ?? [];
   const hasMetrics = visibleMetrics.length > 0;
@@ -1045,6 +1039,7 @@ export default function MenuCard({
     !provider.error && chartData?.localUsage
       ? resolveLocalUsageLead(localUsagePeriod, chartData.localUsage, t)
       : null;
+  const caps = providerCapabilities(provider);
   const hasDensityOutputSpeed =
     !provider.error &&
     !!outputSpeed &&
@@ -1170,43 +1165,50 @@ export default function MenuCard({
 
   const densityInsightsZone = (() => {
     if (densityMode !== "detailed") return null;
-    const speedNode = hasDensityOutputSpeed && outputSpeed ? (
+    // The reference card shows speed + recent-usage slots; the backend's
+    // per-provider capability report decides whether a slot exists at all
+    // (a provider we cannot measure must not show a speed row). When the slot
+    // exists but there is no current reading, the value stays empty — never a
+    // fabricated 0 t/s or "暂不可用".
+    const speedNode = caps.outputSpeed ? (
       <div className="menu-card__insight-row">
         <span className="menu-card__insight-label">
           <SpeedIcon />
           {t("OutputSpeedTitle")}
         </span>
         <span className="menu-card__insight-value">
-          {outputSpeed.tokensPerSecond!.toFixed(1)}
-          <span className="menu-card__insight-unit"> t/s</span>
+          {outputSpeed?.tokensPerSecond ? (
+            <>
+              {outputSpeed.tokensPerSecond.toFixed(1)}
+              <span className="menu-card__insight-unit"> t/s</span>
+            </>
+          ) : null}
         </span>
       </div>
     ) : null;
-    const usageNode = hasDensityUsage && densityLocalUsageLead ? (
+    const usageNode = caps.localUsage ? (
       <div className="menu-card__insight-block">
         <div className="menu-card__insight-row">
           <span className="menu-card__insight-label">
             <UsageIcon />
-            {densityLocalUsageLead.label}
+            {densityLocalUsageLead?.label ?? t("PanelSevenDayUsage")}
           </span>
-          {/* Only the rounded figure ("≈ 11.2亿"). The exact count was here
-              too, as the reference card prints it, but at nine digits it
-              carried no information anyone reads at a glance while dominating
-              the row. It falls back to the exact count when the language has
-              no compact form to render. No "Token" unit word either — the
-              reference omits it, and it made the value wide enough to
-              ellipsize the label beside it. The speed row above does keep its
-              "t/s", which the reference shows. */}
+          {/* Only the rounded figure ("≈ 11.2亿"), mirroring the reference
+              card: the exact count dominated the row at nine digits. Falls
+              back to the exact count when the language has no compact form.
+              No "Token" unit word either. */}
           <span className="menu-card__insight-value">
-            {formatApproxTokens(densityLocalUsageLead.tokens!, language)}
+            {hasDensityUsage && densityLocalUsageLead
+              ? formatApproxTokens(densityLocalUsageLead.tokens!, language)
+              : null}
           </span>
         </div>
-        {densityLocalUsageLead.cost != null && (
+        {hasDensityUsage && densityLocalUsageLead?.cost != null && (
           <div className="menu-card__local-equivalent">
             {t("PanelApiEquivalentValue")} ≈ {formatApiEquivalentValue(densityLocalUsageLead.cost)}
           </div>
         )}
-        {densityLocalUsageLead.topModel && (
+        {hasDensityUsage && densityLocalUsageLead?.topModel && (
           <div className="menu-card__local-note">
             {t("PanelTopModelPrefix")}: {densityLocalUsageLead.topModel}
           </div>

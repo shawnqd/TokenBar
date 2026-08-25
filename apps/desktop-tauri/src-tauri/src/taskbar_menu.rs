@@ -39,6 +39,11 @@ use std::ffi::c_void;
 use std::sync::Mutex;
 use std::time::Instant;
 
+use crate::shell::popup_chrome::{
+    ANIM_DURATION_MS, ANIM_TRAVEL_DIP, BACKDROP_BLUR_DIP, CORNER_RADIUS_DIP,
+    SHADOW_BLUR_DIP, SHADOW_GUTTER_DIP, SHADOW_OFFSET_Y_DIP, SHADOW_STRENGTH_DARK,
+    SHADOW_STRENGTH_LIGHT, TASKBAR_GAP_DIP,
+};
 use crate::taskbar_widget::taskbar_is_light;
 
 // ── Public shape ────────────────────────────────────────────────────────────
@@ -91,20 +96,6 @@ impl MenuItem {
 
 // ── Design constants (DIPs, scaled by the anchor window's DPI) ──────────────
 
-/// Room reserved around the card for the shadow. Must exceed
-/// `SHADOW_BLUR_DIP + SHADOW_OFFSET_Y_DIP` or the blur gets clipped.
-const SHADOW_MARGIN_DIP: i32 = 22;
-/// Blur radius. Tuned by eye over three passes: 11 DIP spread the falloff over
-/// ~40 px and peaked at 13 % darkening, which read as no shadow at all; 7 DIP
-/// at 0.30 strength overshot the other way. 3 DIP keeps the shadow as a tight
-/// contact edge rather than a halo.
-const SHADOW_BLUR_DIP: i32 = 3;
-/// A small downward offset only — the old shadow read as bottom-*right*
-/// because the system draws it diagonally. Horizontally this one is symmetric.
-const SHADOW_OFFSET_Y_DIP: i32 = 3;
-/// Keep the app-owned popup silhouette aligned with `--window-radius` in the
-/// frontend. This is a DIP value and is scaled once in `Metrics::new`.
-const CORNER_RADIUS_DIP: i32 = 12;
 const ROW_HEIGHT_DIP: i32 = 30;
 const SEPARATOR_BLOCK_DIP: i32 = 7;
 /// Vertical padding inside the card, above the first row and below the last.
@@ -136,9 +127,6 @@ const FALLBACK_FONT_SIZE_DIP: i32 = 12;
 /// Deliberately modest: a wide floor leaves short labels stranded against the
 /// left column and makes the whole card read as left-heavy.
 const MIN_CARD_WIDTH_DIP: i32 = 148;
-/// Gap between the card's bottom edge and the top of the taskbar.
-const TASKBAR_GAP_DIP: i32 = 6;
-
 /// Open animation: the card slides up into place while fading in, matching the
 /// Windows flyouts.
 ///
@@ -151,11 +139,8 @@ const TASKBAR_GAP_DIP: i32 = 6;
 /// the *window* is moved, via `UpdateLayeredWindow`'s destination point, from
 /// `ANIM_TRAVEL_DIP` below its resting place up to it. Fading is the layered
 /// window's constant alpha. Both are free — no per-frame pixel work at all.
-const ANIM_DURATION_MS: u128 = 180;
+// Duration/travel live in shell::popup_chrome (shared with the flyout CSS).
 const ANIM_TICK_MS: u32 = 10;
-/// How far below its resting place the card starts. The window overlaps the
-/// taskbar for the first frames, which is what the reference does too.
-const ANIM_TRAVEL_DIP: i32 = 22;
 /// Deactivation arriving within this window of the menu appearing is ignored —
 /// the activation change that *shows* the menu can itself produce one.
 const ACTIVATE_GRACE_MS: u128 = 150;
@@ -430,7 +415,7 @@ impl Metrics {
         let s = |dip: i32| ((dip * dpi) / 96).max(1);
         Self {
             dpi,
-            margin: s(SHADOW_MARGIN_DIP),
+            margin: s(SHADOW_GUTTER_DIP),
             blur: s(SHADOW_BLUR_DIP),
             shadow_dy: s(SHADOW_OFFSET_Y_DIP),
             radius: s(CORNER_RADIUS_DIP),
@@ -659,12 +644,6 @@ fn blur_mask(mask: &mut Vec<f32>, w: i32, h: i32, radius: i32) {
     }
 }
 
-/// Radius of the backdrop blur, in device-independent pixels.
-///
-/// Large on purpose. A backdrop blurred too little reads as a smeared
-/// screenshot rather than as frosted glass, and the text over it stays busy.
-const BACKDROP_BLUR_DIP: i32 = 14;
-
 /// How much of the card is its own colour rather than the blurred backdrop.
 ///
 /// This is the readability control, and it is the reason the value is this
@@ -787,7 +766,7 @@ fn compose_base(
     blur_mask(&mut shadow, w, h, m.blur);
     // Dark keeps the same ratio to light it has always had — a shadow needs
     // more opacity to register against a dark surface than a white one.
-    let strength = if light { 0.15 } else { 0.32 };
+    let strength = if light { SHADOW_STRENGTH_LIGHT } else { SHADOW_STRENGTH_DARK };
 
     let mut pixels = vec![0u8; (w * h * 4) as usize];
     let mut alpha = vec![0u8; (w * h) as usize];

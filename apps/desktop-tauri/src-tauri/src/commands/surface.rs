@@ -20,6 +20,14 @@ pub fn dismiss_tray_panel(app: tauri::AppHandle) -> Result<(), String> {
     crate::shell::flyout_window::hide(&app)
 }
 
+/// Fallback native resize drag. The live tray uses Tauri
+/// `startResizeDragging`; this keeps the same ReleaseCapture + HT* sequence
+/// if a caller still invokes the command.
+#[tauri::command]
+pub fn begin_tray_panel_resize(app: tauri::AppHandle, dir: String) -> Result<(), String> {
+    crate::shell::flyout_window::begin_resize(&app, &dir)
+}
+
 /// Arm the gesture blur guard before a resize-grip drag or drag-reorder
 /// gesture starts its Win32/OLE modal loop, so the transient
 /// `Focused(false)` that loop produces doesn't auto-hide the flyout.
@@ -61,9 +69,9 @@ pub async fn open_settings_window(app: tauri::AppHandle, tab: String) -> Result<
 
 /// Open (or focus) the detached "Open Tray Panel" window.
 ///
-/// Used by `PopOutPanel`'s "back to tray" action, which previously called
-/// `set_surface_mode("trayPanel", ...)` on the shared window — now that the
-/// flyout is its own window, that action opens it directly instead.  Same
+/// Used by the tray panel's "back to tray" flows. Opening the flyout was
+/// previously `set_surface_mode("trayPanel", ...)` on the shared window — now
+/// that the flyout is its own window, this opens it directly instead. Same
 /// `async` requirement as `open_settings_window`: `WebviewWindowBuilder::build`
 /// deadlocks inside synchronous Tauri commands on Windows.
 #[tauri::command]
@@ -214,10 +222,9 @@ pub(crate) fn validate_surface_target(
     // the tray panel is its own dedicated `flyout` window now (see
     // `shell::flyout_window`). This check runs AFTER the mismatch check above
     // so a mismatched trayPanel request (e.g. `target: settings`) still
-    // reports the ordinary "not valid for mode" error — only a well-formed
-    // `trayPanel` + `summary` request (the only target that maps to
-    // `SurfaceMode::TrayPanel` — see `SurfaceTarget::mode`) reaches this
-    // branch and is rejected here.
+    // reports the ordinary "not valid for mode" error — only targets whose
+    // host mode is `SurfaceMode::TrayPanel` (summary and provider deep links)
+    // reach this branch and are rejected here.
     if mode == SurfaceMode::TrayPanel {
         return Err(
             "set_surface_mode does not support 'trayPanel': the tray panel is a dedicated window \
@@ -240,7 +247,6 @@ pub(crate) fn validate_surface_target(
 fn target_label(target: &SurfaceTarget) -> String {
     match target {
         SurfaceTarget::Summary => "summary".into(),
-        SurfaceTarget::Dashboard => "dashboard".into(),
         SurfaceTarget::Provider { provider_id } => format!("provider:{provider_id}"),
         SurfaceTarget::Settings { tab } => format!("settings:{tab}"),
     }

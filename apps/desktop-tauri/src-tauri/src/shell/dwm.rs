@@ -199,11 +199,11 @@ unsafe extern "system" fn borderless_subclass_proc(
             unsafe { DefSubclassProc(hwnd, msg, wparam, lparam) }
         }
         WM_NCPAINT => {
-            // Suppress DWM non-client painting entirely.
+            // Suppress DWM non-client painting entirely (no Win32 caption).
             0
         }
         WM_NCACTIVATE => {
-            // Return TRUE to accept activation but skip DWM painting.
+            // Accept activation but skip DWM caption painting.
             1
         }
         WM_GETMINMAXINFO => {
@@ -216,7 +216,7 @@ unsafe extern "system" fn borderless_subclass_proc(
             // messages have no default work to preserve), but this one used to
             // return early without delegating, which silently discarded the
             // window's configured min/max drag-resize bounds for every
-            // borderless resizable window using this subclass (flyout, PopOut,
+            // borderless resizable window using this subclass (flyout,
             // Settings): `min_track_size`/`max_track_size` were left at
             // whatever Windows' undocumented pre-fill happened to be, not the
             // app's actual `set_min_size`/`set_max_size` values. Confirmed via
@@ -228,7 +228,7 @@ unsafe extern "system" fn borderless_subclass_proc(
             // maximized position/size to the monitor work area instead. This
             // also intersects (not replaces) `max_track_size` with the work
             // area — a window with its own smaller configured max (the flyout)
-            // keeps that max; one with no configured max (PopOut/Settings)
+            // keeps that max; one with no configured max (Settings)
             // still gets capped to the work area as before.
             const MONITOR_DEFAULTTONEAREST: u32 = 2;
             unsafe {
@@ -284,6 +284,14 @@ pub fn force_borderless_transparent_resizable(win: &tauri::WebviewWindow) {
     force_dark_caption_inner(win, true, true);
 }
 
+/// Flyout chrome is fully homemade: the CSS card is the window.
+/// Zero the non-client area and disable DWM caption painting so Windows
+/// cannot draw a title bar, min/max/close, or system frame.
+#[cfg(windows)]
+pub fn force_flyout_shell(win: &tauri::WebviewWindow) {
+    force_borderless_transparent_resizable(win);
+}
+
 #[cfg(all(test, windows))]
 mod tests {
     use super::*;
@@ -304,6 +312,7 @@ mod tests {
         assert_eq!(resize_hit_test(rect(), 250, 399, 8), Some(HTBOTTOM));
         assert_eq!(resize_hit_test(rect(), 250, 250, 8), None);
     }
+
 }
 
 #[cfg(windows)]
@@ -441,3 +450,6 @@ pub fn force_dark_caption(_win: &tauri::WebviewWindow) {}
 
 #[cfg(not(windows))]
 pub fn force_borderless_transparent_resizable(_win: &tauri::WebviewWindow) {}
+
+#[cfg(not(windows))]
+pub fn force_flyout_shell(_win: &tauri::WebviewWindow) {}

@@ -38,13 +38,23 @@ fn conditional_hide_to_tray_updates_matching_surface() {
 #[test]
 fn conditional_hide_to_tray_leaves_non_matching_surface_alone() {
     let mut state = AppState::new();
-    state.transition_surface(SurfaceMode::PopOut, SurfaceTarget::Dashboard);
+    state.transition_surface(
+        SurfaceMode::Settings,
+        SurfaceTarget::Settings {
+            tab: "general".into(),
+        },
+    );
 
     let plan = prepare_hide_to_tray_if_current(&mut state, |mode| mode == SurfaceMode::TrayPanel);
 
     assert!(plan.is_none());
-    assert_eq!(state.surface_machine.current(), SurfaceMode::PopOut);
-    assert_eq!(state.current_target, SurfaceTarget::Dashboard);
+    assert_eq!(state.surface_machine.current(), SurfaceMode::Settings);
+    assert_eq!(
+        state.current_target,
+        SurfaceTarget::Settings {
+            tab: "general".into()
+        }
+    );
 }
 
 // The old `tray_toggle_hides_only_when_panel_window_is_visible` test (which
@@ -140,12 +150,12 @@ fn same_mode_about_request_resolves_as_retarget() {
 #[test]
 fn same_mode_provider_request_resolves_as_retarget() {
     let mut state = AppState::new();
-    state.transition_surface(SurfaceMode::PopOut, SurfaceTarget::Dashboard);
+    state.transition_surface(SurfaceMode::TrayPanel, SurfaceTarget::Summary);
 
     let resolution = resolve_transition_request(
         &state,
         &ShellTransitionRequest {
-            mode: SurfaceMode::PopOut,
+            mode: SurfaceMode::TrayPanel,
             target: SurfaceTarget::Provider {
                 provider_id: "codex".into(),
             },
@@ -156,7 +166,7 @@ fn same_mode_provider_request_resolves_as_retarget() {
 
     match resolution {
         TransitionResolution::SameModeRetarget { mode, target } => {
-            assert_eq!(mode, SurfaceMode::PopOut);
+            assert_eq!(mode, SurfaceMode::TrayPanel);
             assert_eq!(
                 target,
                 SurfaceTarget::Provider {
@@ -217,7 +227,7 @@ fn same_mode_retarget_skips_default_position_synthesis() {
 #[test]
 fn same_mode_retarget_preserves_explicit_position() {
     let resolution = TransitionResolution::SameModeRetarget {
-        mode: SurfaceMode::PopOut,
+        mode: SurfaceMode::TrayPanel,
         target: SurfaceTarget::Provider {
             provider_id: "codex".into(),
         },
@@ -251,10 +261,13 @@ fn same_mode_reopen_still_uses_default_position() {
 }
 
 #[test]
-fn visible_mode_change_skips_default_position_synthesis() {
+fn tray_to_settings_mode_change_synthesizes_default_position() {
+    // The PopOut→Settings "visible-to-visible preserve" case is gone with the
+    // PopOut removal; the remaining visible→visible pair (TrayPanel→Settings)
+    // is explicitly special-cased to open Settings centered instead.
     let resolution = TransitionResolution::ModeChange {
         transition: SurfaceTransition {
-            from: SurfaceMode::PopOut,
+            from: SurfaceMode::TrayPanel,
             to: SurfaceMode::Settings,
             properties: SurfaceMode::Settings.window_properties(),
         },
@@ -274,10 +287,10 @@ fn visible_mode_change_skips_default_position_synthesis() {
         },
     );
 
-    assert_eq!(position, None);
+    assert_eq!(position, Some((20, 30)));
     assert!(
-        !fallback_called,
-        "visible-to-visible mode changes should preserve the current window position"
+        fallback_called,
+        "tray-to-settings should synthesize a centered default position"
     );
 }
 
@@ -367,7 +380,7 @@ fn visible_surface_position_falls_back_to_current_monitor_without_available_moni
     };
 
     let position = visible_surface_position_for_mode_with_fallbacks(
-        SurfaceMode::PopOut,
+        SurfaceMode::Settings,
         None,
         Some(anchor),
         Some(current_monitor),
@@ -380,7 +393,7 @@ fn visible_surface_position_falls_back_to_current_monitor_without_available_moni
         Some(window_positioner::calculate_popout_position(
             None,
             &current_monitor.work_area,
-            &surface_panel_size(SurfaceMode::PopOut),
+            &surface_panel_size(SurfaceMode::Settings),
             current_monitor.scale_factor,
         ))
     );
@@ -425,7 +438,7 @@ fn visible_surface_position_without_anchor_prefers_primary_over_offview_current_
     };
 
     let position = visible_surface_position_for_mode_with_fallbacks(
-        SurfaceMode::PopOut,
+        SurfaceMode::Settings,
         Some(&[offview_current, primary]),
         None,                             // no tray anchor
         Some(offview_current),            // hidden main window parked off-view
@@ -444,7 +457,7 @@ fn visible_surface_position_without_anchor_prefers_primary_over_offview_current_
         window_positioner::calculate_popout_position(
             Some(&inferred_tray_anchor_rect(&primary)),
             &primary.work_area,
-            &surface_panel_size(SurfaceMode::PopOut),
+            &surface_panel_size(SurfaceMode::Settings),
             primary.scale_factor,
         )
     );
@@ -490,7 +503,7 @@ fn visible_surface_position_anchor_lookup_uses_monitor_bounds() {
     };
 
     let position = visible_surface_position_for_mode_with_fallbacks(
-        SurfaceMode::PopOut,
+        SurfaceMode::Settings,
         Some(&[anchor_monitor, current_monitor]),
         Some(anchor),
         Some(current_monitor),
@@ -503,7 +516,7 @@ fn visible_surface_position_anchor_lookup_uses_monitor_bounds() {
         Some(window_positioner::calculate_popout_position(
             Some(&tray_anchor_rect(anchor)),
             &anchor_monitor.work_area,
-            &surface_panel_size(SurfaceMode::PopOut),
+            &surface_panel_size(SurfaceMode::Settings),
             anchor_monitor.scale_factor,
         ))
     );
@@ -737,13 +750,13 @@ fn hidden_mode_change_still_uses_default_position() {
 #[test]
 fn failed_hide_transition_recovers_previous_visible_surface() {
     let previous = SurfaceSnapshot {
-        mode: SurfaceMode::PopOut,
-        target: SurfaceTarget::Provider {
-            provider_id: "codex".into(),
+        mode: SurfaceMode::Settings,
+        target: SurfaceTarget::Settings {
+            tab: "about".into(),
         },
     };
     let transition = SurfaceTransition {
-        from: SurfaceMode::PopOut,
+        from: SurfaceMode::Settings,
         to: SurfaceMode::Hidden,
         properties: SurfaceMode::Hidden.window_properties(),
     };
@@ -838,7 +851,7 @@ fn hidden_surface_snapshot_matches_non_visible_shell_state() {
 }
 
 #[test]
-fn remembered_popout_position_clamps_using_stored_size() {
+fn remembered_settings_position_clamps_using_stored_size() {
     let monitor = MonitorPlacement {
         bounds: Rect {
             x: 0,
@@ -862,13 +875,13 @@ fn remembered_popout_position_clamps_using_stored_size() {
     };
 
     let position =
-        remembered_surface_position_with_monitors(SurfaceMode::PopOut, stored, &[monitor], None);
+        remembered_surface_position_with_monitors(SurfaceMode::Settings, stored, &[monitor], None);
 
     assert_eq!(position, Some((392, 292)));
 }
 
 #[test]
-fn remembered_panel_size_uses_stored_popout_size() {
+fn remembered_panel_size_uses_stored_settings_size() {
     let stored = crate::geometry_store::StoredGeometry {
         x: 0,
         y: 0,
@@ -876,15 +889,15 @@ fn remembered_panel_size_uses_stored_popout_size() {
         height: Some(720),
     };
 
-    let size = remembered_panel_size(SurfaceMode::PopOut, stored);
+    let size = remembered_panel_size(SurfaceMode::Settings, stored);
 
     assert_eq!(size.width, 640);
     assert_eq!(size.height, 720);
 }
 
 #[test]
-fn popout_layout_size_uses_remembered_logical_geometry() {
-    let props = SurfaceMode::PopOut.window_properties();
+fn settings_layout_size_uses_remembered_logical_geometry() {
+    let props = SurfaceMode::Settings.window_properties();
     let stored = crate::geometry_store::StoredGeometry {
         x: 0,
         y: 0,
@@ -892,7 +905,7 @@ fn popout_layout_size_uses_remembered_logical_geometry() {
         height: Some(720),
     };
 
-    let size = logical_size_from_geometry(SurfaceMode::PopOut, &props, Some(stored));
+    let size = logical_size_from_geometry(SurfaceMode::Settings, &props, Some(stored));
 
     assert_eq!(size, (640.0, 720.0));
 }
@@ -912,5 +925,5 @@ fn main_surface_layout_does_not_restore_tray_panel_geometry() {
 
     let size = logical_size_from_geometry(SurfaceMode::TrayPanel, &props, Some(stored));
 
-    assert_eq!(size, (340.0, 788.0));
+    assert_eq!(size, (328.0, 776.0));
 }

@@ -1,4 +1,4 @@
-//! The detached tray panel window.
+﻿//! The detached tray panel window.
 //!
 //! This module is deliberately the only owner of the flyout window lifecycle.
 //! React owns the provider cards; this module owns native visibility,
@@ -21,6 +21,7 @@ pub const FLYOUT_LABEL: &str = "flyout";
 pub const TRAY_PANEL_REVEALED_EVENT: &str = "tray-panel-revealed";
 pub const TRAY_PANEL_CLOSING_EVENT: &str = "tray-panel-closing";
 pub const TRAY_PANEL_HIDDEN_EVENT: &str = "tray-panel-hidden";
+pub const TRAY_PANEL_FROST_EVENT: &str = "tray-panel-frost";
 
 const CLOSE_ANIMATION_DURATION: Duration = Duration::from_millis(180);
 static HOOK_INSTALLED: AtomicBool = AtomicBool::new(false);
@@ -238,6 +239,11 @@ unsafe extern "system" {
     fn CallNextHookEx(hook: isize, code: i32, wparam: usize, lparam: isize) -> isize;
     fn GetAncestor(hwnd: isize, flags: u32) -> isize;
     fn GetWindowRect(hwnd: isize, rect: *mut WinRect) -> i32;
+    fn FindWindowExW(parent: isize, after: isize, class: *const u16, name: *const u16) -> isize;
+    fn SetWindowPos(hwnd: isize, after: isize, x: i32, y: i32, w: i32, h: i32, flags: u32) -> i32;
+    fn PostMessageW(hwnd: isize, msg: u32, wparam: usize, lparam: isize) -> i32;
+    fn GetCursorPos(pt: *mut CursorPoint) -> i32;
+    fn ReleaseCapture() -> i32;
 }
 
 #[cfg(windows)]
@@ -286,6 +292,15 @@ struct WinRect {
     right: i32,
     bottom: i32,
 }
+
+#[cfg(windows)]
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+struct CursorPoint {
+    x: i32,
+    y: i32,
+}
+
 
 #[cfg(windows)]
 const WH_MOUSE_LL: i32 = 14;
@@ -350,6 +365,110 @@ pub fn publish_flyout_geometry(app: &AppHandle) {
 /// cached Tauri position. WebView2 and DPI changes can move the outer HWND
 /// without immediately updating `outer_position`; outside-click decisions
 /// must use the rectangle Windows is actually hit-testing.
+/// The tauri-runtime drag-resize child (TAURI_DRAG_RESIZE_BORDERS) is created
+/// once at build. WebView2 can restack its own child HWNDs above it across
+/// hide/show cycles (the reveal path also fires two SWP_FRAMECHANGED around
+/// show()); when that happens the webview swallows every edge hit as a client
+/// click and the panel feels stuck in both axes. Re-top the child after each
+/// reveal + focus so edge drags reach the sizing child again.
+#[cfg(windows)]
+fn reassert_drag_resize_child(window: &tauri::WebviewWindow) {
+    use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+    const CLASS: &str = "TAURI_DRAG_RESIZE_BORDERS";
+    const NAME: &str = "TAURI_DRAG_RESIZE_WINDOW";
+    // HWND_TOP = 0; SWP_NOMOVE|SWP_NOSIZE|SWP_NOACTIVATE = 0x02|0x01|0x10
+    const SWP_NOACTIVATE_NOMOVE_NOSIZE: u32 = 0x10 | 0x02 | 0x01;
+    let Ok(handle) = window.window_handle() else { return };
+    let RawWindowHandle::Win32(handle) = handle.as_raw() else {
+        return;
+    };
+    let inner = handle.hwnd.get();
+    const GA_ROOT: u32 = 2;
+    let parent = unsafe { let r = GetAncestor(inner, GA_ROOT); if r != 0 { r } else { inner } };
+    let class: Vec<u16> = CLASS.encode_utf16().chain(std::iter::once(0)).collect();
+    let name: Vec<u16> = NAME.encode_utf16().chain(std::iter::once(0)).collect();
+    let mut child = unsafe { FindWindowExW(parent, 0, class.as_ptr(), name.as_ptr()) };
+    if child == 0 {
+        child = unsafe { FindWindowExW(parent, 0, class.as_ptr(), std::ptr::null()) };
+    }
+    if child != 0 {
+        unsafe { SetWindowPos(child, 0, 0, 0, 0, 0, SWP_NOACTIVATE_NOMOVE_NOSIZE) };
+    }
+}
+/// Begin a native resize from a frontend edge handle (fallback path).
+///
+/// WebView2 covers the client, so parent WM_NCHITTEST never sees the card
+/// stroke. The live frontend uses Tauri `startResizeDragging`; this command
+/// stays as the same OS sequence: ReleaseCapture (WebView2 already owns the
+/// mouse on mousedown) then PostMessage WM_NCLBUTTONDOWN with packed POINTS.
+/// SendMessage without ReleaseCapture nested a modal loop inside IPC while
+/// WebView2 still held capture, so the sizing loop never saw mouse moves.
+/// DefWindowProc returns 0 for this message — that is success, not failure.
+#[cfg(windows)]
+pub fn begin_resize(app: &AppHandle, dir: &str) -> Result<(), String> {
+    use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+    const WM_NCLBUTTONDOWN_MSG: u32 = 0x00A1;
+    const HT_LEFT: isize = 10;
+    const HT_RIGHT: isize = 11;
+    const HT_TOP: isize = 12;
+    const HT_TOPLEFT: isize = 13;
+    const HT_TOPRIGHT: isize = 14;
+    const HT_BOTTOM: isize = 15;
+    const HT_BOTTOMLEFT: isize = 16;
+    const HT_BOTTOMRIGHT: isize = 17;
+    const GA_ROOT_RESIZE: u32 = 2;
+    let hit: isize = match dir {
+        "n" => HT_TOP,
+        "s" => HT_BOTTOM,
+        "e" => HT_RIGHT,
+        "w" => HT_LEFT,
+        "ne" => HT_TOPRIGHT,
+        "nw" => HT_TOPLEFT,
+        "se" => HT_BOTTOMRIGHT,
+        "sw" => HT_BOTTOMLEFT,
+        other => return Err(format!("unknown resize direction: {other}")),
+    };
+    let window = app
+        .get_webview_window(FLYOUT_LABEL)
+        .ok_or_else(|| "flyout window unavailable".to_string())?;
+    let Ok(handle) = window.window_handle() else {
+        return Err("flyout handle unavailable".to_string());
+    };
+    let RawWindowHandle::Win32(handle) = handle.as_raw() else {
+        return Err("flyout is not a Win32 window".to_string());
+    };
+    let inner = handle.hwnd.get();
+    let root = unsafe { GetAncestor(inner, GA_ROOT_RESIZE) };
+    let root = if root != 0 { root } else { inner };
+    let mut pt = CursorPoint::default();
+    if unsafe { GetCursorPos(&raw mut pt) } == 0 {
+        return Err("GetCursorPos failed".to_string());
+    }
+    let packed = ((pt.y as u16 as u32) << 16) | (pt.x as u16 as u32);
+    let lparam = packed as isize;
+    if let Some(state) = app.try_state::<Mutex<AppState>>() {
+        if let Ok(mut guard) = state.lock() {
+            guard.begin_gesture_blur_guard(std::time::Instant::now());
+        }
+    }
+    unsafe { ReleaseCapture() };
+    let posted = unsafe { PostMessageW(root, WM_NCLBUTTONDOWN_MSG, hit as usize, lparam) };
+    if posted == 0 {
+        if let Some(state) = app.try_state::<Mutex<AppState>>() {
+            if let Ok(mut guard) = state.lock() {
+                guard.end_gesture_blur_guard();
+            }
+        }
+        return Err("PostMessageW(WM_NCLBUTTONDOWN) failed".to_string());
+    }
+    Ok(())
+}
+
+#[cfg(not(windows))]
+pub fn begin_resize(_app: &AppHandle, _dir: &str) -> Result<(), String> {
+    Err("resize handles are Windows-only".to_string())
+}
+
 #[cfg(windows)]
 fn actual_native_rect(window: &tauri::WebviewWindow) -> Option<ScreenRect> {
     use raw_window_handle::HasWindowHandle;
@@ -529,17 +648,42 @@ pub fn is_open(app: &AppHandle) -> bool {
         .is_some_and(|window| window.is_visible().unwrap_or(false))
 }
 
+#[cfg(windows)]
+fn spawn_frost_finish(app: &AppHandle, snap: Option<super::frost::Snapshot>) {
+    let Some(snap) = snap else {
+        return;
+    };
+    let app = app.clone();
+    std::thread::spawn(move || {
+        if let Some(css) = super::frost::finish(snap) {
+            let _ = app.emit_to(FLYOUT_LABEL, TRAY_PANEL_FROST_EVENT, css);
+        }
+    });
+}
+
 fn show_window(app: &AppHandle, window: &tauri::WebviewWindow) -> Result<(), String> {
     invalidate_pending_input();
     let was_visible = window.is_visible().unwrap_or(false);
     let was_closing = cancel_pending_close();
     set_phase(FlyoutPhase::Showing);
-    super::dwm::force_borderless_transparent_resizable(window);
+    super::dwm::force_flyout_shell(window);
+    // Grab a tiny desktop snapshot while hidden (~1ms). Blur/BMP stay off
+    // this thread so click-to-show matches FluentFlyout / Telegram: the
+    // window appears first.
+    #[cfg(windows)]
+    let frost_snap = if !was_visible {
+        super::frost::snapshot(window)
+    } else {
+        None
+    };
     if let Err(error) = window.show() {
         set_phase(FlyoutPhase::Hidden);
         return Err(error.to_string());
     }
-    super::dwm::force_borderless_transparent_resizable(window);
+    let _ = window.set_resizable(true);
+    super::dwm::force_flyout_shell(window);
+    #[cfg(windows)]
+    spawn_frost_finish(app, frost_snap);
     if let Err(error) = window.set_focus() {
         // The native window is already visible. Keep the controller honest so
         // the next tray click can close/reopen it instead of being trapped in
@@ -548,6 +692,27 @@ fn show_window(app: &AppHandle, window: &tauri::WebviewWindow) -> Result<(), Str
         return Err(error.to_string());
     }
     set_phase(FlyoutPhase::Visible);
+    #[cfg(windows)]
+    {
+        reassert_drag_resize_child(window);
+        // WebView2 restack is async (reveal fires two SWP_FRAMECHANGED around show()).
+        // Single reassert can be undone by pending frame; schedule delayed re-tops.
+        let app_for_reassert = app.clone();
+        let label_for_reassert = window.label().to_string();
+        tauri::async_runtime::spawn(async move {
+            for delay_ms in [80u64, 260u64] {
+                tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
+                let app_c = app_for_reassert.clone();
+                let label_c = label_for_reassert.clone();
+                let handle = app_c.clone();
+                let _ = app_c.run_on_main_thread(move || {
+                    if let Some(w) = handle.get_webview_window(&label_c) {
+                        reassert_drag_resize_child(&w);
+                    }
+                });
+            }
+        });
+    }
     publish_flyout_geometry(app);
     if !was_visible || was_closing {
         app.emit_to(FLYOUT_LABEL, TRAY_PANEL_REVEALED_EVENT, ())
@@ -621,7 +786,7 @@ fn open_or_focus_inner(
         .title("CodexBar")
         .inner_size(width, height)
         .decorations(props.decorations)
-        .shadow(false)
+        .shadow(true)
         .resizable(props.resizable)
         .always_on_top(props.always_on_top)
         .skip_taskbar(props.skip_taskbar)
@@ -639,13 +804,15 @@ fn open_or_focus_inner(
         .background_color(tauri::utils::config::Color(0, 0, 0, 0))
         .build()
         .map_err(|error| error.to_string())?;
-    super::dwm::force_borderless_transparent_resizable(&window);
+    super::dwm::force_flyout_shell(&window);
     let target =
         position.or_else(|| super::position::default_surface_position(app, SurfaceMode::TrayPanel));
     if let Some((x, y)) = target {
         let _ = window.set_position(PhysicalPosition::new(x, y));
     }
     set_phase(FlyoutPhase::Hidden);
+    #[cfg(windows)]
+    spawn_frost_finish(app, super::frost::snapshot(&window));
     if reveal_when_ready {
         arm_reveal(app)?;
     }
@@ -717,6 +884,8 @@ pub fn request_close(app: &AppHandle) -> Result<(), String> {
                     set_phase(FlyoutPhase::Hidden);
                     published::set_hidden();
                     let _ = main_handle.emit_to(FLYOUT_LABEL, TRAY_PANEL_HIDDEN_EVENT, ());
+                    #[cfg(windows)]
+                    spawn_frost_finish(&main_handle, super::frost::snapshot(&window));
                 } else {
                     set_phase(FlyoutPhase::Visible);
                     let _ = main_handle.emit_to(FLYOUT_LABEL, TRAY_PANEL_REVEALED_EVENT, ());
@@ -753,10 +922,22 @@ pub fn handle_window_event(window: &tauri::Window, event: &tauri::WindowEvent) -
         tauri::WindowEvent::Focused(false) => true,
         tauri::WindowEvent::Focused(true) => {
             cancel_pending_close();
+            #[cfg(windows)]
+            if let Some(w) = app.get_webview_window(FLYOUT_LABEL) {
+                reassert_drag_resize_child(&w);
+            }
             true
         }
-        tauri::WindowEvent::Moved(_) | tauri::WindowEvent::Resized(_) => {
+        tauri::WindowEvent::Moved(_) => {
             publish_flyout_geometry(app);
+            true
+        }
+        tauri::WindowEvent::Resized(_) => {
+            publish_flyout_geometry(app);
+            #[cfg(windows)]
+            if let Some(w) = app.get_webview_window(FLYOUT_LABEL) {
+                reassert_drag_resize_child(&w);
+            }
             true
         }
         tauri::WindowEvent::CloseRequested { api, .. } => {
@@ -918,8 +1099,8 @@ mod tests {
     #[test]
     fn tray_window_properties_keep_native_resize_contract() {
         let props = SurfaceMode::TrayPanel.window_properties();
-        assert_eq!(props.width, 340.0);
-        assert_eq!(props.height, 788.0);
+        assert_eq!(props.width, 328.0);
+        assert_eq!(props.height, 776.0);
         assert_eq!(props.min_width, Some(320.0));
         assert_eq!(props.min_height, Some(380.0));
         assert!(props.resizable);

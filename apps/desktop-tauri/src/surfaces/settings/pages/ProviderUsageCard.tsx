@@ -2,12 +2,12 @@ import { useEffect, useMemo, useState } from "react";
 import { useLocale } from "../../../hooks/useLocale";
 import { useResetDisplay } from "../../../hooks/useFormattedResetTime";
 import { getProviderDetailBalance } from "../../../lib/providerBalance";
-import { providerSupportsChartData } from "../../../lib/providerCharts";
 import {
   quotaPercentDisplay,
   type QuotaDisplayContext,
 } from "../../../lib/quotaDisplay";
 import { getProviderChartData } from "../../../lib/tauri";
+import { providerCapabilities } from "../../../lib/providerCapabilities";
 import {
   isMeaningfulQuotaWindow,
   quotaWindowLabel,
@@ -140,7 +140,7 @@ export default function ProviderUsageCard({
   );
 
   useEffect(() => {
-    if (!detail || !providerSupportsChartData(detail.id)) {
+    if (!detail) {
       setCharts(null);
       return;
     }
@@ -215,6 +215,7 @@ export default function ProviderUsageCard({
   }
 
   const max = Math.max(0, ...series.map((point) => point.value));
+  const caps = providerCapabilities({ providerId: detail.id, capabilities: undefined });
   const local = charts?.localUsage;
   const tokenLead =
     range === "30d" || range === "q" || range === "y"
@@ -270,6 +271,7 @@ export default function ProviderUsageCard({
         ))}
       </div>
 
+      {!caps.localUsage ? null : (
       <div className="s5-pd-card">
         <div className="s5-pd-card-h">
           <h4>近期用量</h4>
@@ -312,6 +314,7 @@ export default function ProviderUsageCard({
           </p>
         ) : null}
       </div>
+      )}
     </>
   );
 }

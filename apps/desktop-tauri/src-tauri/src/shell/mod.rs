@@ -8,6 +8,9 @@ use crate::surface_target::SurfaceTarget;
 
 pub(crate) mod dwm;
 pub mod flyout_window;
+#[cfg(windows)]
+pub(crate) mod frost;
+pub mod popup_chrome;
 mod geometry;
 mod position;
 pub mod settings_window;
@@ -23,7 +26,7 @@ pub use position::{
     default_surface_position, inferred_tray_panel_position, remember_current_geometry_if_eligible,
     shortcut_panel_position, tray_panel_position,
 };
-pub use transition::{reopen_to_target, transition_to_target};
+pub use transition::transition_to_target;
 #[allow(unused_imports)]
 pub use window::{apply_window_properties, hide_to_tray, hide_to_tray_if_current};
 

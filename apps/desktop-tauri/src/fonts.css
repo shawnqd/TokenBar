@@ -1,0 +1,8 @@
+/* Only MiSans ships with the app. The other whitelist families are install-guided. */
+@font-face {
+  font-family: "MiSans VF";
+  src: url("/fonts/MiSansVF.ttf") format("truetype");
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+}

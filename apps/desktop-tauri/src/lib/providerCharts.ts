@@ -1,23 +1,15 @@
 /**
- * Which providers have chart or local-usage data worth fetching.
+ * Whether the UI should fetch chart / local-usage data for a provider.
  *
- * This is a capability of OUR code, not a property of the provider: it lists
- * the providers we have written a local-log parser or a dashboard chart loader
- * for. It cannot be derived from a snapshot, so it has to be stated — but it
- * must be stated only once.
- *
- * It is the mirror of two Rust functions:
- *   * `commands::chart::scan_local_cost` — the local session-log scanners
- *   * `commands::chart::load_openai_dashboard_chart_data` — the hosted charts
- *
- * `scripts/check-chart-providers.mjs` fails the build when this set and those
- * two disagree. That check exists because they did: Grok's local-usage scanner
- * was added in Rust while this set still said `claude, codex, openai`, so the
- * frontend never asked for the data and the card stayed empty with a working
- * backend behind it.
+ * Every provider is treated identically here: all of them go through the same
+ * `get_provider_chart_data` fetch, and the backend decides how much is real.
+ * `scan_local_cost` only parses the local logs we can read (Codex / Claude /
+ * Grok today) and every other provider gets an empty/zero result back, so the
+ * slot simply stays empty — never a synthetic zero. This replaces the old
+ * per-provider allow-list, which drifted from the backend once already (Grok's
+ * scanner existed before the frontend list mentioned it) and hid the whole
+ * recent-usage block for every unlisted provider.
  */
-const PROVIDER_CHART_DATA_IDS = new Set(["claude", "codex", "grok", "openai"]);
-
-export function providerSupportsChartData(providerId: string): boolean {
-  return PROVIDER_CHART_DATA_IDS.has(providerId.toLowerCase());
+export function providerSupportsChartData(_providerId: string): boolean {
+  return true;
 }

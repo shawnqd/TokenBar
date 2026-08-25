@@ -2,24 +2,28 @@
    design/settings-page-preview.html; scoped under .settings-v5. */
 
 .settings-v5 .s5-section {
-  background: var(--flyout-zone-bg);
-  border: 1px solid var(--flyout-hairline);
-  border-radius: var(--radius);
-  margin-bottom: 10px;
-  overflow: hidden;
+  background: transparent;
+  border: 0;
+  border-bottom: 1px solid var(--flyout-divider);
+  border-radius: 0;
+  margin-bottom: 16px;
+  padding-bottom: 12px;
+  overflow: visible;
 }
 
 .settings-v5 .s5-section-h {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 8px 14px 4px;
+  padding: 0 0 6px;
 }
 
 .settings-v5 .s5-section-h h3 {
   margin: 0;
-  font-size: 13px;
+  font-size: 11px;
   font-weight: 600;
+  color: var(--flyout-muted);
+  letter-spacing: 0.04em;
 }
 
 .settings-v5 .s5-reset {
@@ -42,9 +46,15 @@
   grid-template-columns: minmax(0, 1fr) auto;
   gap: 8px 16px;
   align-items: center;
-  padding: 8px 14px;
+  padding: 8px 0;
   min-height: 40px;
   border-top: 1px solid var(--flyout-divider);
+}
+
+.settings-v5 .s5-section > .s5-field:first-child,
+.settings-v5 .s5-section > .s5-section-h + .s5-field,
+.settings-v5 .s5-section > .s5-section-h + .s5-hint {
+  border-top: 0;
 }
 
 .settings-v5 .s5-field.is-off {
@@ -69,10 +79,10 @@
 }
 
 .settings-v5 .s5-hint {
-  font-size: 12px;
+  font-size: 11px;
   color: var(--flyout-muted);
   line-height: 1.45;
-  padding: 6px 14px 10px;
+  padding: 8px 0 12px;
 }
 
 .settings-v5 .s5-seg {
@@ -166,6 +176,53 @@
   border-radius: 8px;
   padding: 5px 8px;
   min-width: 88px;
+}
+
+.settings-v5 .s5-dropdown {
+  display: inline-flex;
+  min-width: 88px;
+  max-width: 240px;
+}
+
+.settings-v5 .s5-dropdown .dropdown,
+.settings-v5 .s5-dropdown .dropdown__trigger {
+  width: 100%;
+  min-width: 0;
+}
+
+.settings-v5 .dropdown__trigger {
+  height: 32px;
+  padding: 0 10px;
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 32px;
+  color: var(--flyout-text);
+  background: var(--flyout-bg);
+  border: 1px solid var(--flyout-hairline);
+  border-radius: 8px;
+  box-shadow: none;
+  max-width: 240px;
+}
+
+.settings-v5 .dropdown__trigger:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--flyout-text) 5%, var(--flyout-bg));
+}
+
+.settings-v5 .dropdown__trigger--open,
+.settings-v5 .dropdown__trigger:focus-visible {
+  border-color: var(--flyout-accent);
+  box-shadow: 0 0 0 2px var(--accent-soft);
+}
+
+.settings-v5 .dropdown__chevron {
+  color: var(--flyout-muted);
+}
+
+.settings-v5 .s5-entry .s5-dropdown,
+.settings-v5 .s5-entry .dropdown,
+.settings-v5 .s5-entry .dropdown__trigger {
+  width: 100%;
+  max-width: none;
 }
 
 .settings-v5 .s5-num {
@@ -266,7 +323,7 @@
   grid-template-columns: 28px minmax(0, 1.2fr) minmax(0, 1fr) 72px 88px;
   gap: 6px;
   align-items: center;
-  padding: 6px 14px;
+  padding: 6px 0;
   font-size: 12px;
 }
 
@@ -330,17 +387,27 @@
   min-width: 0;
 }
 
-.settings-v5 .s5-surf-fields > .s5-section:last-child {
+.settings-v5 .s5-surf-fields > .s5-section:last-child,
+.settings-page > .s5-section:last-child {
   margin-bottom: 0;
+  padding-bottom: 0;
+  border-bottom: 0;
 }
 
 .settings-v5 .s5-stage {
   position: sticky;
   top: 0;
-  border: 1px solid var(--flyout-hairline);
-  border-radius: 12px;
-  background: var(--flyout-zone-bg);
-  padding: 10px 12px 12px;
+  border: 1px solid var(--flyout-divider);
+  border-radius: 0;
+  background: transparent;
+  padding: 0 0 12px;
+  overflow: visible;
+}
+
+/* Tray preview: flyout is the window; keep the same hairline stage as HTML. */
+.settings-v5 .s5-stage--tray {
+  background: transparent;
+  border-radius: 0;
 }
 
 .settings-v5 .s5-preview-label {
@@ -358,8 +425,9 @@
 }
 
 .settings-v5 .s5-stage-frame--tray {
-  width: 328px;
-  height: 256px;
+  width: 340px;
+  height: 520px;
+  overflow: visible;
 }
 
 .settings-v5 .s5-stage-frame--float {
@@ -835,7 +903,7 @@
   border-radius: 8px;
   cursor: pointer;
   border: 1px solid var(--flyout-hairline);
-  background: var(--flyout-zone-bg);
+  background: transparent;
   color: var(--flyout-text);
   white-space: nowrap;
   word-break: keep-all;
@@ -868,11 +936,18 @@
 }
 
 .settings-v5 .s5-pd-card {
-  border: 1px solid var(--flyout-hairline);
-  border-radius: 12px;
-  background: var(--flyout-zone-bg);
-  padding: 14px 16px;
-  margin-bottom: 10px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  padding: 0 0 16px;
+  margin-bottom: 16px;
+  border-bottom: 1px solid var(--flyout-divider);
+}
+
+.settings-v5 .s5-pd-card:last-child {
+  margin-bottom: 0;
+  padding-bottom: 0;
+  border-bottom: 0;
 }
 
 .settings-v5 .s5-pd-card-h {
@@ -880,13 +955,15 @@
   align-items: center;
   justify-content: space-between;
   gap: 10px;
-  margin-bottom: 10px;
+  margin-bottom: 8px;
 }
 
 .settings-v5 .s5-pd-card-h h4 {
   margin: 0;
-  font-size: 13px;
+  font-size: 11px;
   font-weight: 600;
+  color: var(--flyout-muted);
+  letter-spacing: 0.04em;
 }
 
 .settings-v5 .s5-pd-lead {
@@ -963,7 +1040,14 @@
   grid-template-columns: minmax(0, 1fr) auto;
   gap: 12px;
   align-items: center;
-  min-height: 32px;
+  min-height: 40px;
+  padding: 8px 0;
+  border-top: 1px solid var(--flyout-divider);
+}
+
+.settings-v5 .s5-pd-card > .s5-pd-row:first-child,
+.settings-v5 .s5-pd-card-h + .s5-pd-row {
+  border-top: 0;
 }
 
 .settings-v5 .s5-chart-demo {
@@ -1063,6 +1147,10 @@
   z-index: 20;
 }
 
+.settings-v5 .s5-modal-back--fixed {
+  position: fixed;
+}
+
 .settings-v5 .s5-modal {
   width: min(360px, 90%);
   background: var(--flyout-bg);
@@ -1086,6 +1174,7 @@
 .settings-v5 .s5-modal-actions {
   display: flex;
   justify-content: flex-end;
+  flex-wrap: wrap;
   gap: 8px;
 }
 
@@ -1108,4 +1197,15 @@
   .settings-v5 .s5-prov {
     grid-template-columns: 1fr;
   }
+}
+
+/* 服务商拖排序（sortablejs）：拖动中抬起，落点幽灵半透明、不挡点击 */
+.settings-v5 .s5-prow--dragging {
+  z-index: 40;
+  opacity: 0.85;
+  cursor: grabbing;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.25);
+}
+.settings-v5 .s5-prow--ghost {
+  opacity: 0.35;
 }

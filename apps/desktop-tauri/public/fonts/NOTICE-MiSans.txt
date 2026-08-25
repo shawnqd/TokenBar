@@ -1,0 +1,13 @@
+MiSans VF
+Copyright Xiaomi Inc.
+
+Obtained from the official HyperOS font site:
+https://hyperos.mi.com/font/zh/
+
+TokenBar embeds an unmodified copy of MiSans VF for use inside this
+application. Xiaomi permits free commercial use of MiSans. The font
+file must not be sold or redistributed as a standalone font product.
+Keep this notice with the font file.
+
+Official terms: Xiaomi Font Intellectual Property License Agreement
+https://hyperos.mi.com/font/zh/download/

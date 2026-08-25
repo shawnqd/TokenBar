@@ -5,8 +5,6 @@
 //! startup, e.g.:
 //!
 //!   - `trayPanel`          — show the tray panel
-//!   - `popOut`             — show the pop-out dashboard
-//!   - `popOut:provider:codex` — show a provider pop-out
 //!   - `settings`           — show settings (General tab)
 //!   - `settings:apiKeys`   — show settings on the API Keys tab
 //!   - `settings:cookies`   — show settings on the Cookies tab
@@ -19,7 +17,7 @@
 use std::sync::{LazyLock, Mutex};
 
 use serde::Serialize;
-use tauri::{AppHandle, Manager, WebviewWindow};
+use tauri::{AppHandle, Emitter, Manager, WebviewWindow};
 
 use crate::commands::{ProviderCatalogEntry, get_provider_catalog};
 use crate::events;
@@ -133,12 +131,6 @@ impl ProofConfig {
     pub fn surface_target(&self) -> SurfaceTarget {
         match self.surface_mode() {
             SurfaceMode::Hidden | SurfaceMode::TrayPanel => SurfaceTarget::Summary,
-            SurfaceMode::PopOut => self
-                .target_payload
-                .as_deref()
-                .and_then(SurfaceTarget::parse)
-                .filter(|target| target.mode() == SurfaceMode::PopOut)
-                .unwrap_or(SurfaceTarget::Dashboard),
             SurfaceMode::Settings => SurfaceTarget::Settings {
                 tab: self
                     .settings_tab
@@ -153,7 +145,6 @@ impl ProofConfig {
 pub enum ProofCommand {
     OpenTrayPanel,
     OpenNativeMenu,
-    OpenDashboard,
     OpenProvider { provider_id: String },
     OpenSettings { tab: String },
     OpenAboutPath,
@@ -165,7 +156,6 @@ impl ProofCommand {
         match raw {
             "open-tray-panel" => Some(Self::OpenTrayPanel),
             "open-native-menu" => Some(Self::OpenNativeMenu),
-            "open-dashboard" => Some(Self::OpenDashboard),
             "open-about-path" => Some(Self::OpenAboutPath),
             "hide-surface" => Some(Self::HideSurface),
             _ => {
@@ -220,7 +210,7 @@ pub fn activate(app: &AppHandle) {
     let position = match target {
         // Detached surfaces are larger than tray panels. Let their normal
         // positioning paths center/clamp them instead of reusing tray coords.
-        SurfaceMode::Settings | SurfaceMode::PopOut => None,
+        SurfaceMode::Settings => None,
         _ => proof_window_position(app),
     };
     tracing::info!(
@@ -373,7 +363,6 @@ fn execute_proof_command(
     match command {
         ProofCommand::OpenTrayPanel => open_proof_tray_panel(app),
         ProofCommand::OpenNativeMenu => open_proof_native_menu(),
-        ProofCommand::OpenDashboard => open_proof_dashboard(app),
         ProofCommand::OpenProvider { provider_id } => open_proof_provider(app, provider_id),
         ProofCommand::OpenSettings { tab } => open_proof_settings(app, tab),
         ProofCommand::OpenAboutPath => open_proof_about_path(app),
@@ -382,7 +371,7 @@ fn execute_proof_command(
 }
 
 // Opens the real dedicated `flyout` window (same as an actual tray-icon
-// click) instead of `shell::reopen_to_target`'s `main`-window path — see
+// click) instead of a `main`-window transition — see
 // `activate`'s doc comment above for why. Must run from an async command
 // (see `commands::run_proof_command`) — `open_or_focus` deadlocks on Windows
 // if its first-ever `WebviewWindowBuilder::build()` runs synchronously.
@@ -399,21 +388,20 @@ fn open_proof_native_menu() -> Result<ProofCommandOutcome, String> {
     Ok(ProofCommandOutcome::EMIT_AFTER)
 }
 
-fn open_proof_dashboard(app: &AppHandle) -> Result<ProofCommandOutcome, String> {
-    shell::transition_to_target(app, SurfaceMode::PopOut, SurfaceTarget::Dashboard, None)?;
-    Ok(ProofCommandOutcome::SILENT)
-}
-
 fn open_proof_provider(
     app: &AppHandle,
     provider_id: String,
 ) -> Result<ProofCommandOutcome, String> {
-    shell::transition_to_target(
-        app,
-        SurfaceMode::PopOut,
-        SurfaceTarget::Provider { provider_id },
-        None,
-    )?;
+    // Provider deep links open the tray panel (the PopOut provider view was
+    // removed). The flyout window, not `main`'s surface machine, hosts it.
+    let position = shell::tray_panel_position(app).or_else(|| shell::shortcut_panel_position(app));
+    shell::flyout_window::open_or_focus(app, position)?;
+    let Some(window) = app.get_webview_window(crate::shell::flyout_window::FLYOUT_LABEL) else {
+        return Ok(ProofCommandOutcome::SILENT);
+    };
+    // Same event name as `tray_bridge::FLYOUT_SELECT_PROVIDER_EVENT` — the
+    // flyout frontend uses it to highlight the deep-linked provider.
+    let _ = window.emit("flyout-select-provider", provider_id);
     Ok(ProofCommandOutcome::SILENT)
 }
 
@@ -613,18 +601,6 @@ fn proof_payload_is_supported(surface_mode: SurfaceMode, payload: Option<&str>) 
         (SurfaceMode::Hidden | SurfaceMode::TrayPanel, Some(_)) => false,
         (SurfaceMode::Settings, None) => true,
         (SurfaceMode::Settings, Some(tab)) => is_supported_settings_tab(tab),
-        (SurfaceMode::PopOut, None) => true,
-        (SurfaceMode::PopOut, Some(raw_target)) => {
-            let Some(target) = SurfaceTarget::parse(raw_target) else {
-                return false;
-            };
-
-            match target {
-                SurfaceTarget::Dashboard => true,
-                SurfaceTarget::Provider { provider_id } => is_supported_provider_id(&provider_id),
-                _ => false,
-            }
-        }
     }
 }
 
@@ -750,17 +726,17 @@ mod tests {
     }
 
     #[test]
-    fn parse_provider_popout_proof_target() {
+    fn removed_popout_proof_target_is_ignored() {
+        // The internal PopOut dashboard was removed; any proof env that names
+        // it must be treated like an unknown surface.
+        with_proof_mode_env(Some("popOut"), || {
+            assert!(ProofConfig::from_env().is_none());
+        });
         with_proof_mode_env(Some("popOut:provider:codex"), || {
-            let cfg = ProofConfig::from_env().unwrap();
-            assert_eq!(cfg.target_surface, "popOut");
-            assert_eq!(cfg.target_payload.as_deref(), Some("provider:codex"));
-            assert_eq!(
-                cfg.surface_target(),
-                SurfaceTarget::Provider {
-                    provider_id: "codex".into()
-                }
-            );
+            assert!(ProofConfig::from_env().is_none());
+        });
+        with_proof_mode_env(Some("popOut:provider:not-a-provider"), || {
+            assert!(ProofConfig::from_env().is_none());
         });
     }
 
@@ -806,23 +782,11 @@ mod tests {
 
     #[test]
     fn invalid_provider_target_returns_none() {
-        with_proof_mode_env(Some("popOut:provider:not-a-provider"), || {
-            assert!(ProofConfig::from_env().is_none());
-        });
-    }
-
-    #[test]
-    fn pop_out_surface() {
-        with_proof_mode_env(Some("popOut"), || {
-            let cfg = ProofConfig::from_env().unwrap();
-            assert_eq!(cfg.surface_mode(), SurfaceMode::PopOut);
-            assert_eq!(cfg.surface_target(), SurfaceTarget::Dashboard);
-        });
-    }
-
-    #[test]
-    fn parse_proof_command_rejects_unknown_provider() {
-        assert!(ProofCommand::parse("open-provider:not-a-provider").is_none());
+        // "open-provider:" payloads still go through ProofCommand validation.
+        assert!(
+            ProofCommand::parse("open-provider:not-a-provider").is_none(),
+            "unknown provider must be rejected by the proof command parser"
+        );
     }
 
     #[test]
@@ -858,7 +822,6 @@ mod tests {
         let (_, items) = native_menu_snapshot_for_settings(&providers, &settings, "tray");
 
         assert!(items.iter().any(|item| item == "すべて更新"));
-        assert!(items.iter().any(|item| item == "ダッシュボードを開く"));
         assert!(!items.iter().any(|item| item == "Refresh All"));
     }
 
@@ -894,8 +857,10 @@ mod tests {
     #[test]
     fn native_menu_override_normalizes_visible_surface_state() {
         let (mode, target, window_rect) = resolve_surface_state(
-            SurfaceMode::PopOut,
-            SurfaceTarget::Dashboard,
+            SurfaceMode::Settings,
+            SurfaceTarget::Settings {
+                tab: "about".into(),
+            },
             Some(ProofRect {
                 x: 10,
                 y: 20,
