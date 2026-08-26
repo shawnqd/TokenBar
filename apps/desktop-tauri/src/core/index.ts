@@ -4,3 +4,8 @@ export * from "./fromBridge";
 export * from "./projection";
 export * from "./snapshot";
 export * from "./usageStore";
+export * from "./refreshCoordinator";
+export * from "./enrichmentScheduler";
+export * from "./surfaceRegistry";
+export * from "./actionDispatcher";
+export * from "./useCoreBridge";
