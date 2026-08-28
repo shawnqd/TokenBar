@@ -41,6 +41,8 @@ import type {
   ProviderUsageSnapshot,
   SettingsSnapshot,
 } from "../types/bridge";
+import { __clearFloatBarStoreForTest } from "./floatBarStore";
+import { TASKBAR_PROVIDER_AUTO } from "../types/bridge";
 
 function rateWindow(
   used: number,
@@ -53,8 +55,8 @@ function rateWindow(
   return {
     usedPercent: used,
     remainingPercent: 100 - used,
-kind: null,
-        windowMinutes: null,
+    kind: null,
+    windowMinutes: null,
     resetsAt: opts.resetsAt ?? null,
     resetDescription: opts.resetDescription ?? null,
     isExhausted: opts.exhausted ?? false,
@@ -133,6 +135,7 @@ function settings(overrides: Partial<SettingsSnapshot> = {}): SettingsSnapshot {
     floatBarStyle: "floating",
     floatBarClickThrough: false,
     floatBarProviderIds: [],
+    floatBarEntries: undefined as any,
     floatBarDarkText: false,
     floatBarShowCost: false,
     floatBarShowResetInline: false,
@@ -184,6 +187,7 @@ function renderFloatBar(state: BootstrapState) {
 describe("FloatBar", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    __clearFloatBarStoreForTest();
     tauriMocks.refreshProviders.mockResolvedValue(undefined);
     tauriMocks.refreshProvidersIfStale.mockResolvedValue(undefined);
     tauriMocks.getProviderLocalUsageSummary.mockResolvedValue(null);
@@ -221,7 +225,6 @@ describe("FloatBar", () => {
     const titles = Array.from(container.querySelectorAll(".floatbar__pill")).map(
       (el) => el.getAttribute("title") ?? "",
     );
-    // Highest used (codex, 75%) shows first; display follows showAsUsed.
     expect(titles[0]).toMatch(/Codex: 75% used/);
     expect(titles[1]).toMatch(/Claude: 20% used/);
   });
@@ -270,7 +273,6 @@ describe("FloatBar", () => {
     });
   });
 
-  /** The floating bar must not follow the dashboard's or the taskbar's choice. */
   it("ignores the dashboard and taskbar show-as-used settings", async () => {
     tauriMocks.getCachedProviders.mockResolvedValue([
       snapshot("claude", "Claude", 20),
@@ -279,7 +281,7 @@ describe("FloatBar", () => {
       floatBarShowAsUsed: true,
       dashboardShowAsUsed: false,
       taskbarShowAsUsed: false,
-    taskbarTooltipEntries: [],
+      taskbarTooltipEntries: [],
     };
     tauriMocks.getSettingsSnapshot.mockResolvedValue(settings(overrides));
 
@@ -295,9 +297,6 @@ describe("FloatBar", () => {
   });
 
   it("applies warning tone when remaining drops below the high threshold", async () => {
-    // highUsageThreshold = 70 → high-remaining cutoff = 30%.
-    // claude at 80% used → 20% remaining → critical (also below crit cutoff 10).
-    // Use 75% used → 25% remaining → warn (between 10 and 30).
     tauriMocks.getCachedProviders.mockResolvedValue([snapshot("claude", "Claude", 75)]);
     tauriMocks.getSettingsSnapshot.mockResolvedValue(settings());
 
@@ -319,7 +318,7 @@ describe("FloatBar", () => {
     });
   });
 
-  it("filters to the floatBarProviderIds allowlist when non-empty", async () => {
+  it("filters to the floatBarProviderIds allowlist when non-empty (legacy migration)", async () => {
     tauriMocks.getCachedProviders.mockResolvedValue([
       snapshot("claude", "Claude", 30),
       snapshot("codex", "Codex", 50),
@@ -335,6 +334,77 @@ describe("FloatBar", () => {
       const pills = container.querySelectorAll(".floatbar__pill");
       expect(pills.length).toBe(1);
       expect(pills[0].getAttribute("title")).toMatch(/Codex/);
+    });
+  });
+
+  it("renders only entries listed in floatBarEntries (provider+window) – runtime consumes entries", async () => {
+    tauriMocks.getCachedProviders.mockResolvedValue([
+      snapshot("claude", "Claude", 30),
+      snapshot("codex", "Codex", 50),
+      snapshot("cursor", "Cursor", 10),
+    ]);
+    const withEntries = {
+      floatBarEntries: [
+        { providerId: "codex", window: "primary" as const },
+        { providerId: "claude", window: "primary" as const },
+      ],
+    };
+    tauriMocks.getSettingsSnapshot.mockResolvedValue(settings(withEntries));
+
+    const { container } = renderFloatBar(bootstrap(withEntries));
+    await waitFor(() => {
+      const pills = container.querySelectorAll(".floatbar__pill");
+      expect(pills.length).toBe(2);
+      const titles = Array.from(pills).map((el) => el.getAttribute("title") ?? "");
+      expect(titles.join(" ")).toMatch(/Codex/);
+      expect(titles.join(" ")).toMatch(/Claude/);
+      expect(titles.join(" ")).not.toMatch(/Cursor/);
+    });
+  });
+
+  it("prefers floatBarEntries over legacy ids when both present", async () => {
+    tauriMocks.getCachedProviders.mockResolvedValue([
+      snapshot("claude", "Claude", 30),
+      snapshot("codex", "Codex", 50),
+    ]);
+    const both = {
+      floatBarProviderIds: ["claude"],
+      floatBarEntries: [{ providerId: "codex", window: "primary" as const }],
+    };
+    tauriMocks.getSettingsSnapshot.mockResolvedValue(settings(both));
+
+    const { container } = renderFloatBar(bootstrap(both));
+    await waitFor(() => {
+      const pills = container.querySelectorAll(".floatbar__pill");
+      expect(pills.length).toBe(1);
+      expect(pills[0].getAttribute("title")).toMatch(/Codex/);
+      expect(pills[0].getAttribute("title")).not.toMatch(/Claude/);
+    });
+  });
+
+  it("expands auto entries positionally to enabled providers", async () => {
+    tauriMocks.getCachedProviders.mockResolvedValue([
+      snapshot("claude", "Claude", 30),
+      snapshot("codex", "Codex", 50),
+      snapshot("cursor", "Cursor", 10),
+    ]);
+    const withAuto = {
+      enabledProviders: ["claude", "codex", "cursor"],
+      floatBarEntries: [
+        { providerId: TASKBAR_PROVIDER_AUTO, window: "session" as const },
+        { providerId: TASKBAR_PROVIDER_AUTO, window: "weekly" as const },
+      ],
+    };
+    tauriMocks.getSettingsSnapshot.mockResolvedValue(settings(withAuto));
+
+    const { container } = renderFloatBar(bootstrap(withAuto));
+    await waitFor(() => {
+      const pills = container.querySelectorAll(".floatbar__pill");
+      // auto session -> claude, auto weekly -> codex (positional)
+      expect(pills.length).toBe(2);
+      const titles = Array.from(pills).map((el) => el.getAttribute("title") ?? "");
+      expect(titles.join(" ")).toMatch(/Claude/);
+      expect(titles.join(" ")).toMatch(/Codex/);
     });
   });
 
@@ -436,9 +506,6 @@ describe("FloatBar", () => {
     });
   });
 
-  /// Providers disagree about which slot holds which cycle, so a named window
-  /// has to be matched by declared LENGTH. Claude keeps its weekly quota in
-  /// `secondary`; asking for "weekly" must not return the 5-hour `primary`.
   it("shows a labelled reset per configured window, matched by cycle length", async () => {
     const sessionReset = new Date(Date.now() + 2 * 60 * 60_000).toISOString();
     const weeklyReset = new Date(Date.now() + 48 * 60 * 60_000).toISOString();
@@ -464,8 +531,6 @@ describe("FloatBar", () => {
     await waitFor(() => {
       const resets = container.querySelectorAll(".floatbar__reset");
       expect(resets).toHaveLength(2);
-      // Two deadlines side by side are meaningless unless each is named. The
-      // locale harness echoes these keys back rather than the display strings.
       expect(resets[0].textContent).toContain("TaskbarWindowSession");
       expect(resets[0].textContent).toMatch(/1h 59m|2h/);
       expect(resets[1].textContent).toContain("TaskbarWindowWeekly");
@@ -473,8 +538,6 @@ describe("FloatBar", () => {
     });
   });
 
-  /// A provider that does not publish the requested cycle must show nothing
-  /// for it, never somebody else's window standing in.
   it("prints nothing for a window the provider does not publish", async () => {
     const provider = snapshot("codex", "Codex", 20, {
       resetsAt: new Date(Date.now() + 3 * 60 * 60_000).toISOString(),
@@ -496,8 +559,6 @@ describe("FloatBar", () => {
     expect(container.querySelectorAll(".floatbar__reset")).toHaveLength(0);
   });
 
-  /// `primary` and a named cycle routinely resolve to the same window — Codex's
-  /// primary IS its weekly — and printing it twice would read as two deadlines.
   it("does not print the same window twice", async () => {
     const provider = snapshot("codex", "Codex", 20, {
       resetsAt: new Date(Date.now() + 24 * 60 * 60_000).toISOString(),
@@ -519,42 +580,30 @@ describe("FloatBar", () => {
     expect(container.querySelectorAll(".floatbar__reset")).toHaveLength(1);
   });
 
-  it("polls refreshProvidersIfStale on the configured interval", async () => {
+  it("does not poll refreshProvidersIfStale on interval – data refresh is via core store, UI tick remains", async () => {
     vi.useFakeTimers();
     try {
       tauriMocks.getCachedProviders.mockResolvedValue([]);
       tauriMocks.getSettingsSnapshot.mockResolvedValue(settings());
-      // 60s minimum is enforced in FloatBar.tsx; use the floor here.
       await act(async () => {
         renderFloatBar(bootstrap({ refreshIntervalSecs: 60 }));
       });
 
-      // Initial tick fires synchronously on mount; useProviders is passive here
-      // so the floatbar does not double-request stale refreshes at startup.
-      await vi.waitFor(() => {
-        expect(tauriMocks.refreshProvidersIfStale).toHaveBeenCalledTimes(1);
+      // FloatBar should not call refreshProvidersIfStale on mount; it uses core store sync instead
+      // Allow microtasks to flush
+      await act(async () => {
+        await Promise.resolve();
       });
-      const initialCalls = tauriMocks.refreshProvidersIfStale.mock.calls.length;
+      expect(tauriMocks.refreshProvidersIfStale).not.toHaveBeenCalled();
 
-      // Advance the timer past the 60-second interval — the floatbar tick
-      // should fire again.
+      // Advance 60s – UI tick should fire but not trigger refresh
       await vi.advanceTimersByTimeAsync(60_000);
-      expect(tauriMocks.refreshProvidersIfStale.mock.calls.length).toBeGreaterThan(
-        initialCalls,
-      );
+      expect(tauriMocks.refreshProvidersIfStale).not.toHaveBeenCalled();
     } finally {
       vi.useRealTimers();
     }
   });
 
-  /**
-   * The floating bar's two "用量显示" switches, end to end.
-   *
-   * `floatBarShowAsUsed` and `floatBarResetTimeRelative` were reported as
-   * having no effect on the bar. Both were covered only at their ends — Rust
-   * proves the patch persists, `quotaDisplay.test.ts` proves the helpers branch
-   * — with nothing asserting a rendered pill follows them.
-   */
   describe("its own usage-display switches", () => {
     const RESETS_AT = new Date(Date.now() + 2 * 3600_000 + 30 * 60_000).toISOString();
 
@@ -574,6 +623,7 @@ describe("FloatBar", () => {
       });
       const title = container.querySelector(".floatbar__pill")!.getAttribute("title") ?? "";
       unmount();
+      __clearFloatBarStoreForTest();
       return title;
     }
 
@@ -591,15 +641,6 @@ describe("FloatBar", () => {
       expect(absolute).not.toContain("Resets in");
     });
 
-    /**
-     * Why the switch was reported as dead.
-     *
-     * The bar renders a reset chip only when `floatBarShowResetInline` is on,
-     * and that lives in a different section of the same page. With it off — the
-     * default — the reset-time mode reaches the hover tooltip and nothing else,
-     * which on screen is indistinguishable from a broken toggle. FloatBarTab
-     * now says so in the field description.
-     */
     it("prints no reset chip at all until inline resets are switched on", async () => {
       const withChips = async (showResetInline: boolean) => {
         const effective = settings({ floatBarShowResetInline: showResetInline });
@@ -617,6 +658,7 @@ describe("FloatBar", () => {
         });
         const count = container.querySelectorAll(".floatbar__reset").length;
         unmount();
+        __clearFloatBarStoreForTest();
         return count;
       };
 
@@ -624,7 +666,6 @@ describe("FloatBar", () => {
       expect(await withChips(true)).toBe(1);
     });
 
-    /// The dashboard owns a separate copy; the bar must ignore it entirely.
     it("ignores the dashboard's copy of the same two choices", async () => {
       const title = await pillTitle({
         floatBarShowAsUsed: true,

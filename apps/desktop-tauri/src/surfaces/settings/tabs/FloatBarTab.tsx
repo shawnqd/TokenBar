@@ -9,7 +9,7 @@ import type { TaskbarEntry, TaskbarWindowKind } from "../../../types/bridge";
 import type { TabProps } from "../../Settings";
 import BinaryChoiceField from "../BinaryChoiceField";
 import {
-  floatBarEntriesFromIds,
+  resolveFloatBarEntries,
   floatBarIdsFromEntries,
 } from "../floatBarEntries";
 import PreviewFrame from "../PreviewFrame";
@@ -42,13 +42,13 @@ const FLOAT_BAR_CONTENT_DEFAULTS = {
   floatBarShowAsUsed: true,
   floatBarResetTimeRelative: true,
   floatBarProviderIds: [] as string[],
+  floatBarEntries: [] as TaskbarEntry[],
 };
 
 export default function FloatBarTab({ settings, set, saving }: TabProps) {
   const { t } = useLocale();
-  const persistedIds = settings.floatBarProviderIds ?? [];
   const [entries, setEntries] = useState<TaskbarEntry[]>(() =>
-    floatBarEntriesFromIds(persistedIds),
+    resolveFloatBarEntries(settings),
   );
   const [availability, setAvailability] = useState<Record<
     string,
@@ -56,8 +56,8 @@ export default function FloatBarTab({ settings, set, saving }: TabProps) {
   > | null>(null);
 
   useEffect(() => {
-    setEntries(floatBarEntriesFromIds(settings.floatBarProviderIds ?? []));
-  }, [settings.floatBarProviderIds]);
+    setEntries(resolveFloatBarEntries(settings));
+  }, [settings.floatBarEntries, settings.floatBarProviderIds]);
 
   useEffect(() => {
     let cancelled = false;
@@ -77,7 +77,6 @@ export default function FloatBarTab({ settings, set, saving }: TabProps) {
     () => [
       {
         id: TASKBAR_PROVIDER_AUTO,
-        // TODO(lane-s-i18n): 跟随已启用
         label: "跟随已启用",
       },
       ...(settings.enabledProviders ?? []).map((id) => ({ id, label: id })),
@@ -98,7 +97,8 @@ export default function FloatBarTab({ settings, set, saving }: TabProps) {
 
   const commitEntries = (next: TaskbarEntry[]) => {
     setEntries(next);
-    set({ floatBarProviderIds: floatBarIdsFromEntries(next) });
+    // Runtime consumes floatBarEntries; legacy ids kept for migration
+    set({ floatBarEntries: next, floatBarProviderIds: floatBarIdsFromEntries(next) });
   };
 
   return (
@@ -115,7 +115,8 @@ export default function FloatBarTab({ settings, set, saving }: TabProps) {
                 className="settings-section-heading__action"
                 disabled={saving}
                 onClick={() => {
-                  setEntries(floatBarEntriesFromIds([]));
+                  const resetEntries = resolveFloatBarEntries({ floatBarEntries: [], floatBarProviderIds: [] } as any);
+                  setEntries(resetEntries);
                   set(FLOAT_BAR_CONTENT_DEFAULTS);
                 }}
               >

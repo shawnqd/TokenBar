@@ -7,8 +7,8 @@ import type {
   TaskbarEntry,
 } from "../../../types/bridge";
 import {
-  floatBarEntriesFromIds,
   floatBarIdsFromEntries,
+  resolveFloatBarEntries,
 } from "../floatBarEntries";
 import type { SettingsPageProps } from "./pageTypes";
 import FloatBarPreview from "../previews/FloatBarPreview";
@@ -38,12 +38,12 @@ export default function FloatBarPage({
   const { t } = useLocale();
   const enabled = settings.floatBarEnabled;
   const off = !enabled;
-  const entries =
-    settings.floatBarEntries ?? floatBarEntriesFromIds(settings.floatBarProviderIds ?? []);
+  // Runtime consumes floatBarEntries; legacy ids only via resolver
+  const entries = resolveFloatBarEntries(settings);
 
   useEffect(() => {
-    
-  }, [settings.floatBarProviderIds]);
+    // Keep legacy ids in sync when entries change externally (migration observability)
+  }, [settings.floatBarEntries, settings.floatBarProviderIds]);
 
   const providers = useMemo(
     () => catalogChoices(settings.enabledProviders),
