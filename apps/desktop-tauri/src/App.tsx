@@ -15,6 +15,7 @@ import { useTheme } from "./hooks/useTheme";
 import TrayPanel from "./surfaces/TrayPanel";
 import { FLOATBAR_WINDOW_LABEL } from "./floatbar/api";
 import { LocaleProvider } from "./i18n/LocaleProvider";
+import { ensureAppRuntimeBooted } from "./appRuntime";
 import type { BootstrapState, ThemePreference } from "./types/bridge";
 import type { SurfaceSnapshot } from "./hooks/useSurfaceSnapshot";
 
@@ -59,6 +60,19 @@ export default function App() {
 
 function AppInner() {
   const surface = useSurfaceSnapshot();
+  const [core, setCore] = useState<import("./appRuntime").AppRuntime | null>(null);
+
+  useEffect(() => {
+    let disposed = false;
+    void ensureAppRuntimeBooted()
+      .then((r) => {
+        if (!disposed) setCore(r);
+      })
+      .catch(() => {});
+    return () => {
+      disposed = true;
+    };
+  }, []);
   const [state, setState] = useState<BootstrapState | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [themePreference, setThemePreference] = useState<ThemePreference>("dark");
@@ -182,7 +196,7 @@ function AppInner() {
 
   // Detached settings window — render Settings directly, skip SurfaceRouter.
   if (isSettingsWindow()) {
-    return <DetachedSettingsApp state={state} />;
+    return <DetachedSettingsApp state={state} coreStore={core?.store ?? null} dispatcher={core?.dispatcher ?? null} />;
   }
 
   // Detached floating-bar window — render the FloatBar surface directly.
@@ -232,7 +246,15 @@ function SurfaceRouter({
   }
 }
 
-function DetachedSettingsApp({ state }: { state: BootstrapState }) {
+function DetachedSettingsApp({
+  state,
+  coreStore,
+  dispatcher,
+}: {
+  state: BootstrapState;
+  coreStore?: import("./core/usageStore").UsageStore | null;
+  dispatcher?: import("./core/actionDispatcher").ActionDispatcher | null;
+}) {
   const [tab, setTab] = useState(initialSettingsTab);
 
   useEffect(() => {
@@ -248,7 +270,7 @@ function DetachedSettingsApp({ state }: { state: BootstrapState }) {
 
   return (
     <Suspense fallback={<SurfaceFallback />}>
-      <DetachedSettingsReadyContent state={state} tab={tab} />
+      <DetachedSettingsReadyContent state={state} tab={tab} coreStore={coreStore} dispatcher={dispatcher} />
     </Suspense>
   );
 }
@@ -256,9 +278,13 @@ function DetachedSettingsApp({ state }: { state: BootstrapState }) {
 function DetachedSettingsReadyContent({
   state,
   tab,
+  coreStore,
+  dispatcher,
 }: {
   state: BootstrapState;
   tab: string;
+  coreStore?: import("./core/usageStore").UsageStore | null;
+  dispatcher?: import("./core/actionDispatcher").ActionDispatcher | null;
 }) {
   const frameRef = useRef<HTMLElement>(null);
   const closingRef = useRef(false);
@@ -354,6 +380,8 @@ function DetachedSettingsReadyContent({
         initialTab={tab}
         onRequestClose={requestClose}
         windowMotion={windowMotion}
+        coreStore={coreStore}
+        dispatcher={dispatcher}
       />
     </main>
   );

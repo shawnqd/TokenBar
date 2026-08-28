@@ -10,7 +10,7 @@
     "check-locale": "node scripts/check-locale-drift.mjs",
     "check-provider-marks": "node scripts/check-provider-marks.mjs",
     "check-chart-providers": "node scripts/check-chart-providers.mjs",
-    "prebuild": "pnpm run check-locale && pnpm run check-provider-marks && pnpm run check-chart-providers",
+    "prebuild": "pnpm run check-locale && pnpm run check-provider-marks && pnpm run check-chart-providers && pnpm run check:core-consumption",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
     "test": "vitest run",
@@ -18,7 +18,8 @@
     "tauri:dev": "tauri dev",
     "tauri:build": "tauri build --no-bundle",
     "tauri:build:windows-cross": "../../scripts/macos-windows-cross-build.sh",
-    "tauri:build:debug": "tauri build --debug --no-bundle"
+    "tauri:build:debug": "tauri build --debug --no-bundle",
+    "check:core-consumption": "node scripts/check-core-consumption.mjs"
   },
   "dependencies": {
     "@tauri-apps/api": "2.10.1",

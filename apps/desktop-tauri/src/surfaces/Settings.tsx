@@ -9,6 +9,8 @@ import { useSettings } from "../hooks/useSettings";
 import { useSurfaceTarget } from "../hooks/useSurfaceMode";
 import { useLocale } from "../hooks/useLocale";
 import { closeSettingsWindow } from "../lib/tauri";
+import type { UsageStore } from "../core/usageStore";
+import type { ActionDispatcher } from "../core/actionDispatcher";
 import SettingsNav from "./settings/SettingsNav";
 import SettingsPageHead from "./settings/SettingsPageHead";
 import SaveToast, { type SaveToastState } from "./settings/SaveToast";
@@ -54,11 +56,15 @@ export default function Settings({
   initialTab: propTab,
   onRequestClose,
   windowMotion,
+  coreStore,
+  dispatcher,
 }: {
   state: BootstrapState;
   initialTab?: string;
   onRequestClose?: () => void;
   windowMotion?: "idle" | "visible" | "closing";
+  coreStore?: UsageStore | null;
+  dispatcher?: ActionDispatcher | null;
 }) {
   const { settings, saving, error, update } = useSettings(state.settings);
   const { t } = useLocale();
@@ -171,7 +177,7 @@ export default function Settings({
   );
 
   const copy = SETTINGS_PAGE_COPY[activeTab];
-  const tabProps: TabProps = { settings, set, saving };
+  const tabProps: TabProps = { settings, set, saving, coreStore, dispatcher };
   const isProviders = activeTab === "providers";
 
   return (
@@ -266,4 +272,6 @@ export interface TabProps {
   settings: BootstrapState["settings"];
   set: (p: SettingsUpdate) => void;
   saving: boolean;
+  coreStore?: UsageStore | null;
+  dispatcher?: ActionDispatcher | null;
 }
