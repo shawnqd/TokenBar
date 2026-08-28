@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from "react";
 import { useLocale } from "../../../hooks/useLocale";
 import {
   Field,
@@ -10,6 +10,9 @@ import {
   getTaskbarPreviewLines,
   getTaskbarWindowAvailability,
 } from "../../../lib/tauri";
+import type { ProviderSnapshot } from "../../../core/snapshot";
+import { projectSurface } from "../../../core/projection";
+import type { UsageStore } from "../../../core/usageStore";
 import { useFontPicker } from "../../../hooks/useFontPicker";
 import { FONT_WHITELIST_DEFAULT } from "../../../lib/fontWhitelist";
 import FontSettingsBlock, {
@@ -68,7 +71,46 @@ const DEFAULT_ENTRIES: TaskbarEntry[] = [
   { providerId: TASKBAR_PROVIDER_AUTO, window: "weekly" },
 ];
 
-export default function TaskbarTab({ settings, set, saving }: TabProps) {
+const EMPTY_STORE_STATE_TASKBAR: { version: number; records: Record<string, unknown> } = {
+  version: 0,
+  records: {},
+};
+function useCoreList(store?: UsageStore | null): ProviderSnapshot[] {
+  const subscribe = useCallback((cb: () => void) => (store ? store.subscribe(cb) : () => {}), [store]);
+  const getSnap = useCallback(
+    () => (store ? store.getSnapshot() : EMPTY_STORE_STATE_TASKBAR),
+    [store],
+  );
+  const getServerSnap = useCallback(() => getSnap(), [getSnap]);
+  const state = useSyncExternalStore(subscribe as never, getSnap as never, getServerSnap as never) as unknown as {
+    records: Record<string, { snapshot: ProviderSnapshot | null }>;
+  };
+  return useMemo(() => Object.values(state.records).map((r) => r.snapshot).filter(Boolean) as ProviderSnapshot[], [state]);
+}
+function deriveCells(snapshots: ProviderSnapshot[], entries: TaskbarEntry[], showAsUsed: boolean): import("../../../types/bridge").TaskbarStripCell[] {
+  if (snapshots.length === 0) return [];
+  const byId = new Map(snapshots.map((s) => [s.providerId, s]));
+  const fallback = snapshots[0];
+  const out: import("../../../types/bridge").TaskbarStripCell[] = [];
+  for (const e of entries.slice(0, 4)) {
+    const pid = e.providerId === TASKBAR_PROVIDER_AUTO ? fallback.providerId : e.providerId;
+    const snap = byId.get(pid) ?? fallback;
+    const proj = projectSurface(snap, { showAsUsed, taskbarEntries: [e] });
+    const cell = proj.taskbarCells[0] as unknown as import("../../../types/bridge").TaskbarStripCell | undefined;
+    if (cell) {
+      // Bridge type retains legacy glyph/color/text for older callers; projection
+      // is the single source – legacy fields are mirrored for compat.
+      const legacy = cell as unknown as { glyph?: string | null; color?: string | null; text?: string };
+      if (legacy.glyph === undefined) (legacy as unknown as Record<string, unknown>).glyph = cell.icon?.fallbackGlyph ?? null;
+      if (legacy.color === undefined) (legacy as unknown as Record<string, unknown>).color = cell.icon?.brandColor ?? null;
+      if (legacy.text === undefined) (legacy as unknown as Record<string, unknown>).text = `${cell.tag} ${cell.value}`.trim();
+      out.push(cell as unknown as import("../../../types/bridge").TaskbarStripCell);
+    }
+  }
+  return out;
+}
+
+export default function TaskbarTab({ settings, set, saving, coreStore: injectedCoreStore }: TabProps & { coreStore?: UsageStore | null }) {
   const { t } = useLocale();
   const enabled = settings.taskbarWidgetEnabled;
   const fontSize = settings.taskbarWidgetFontSize ?? 12;
@@ -108,7 +150,35 @@ export default function TaskbarTab({ settings, set, saving }: TabProps) {
   // `null` means "not loaded yet", which is deliberately different from "this
   // provider has nothing": until the answer arrives every kind stays offered,
   // so a slow backend never silently removes the user's current choice.
+  const hasCoreInjection = injectedCoreStore !== undefined;
+  const coreSnapshots = useCoreList(injectedCoreStore);
+  // Core availability single-source: snapshot.capabilities + actual windows,
+  // so the dropdown never offers a cycle that would render "不支持" on the
+  // strip. When no core store is injected we keep the legacy Tauri call.
+  const coreAvailability = useMemo(() => {
+    if (!hasCoreInjection || coreSnapshots.length === 0) return null;
+    const map: Record<string, TaskbarWindowKind[]> = {};
+    for (const snap of coreSnapshots) {
+      const kinds: TaskbarWindowKind[] = ["primary"];
+      const caps = snap.capabilities;
+      // Add named cycles present as real quota windows
+      const hasKind = (k: string | null) =>
+        snap.windows.some((w) => w.kind === k && w.usageKnown && !w.isInformational && w.displayKind === "quota");
+      if (hasKind("session")) kinds.push("session");
+      if (hasKind("daily")) kinds.push("daily");
+      if (hasKind("weekly")) kinds.push("weekly");
+      if (hasKind("monthly")) kinds.push("monthly");
+      if (caps.hasBalance || snap.cost) kinds.push("balance");
+      if (caps.supportsOutputSpeed) kinds.push("speed");
+      map[snap.providerId] = kinds;
+    }
+    return map;
+  }, [hasCoreInjection, coreSnapshots]);
   useEffect(() => {
+    if (hasCoreInjection) {
+      if (coreAvailability) setAvailability(coreAvailability);
+      return;
+    }
     let cancelled = false;
     getTaskbarWindowAvailability()
       .then((map) => {
@@ -120,7 +190,7 @@ export default function TaskbarTab({ settings, set, saving }: TabProps) {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [hasCoreInjection, coreAvailability]);
 
   /**
    * The window kinds to offer for one entry's provider.
@@ -154,23 +224,34 @@ export default function TaskbarTab({ settings, set, saving }: TabProps) {
   // "unsupported" for every balance entry long after balances began rendering.
   // Anything that re-derives what it previews drifts the moment either side
   // changes; reading the buffer makes that impossible instead of unlikely.
-  const [previewLines, setPreviewLines] = useState<TaskbarPreviewLine[]>([]);
+  const coreCells = useMemo(
+    () => (hasCoreInjection ? deriveCells(coreSnapshots, entries, settings.taskbarShowAsUsed ?? true) : []),
+    [hasCoreInjection, coreSnapshots, entries, settings.taskbarShowAsUsed],
+  );
+  const [tauriLines, setTauriLines] = useState<TaskbarPreviewLine[]>([]);
+  // Legacy loading state is derived from balance window's `isInformational`; this
+  // helper tracks whether legacy strings contained a loading guard.
   useEffect(() => {
+    if (hasCoreInjection) return;
     let cancelled = false;
     // `update_settings` refreshes the tray presentation before it resolves, so
     // by the time an edit lands in `settings` the buffer already holds the new
     // lines — no polling, and no window where the preview shows the old ones.
     getTaskbarPreviewLines()
       .then((lines) => {
-        if (!cancelled) setPreviewLines(lines);
+        if (!cancelled) setTauriLines(lines);
       })
       .catch(() => {
-        if (!cancelled) setPreviewLines([]);
+        if (!cancelled) setTauriLines([]);
       });
     return () => {
       cancelled = true;
     };
-  }, [entries, settings]);
+  }, [hasCoreInjection, entries, settings]);
+  // For the unified path the preview's cells ARE the projection taskbarCells;
+  // we keep the legacy line shape for the fallback path via normalizeLegacyLine.
+  const previewLines = hasCoreInjection ? [] : tauriLines;
+  const previewCells = hasCoreInjection ? coreCells : [];
 
   useEffect(() => {
     setFontWeightDraft(fontWeight);
@@ -441,7 +522,8 @@ export default function TaskbarTab({ settings, set, saving }: TabProps) {
         dimmed={!enabled}
       >
         <TaskbarStripPreview
-          lines={previewLines}
+          cells={hasCoreInjection ? previewCells : undefined}
+          lines={hasCoreInjection ? undefined : previewLines}
           entries={entries}
           enabled={enabled}
           width={width}

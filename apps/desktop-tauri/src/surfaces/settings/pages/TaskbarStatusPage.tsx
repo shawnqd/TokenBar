@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, useSyncExternalStore, useCallback } from "react";
 import { useFontPicker } from "../../../hooks/useFontPicker";
 import { useLocale } from "../../../hooks/useLocale";
 import { getTaskbarPreviewLines } from "../../../lib/tauri";
@@ -16,17 +16,75 @@ import { catalogChoices } from "./htmlFixture";
 import { V5EntryList } from "./V5EntryList";
 import { V5Field, V5Num, V5Section, V5Seg, V5Select, V5Toggle } from "./v5Controls";
 import FontInstallDialog from "../FontInstallDialog";
+import type { ProviderSnapshot } from "../../../core/snapshot";
+import { projectSurface } from "../../../core/projection";
+import type { UsageStore } from "../../../core/usageStore";
 
 const DEFAULT_ENTRIES: TaskbarEntry[] = [
   { providerId: TASKBAR_PROVIDER_AUTO, window: "session" },
   { providerId: TASKBAR_PROVIDER_AUTO, window: "weekly" },
 ];
 
+const EMPTY_STORE_STATE_TASKBAR_PAGE: { version: number; records: Record<string, unknown> } = {
+  version: 0,
+  records: {},
+};
+function useCoreSnapshotListForTaskbar(store?: UsageStore | null): ProviderSnapshot[] {
+  const subscribe = useCallback(
+    (cb: () => void) => (store ? store.subscribe(cb) : () => {}),
+    [store],
+  );
+  const getSnapshot = useCallback(
+    () => (store ? store.getSnapshot() : EMPTY_STORE_STATE_TASKBAR_PAGE),
+    [store],
+  );
+  const getServerSnapshot = useCallback(() => getSnapshot(), [getSnapshot]);
+  const state = useSyncExternalStore(
+    subscribe as unknown as Parameters<typeof useSyncExternalStore>[0],
+    getSnapshot as never,
+    getServerSnapshot as never,
+  ) as unknown as { records: Record<string, { snapshot: ProviderSnapshot | null }> };
+  return useMemo(
+    () => Object.values(state.records).map((r) => r.snapshot).filter(Boolean) as ProviderSnapshot[],
+    [state],
+  );
+}
+
+function deriveTaskbarCellsFromSnapshots(
+  snapshots: ProviderSnapshot[],
+  entries: TaskbarEntry[],
+  showAsUsed: boolean,
+): TaskbarStripCell[] {
+  if (snapshots.length === 0 || entries.length === 0) return [];
+  const byId = new Map(snapshots.map((s) => [s.providerId, s]));
+  const fallback = snapshots[0];
+  const cells: TaskbarStripCell[] = [];
+  for (const entry of entries.slice(0, 4)) {
+    const pid = entry.providerId === TASKBAR_PROVIDER_AUTO ? fallback.providerId : entry.providerId;
+    const snap = byId.get(pid) ?? fallback;
+    const proj = projectSurface(snap, {
+      showAsUsed,
+      taskbarEntries: [entry],
+    });
+    // projection.taskbarCells is ordered by entries; single entry → single cell
+    const cell = proj.taskbarCells[0] as unknown as TaskbarStripCell | undefined;
+    if (cell) {
+      const legacy = cell as unknown as Record<string, unknown>;
+      if (legacy.glyph === undefined) legacy.glyph = (cell as unknown as { icon?: { fallbackGlyph: string | null } }).icon?.fallbackGlyph ?? null;
+      if (legacy.color === undefined) legacy.color = (cell as unknown as { icon?: { brandColor: string | null } }).icon?.brandColor ?? null;
+      if (legacy.text === undefined) legacy.text = `${(cell as unknown as { tag: string }).tag} ${(cell as unknown as { value: string }).value}`.trim();
+      cells.push(cell as unknown as TaskbarStripCell);
+    }
+  }
+  return cells;
+}
+
 export default function TaskbarStatusPage({
   settings,
   set,
   saving,
-}: SettingsPageProps) {
+  coreStore: injectedCoreStore,
+}: SettingsPageProps & { coreStore?: UsageStore | null }) {
   const { t } = useLocale();
   const enabled = settings.taskbarWidgetEnabled;
   const off = !enabled;
@@ -35,7 +93,6 @@ export default function TaskbarStatusPage({
   const [weightDraft, setWeightDraft] = useState(
     settings.taskbarWidgetFontWeight ?? 400,
   );
-  const [previewLines, setPreviewLines] = useState<TaskbarStripCell[]>([]);
   const entries = settings.taskbarWidgetEntries ?? DEFAULT_ENTRIES;
   const width = settings.taskbarWidgetWidth ?? 136;
   const currentFamily = settings.taskbarWidgetFontFamily || "";
@@ -51,19 +108,28 @@ export default function TaskbarStatusPage({
     confirmInstalled,
   } = useFontPicker(currentFamily);
 
+  const hasCoreInjection = injectedCoreStore !== undefined;
+  const coreSnapshots = useCoreSnapshotListForTaskbar(injectedCoreStore);
+  const coreCells = useMemo(
+    () => (hasCoreInjection ? deriveTaskbarCellsFromSnapshots(coreSnapshots, entries, settings.taskbarShowAsUsed ?? true) : []),
+    [hasCoreInjection, coreSnapshots, entries, settings.taskbarShowAsUsed],
+  );
+  const [tauriCells, setTauriCells] = useState<TaskbarStripCell[]>([]);
   useEffect(() => {
+    if (hasCoreInjection) return;
     let cancelled = false;
     getTaskbarPreviewLines()
       .then((lines) => {
-        if (!cancelled) setPreviewLines(lines);
+        if (!cancelled) setTauriCells(lines);
       })
       .catch(() => {
-        if (!cancelled) setPreviewLines([]);
+        if (!cancelled) setTauriCells([]);
       });
     return () => {
       cancelled = true;
     };
   }, [
+      hasCoreInjection,
       enabled,
       entries,
       width,
@@ -75,6 +141,7 @@ export default function TaskbarStatusPage({
       settings.taskbarWidgetTextAlign,
       settings.taskbarShowAsUsed,
     ]);
+  const previewLines = hasCoreInjection ? coreCells : tauriCells;
 
   useEffect(() => {
     setWeightDraft(settings.taskbarWidgetFontWeight ?? 400);

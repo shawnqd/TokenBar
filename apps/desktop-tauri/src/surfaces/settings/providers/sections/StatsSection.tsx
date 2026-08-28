@@ -11,6 +11,7 @@ import type {
   ProviderLocalUsageSummary,
   ProviderOutputSpeed,
 } from "../../../../types/bridge";
+import type { ProviderSnapshot } from "../../../../core/snapshot";
 import { CostHistoryChart } from "./charts/CostHistoryChart";
 import { CreditsHistoryChart } from "./charts/CreditsHistoryChart";
 import { UsageBreakdownChart } from "./charts/UsageBreakdownChart";
@@ -24,6 +25,16 @@ interface Props {
   cost: CostSnapshotBridge | null;
   /** Which period the token stats lead with (Settings-driven). */
   localUsagePeriod: LocalUsagePeriod;
+  /** Declarative chart loader (enrichment scheduler path). When provided,
+   *  StatsSection no longer directly invokes `get_provider_chart_data`; it
+   *  delegates to the injected loader and shows loading/empty without
+   *  fabricating values. */
+  chartLoader?: (
+    providerId: string,
+    accountEmail?: string,
+  ) => Promise<ProviderChartData>;
+  /** Optional core snapshot for capability single-source (snapshot.capabilities). */
+  coreSnapshot?: ProviderSnapshot | null;
 }
 
 type TabKey = "tokens" | "speed" | "cost" | "credits" | "usage";
@@ -66,10 +77,21 @@ export function StatsSection({
   speed,
   cost,
   localUsagePeriod,
+  chartLoader,
+  coreSnapshot,
 }: Props) {
   const { t } = useLocale();
-  const caps = providerCapabilities({ providerId, capabilities: undefined });
+  // Capability single-source: core snapshot's capabilities win when present.
+  const caps = coreSnapshot?.capabilities
+    ? {
+        localUsage:
+          coreSnapshot.capabilities.supportsLocalCost ||
+          coreSnapshot.capabilities.supportsCharts,
+        outputSpeed: coreSnapshot.capabilities.supportsOutputSpeed,
+      }
+    : providerCapabilities({ providerId, capabilities: undefined });
   const [data, setData] = useState<ProviderChartData | null>(null);
+  const [isLoading, setIsLoading] = useState(false);
   const [active, setActive] = useState<TabKey | null>(null);
   const [range, setRange] = useState<RangeKey>("30d");
   const [animations, setAnimations] = useState(true);
@@ -77,17 +99,22 @@ export function StatsSection({
   useEffect(() => {
     let cancelled = false;
     setData(null);
-    getProviderChartData(providerId, accountEmail ?? undefined)
+    setIsLoading(true);
+    const loader = chartLoader ?? getProviderChartData;
+    loader(providerId, accountEmail ?? undefined)
       .then((d) => {
         if (!cancelled) setData(d);
       })
       .catch(() => {
         if (!cancelled) setData(null);
+      })
+      .finally(() => {
+        if (!cancelled) setIsLoading(false);
       });
     return () => {
       cancelled = true;
     };
-  }, [providerId, accountEmail]);
+  }, [providerId, accountEmail, chartLoader]);
 
   useEffect(() => {
     let cancelled = false;

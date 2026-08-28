@@ -59,6 +59,9 @@ import MenuCard from "../../../components/MenuCard";
 import { useOutputSpeedSnapshot } from "../../../hooks/useOutputSpeedSnapshot";
 import { outputSpeedProviderId } from "../../../lib/outputSpeed";
 import type { QuotaDisplayContext } from "../../../lib/quotaDisplay";
+import type { ProviderSnapshot } from "../../../core/snapshot";
+import { projectSurface } from "../../../core/projection";
+import type { ProviderChartData } from "../../../types/bridge";
 import {
   ProviderAuthMethod,
   ProviderHeaderSkeleton,
@@ -70,6 +73,16 @@ import {
 interface Props {
   providerId: string | null;
   providerSnapshot?: ProviderUsageSnapshot | null;
+  /** Unified core snapshot. When present, the overview card and stats read
+   *  from this projection; chart/usage data is fetched via the injected
+   *  enrichment loader without fabricating values. */
+  coreSnapshot?: ProviderSnapshot | null;
+  /** Declarative chart loader for enrichment. Falls back to Tauri invoke when
+   *  not supplied (legacy path). */
+  chartLoader?: (
+    providerId: string,
+    accountEmail?: string,
+  ) => Promise<ProviderChartData>;
   cookieDomain?: string | null;
   /**
    * The detail pane is a data preview, so per TASK-018 item B it follows the
@@ -98,6 +111,8 @@ interface Props {
 export function ProviderDetailPane({
   providerId,
   providerSnapshot = null,
+  coreSnapshot = null,
+  chartLoader,
   cookieDomain = null,
   display,
   localUsagePeriod,
@@ -367,13 +382,54 @@ export function ProviderDetailPane({
         />
       )}
 
-      {/* 2. Status & quota overview */}
-      {providerSnapshot ? (
+      {/* 2. Status & quota overview — unified core projection path.
+          When a core snapshot is present the overview reads the same store as
+          tray/floatbar/taskbar via `projectSurface`; chart/usage data is
+          fetched via the injected `chartLoader` (enrichment scheduler) with
+          loading/empty states, never a fabricated 100%. */}
+      {providerSnapshot || coreSnapshot ? (
         <div className="provider-detail-live-card provider-detail-overview">
           {/* Live card keeps MenuCard metrics; its own header is hidden so the
               workspace IdentitySection is the single identity shell. */}
           <MenuCard
-            provider={providerSnapshot}
+            provider={
+              providerSnapshot ??
+              // Synthetic bridge fallback so MenuCard header still has a name
+              // when only the core snapshot is available; quota windows are
+              // driven by `coreSnapshot` via projection so the synthetic's
+              // primary is not rendered.
+              ({
+                providerId: coreSnapshot!.providerId,
+                displayName: coreSnapshot!.displayName,
+                primary: {
+                  usedPercent: 0,
+                  remainingPercent: 100,
+                  kind: null,
+                  windowMinutes: null,
+                  resetsAt: null,
+                  resetDescription: null,
+                  isExhausted: false,
+                  reservePercent: null,
+                  reserveDescription: null,
+                },
+                primaryLabel: null,
+                secondary: null,
+                modelSpecific: null,
+                tertiary: null,
+                extraRateWindows: [],
+                cost: coreSnapshot!.cost,
+                planName: coreSnapshot!.planName,
+                accountEmail: coreSnapshot!.accountEmail,
+                sourceLabel: coreSnapshot!.sourceLabel,
+                updatedAt: coreSnapshot!.updatedAt ?? new Date().toISOString(),
+                error: coreSnapshot!.error,
+                pace: coreSnapshot!.pace,
+                accountOrganization: coreSnapshot!.accountOrganization,
+                trayStatusLabel: coreSnapshot!.trayStatusLabel,
+              } as unknown as ProviderUsageSnapshot)
+            }
+            coreSnapshot={coreSnapshot}
+            chartLoader={chartLoader}
             display={display}
             compactMetrics={compactMetrics}
             localUsagePeriod={localUsagePeriod}
@@ -389,7 +445,7 @@ export function ProviderDetailPane({
         <ProviderSectionSkeleton title={t("ProviderUsage")} />
       ) : null}
 
-      {/* 3. Recent data */}
+      {/* 3. Recent data — chart/local usage/output speed via enrichment. */}
       {detail && (
         <StatsSection
           providerId={detail.id}
@@ -397,6 +453,8 @@ export function ProviderDetailPane({
           speed={providerOutputSpeed}
           cost={detail.cost}
           localUsagePeriod={localUsagePeriod}
+          chartLoader={chartLoader}
+          coreSnapshot={coreSnapshot}
         />
       )}
 

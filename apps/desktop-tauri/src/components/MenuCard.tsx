@@ -15,6 +15,8 @@ import { BarChart } from "./charts/BarChart";
 import { getProviderChartData } from "../lib/tauri";
 import { useLocale } from "../hooks/useLocale";
 import { useFormattedResetTime } from "../hooks/useFormattedResetTime";
+import type { ProviderSnapshot } from "../core/snapshot";
+import { projectSurface } from "../core/projection";
 import {
   FORECAST_UNAVAILABLE,
   forecastMarkerPercent,
@@ -146,6 +148,22 @@ function CopyIconButton({ text }: { text: string }) {
 
 interface MenuCardProps {
   provider: ProviderUsageSnapshot;
+  /**
+   * Optional core snapshot projection source. When provided, quota windows are
+   * derived via `projectSurface(coreSnapshot)` so the detail/preview reads the
+   * same store as every other surface. Visual structure (classes,文案,colors)
+   * stays frozen; only the data origin changes.
+   */
+  coreSnapshot?: ProviderSnapshot | null;
+  /**
+   * Declarative chart data loader. When provided, MenuCard no longer directly
+   * invokes `get_provider_chart_data`; the caller (enrichment scheduler or
+   * injected fetcher) supplies data. No fabricated 100% is shown while loading.
+   */
+  chartLoader?: (
+    providerId: string,
+    accountEmail?: string,
+  ) => Promise<ProviderChartData>;
   /**
    * The owning surface's quota presentation choice, from
    * `quotaDisplayContext(settings, component)`. The card never reads settings
@@ -842,6 +860,8 @@ function CompactSecondaryQuota({
  */
 export default function MenuCard({
   provider,
+  coreSnapshot,
+  chartLoader,
   display,
   compactMetrics = false,
   outputSpeed = null,
@@ -864,10 +884,12 @@ export default function MenuCard({
     let cancelled = false;
     setChartData(null);
     setIsChartDataLoading(true);
-    getProviderChartData(
-      provider.providerId,
-      provider.accountEmail ?? undefined,
-    )
+    const loader = chartLoader ?? getProviderChartData;
+    // When chartLoader is injected (enrichment scheduler path), the component
+    // no longer directly invokes the Tauri command; the loader is the single
+    // enrichment entry point. While loading, the card shows the skeleton rather
+    // than fabricating a 100% or static value.
+    loader(provider.providerId, provider.accountEmail ?? undefined)
       .then((data) => {
         if (!cancelled) {
           setChartData(data);
@@ -884,7 +906,7 @@ export default function MenuCard({
     return () => {
       cancelled = true;
     };
-  }, [provider.providerId, provider.accountEmail]);
+  }, [provider.providerId, provider.accountEmail, chartLoader]);
 
   const isWayfinder = provider.providerId === "wayfinder";
   const planName = isWayfinder ? null : displayPlanName(provider.planName);
@@ -896,6 +918,12 @@ export default function MenuCard({
   // really a balance echo that should be hidden. See lib/providerBalance.
   const { balance, excludeWindows, suppressPlanBadge } = getProviderBalance(provider);
 
+  // When a core snapshot is supplied (projectSurface path), quota windows are
+  // derived from the unified store via projection so Settings detail/preview
+  // shares the same source as tray/floatbar/taskbar. The legacy bridge provider
+  // remains for callers that have not yet migrated.
+  const coreProjection = coreSnapshot ? projectSurface(coreSnapshot) : null;
+
   const resetCreditsWindow = provider.extraRateWindows?.find(
     (extra) => extra.id === "reset-credits",
   );
@@ -905,44 +933,90 @@ export default function MenuCard({
     return match ? Number(match[1]) : null;
   })();
 
-  const metrics: MetricEntry[] = [];
+  let metrics: MetricEntry[] = [];
   const wayfinderUsage = isWayfinder ? provider.wayfinderUsage ?? null : null;
-  if (!isWayfinder && !excludeWindows.has("primary") && isMeaningfulQuotaWindow(provider.primary))
-    metrics.push({
-      id: "primary",
-      label: quotaWindowLabel(provider.primaryLabel, provider.primary, t),
-      snap: provider.primary,
-    });
-  if (
-    provider.secondary &&
-    !excludeWindows.has("secondary") &&
-    isMeaningfulQuotaWindow(provider.secondary)
-  )
-    metrics.push({
-      id: "secondary",
-      label: quotaWindowLabel(provider.secondaryLabel, provider.secondary, t),
-      snap: provider.secondary,
-    });
-  if (provider.modelSpecific && isMeaningfulQuotaWindow(provider.modelSpecific))
-    metrics.push({
-      id: "model-specific",
-      label: t("DetailWindowModelSpecific"),
-      snap: provider.modelSpecific,
-    });
-  if (provider.tertiary && isMeaningfulQuotaWindow(provider.tertiary))
-    metrics.push({
-      id: "tertiary",
-      label: quotaWindowLabel("monthly", provider.tertiary, t),
-      snap: provider.tertiary,
-    });
-  for (const extra of provider.extraRateWindows ?? []) {
-    if (extra.id === "reset-credits") continue;
-    if (!isMeaningfulQuotaWindow(extra.window)) continue;
-    metrics.push({
-      id: `extra-${extra.id}`,
-      label: extra.title,
-      snap: extra.window,
-    });
+  if (!coreSnapshot) {
+    if (!isWayfinder && !excludeWindows.has("primary") && isMeaningfulQuotaWindow(provider.primary))
+      metrics.push({
+        id: "primary",
+        label: quotaWindowLabel(provider.primaryLabel, provider.primary, t),
+        snap: provider.primary,
+      });
+    if (
+      provider.secondary &&
+      !excludeWindows.has("secondary") &&
+      isMeaningfulQuotaWindow(provider.secondary)
+    )
+      metrics.push({
+        id: "secondary",
+        label: quotaWindowLabel(provider.secondaryLabel, provider.secondary, t),
+        snap: provider.secondary,
+      });
+    if (provider.modelSpecific && isMeaningfulQuotaWindow(provider.modelSpecific))
+      metrics.push({
+        id: "model-specific",
+        label: t("DetailWindowModelSpecific"),
+        snap: provider.modelSpecific,
+      });
+    if (provider.tertiary && isMeaningfulQuotaWindow(provider.tertiary))
+      metrics.push({
+        id: "tertiary",
+        label: quotaWindowLabel("monthly", provider.tertiary, t),
+        snap: provider.tertiary,
+      });
+    for (const extra of provider.extraRateWindows ?? []) {
+      if (extra.id === "reset-credits") continue;
+      if (!isMeaningfulQuotaWindow(extra.window)) continue;
+      metrics.push({
+        id: `extra-${extra.id}`,
+        label: extra.title,
+        snap: extra.window,
+      });
+    }
+  } else if (coreProjection && !isWayfinder) {
+    // Core snapshot path: windows come from projection (sorted, quota-only) so
+    // the card and the tray share one ordering. Map back to MetricEntry shape
+    // so the existing MetricRow rendering (classes, forecast, pace) is untouched.
+    const toSnap = (w: typeof coreProjection.primary): RateWindowSnapshot | null => {
+      if (!w) return null;
+      // ProjectedWindow mirrors RateWindowSnapshot quota fields; fill missing
+      // reserve/forecast fields from the underlying core window when present.
+      const src = coreSnapshot.windows.find((rw) => rw.id === w.id) ?? null;
+      return {
+        usedPercent: w.usedPercent,
+        remainingPercent: w.remainingPercent,
+        kind: w.kind,
+        windowMinutes: w.windowMinutes,
+        resetsAt: w.resetsAt,
+        resetDescription: w.resetDescription,
+        isExhausted: w.isExhausted,
+        reservePercent: src?.reservePercent ?? null,
+        reserveDescription: src?.reserveDescription ?? null,
+        reserveWillLastToReset: src?.reserveWillLastToReset,
+        reserveEtaSeconds: src?.reserveEtaSeconds ?? null,
+      };
+    };
+    const pushProj = (id: string, label: string, w: typeof coreProjection.primary) => {
+      const snap = toSnap(w);
+      if (!snap) return;
+      // Skip synthetic/balance-only windows already handled via balance block
+      if (!isMeaningfulQuotaWindow(snap)) return;
+      metrics.push({ id, label, snap });
+    };
+    if (coreProjection.primary) {
+      pushProj("primary", coreProjection.primary.label, coreProjection.primary);
+    }
+    if (coreProjection.secondary) {
+      pushProj("secondary", coreProjection.secondary.label, coreProjection.secondary);
+    }
+    for (const extra of coreProjection.extras) {
+      pushProj(`extra-${extra.id}`, extra.label, extra);
+    }
+    // Overflow windows are not rendered in the card outer surface but are
+    // retained for accessibility; they appear via the detail pane's extras list.
+    for (const over of coreProjection.overflow) {
+      pushProj(`extra-${over.id}`, over.label, over);
+    }
   }
   // An owning surface may provide a quota-window filter. Apply it before the
   // compact slice so "compact shows the first window" means the first window
@@ -994,12 +1068,15 @@ export default function MenuCard({
     !provider.error &&
     isChartDataLoading;
   const localCostHistory = chartData?.costHistory ?? [];
+  const effectiveCost = coreSnapshot?.cost ?? provider.cost;
+  const effectivePace = coreSnapshot?.pace ?? provider.pace;
+  const effectiveError = coreSnapshot?.error ?? provider.error;
   const hasMetrics = visibleMetrics.length > 0;
   const hasResetCredits = !compactMetrics && resetCreditsAvailable != null;
-  const hasCost = !compactMetrics && !!provider.cost;
-  const hasPace = !compactMetrics && !!provider.pace;
+  const hasCost = !compactMetrics && !!effectiveCost;
+  const hasPace = !compactMetrics && !!effectivePace;
   const hasDetails =
-    !provider.error &&
+    !effectiveError &&
     (hasMetrics ||
       hasResetCredits ||
       !!balance ||
@@ -1009,7 +1086,7 @@ export default function MenuCard({
       !!localUsage ||
       showLocalUsagePlaceholder ||
       !!wayfinderUsage);
-  const displayError = provider.error ? localizeProviderError(provider.error, t) : null;
+  const displayError = effectiveError ? localizeProviderError(effectiveError, t) : null;
 
   // ── Tray flyout density tiers (detailed/compact/minimal) ────────────
   // Only active when the caller passes `densityMode` (TrayPanel's overview
@@ -1019,7 +1096,7 @@ export default function MenuCard({
   // in this block affect their output.
   const primaryMetric = filteredMetrics[0] ?? null;
   const secondaryMetric = filteredMetrics[1] ?? null;
-  const hasPaceForDensity = !provider.error && !!provider.pace;
+  const hasPaceForDensity = !effectiveError && !!effectivePace;
 
   // Which quota row inside THIS tier is the weekly window. Used by
   // `densityOrphanForecast` to decide whether the weekly window is drawn as a
@@ -1036,12 +1113,23 @@ export default function MenuCard({
     return drawn.includes(weeklyMetricId) ? weeklyMetricId : null;
   })();
   const densityLocalUsageLead =
-    !provider.error && chartData?.localUsage
+    !effectiveError && chartData?.localUsage
       ? resolveLocalUsageLead(localUsagePeriod, chartData.localUsage, t)
       : null;
-  const caps = providerCapabilities(provider);
+  // Capability is single-source: when a core snapshot is present its
+  // `capabilities` drive the slot, otherwise fall back to the bridge helper
+  // (which itself falls back to the provider catalog). No second hard-coded list.
+  const caps = coreSnapshot?.capabilities
+    ? {
+        outputSpeed: coreSnapshot.capabilities.supportsOutputSpeed,
+        localUsage: coreSnapshot.capabilities.supportsLocalCost || coreSnapshot.capabilities.supportsCharts,
+        providerDashboard: coreSnapshot.capabilities.supportsProviderDashboard,
+        statusPage: coreSnapshot.capabilities.supportsStatusPage,
+        login: coreSnapshot.capabilities.supportsLogin,
+      }
+    : providerCapabilities(provider);
   const hasDensityOutputSpeed =
-    !provider.error &&
+    !effectiveError &&
     !!outputSpeed &&
     outputSpeed.tokensPerSecond != null &&
     outputSpeed.tokensPerSecond > 0;
@@ -1050,7 +1138,7 @@ export default function MenuCard({
     densityLocalUsageLead.tokens != null &&
     densityLocalUsageLead.tokens > 0;
   const hasDensityContent =
-    !provider.error &&
+    !effectiveError &&
     (metrics.length > 0 ||
       !!balance ||
       hasPaceForDensity ||
@@ -1062,7 +1150,7 @@ export default function MenuCard({
   const cardClassName = [
     "menu-card",
     densityMode ? `menu-card--${densityMode}` : null,
-    provider.error ? "menu-card--error" : null,
+    effectiveError ? "menu-card--error" : null,
     effectiveHasDetails ? "menu-card--with-details" : "menu-card--header-only",
   ]
     .filter(Boolean)
@@ -1092,7 +1180,7 @@ export default function MenuCard({
       // The reference FloatBar keeps the plan name out of the quota bar;
       // detailed/compact/minimal all reserve that space for the percentage.
       planLabel={null}
-      pace={provider.pace}
+      pace={effectivePace}
     />
   ) : balance ? (
     <ProviderBalanceBlock balance={balance} showTitle={false} />
@@ -1120,11 +1208,11 @@ export default function MenuCard({
                   display={display}
                   hero={idx === 0}
                   planLabel={null}
-                  pace={provider.pace}
+                  pace={effectivePace}
                 />
               ))
             : balance && <ProviderBalanceBlock balance={balance} showTitle={false} />}
-          {!provider.error && hasResetCredits && (
+          {!effectiveError && hasResetCredits && (
             <>
               {/* The reference card separates the reset-credits pill from the
                   quota windows above it with the same hairline it uses between
@@ -1151,7 +1239,7 @@ export default function MenuCard({
               title={secondaryMetric.label}
               rate={secondaryMetric.snap}
               display={display}
-              pace={provider.pace}
+              pace={effectivePace}
             />
           )}
         </section>
@@ -1313,7 +1401,7 @@ export default function MenuCard({
         {!namedAbove && (
           <span className="menu-card__orphan-forecast-label">{weekly.label}</span>
         )}
-        <QuotaForecast forecast={quotaForecastDisplay(provider.pace, weekly.snap)} t={t} />
+        <QuotaForecast forecast={quotaForecastDisplay(effectivePace, weekly.snap)} t={t} />
       </div>
     );
   })();
@@ -1332,7 +1420,7 @@ export default function MenuCard({
           <div className="menu-card__name-group">
             <span className="menu-card__name">{provider.displayName}</span>
           </div>
-          {!provider.error && (
+          {!effectiveError && (
             <span
               className={`menu-card__subtitle menu-card__updated${useShortUpdatedTime ? " menu-card__updated--short" : ""}`}
             >
@@ -1340,10 +1428,10 @@ export default function MenuCard({
             </span>
           )}
         </div>
-        {provider.error && (
+        {effectiveError && (
           <div className="menu-card__error-block">
             <div className="menu-card__error-text">{displayError}</div>
-            <CopyIconButton text={provider.error} />
+            <CopyIconButton text={effectiveError} />
           </div>
         )}
       </header>
@@ -1366,7 +1454,7 @@ export default function MenuCard({
 
       {effectiveHasDetails && !densityMode && (
         <div className="menu-card__content">
-          {!provider.error && hasMetrics && (
+          {!effectiveError && hasMetrics && (
             <section className="menu-card__group menu-card__metrics">
               {visibleMetrics.map((m, idx) => (
                 <MetricRow
@@ -1377,7 +1465,7 @@ export default function MenuCard({
                   display={display}
                   hero={idx === 0}
                   planLabel={idx === 0 && !suppressPlanBadge ? planName : null}
-                  pace={provider.pace}
+                  pace={effectivePace}
                 />
               ))}
             </section>

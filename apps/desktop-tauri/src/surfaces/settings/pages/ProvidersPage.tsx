@@ -1,9 +1,14 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import Sortable from "sortablejs";
 import { ProviderIcon } from "../../../components/providers/ProviderIcon";
 import { getProviderIcon } from "../../../components/providers/providerIcons";
 import { useProviders } from "../../../hooks/useProviders";
 import { getProviderBalance } from "../../../lib/providerBalance";
+import type { ProviderSnapshot } from "../../../core/snapshot";
+import { projectSurface } from "../../../core/projection";
+import type { UsageStore } from "../../../core/usageStore";
+import { useActionDispatcher } from "../../../core/useCoreBridge";
+import type { ActionDispatcher } from "../../../core/actionDispatcher";
 import {
   primaryQuotaState,
   quotaDisplayContext,
@@ -316,34 +321,79 @@ function TokenCard({ provider }: { provider: FixtureProvider }) {
   );
 }
 
+const EMPTY_STORE_STATE: { version: number; records: Record<string, unknown> } = {
+  version: 0,
+  records: {},
+};
+function useCoreSnapshotListForPage(store?: UsageStore | null): ProviderSnapshot[] {
+  const subscribe = useCallback(
+    (cb: () => void) => (store ? store.subscribe(cb) : () => {}),
+    [store],
+  );
+  const getSnapshot = useCallback(
+    () => (store ? store.getSnapshot() : EMPTY_STORE_STATE),
+    [store],
+  );
+  const getServerSnapshot = useCallback(() => getSnapshot(), [getSnapshot]);
+  const state = useSyncExternalStore(
+    subscribe as unknown as Parameters<typeof useSyncExternalStore>[0],
+    getSnapshot as never,
+    getServerSnapshot as never,
+  ) as unknown as { records: Record<string, { snapshot: ProviderSnapshot | null }> };
+  return useMemo(() => Object.values(state.records).map((r) => r.snapshot).filter(Boolean) as ProviderSnapshot[], [state]);
+}
+
 export default function ProvidersPage({
   settings,
   set,
   saving,
   catalog: liveCatalog,
-}: SettingsPageProps) {
+  coreStore: injectedCoreStore,
+  dispatcher: injectedDispatcher,
+}: SettingsPageProps & { coreStore?: UsageStore | null; dispatcher?: ActionDispatcher | null }) {
   const enabled = settings.enabledProviders ?? [];
   const motion = settings.enableAnimations !== false;
-  const { providers: snapshots, refresh } = useProviders({
-    refreshOnMount: true,
-  });
+  const legacy = useProviders({ refreshOnMount: true });
+  const coreSnapshots = useCoreSnapshotListForPage(injectedCoreStore);
+  const hasCoreInjection = injectedCoreStore !== undefined;
+  const snapshotsBridge = legacy.providers;
+  const snapshotByIdBridge = useMemo(
+    () => new Map(snapshotsBridge.map((row) => [row.providerId, row])),
+    [snapshotsBridge],
+  );
+  const snapshotByIdCore = useMemo(
+    () => new Map(coreSnapshots.map((row) => [row.providerId, row])),
+    [coreSnapshots],
+  );
+  // Unified map: when injected, core is source of truth; empty injected store
+  // renders the empty/loading state without fabricating.
+  const snapshotById: Map<string, unknown> = hasCoreInjection ? (snapshotByIdCore as Map<string, unknown>) : (snapshotByIdBridge as Map<string, unknown>);
+  // Keep the legacy refresh timer for backward compat when no core store.
+  const refresh = legacy.refresh;
+  const actionDispatcher = useActionDispatcher(injectedDispatcher ?? undefined);
   const [nowMs, setNowMs] = useState(() => Date.now());
-  const snapshotById = useMemo(
-    () => new Map(snapshots.map((row) => [row.providerId, row])),
-    [snapshots],
+  const [query, setQuery] = useState("");
+  const [selected, setSelected] = useState(
+    () => enabled[0] ?? liveCatalog?.[0]?.id ?? "claude",
+  );
+  const setSelectedWrapped = useCallback(
+    (id: string) => {
+      const d = actionDispatcher as unknown as ActionDispatcher;
+      if (d && typeof d.dispatch === "function") {
+        void d.dispatch({ type: "openProviderDetail", target: { kind: "provider", providerId: id } } as never).catch(() => {});
+      }
+      setSelected(id);
+    },
+    [actionDispatcher],
   );
 
   useEffect(() => {
     const timer = window.setInterval(() => {
       setNowMs(Date.now());
-      refresh();
+      if (!hasCoreInjection) refresh();
     }, 60_000);
     return () => window.clearInterval(timer);
-  }, [refresh]);
-  const [query, setQuery] = useState("");
-  const [selected, setSelected] = useState(
-    () => enabled[0] ?? liveCatalog?.[0]?.id ?? "claude",
-  );
+  }, [refresh, hasCoreInjection]);
   const [authById, setAuthById] = useState<Record<string, AuthMethod>>({});
   const [loginOpen, setLoginOpen] = useState(false);
   const [note, setNote] = useState<string | null>(null);
@@ -443,10 +493,10 @@ export default function ProvidersPage({
       ? manualCookies.some((cookie) => cookie.providerId === selectedProvider.id)
       : false;
     const selectedSnapshot = selectedProvider
-      ? snapshotById.get(selectedProvider.id)
+      ? (snapshotById.get(selectedProvider.id) as { error?: string | null } | undefined)
       : undefined;
     const selectedIsLoggedIn = Boolean(
-      selectedSnapshot && !selectedSnapshot.error,
+      selectedSnapshot && !(selectedSnapshot as { error?: string | null }).error,
     );
     const localCredentialLabel = selectedHasApiKey
       ? "已保存 API 密钥"
@@ -464,8 +514,27 @@ export default function ProvidersPage({
   };
 
   const rowMeta = (id: string, isOn: boolean) => {
-    const snap = snapshotById.get(id) ?? null;
+    const snapAny = snapshotById.get(id) ?? null;
     if (!isOn) return { sub: "未配置", metric: "", problem: false };
+    // Core snapshot path
+    if (hasCoreInjection) {
+      const snap = snapAny as ProviderSnapshot | null;
+      if (!snap || snap.error || snap.displayState === "error" || snap.displayState === "authRequired") {
+        return { sub: "未配置", metric: "", problem: Boolean(snap?.error) };
+      }
+      const updatedMs = snap.updatedAt ? Date.parse(snap.updatedAt) : NaN;
+      const time = Number.isFinite(updatedMs) ? listUpdatedLabel(updatedMs, nowMs) : "刚刚更新";
+      let metric = "";
+      const proj = projectSurface(snap);
+      if (proj.primary && proj.primary.fillPercent != null) {
+        metric = `${Math.round(proj.primary.usedPercent)}%`;
+      } else if (proj.balance) {
+        metric = proj.balance.amountText;
+      }
+      const stale = Number.isFinite(updatedMs) && nowMs - updatedMs > 10 * 60_000;
+      return { sub: time, metric, problem: stale || snap.displayState === "stale" };
+    }
+    const snap = snapAny as unknown as import("../../../types/bridge").ProviderUsageSnapshot | null;
     if (!snap || snap.error) {
       return { sub: "未配置", metric: "", problem: Boolean(snap?.error) };
     }
@@ -525,7 +594,7 @@ export default function ProvidersPage({
         <button
           type="button"
           className={`s5-pinned${selected === COOKIE_IMPORT_ID ? " on" : ""}`}
-          onClick={() => setSelected(COOKIE_IMPORT_ID)}
+          onClick={() => setSelectedWrapped(COOKIE_IMPORT_ID)}
         >
           批量导入网页会话
         </button>
@@ -543,7 +612,7 @@ export default function ProvidersPage({
                   provider.enabled ? "" : " off"
                 }${meta.problem ? " problem" : ""}`}
                 onClick={() => {
-                  setSelected(provider.id);
+                  setSelectedWrapped(provider.id);
                   setLoginOpen(false);
                 }}
               >
