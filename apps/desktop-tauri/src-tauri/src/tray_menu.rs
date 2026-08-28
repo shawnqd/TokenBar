@@ -142,6 +142,9 @@ pub(crate) fn build_tray_menu_with(
         "refresh",
         text(LocaleKey::TrayRefreshAll),
     ));
+    // Legacy menu id `pop_out` (historical PopOut dashboard) now opens the
+    // dedicated tray flyout window. Id retained for compat with persisted
+    // menu snapshots and proof-harness expectations; label is "Open Tray Panel".
     menu.push(TrayMenuEntry::item(
         "pop_out",
         text(LocaleKey::TrayOpenPanel),

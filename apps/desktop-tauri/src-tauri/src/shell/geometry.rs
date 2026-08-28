@@ -68,6 +68,9 @@ pub(super) fn monitor_placement(monitor: &tauri::Monitor) -> MonitorPlacement {
     }
 }
 
+// Legacy name retained: originally positioned the PopOut dashboard detached
+// window. Now used generically for any detached window (Settings fallback)
+// that wants tray-anchored or bottom-right fallback placement.
 pub(super) fn popout_position(
     anchor_rect: Option<&Rect>,
     monitor: &MonitorPlacement,

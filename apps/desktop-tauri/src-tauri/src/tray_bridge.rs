@@ -211,6 +211,7 @@ fn resolve_menu_action(id: &str) -> Option<MenuAction> {
         "settings" => Some(MenuAction::OpenSettings("general".into())),
         "about" => Some(MenuAction::OpenSettings("about".into())),
         "toggle_float_bar" => Some(MenuAction::ToggleFloatBar),
+        // Legacy id from the removed PopOut dashboard — now the tray flyout.
         "pop_out" => Some(MenuAction::OpenFlyout),
         _ if id.starts_with("toggle_provider:") => {
             let provider_id = id["toggle_provider:".len()..].to_string();

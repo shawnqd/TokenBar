@@ -581,9 +581,16 @@ pub struct SettingsSnapshot {
     // above are legacy migration sources and are no longer read by any surface.
     float_bar_show_as_used: bool,
     float_bar_reset_time_relative: bool,
+    /// Compat only: dashboard (tray flyout) still carries its own pair, but
+    /// dashboard_* filter fields below are not consulted by any renderer —
+    /// see `settings.rs` where they are marked `Retained for compat`.
     dashboard_show_as_used: bool,
     dashboard_reset_time_relative: bool,
+    /// Compat only: retained for old settings.json load, not read by any surface
+    /// — the tray flyout follows `enabled_providers` directly.
     dashboard_provider_ids: Vec<String>,
+    /// Compat only: retained for old settings.json load, not read by any surface
+    /// — cards render the quota windows returned by each provider.
     dashboard_quota_windows: Vec<String>,
     taskbar_show_as_used: bool,
     taskbar_reset_time_relative: bool,

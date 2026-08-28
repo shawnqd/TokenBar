@@ -163,7 +163,8 @@ pub fn calculate_shortcut_position(
     (x, y)
 }
 
-/// Calculate detached popout/settings placement.
+/// Calculate detached window placement (legacy `popout` name retained for
+/// compat — originally the PopOut dashboard, now the Settings fallback).
 ///
 /// Placement rules:
 /// - With a known tray anchor, centre horizontally on the tray parity anchor

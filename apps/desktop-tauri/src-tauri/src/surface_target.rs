@@ -4,6 +4,10 @@ use codexbar::core::ProviderId;
 
 use crate::surface::SurfaceMode;
 
+// `dashboard` is retained as a compat alias for the trayPanel settings page
+// — the detached PopOut dashboard window was removed, but old
+// `settings:dashboard` deep links and persisted `settings.json` tab values
+// still parse. New code should use `trayPanel`.
 const SETTINGS_TAB_IDS: &[&str] = &[
     "general",
     "providers",

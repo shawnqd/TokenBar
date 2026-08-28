@@ -171,6 +171,7 @@ fn main() {
             commands::close_settings_window,
             commands::get_current_surface_mode,
             commands::get_current_surface_state,
+            commands::surface_action,
             commands::get_proof_state,
             commands::run_proof_command,
             commands::refresh_providers,

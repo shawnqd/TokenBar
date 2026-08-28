@@ -1052,3 +1052,127 @@ fn float_bar_reset_windows_may_be_empty() {
     assert!(normalize_float_bar_reset_windows(&[]).is_empty());
     assert!(normalize_float_bar_reset_windows(&["nonsense".to_string()]).is_empty());
 }
+
+// ── CORE-06 migration completeness ─────────────────────────────────────
+
+#[test]
+fn float_bar_legacy_provider_ids_migrate_to_entries() {
+    // Old file with only `float_bar_provider_ids`, no `float_bar_entries`
+    let json = r#"{
+        "float_bar_provider_ids": ["codex", "claude"],
+        "refresh_interval_secs": 300
+    }"#;
+    let s: Settings = serde_json::from_str(json).expect("parse");
+    assert_eq!(
+        s.float_bar_entries,
+        vec![
+            TaskbarEntry { provider_id: "codex".into(), window: "primary".into() },
+            TaskbarEntry { provider_id: "claude".into(), window: "primary".into() },
+        ]
+    );
+    // Round-trip preserves entries; provider_ids retained for compat.
+    let json2 = serde_json::to_string(&s).expect("serialize");
+    let back: Settings = serde_json::from_str(&json2).expect("re-parse");
+    assert_eq!(back.float_bar_entries, s.float_bar_entries);
+}
+
+#[test]
+fn float_bar_entries_take_precedence_over_legacy_ids() {
+    let json = r#"{
+        "float_bar_provider_ids": ["codex"],
+        "float_bar_entries": [{"provider_id":"claude","window":"weekly"}],
+        "refresh_interval_secs": 300
+    }"#;
+    let s: Settings = serde_json::from_str(json).expect("parse");
+    // Explicit entries win; legacy ids ignored.
+    assert_eq!(
+        s.float_bar_entries,
+        vec![TaskbarEntry { provider_id: "claude".into(), window: "weekly".into() }]
+    );
+}
+
+#[test]
+fn float_bar_legacy_ids_migrate_when_entries_empty() {
+    // Empty entries + populated ids → ids seed entries
+    let json = r#"{
+        "float_bar_provider_ids": ["gemini"],
+        "float_bar_entries": [],
+        "refresh_interval_secs": 300
+    }"#;
+    let s: Settings = serde_json::from_str(json).expect("parse");
+    assert_eq!(
+        s.float_bar_entries,
+        vec![TaskbarEntry { provider_id: "gemini".into(), window: "primary".into() }]
+    );
+}
+
+#[test]
+fn taskbar_legacy_content_migrates_to_entries() {
+    for (content, expected) in [
+        ("usage", vec![("auto", "session"), ("auto", "weekly")]),
+        ("speed", vec![("auto", "speed")]),
+        ("usage_speed", vec![("auto", "session"), ("auto", "speed")]),
+        ("unknown", vec![("auto", "session"), ("auto", "weekly")]),
+    ] {
+        let json = format!(r#"{{"taskbar_widget_content":"{content}"}}"#);
+        let s: Settings = serde_json::from_str(&json).expect("parse");
+        let expected_entries: Vec<TaskbarEntry> = expected
+            .into_iter()
+            .map(|(p, w)| TaskbarEntry { provider_id: p.into(), window: w.into() })
+            .collect();
+        assert_eq!(s.taskbar_widget_entries, expected_entries, "content={content}");
+    }
+}
+
+#[test]
+fn taskbar_legacy_content_is_seed_only_when_entries_absent() {
+    // When entries already present, legacy content is not consulted.
+    let json = r#"{
+        "taskbar_widget_content": "speed",
+        "taskbar_widget_entries": [{"provider_id":"codex","window":"weekly"}]
+    }"#;
+    let s: Settings = serde_json::from_str(json).expect("parse");
+    assert_eq!(
+        s.taskbar_widget_entries,
+        vec![TaskbarEntry { provider_id: "codex".into(), window: "weekly".into() }]
+    );
+}
+
+#[test]
+fn taskbar_entries_round_trip_via_raw() {
+    let s = Settings {
+        taskbar_widget_entries: vec![
+            TaskbarEntry { provider_id: "codex".into(), window: "session".into() },
+            TaskbarEntry { provider_id: "claude".into(), window: "weekly".into() },
+        ],
+        ..Settings::default()
+    };
+    let json = serde_json::to_string(&s).expect("serialize");
+    let back: Settings = serde_json::from_str(&json).expect("deserialize");
+    assert_eq!(back.taskbar_widget_entries, s.taskbar_widget_entries);
+}
+
+#[test]
+fn dashboard_compat_fields_do_not_drive_rendering() {
+    // Dashboard provider filter is compat only; enabled_providers drives the tray.
+    let json = r#"{
+        "enabled_providers": ["codex","claude"],
+        "dashboard_provider_ids": ["codex"],
+        "dashboard_quota_windows": ["weekly"],
+        "refresh_interval_secs": 300
+    }"#;
+    let s: Settings = serde_json::from_str(json).expect("parse");
+    // Dashboard list preserved for old file compat
+    assert_eq!(s.dashboard_provider_ids, vec!["codex"]);
+    // But rendering follows enabled_providers in canonical order (Codex then Claude)
+    assert_eq!(
+        s.get_enabled_provider_ids(),
+        vec![ProviderId::Codex, ProviderId::Claude]
+    );
+    // dashboard_quota_windows normalized but not consulted by renderer
+    assert!(s.dashboard_quota_windows.contains(&"weekly".to_string()));
+    // After save/reload the compat fields survive round-trip
+    let json2 = serde_json::to_string(&s).expect("serialize");
+    let back: Settings = serde_json::from_str(&json2).expect("re-parse");
+    assert_eq!(back.dashboard_provider_ids, s.dashboard_provider_ids);
+}

@@ -88,9 +88,11 @@ pub fn emit_proof_state_changed(app: &AppHandle, payload: &ProofStatePayload) {
 }
 
 /// Broadcast to every window that persisted settings changed, so surfaces in
-/// other windows (e.g. the PopOut dashboard) re-read settings and re-render —
-/// the detached Settings window and the main window are separate webviews and
-/// do not share React state. Payload-less; listeners re-fetch the snapshot.
+/// other windows (the detached Settings window and the tray flyout) re-read
+/// settings and re-render — they are separate webviews and do not share React
+/// state. Payload-less; listeners re-fetch the snapshot.
+/// Legacy PopOut dashboard alias removed; this event is payload-less for any
+/// remaining detached surface.
 pub fn emit_settings_changed(app: &AppHandle) {
     let _ = app.emit(SETTINGS_CHANGED, ());
 }
