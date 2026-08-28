@@ -1,10 +1,15 @@
 /**
- * Decide whether a quota row should be rendered when a surface supplies an
- * explicit cycle filter (for example, the floating bar or taskbar).
+ * Dashboard quota-window filter — kept as a READ-ONLY compatibility helper.
  *
- * The dashboard deliberately passes no filter: it adapts to the windows each
- * provider actually returns. Keeping this generic helper separate prevents a
- * dashboard-only setting from becoming another source of truth.
+ * The dashboard surface entry has been removed from the app: no surface in
+ * this codebase passes a cycle filter today, and nothing here may use a
+ * dashboard setting as a render input. This helper survives only because the
+ * shared MenuCard still accepts an optional `quotaWindows` filter (its own
+ * public API contract), so callers can keep compiling and future dashboard
+ * surfaces have a single place to resolve the filter.
+ *
+ * It performs no I/O, copies no credentials and never decides what the tray
+ * panel or any other live surface renders.
  */
 export function dashboardShowsQuotaWindow(
   kind: string | null | undefined,

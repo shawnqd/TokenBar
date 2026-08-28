@@ -1,9 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { render, waitFor } from "@testing-library/react";
+import { fromBridge } from "../../core";
 
 const tauriMocks = vi.hoisted(() => ({
   getLocaleStrings: vi.fn(),
-  getProviderChartData: vi.fn().mockResolvedValue({ providerId: "opencodego", costHistory: [], creditsHistory: [], usageBreakdown: [], localUsage: null }),
+  openProviderDashboard: vi.fn(),
+  openProviderStatusPage: vi.fn(),
 }));
 
 vi.mock("../../lib/tauri", () => tauriMocks);
@@ -11,6 +13,7 @@ vi.mock("../../lib/tauri", () => tauriMocks);
 import { LocaleProvider } from "../../i18n/LocaleProvider";
 import { buildBundle } from "../../test/localeHarness";
 import TrayCard from "./TrayCard";
+import type { ProviderSnapshot } from "../../core";
 import type { ProviderUsageSnapshot, RateWindowSnapshot } from "../../types/bridge";
 
 function rw(usedPercent: number, windowMinutes: number | null, kind: string | null, resetsAt: string | null = null, resetDescription: string | null = null): RateWindowSnapshot {
@@ -22,7 +25,7 @@ function rw(usedPercent: number, windowMinutes: number | null, kind: string | nu
 
 /** OpenCode Go's real snapshot shape: 5h rolling (primary) + weekly
  *  (secondary) + monthly (tertiary) + a date-only "Renews" marker. */
-function opencodeSnapshot(): ProviderUsageSnapshot {
+function opencodeBridge(): ProviderUsageSnapshot {
   return {
     providerId: "opencodego",
     displayName: "OpenCode Go",
@@ -42,7 +45,29 @@ function opencodeSnapshot(): ProviderUsageSnapshot {
   };
 }
 
-describe("TrayCard OpenCode Go projection", () => {
+export function opencodeCoreSnapshot(): ProviderSnapshot {
+  return fromBridge(opencodeBridge());
+}
+
+const DISPLAY = {
+  showAsUsed: true,
+  resetTimeRelative: true,
+  highUsageThreshold: 75,
+  criticalUsageThreshold: 95,
+} as const;
+
+function renderCard(
+  provider: ProviderSnapshot | ProviderUsageSnapshot,
+  props: Partial<Parameters<typeof TrayCard>[0]> = {},
+) {
+  return render(
+    <LocaleProvider>
+      <TrayCard provider={provider} display={{ ...DISPLAY }} densityMode="detailed" {...props} />
+    </LocaleProvider>,
+  );
+}
+
+describe("TrayCard OpenCode Go projection (core read model)", () => {
   beforeEach(() => {
     tauriMocks.getLocaleStrings.mockResolvedValue(buildBundle({
       ProviderSessionLabel: "5 小时额度",
@@ -52,18 +77,12 @@ describe("TrayCard OpenCode Go projection", () => {
       ResetsInDaysHours: "{}d {}h",
       ResetsInHoursMinutes: "{}h {}m",
     }));
+    tauriMocks.openProviderDashboard.mockResolvedValue(undefined);
+    tauriMocks.openProviderStatusPage.mockResolvedValue(undefined);
   });
 
-  it("renders exactly the three real cycles — 5h hero, weekly + monthly tiles, plus the zen balance block", async () => {
-    const { container } = render(
-      <LocaleProvider>
-        <TrayCard
-          provider={opencodeSnapshot()}
-          densityMode="detailed"
-          display={{ showAsUsed: true, resetTimeRelative: true, highUsageThreshold: 75, criticalUsageThreshold: 95 }}
-        />
-      </LocaleProvider>
-    );
+  it("renders exactly the three real cycles from the core projection — 5h hero, weekly + monthly tiles, plus the zen balance block", async () => {
+    const { container } = renderCard(opencodeCoreSnapshot(), { densityMode: "detailed" });
     await waitFor(() => {
       if (!container.querySelector(".tray-card")) throw new Error("card not rendered");
     });
@@ -87,20 +106,29 @@ describe("TrayCard OpenCode Go projection", () => {
     expect(tileResets.every((text) => text && text.length > 0)).toBe(true);
     // OpenCode Go has no local session-log scanner and no output-speed parser,
     // so the insight footer (speed | usage) must be hidden entirely — never an
-    // empty slot. Capability comes from the stable snapshot, not fetch state,
+    // empty slot. Capability comes from the core snapshot, not fetch state,
     // so the card does not flicker the footer in and out while data loads.
     expect(container.querySelector(".meta-well")).toBeNull();
   });
 
+  it("still accepts the legacy bridge shape (Settings preview path) and projects it through core", async () => {
+    const { container } = renderCard(opencodeBridge(), { densityMode: "detailed" });
+    await waitFor(() => {
+      if (!container.querySelector(".tray-card")) throw new Error("card not rendered");
+    });
+    const labels = Array.from(container.querySelectorAll(".quota-row__label, .quota-tile__label"))
+      .map((el) => el.textContent);
+    expect(labels).toEqual(["5 小时额度", "周", "月"]);
+    expect(container.querySelector(".quota-row__hero-pct")?.textContent).toBe("72%");
+    expect(container.querySelector(".balance-block__amount")?.textContent).toBe("$38.80");
+    expect(container.textContent).not.toContain("Renews");
+    expect(container.textContent).not.toContain("Zen balance");
+  });
+
   it("lone extra tile spans full width", async () => {
-    const { container } = render(
-      <LocaleProvider>
-        <TrayCard
-          provider={{ ...opencodeSnapshot(), secondary: null }}
-          densityMode="detailed"
-          display={{ showAsUsed: true, resetTimeRelative: true, highUsageThreshold: 75, criticalUsageThreshold: 95 }}
-        />
-      </LocaleProvider>
+    const { container } = renderCard(
+      fromBridge({ ...opencodeBridge(), secondary: null }),
+      { densityMode: "detailed" },
     );
     await waitFor(() => {
       if (!container.querySelector(".tray-card")) throw new Error("card not rendered");
@@ -114,15 +142,7 @@ describe("TrayCard OpenCode Go projection", () => {
   });
 
   it("minimal tier keeps the hero metric and never invents a bar", async () => {
-    const { container } = render(
-      <LocaleProvider>
-        <TrayCard
-          provider={opencodeSnapshot()}
-          densityMode="minimal"
-          display={{ showAsUsed: true, resetTimeRelative: true, highUsageThreshold: 75, criticalUsageThreshold: 95 }}
-        />
-      </LocaleProvider>
-    );
+    const { container } = renderCard(opencodeCoreSnapshot(), { densityMode: "minimal" });
     await waitFor(() => {
       if (!container.querySelector(".tray-card")) throw new Error("card not rendered");
     });
@@ -130,5 +150,45 @@ describe("TrayCard OpenCode Go projection", () => {
     // Secondary + extra windows condense into one chip on the minimal tier.
     expect(container.textContent).toContain("周58%·月45%");
     expect(container.textContent).not.toContain("Renews");
+  });
+
+  it("renders the injected chart/usage enrichment when the provider has the local-usage capability", async () => {
+    const provider = opencodeCoreSnapshot();
+    const capable = {
+      ...provider,
+      capabilities: {
+        ...provider.capabilities,
+        supportsCharts: true,
+        supportsLocalCost: true,
+      },
+    };
+    const { container } = renderCard(capable, {
+      densityMode: "detailed",
+      localUsagePeriod: "7d",
+      chartData: {
+        providerId: "opencodego",
+        costHistory: [],
+        creditsHistory: [],
+        usageBreakdown: [],
+        localUsage: {
+          todayCost: null,
+          todayTokens: null,
+          sevenDayCost: 0.42,
+          sevenDayTokens: 48_000,
+          thirtyDayCost: null,
+          thirtyDayTokens: null,
+          todayTopModel: null,
+          sevenDayTopModel: "opencode-2",
+          thirtyDayTopModel: null,
+          estimateNote: "Estimated from local logs",
+        },
+      },
+    });
+    await waitFor(() => {
+      if (!container.querySelector(".tray-card")) throw new Error("card not rendered");
+    });
+    // Data comes from the injected enrichment result, not a tauri chart call.
+    expect(container.querySelector('[data-slot="usage"]')?.textContent).toBe("≈ 48K");
+    expect(container.textContent).toContain("opencode-2");
   });
 });

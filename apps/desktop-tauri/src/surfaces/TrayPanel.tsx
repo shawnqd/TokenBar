@@ -5,6 +5,7 @@ import type {
   MenuBarDisplayMode,
   ProviderUsageSnapshot,
 } from "../types/bridge";
+import type { ProviderSnapshot, UsageStoreKey } from "../core";
 import {
   beginFlyoutGesture,
   beginTrayPanelResize,
@@ -13,9 +14,7 @@ import {
   openSettingsWindow,
   quitApp as quitApplication,
   reorderProviders,
-  setSurfaceMode,
 } from "../lib/tauri";
-import { useProviders } from "../hooks/useProviders";
 import { useSettings } from "../hooks/useSettings";
 import { useLocale } from "../hooks/useLocale";
 import { useTrayPanelLayout } from "../hooks/useTrayPanelLayout";
@@ -27,9 +26,16 @@ import { orderProviderSnapshots } from "../lib/providerOrder";
 import { quotaDisplayContext } from "../lib/quotaDisplay";
 import { outputSpeedProviderId } from "../lib/outputSpeed";
 import {
+  coreSnapshotToBridge,
   hydrateProviderSlots,
   orderedEnabledProviderSlots,
 } from "../lib/trayProviders";
+import {
+  trayCoreStore,
+  useTrayCoreRecords,
+  useTrayCoreState,
+  useTrayRefreshAllCommand,
+} from "./tray/trayCoreStore";
 
 const TRAY_INITIAL_REFRESH_DELAY_MS = 250;
 const DENSE_OVERVIEW_THRESHOLD = 32;
@@ -65,7 +71,7 @@ const RefreshIcon = () => (
 const GearIcon = () => (
   <svg {...footerIconProps}>
     <circle cx="12" cy="12" r="3" />
-    <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z" />
+    <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 2-2 2 2 0 0 1 2 2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z" />
   </svg>
 );
 const PowerIcon = () => (
@@ -76,30 +82,29 @@ const PowerIcon = () => (
 );
 
 /**
- * Tray popover surface 鈥?native 328 DIP flyout with three density tiers
+ * Tray popover surface — native 328 DIP flyout with three density tiers
  * (overview obeys the setting; a single provider's detail view is always
  * detailed). The card stack is driven by TrayCard (the unified modular port
  * of design/density-preview.html); the footer holds the four actions as
  * stroke-icon rows.
+ *
+ * Data comes from the unified core read model (trayCoreStore), never from
+ * `useProviders`: provider snapshots are core records, refresh is a manual
+ * coordinator command, and chart/speed slots render injected enrichment
+ * results. The local timers below only drive UI ticking (reset countdowns);
+ * panel data freshness belongs to the core coordinator.
  */
 export default function TrayPanel({ state }: { state: BootstrapState }) {
   const { settings } = useSettings(state.settings);
-  const {
-    providers,
-    isRefreshing,
-    refresh,
-    hasCachedData,
-  } = useProviders({
-    initialRefreshDelayMs: TRAY_INITIAL_REFRESH_DELAY_MS,
-    forceRefreshOnMount: settings.refreshAllProvidersOnMenuOpen,
-  });
-
   const { t } = useLocale();
+  const trayState = useTrayCoreState();
+  const records = useTrayCoreRecords();
+  const refreshAllCommand = useTrayRefreshAllCommand();
   const outputSpeed = useOutputSpeedSnapshot(
     settings.outputSpeedEnabled !== false,
   );
   // The tray flyout and the PopOut dashboard share the "dashboard" component's
-  // settings 鈥?they render the same cards from the same snapshot.
+  // settings — they render the same cards from the same snapshot.
   const display = useMemo(
     () => quotaDisplayContext(settings, "dashboard"),
     [settings],
@@ -107,8 +112,29 @@ export default function TrayPanel({ state }: { state: BootstrapState }) {
   const shownProviderIds = settings.enabledProviders;
   // A tray flyout is a live view: render only currently enabled providers.
   const enabledSnapshots = useMemo(
-    () => providers.filter((provider) => shownProviderIds.includes(provider.providerId)),
-    [providers, shownProviderIds],
+    () =>
+      records
+        .filter(
+          (record) =>
+            record.snapshot != null &&
+            shownProviderIds.includes(record.snapshot.providerId),
+        )
+        .map((record) => coreSnapshotToBridge(record.snapshot!)),
+    [records, shownProviderIds],
+  );
+  const coreById = useMemo(() => {
+    const map = new Map<string, ProviderSnapshot>();
+    for (const record of records) {
+      if (record.snapshot) map.set(record.snapshot.providerId, record.snapshot);
+    }
+    return map;
+  }, [records]);
+  const isRefreshing = records.some(
+    (record) =>
+      record.displayState === "refreshing" || record.displayState === "loading",
+  );
+  const hasCachedData = records.some(
+    (record) => record.snapshot != null || record.lastGood != null,
   );
 
   const sorted = useMemo(
@@ -154,7 +180,7 @@ export default function TrayPanel({ state }: { state: BootstrapState }) {
   >("parked");
   /** True once the opening animation has played. The reveal keyframes use
    *  fill-mode `both`, which would otherwise hold a transform on the panel
-   *  forever and keep the whole tree on a composited layer 鈥?the source of
+   *  forever and keep the whole tree on a composited layer — the source of
    *  the blurry-while-scrolling text. --settled drops it (styles.css). */
   const [revealSettled, setRevealSettled] = useState(false);
   const expectsDenseOverview =
@@ -178,10 +204,63 @@ export default function TrayPanel({ state }: { state: BootstrapState }) {
     return [match];
   }, [denseTrayProviders, sorted, selectedProviderId, gridExpanded]);
 
-  // Detail is an explicit "show me everything" action 鈫?always detailed.
+  // Detail is an explicit "show me everything" action → always detailed.
   const densityMode: MenuBarDisplayMode =
     selectedProviderId !== null ? "detailed" : settings.menuBarDisplayMode;
   useTrayPanelLayout({ canMeasure: true });
+
+  // Provider keys to refresh: real keys of enabled records first, then
+  // placeholder keys for enabled providers the store has not seen yet.
+  const refreshKeys = useMemo<UsageStoreKey[]>(() => {
+    const keys: UsageStoreKey[] = [];
+    const seen = new Set<string>();
+    for (const record of records) {
+      if (shownProviderIds.includes(record.key.providerId)) {
+        keys.push(record.key);
+        seen.add(record.key.providerId);
+      }
+    }
+    for (const providerId of shownProviderIds) {
+      if (!seen.has(providerId)) {
+        keys.push({ providerId, accountKey: "default", sourceKey: "default" });
+      }
+    }
+    return keys;
+  }, [records, shownProviderIds]);
+
+  const handleRefresh = useCallback(() => {
+    void refreshAllCommand(refreshKeys, { manual: true }).catch(() => {});
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [refreshAllCommand, refreshKeys]);
+
+  // Initial stale-aware refresh (manual when the "refresh on open" setting is
+  // on). Runs once per surface mount, delayed so the flyout can paint first.
+  const initialRefreshRequested = useRef(false);
+  useEffect(() => {
+    if (initialRefreshRequested.current) return;
+    if (refreshKeys.length === 0) return;
+    initialRefreshRequested.current = true;
+    const timer = window.setTimeout(() => {
+      void refreshAllCommand(refreshKeys, {
+        manual: settings.refreshAllProvidersOnMenuOpen,
+      }).catch(() => {});
+    }, TRAY_INITIAL_REFRESH_DELAY_MS);
+    return () => window.clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [refreshAllCommand, refreshKeys, settings.refreshAllProvidersOnMenuOpen]);
+
+  // Committed chart/local-usage enrichment per provider, read from the core
+  // store so TrayCard receives injected results (never a direct tauri call).
+  const chartByProviderId = useMemo(() => {
+    const map = new Map<string, import("../types/bridge").ProviderChartData>();
+    if (!trayCoreStore.hasRecords()) return map;
+    for (const record of records) {
+      const chart = trayCoreStore.getChartData(record.key);
+      if (chart) map.set(record.key.providerId, chart);
+    }
+    return map;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [records, trayState.version]);
 
   useEffect(() => {
     let disposed = false;
@@ -228,7 +307,7 @@ export default function TrayPanel({ state }: { state: BootstrapState }) {
     void quitApplication();
   }, []);
 
-  // Keyboard shortcuts 鈥?Esc dismiss, Ctrl+R refresh, Ctrl+, settings, Ctrl+Q quit.
+  // Keyboard shortcuts — Esc dismiss, Ctrl+R refresh, Ctrl+, settings, Ctrl+Q quit.
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       if (
@@ -246,7 +325,7 @@ export default function TrayPanel({ state }: { state: BootstrapState }) {
       switch (e.key.toLowerCase()) {
         case "r":
           e.preventDefault();
-          refresh();
+          void handleRefresh();
           break;
         case ",":
           e.preventDefault();
@@ -260,7 +339,7 @@ export default function TrayPanel({ state }: { state: BootstrapState }) {
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [refresh, openSettings, quitApp]);
+  }, [handleRefresh, openSettings, quitApp]);
 
   const handleGridClick = useCallback((providerId: string | null) => {
     setSelectedProviderId(providerId);
@@ -315,15 +394,19 @@ export default function TrayPanel({ state }: { state: BootstrapState }) {
 
   const renderProviderCard = (p: ProviderUsageSnapshot) => {
     const speedId = outputSpeedProviderId(p.providerId);
+    const coreSnapshot = coreById.get(p.providerId) ?? null;
+    const providerForCard: ProviderSnapshot | ProviderUsageSnapshot =
+      coreSnapshot ?? p;
     return (
       <TrayCard
         key={p.providerId}
-        provider={p}
+        provider={providerForCard}
         densityMode={densityMode}
         display={display}
         outputSpeed={speedId ? outputSpeed?.[speedId] : null}
         localUsagePeriod={settings.localUsagePeriod}
         showProviderIcon={settings.switcherShowsIcons}
+        chartData={chartByProviderId.get(p.providerId) ?? null}
         detail={isDetailView}
       />
     );
@@ -357,7 +440,7 @@ export default function TrayPanel({ state }: { state: BootstrapState }) {
 
   const footer = (
     <footer className="flyout-footer" aria-label={t("PanelMenu")}>
-      <button type="button" className="footer-row" onClick={() => refresh()}>
+      <button type="button" className="footer-row" onClick={() => void handleRefresh()}>
         <span className="footer-row__left">
           <span className={`footer-row__icon${isRefreshing ? " is-spinning" : ""}`}><RefreshIcon /></span>
           <span className="footer-row__label">{t("ActionRefresh")}</span>

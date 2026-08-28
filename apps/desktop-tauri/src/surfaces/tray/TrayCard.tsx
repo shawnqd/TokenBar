@@ -1,20 +1,20 @@
-import { useEffect, useMemo, useState } from "react";
+import { useMemo } from "react";
 import type { CSSProperties } from "react";
 import type {
   Language,
   LocalUsagePeriod,
   MenuBarDisplayMode,
   PaceSnapshot,
-  ProviderCapabilitiesSnapshot,
   ProviderChartData,
   ProviderLocalUsageSummary,
   ProviderOutputSpeed,
   ProviderUsageSnapshot,
   RateWindowSnapshot,
 } from "../../types/bridge";
+import { fromBridge, projectSurface, type ProjectedWindow, type ProviderSnapshot } from "../../core";
 import { useLocale } from "../../hooks/useLocale";
 import { useResetDisplay } from "../../hooks/useFormattedResetTime";
-import { getProviderChartData, openProviderDashboard, openProviderStatusPage } from "../../lib/tauri";
+import { openProviderDashboard, openProviderStatusPage } from "../../lib/tauri";
 import {
   forecastMarkerPercent,
   quotaForecastDisplay,
@@ -22,29 +22,30 @@ import {
   type QuotaDisplayContext,
 } from "../../lib/quotaDisplay";
 import { formatRelativeUpdated } from "../../lib/relativeTime";
-import { providerSupportsChartData } from "../../lib/providerCharts";
 import { getProviderBalance } from "../../lib/providerBalance";
+import { coreSnapshotToBridge } from "../../lib/trayProviders";
 import { ProviderIcon } from "../../components/providers/ProviderIcon";
 import {
-  isMeaningfulQuotaWindow,
   quotaWindowLabel,
 } from "../../components/ProviderQuotaBlock";
 import type { LocaleKey } from "../../i18n/keys";
-import { HAS_DASHBOARD, HAS_STATUS_PAGE } from "./providerCapabilities";
-import { providerCapabilities as resolveCapabilities } from "../../lib/providerCapabilities";
 import "./tray-v5.css";
 
 /* ── Public contract (imported by the Settings tray-panel preview) ─────── */
 
 export interface TrayCardProps {
-  provider: ProviderUsageSnapshot;
+  /** Unified core snapshot; the bridge shape is still accepted for callers
+   *  outside the core read model (Settings page preview) and normalized via
+   *  `fromBridge` internally. */
+  provider: ProviderSnapshot | ProviderUsageSnapshot;
   /** detailed | compact | minimal — the overview obeys settings; the detail
    *  view is always "detailed" (drives hero / full-width secondary / 2-col). */
   densityMode: MenuBarDisplayMode;
   /** The owning surface's quota presentation:
    *  quotaDisplayContext(settings, "dashboard"). */
   display: QuotaDisplayContext;
-  /** Most recent completed-response speed for providers that expose it. */
+  /** Most recent completed-response speed for providers that expose it,
+   *  injected from the core enrichment read model. */
   outputSpeed?: ProviderOutputSpeed | null;
   /** Which period the insight "near usage" row leads with. */
   localUsagePeriod?: LocalUsagePeriod;
@@ -52,6 +53,9 @@ export interface TrayCardProps {
   showProviderIcon?: boolean;
   /** True renders the capability-gated 控制台 / 状态监控 buttons. */
   detail?: boolean;
+  /** Committed chart/local-usage enrichment result injected by the owning
+   *  surface; null/absent hides the usage slot (capability-gated). */
+  chartData?: ProviderChartData | null;
 }
 
 type PaceTone = "reserve" | "deficit" | "onpace";
@@ -76,86 +80,78 @@ function paceToneOf(forecast: {
   return delta > 0 ? "deficit" : "reserve";
 }
 
-/* ── Window projection (spec 8.3 hard rules) ──────────────────────────── */
+/* ── Window projection (core projectSurface + legacy exclusions) ─────── */
 
-interface TrayWindowView {
+/** Accept both shapes so the Settings-page preview keeps compiling unchanged;
+ *  the core snapshot is the primary read model for the tray flyout. */
+function isCoreSnapshot(
+  provider: ProviderSnapshot | ProviderUsageSnapshot,
+): provider is ProviderSnapshot {
+  return Array.isArray((provider as ProviderSnapshot).windows);
+}
+
+/** The projection filters balance/synthetic/informational rows itself; these
+ *  two tray-only exclusions carry over from the legacy card: date-only renewal
+ *  markers (no measurable cycle) and the old zen-balance / reset-credits
+ *  carrier ids that the balance block renders instead of quota tiles. */
+function isLegacyHiddenWindow(
+  window: ProviderSnapshot["windows"][number],
+): boolean {
+  if (window.id === "zen-balance" || window.id === "reset-credits") return true;
+  if (
+    window.windowMinutes == null &&
+    window.usedPercent === 0 &&
+    window.resetsAt != null
+  ) {
+    return true;
+  }
+  return false;
+}
+
+function toRateWindow(window: ProjectedWindow): RateWindowSnapshot {
+  return {
+    usedPercent: window.usedPercent,
+    remainingPercent: window.remainingPercent,
+    kind: window.kind,
+    windowMinutes: window.windowMinutes,
+    resetsAt: window.resetsAt,
+    resetDescription: window.resetDescription,
+    isExhausted: window.isExhausted,
+    isInformational: window.isInformational,
+    reservePercent: null,
+    reserveDescription: null,
+  };
+}
+
+interface CardWindowView {
   id: string;
   label: string;
   snap: RateWindowSnapshot;
-  /** Meaningful only for extra tiles: an odd last tile spans both columns. */
-  fullWidth: boolean;
 }
 
-function windowBucket(kind: RateWindowSnapshot["kind"]): number {
-  switch (kind) {
-    case "session": return 0;
-    case "daily": return 1;
-    case "weekly": return 2;
-    case "monthly": return 3;
-    default: return 4;
-  }
-}
-
-/** Real windows only: balance carriers (getProviderBalance) are excluded,
- *  informational rows and usageKnown=false windows are dropped, and nothing
- *  fabricated ever becomes a quota row. */
-function gatherWindows(
-  provider: ProviderUsageSnapshot,
-  exclude: Set<"primary" | "secondary">,
+/** The projection keeps raw labels; the card re-applies the same localized
+ *  label rules the legacy gatherWindows used so English slot names never leak
+ *  into the UI and identical words render for the same cycle kinds. */
+function legacyWindowLabel(
+  window: ProjectedWindow,
+  bridge: ProviderUsageSnapshot,
   t: (key: LocaleKey) => string,
-): TrayWindowView[] {
-  const windows: TrayWindowView[] = [];
-  const add = (
-    id: string,
-    snap: RateWindowSnapshot | null,
-    label: string,
-    usageKnown?: boolean,
-  ) => {
-    if (!snap) return;
-    if (snap.isInformational) return;
-    if (usageKnown === false) return;
-    if (!isMeaningfulQuotaWindow(snap)) return;
-    // Date-only markers are not quota windows: OpenCode Go's "Renews" row
-    // (0% used, no cycle length, only a renewal timestamp) must never render
-    // as a tile with a fake bar — a real cycle always has a length to measure.
-    if (snap.windowMinutes == null && snap.usedPercent === 0 && snap.resetsAt != null) return;
-    windows.push({ id, label, snap, fullWidth: false });
-  };
-  if (!exclude.has("primary")) {
-    add("primary", provider.primary, quotaWindowLabel(provider.primaryLabel, provider.primary, t));
+): string {
+  const snap = toRateWindow(window);
+  if (window.id === "primary") {
+    return quotaWindowLabel(bridge.primaryLabel, snap, t);
   }
-  if (provider.secondary && !exclude.has("secondary")) {
-    add("secondary", provider.secondary, quotaWindowLabel(provider.secondaryLabel, provider.secondary, t));
+  if (window.id === "secondary") {
+    return quotaWindowLabel(bridge.secondaryLabel, snap, t);
   }
-  if (provider.modelSpecific) {
-    add("model-specific", provider.modelSpecific, t("DetailWindowModelSpecific"));
+  if (window.id === "modelSpecific") {
+    return t("DetailWindowModelSpecific");
   }
-  if (provider.tertiary) {
-    add("tertiary", provider.tertiary, quotaWindowLabel("monthly", provider.tertiary, t));
+  if (window.id === "tertiary") {
+    return quotaWindowLabel("monthly", snap, t);
   }
-  for (const extra of provider.extraRateWindows ?? []) {
-    if (extra.id === "reset-credits" || extra.id === "zen-balance") continue;
-    add(`extra-${extra.id}`, extra.window, extra.title, extra.usageKnown);
-  }
-  return windows;
-}
-
-/** Session windows first by windowMinutes asc, then daily → weekly → monthly,
- *  then everything else kept in the provider's given order. */
-function sortWindows(windows: TrayWindowView[]): TrayWindowView[] {
-  const indexed = windows.map((w, index) => ({ w, index }));
-  indexed.sort((a, b) => {
-    const ba = windowBucket(a.w.snap.kind);
-    const bb = windowBucket(b.w.snap.kind);
-    if (ba !== bb) return ba - bb;
-    if (ba === 0) {
-      const am = a.w.snap.windowMinutes ?? Number.MAX_SAFE_INTEGER;
-      const bm = b.w.snap.windowMinutes ?? Number.MAX_SAFE_INTEGER;
-      if (am !== bm) return am - bm;
-    }
-    return a.index - b.index;
-  });
-  return indexed.map((entry) => entry.w);
+  const extra = bridge.extraRateWindows.find((row) => row.id === window.id);
+  return quotaWindowLabel(extra?.title ?? window.label, snap, t);
 }
 
 /* ── Formatting helpers (reuse MenuCard's approach) ───────────────────── */
@@ -554,16 +550,7 @@ function BalanceBlock({ provider, isCompact }: { provider: ProviderUsageSnapshot
   );
 }
 
-function statusSource(provider: ProviderUsageSnapshot): string | null {
-  const label = provider.trayStatusLabel?.trim();
-  if (label) return label;
-  if (provider.wayfinderUsage) return provider.wayfinderUsage.gatewayStatus;
-  return null;
-}
-
-function StatusBlock({ provider }: { provider: ProviderUsageSnapshot }) {
-  const headline = statusSource(provider);
-  if (!headline) return null;
+function StatusBlock({ headline }: { headline: string }) {
   return (
     <div className="status-block">
       <div className="status-headline">
@@ -579,7 +566,7 @@ function StatusBlock({ provider }: { provider: ProviderUsageSnapshot }) {
 /** Condensed "周58%·月45%" chip text for the minimal tier's secondary +
  *  extra windows on one line; null when there is nothing to summarize. */
 function condensedChipText(
-  windows: TrayWindowView[],
+  windows: CardWindowView[],
   display: QuotaDisplayContext,
 ): string | null {
   if (windows.length === 0) return null;
@@ -595,26 +582,32 @@ function condensedChipText(
 }
 
 function MinimalCard({
-  provider,
+  providerId,
+  displayName,
+  pace,
   display,
+  hasStatus,
   outputSpeedText,
   balanceText,
   hero,
   condensedChip,
   showProviderIcon,
-  caps,
+  hasOutputSpeed,
 }: {
-  provider: ProviderUsageSnapshot;
+  providerId: string;
+  displayName: string;
+  pace: PaceSnapshot | null;
   display: QuotaDisplayContext;
+  hasStatus: boolean;
   outputSpeedText: string | null;
   balanceText: string | null;
-  hero: TrayWindowView | null;
+  hero: CardWindowView | null;
   condensedChip: string | null;
   showProviderIcon: boolean;
-  caps: ProviderCapabilitiesSnapshot;
+  hasOutputSpeed: boolean;
 }) {
   const { t } = useLocale();
-  const name = provider.displayName.split(" ")[0];
+  const name = displayName.split(" ")[0];
   // Sublabel: the hero window's short cycle name, or "余额-ish" when the only
   // reading is a balance amount we can show as the metric.
   const heroIsReal = hero != null && !hero.snap.isInformational;
@@ -623,7 +616,7 @@ function MinimalCard({
     : balanceText
       ? balanceText
       : null;
-  const subLabel = heroIsReal ? hero!.label : balanceText ? provider.displayName.split(" ")[0] : "";
+  const subLabel = heroIsReal ? hero!.label : balanceText ? displayName.split(" ")[0] : "";
   const hasBar = heroIsReal;
 
   // Pace badge from the hero forecast.
@@ -632,7 +625,7 @@ function MinimalCard({
   // Pace notch on the minimal bar (HTML renderMinimalStreamlined's notchLeft).
   let notchLeft: number | null = null;
   if (heroIsReal) {
-    const forecast = quotaForecastDisplay(hero!.snap.kind === "weekly" ? provider.pace : null, hero!.snap);
+    const forecast = quotaForecastDisplay(hero!.snap.kind === "weekly" ? pace : null, hero!.snap);
     const marker = forecastMarkerPercent(forecast, display);
     notchLeft = marker;
     paceTone = paceToneOf(forecast);
@@ -643,7 +636,7 @@ function MinimalCard({
     }
   } else {
     // No quota window: surface the balance breakdown or a bare healthy dot.
-    const breakdown = provider.wayfinderUsage ? "●" : null;
+    const breakdown = hasStatus ? "●" : null;
     paceBadge = breakdown ?? null;
   }
 
@@ -653,7 +646,7 @@ function MinimalCard({
         <span className="minimal-streamlined__title">
           {showProviderIcon && (
             <ProviderIcon
-              providerId={provider.providerId}
+              providerId={providerId}
               size={14}
               className="minimal-streamlined__icon"
             />
@@ -686,7 +679,7 @@ function MinimalCard({
           {paceBadge ? <span className={`soft-badge soft-badge--${paceTone}`}>{paceBadge}</span> : null}
           {condensedChip ? <span className="soft-badge soft-badge--neutral">{condensedChip}</span> : null}
         </span>
-        {caps.outputSpeed && outputSpeedText && (
+        {hasOutputSpeed && outputSpeedText && (
           <span className="minimal-streamlined__speed">{outputSpeedText}</span>
         )}
       </div>
@@ -704,74 +697,76 @@ export default function TrayCard({
   localUsagePeriod = "7d",
   showProviderIcon = true,
   detail = false,
+  chartData = null,
 }: TrayCardProps) {
   const { t, language } = useLocale();
-  const [chartData, setChartData] = useState<ProviderChartData | null>(null);
-  const [isChartDataLoading, setIsChartDataLoading] = useState(false);
 
-  const supportsChart = providerSupportsChartData(provider.providerId);
-  // Stable, provider-level capability flags (backend-reported; deterministic
-  // fallback for older snapshots). Slot visibility must depend on these, not
-  // on whether chart data has finished loading — otherwise a card flickers its
-  // speed/usage rows in and out as fetches settle.
-  const caps = resolveCapabilities(provider);
-  useEffect(() => {
-    if (!supportsChart) {
-      setChartData(null);
-      setIsChartDataLoading(false);
-      return;
-    }
-    let cancelled = false;
-    setChartData(null);
-    setIsChartDataLoading(true);
-    getProviderChartData(provider.providerId, provider.accountEmail ?? undefined)
-      .then((data) => {
-        if (!cancelled) setChartData(data);
-      })
-      .catch(() => undefined)
-      .finally(() => {
-        if (!cancelled) setIsChartDataLoading(false);
-      });
-    return () => { cancelled = true; };
-  }, [provider.providerId, provider.accountEmail, supportsChart]);
-
-  const balanceInfo = useMemo(() => getProviderBalance(provider), [provider]);
-  const windows = useMemo(
-    () => sortWindows(gatherWindows(provider, balanceInfo.excludeWindows, t)),
-    [provider, balanceInfo.excludeWindows, t],
+  const core = useMemo(
+    () => (isCoreSnapshot(provider) ? provider : fromBridge(provider)),
+    [provider],
   );
-  const opencodeGo = provider.providerId === "opencodego";
-  const hero = windows[0] ?? null;
-  const secondary = opencodeGo ? null : (windows[1] ?? null);
+  const bridge = useMemo(
+    () => (isCoreSnapshot(provider) ? coreSnapshotToBridge(provider) : provider),
+    [provider],
+  );
+
+  const displayWindows = useMemo(
+    () => core.windows.filter((window) => !isLegacyHiddenWindow(window)),
+    [core.windows],
+  );
+  const projection = useMemo(
+    () =>
+      projectSurface(
+        { ...core, windows: displayWindows },
+        { showAsUsed: display.showAsUsed },
+      ),
+    [core, displayWindows, display.showAsUsed],
+  );
+  const caps = projection.capabilities;
+  const hasOutputSpeed = caps.supportsOutputSpeed;
+  const hasLocalUsage = caps.supportsCharts || caps.supportsLocalCost;
+
+  const balanceInfo = useMemo(() => getProviderBalance(bridge), [bridge]);
+  const views = useMemo<CardWindowView[]>(
+    () =>
+      projection.layers.quota.map((window) => ({
+        id: window.id,
+        label: legacyWindowLabel(window, bridge, t),
+        snap: toRateWindow(window),
+      })),
+    [projection.layers.quota, bridge, t],
+  );
+  const hero = views[0] ?? null;
+  const secondary = views[1] ?? null;
   const extraTiles = useMemo(() => {
-    const rest = windows.slice(opencodeGo ? 1 : 2);
+    const rest = views.slice(2);
     const count = rest.length;
     return rest.map((w, idx) => ({
       ...w,
       fullWidth: count === 1 || (count > 1 && idx === count - 1 && count % 2 === 1),
     }));
-  }, [windows, opencodeGo]);
+  }, [views]);
 
-  const localUsage = provider.error ? null : chartData?.localUsage ?? null;
-  const usageLead =
-    localUsage && !isChartDataLoading
-      ? resolveLocalUsageLead(localUsagePeriod, localUsage)
-      : null;
+  const localUsage = core.error ? null : chartData?.localUsage ?? null;
+  const usageLead = localUsage ? resolveLocalUsageLead(localUsagePeriod, localUsage) : null;
 
   const speedValid =
     outputSpeed != null && outputSpeed.tokensPerSecond != null && outputSpeed.tokensPerSecond > 0;
   const outputSpeedText = speedValid ? `${outputSpeed!.tokensPerSecond!.toFixed(1)} t/s` : null;
 
   const balanceText = balanceInfo.balance ? balanceInfo.balance.amount : null;
-  const hasStatus = statusSource(provider) != null;
+  const statusHeadline =
+    (core.trayStatusLabel?.trim() || projection.telemetry?.gatewayStatus || null);
+  const hasStatus = statusHeadline != null;
 
-  // Context buttons only exist in the detail view, gated per capability.
-  const canDashboard = detail && HAS_DASHBOARD.has(provider.providerId);
-  const canStatus = detail && HAS_STATUS_PAGE.has(provider.providerId);
+  // Context buttons only exist in the detail view, gated by the core
+  // capability flags (no provider-name branches).
+  const canDashboard = detail && caps.supportsProviderDashboard;
+  const canStatus = detail && caps.supportsStatusPage;
   const hasContext = canDashboard || canStatus;
 
   const condensedChip = condensedChipText(
-    [secondary, ...extraTiles].filter((w): w is TrayWindowView => w != null),
+    [secondary, ...extraTiles].filter((w): w is CardWindowView => w != null),
     display,
   );
 
@@ -779,26 +774,29 @@ export default function TrayCard({
   // card (spec 5.4).
   if (densityMode === "minimal") {
     return (
-      <div className="tray-card tray-card--minimal" id={`card-${provider.providerId}`}>
+      <div className="tray-card tray-card--minimal" id={`card-${core.providerId}`}>
         <MinimalCard
-          provider={provider}
+          providerId={core.providerId}
+          displayName={core.displayName}
+          pace={core.pace}
           display={display}
+          hasStatus={hasStatus}
           outputSpeedText={outputSpeedText}
           balanceText={balanceText}
           hero={hero}
           condensedChip={condensedChip}
           showProviderIcon={showProviderIcon}
-          caps={caps}
+          hasOutputSpeed={hasOutputSpeed}
         />
         {hasContext && (
           <div className={`context-actions${canDashboard && canStatus ? "" : " context-actions--single"}`}>
             {canDashboard && (
-              <button type="button" className="context-btn" onClick={() => void openProviderDashboard(provider.providerId)}>
+              <button type="button" className="context-btn" onClick={() => void openProviderDashboard(core.providerId)}>
                 <ChartIcon />{t("ActionUsageDashboard")}
               </button>
             )}
             {canStatus && (
-              <button type="button" className="context-btn" onClick={() => void openProviderStatusPage(provider.providerId)}>
+              <button type="button" className="context-btn" onClick={() => void openProviderStatusPage(core.providerId)}>
                 <StatBarsIcon />{t("ActionStatusPage")}
               </button>
             )}
@@ -808,9 +806,10 @@ export default function TrayCard({
     );
   }
 
-  const updatedRaw = Number.isNaN(Date.parse(provider.updatedAt))
-    ? provider.updatedAt
-    : formatRelativeUpdated(Date.parse(provider.updatedAt), t);
+  const updatedRaw = core.updatedAt == null ||
+    Number.isNaN(Date.parse(core.updatedAt))
+    ? core.updatedAt ?? ""
+    : formatRelativeUpdated(Date.parse(core.updatedAt), t);
   const updatedText =
     densityMode === "compact" ? updatedRaw.replace(/更新$/, "") : updatedRaw;
 
@@ -829,15 +828,15 @@ export default function TrayCard({
   return (
     <div
       className={`tray-card tray-card--${densityMode}`}
-      id={`card-${provider.providerId}`}
+      id={`card-${core.providerId}`}
       data-detail={detail ? "true" : undefined}
     >
       <div className="card-header">
           <div className="card-header__left">
             {showProviderIcon && (
-              <ProviderIcon providerId={provider.providerId} size={20} className="card-header__icon" />
+              <ProviderIcon providerId={core.providerId} size={20} className="card-header__icon" />
             )}
-            <span className="card-header__name">{provider.displayName}</span>
+            <span className="card-header__name">{core.displayName}</span>
             <span className="card-header__updated">{updatedText}</span>
           </div>
       </div>
@@ -849,11 +848,11 @@ export default function TrayCard({
               title={hero.label}
               snap={hero.snap}
               display={display}
-              pace={provider.pace}
+              pace={core.pace}
               windowKind={hero.snap.kind}
             />
             {secondary && (
-              <QuotaTile label={secondary.label} snap={secondary.snap} display={display} pace={provider.pace} fullWidth />
+              <QuotaTile label={secondary.label} snap={secondary.snap} display={display} pace={core.pace} fullWidth />
             )}
           </div>
         )}
@@ -867,7 +866,7 @@ export default function TrayCard({
                   label={tile.label}
                   snap={tile.snap}
                   display={display}
-                  pace={provider.pace}
+                  pace={core.pace}
                   fullWidth={tile.fullWidth}
                 />
               ))}
@@ -877,13 +876,13 @@ export default function TrayCard({
 
         {balanceInfo.balance && (
           <div className={`modular-section${sectionClass()}`}>
-            <BalanceBlock provider={provider} isCompact={isCompact} />
+            <BalanceBlock provider={bridge} isCompact={isCompact} />
           </div>
         )}
 
         {!hero && !balanceInfo.balance && hasStatus && (
           <div className={`modular-section${sectionClass()}`}>
-            <StatusBlock provider={provider} />
+            <StatusBlock headline={statusHeadline} />
           </div>
         )}
 
@@ -892,22 +891,22 @@ export default function TrayCard({
             compact = dual chips. Only renders when the provider actually has
             one of these capabilities — no empty slot for providers we cannot
             measure. */}
-        {caps.outputSpeed || caps.localUsage ? (
+        {hasOutputSpeed || hasLocalUsage ? (
         <div className={`modular-section${isCompact ? sectionClass() : ""}`}>
           {!isCompact ? (
             <div className="meta-well">
-              {caps.outputSpeed || caps.localUsage ? (
+              {hasOutputSpeed || hasLocalUsage ? (
               <div className="meta-well__line">
-                {caps.outputSpeed && (
+                {hasOutputSpeed && (
                   <div className="meta-well__item">
                     <span className="meta-well__label">{t("TaskbarWidgetPreviewSpeed")}</span>
                     <span className="meta-well__value" data-slot="speed">{outputSpeedText ?? ""}</span>
                   </div>
                 )}
-                {caps.outputSpeed && caps.localUsage && (
+                {hasOutputSpeed && hasLocalUsage && (
                   <span className="meta-well__rule" aria-hidden="true" />
                 )}
-                {caps.localUsage && (
+                {hasLocalUsage && (
                   <div className="meta-well__item">
                     <span className="meta-well__label">{t(usageLead ? usageLead.labelKey : "PanelSevenDayUsage").replace(/使用$/, "")}</span>
                     <span className="meta-well__value" data-slot="usage">
@@ -919,7 +918,7 @@ export default function TrayCard({
                 )}
               </div>
               ) : null}
-              {caps.localUsage && usageLead && usageLead.cost != null && (
+              {hasLocalUsage && usageLead && usageLead.cost != null && (
                 <div className="meta-well__note">
                   {t("PanelApiEquivalentValue")} ≈ {formatApiEquivalentValue(usageLead.cost)}
                   {usageLead.topModel ? ` · ${usageLead.topModel}` : ""}
@@ -928,10 +927,10 @@ export default function TrayCard({
             </div>
           ) : (
             <div className="compact-chips-row">
-              {caps.outputSpeed && (
+              {hasOutputSpeed && (
                 <span className="compact-chip">{t("TaskbarWidgetPreviewSpeed")} <strong>{outputSpeedText ?? ""}</strong></span>
               )}
-              {caps.localUsage && (
+              {hasLocalUsage && (
                 <span className="compact-chip">{t(usageLead ? usageLead.labelKey : "PanelSevenDayUsage").replace(/使用$/, "")} <strong>
                   {usageLead && usageLead.tokens != null && usageLead.tokens > 0
                     ? formatCompactTokens(usageLead.tokens, language) ?? formatTokenCount(usageLead.tokens)
@@ -947,12 +946,12 @@ export default function TrayCard({
       {hasContext && (
         <div className={`context-actions${canDashboard && canStatus ? "" : " context-actions--single"}`}>
           {canDashboard && (
-            <button type="button" className="context-btn" onClick={() => void openProviderDashboard(provider.providerId)}>
+            <button type="button" className="context-btn" onClick={() => void openProviderDashboard(core.providerId)}>
               <ChartIcon />{t("ActionUsageDashboard")}
             </button>
           )}
           {canStatus && (
-            <button type="button" className="context-btn" onClick={() => void openProviderStatusPage(provider.providerId)}>
+            <button type="button" className="context-btn" onClick={() => void openProviderStatusPage(core.providerId)}>
               <StatBarsIcon />{t("ActionStatusPage")}
             </button>
           )}

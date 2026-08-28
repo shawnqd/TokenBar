@@ -1,20 +1,33 @@
 import MenuCard from "../../../components/MenuCard";
 import { useOutputSpeedSnapshot } from "../../../hooks/useOutputSpeedSnapshot";
-import { useProviders } from "../../../hooks/useProviders";
 import { outputSpeedProviderId } from "../../../lib/outputSpeed";
 import { quotaDisplayContext } from "../../../lib/quotaDisplay";
-import type { SettingsSnapshot } from "../../../types/bridge";
+import { coreSnapshotToBridge } from "../../../lib/trayProviders";
+import type { ProviderUsageSnapshot, SettingsSnapshot } from "../../../types/bridge";
+import { useTrayCoreRecords } from "../../../surfaces/tray/trayCoreStore";
 import { pickPreviewSnapshot } from "./catalogFixtures";
 
 interface Props {
   settings: SettingsSnapshot;
 }
 
+/**
+ * Settings preview for the tray panel. Same read model as the flyout:
+ * records come from the tray core store (unified core read model) and chart /
+ * speed slots render injected enrichment results. The preview keeps the legacy
+ * MenuCard surface (bridge-shaped data view only — no credential data, no
+ * fake usage).
+ */
 export default function TrayPanelPreview({ settings }: Props) {
-  const { providers } = useProviders({ refreshOnMount: false });
+  const records = useTrayCoreRecords();
+  const liveProviders: ProviderUsageSnapshot[] = records
+    .map((record) =>
+      record.snapshot ? coreSnapshotToBridge(record.snapshot) : null,
+    )
+    .filter((snapshot): snapshot is ProviderUsageSnapshot => snapshot != null);
   const outputSpeedEnabled = settings.outputSpeedEnabled !== false;
   const outputSpeed = useOutputSpeedSnapshot(outputSpeedEnabled);
-  const snapshot = pickPreviewSnapshot(providers);
+  const snapshot = pickPreviewSnapshot(liveProviders);
   const display = quotaDisplayContext(settings, "dashboard");
   const scale = Math.max(1, Math.min(2, (settings.trayScalePercent ?? 100) / 100));
   const speedId = outputSpeedProviderId(snapshot.providerId);

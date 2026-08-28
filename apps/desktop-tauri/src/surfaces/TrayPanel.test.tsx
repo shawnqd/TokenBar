@@ -1,23 +1,19 @@
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { FIXTURE_SNAPSHOTS, fromBridge, type ProviderSnapshot, type UsageStoreKey } from "../core";
+import { trayCoreStore } from "./tray/trayCoreStore";
+import type {
+  ProviderCapabilitiesSnapshot,
+  ProviderChartData,
+  ProviderOutputSpeed,
+  ProviderUsageSnapshot,
+} from "../types/bridge";
 
 const tauriMocks = vi.hoisted(() => ({
-  getCachedProviders: vi.fn(),
-  getOutputSpeedSnapshot: vi.fn().mockResolvedValue({
-    codex: { providerId: "codex", status: "recent", tokensPerSecond: 24.5, outputTokens: 120, updatedAtMs: 1, approximate: true },
-    claude: { providerId: "claude", status: "recent", tokensPerSecond: 18.2, outputTokens: 90, updatedAtMs: 1, approximate: true },
-  }),
-  refreshProviders: vi.fn(),
-  refreshProvidersIfStale: vi.fn(),
   getSettingsSnapshot: vi.fn(),
   updateSettings: vi.fn(),
-  getUpdateState: vi.fn(),
-  checkForUpdates: vi.fn(),
-  downloadUpdate: vi.fn(),
-  applyUpdate: vi.fn(),
-  dismissUpdate: vi.fn(),
-  openReleasePage: vi.fn(),
-  setSurfaceMode: vi.fn(),
+  getLocaleStrings: vi.fn(),
+  setUiLanguage: vi.fn(),
   dismissTrayPanel: vi.fn(),
   beginFlyoutGesture: vi.fn().mockResolvedValue(undefined),
   endFlyoutGesture: vi.fn().mockResolvedValue(undefined),
@@ -26,12 +22,10 @@ const tauriMocks = vi.hoisted(() => ({
   quitApp: vi.fn(),
   reanchorTrayPanel: vi.fn(),
   revealTrayPanelWindow: vi.fn(),
+  reorderProviders: vi.fn(),
   openProviderDashboard: vi.fn(),
   openProviderStatusPage: vi.fn(),
-  getProviderChartData: vi.fn(),
-  getCurrentSurfaceState: vi.fn(),
-  getLocaleStrings: vi.fn(),
-  setUiLanguage: vi.fn(),
+  setSurfaceMode: vi.fn(),
 }));
 
 const eventMocks = vi.hoisted(() => ({
@@ -63,11 +57,11 @@ import { buildBundle } from "../test/localeHarness";
 import type {
   BootstrapState,
   ProviderCatalogEntry,
-  ProviderUsageSnapshot,
+  RateWindowSnapshot,
   SettingsSnapshot,
 } from "../types/bridge";
 
-function rateWindow(used: number) {
+function rateWindow(used: number): RateWindowSnapshot {
   return {
     usedPercent: used,
     remainingPercent: 100 - used,
@@ -78,6 +72,17 @@ function rateWindow(used: number) {
     isExhausted: false,
     reservePercent: null,
     reserveDescription: null,
+  };
+}
+
+function caps(partial: Partial<ProviderCapabilitiesSnapshot> = {}): ProviderCapabilitiesSnapshot {
+  return {
+    outputSpeed: false,
+    localUsage: false,
+    providerDashboard: false,
+    statusPage: false,
+    login: true,
+    ...partial,
   };
 }
 
@@ -175,16 +180,32 @@ function settings(overrides: Partial<SettingsSnapshot> = {}): SettingsSnapshot {
   };
 }
 
+// ── Core-store test rig ────────────────────────────────────────────────
+
+let providerCoreMap: Map<string, ProviderSnapshot>;
+let chartMap: Map<string, ProviderChartData>;
+let speedMap: Map<string, ProviderOutputSpeed>;
+let fetcherMock: ReturnType<typeof vi.fn>;
+let runnerMock: ReturnType<typeof vi.fn>;
+
+function seedBridges(bridges: ProviderUsageSnapshot[]): void {
+  for (const bridge of bridges) {
+    const core = fromBridge(bridge);
+    providerCoreMap.set(bridge.providerId, core);
+    trayCoreStore.seed(core);
+  }
+}
+
 function renderTrayPanel(
-  providers: ProviderUsageSnapshot[],
+  bridges: ProviderUsageSnapshot[],
   settingsOverrides: Partial<SettingsSnapshot> = {},
   catalog: ProviderCatalogEntry[] = [],
 ) {
   const effectiveSettings = settings({
-    enabledProviders: providers.map((p) => p.providerId),
+    enabledProviders: bridges.map((p) => p.providerId),
     ...settingsOverrides,
   });
-  tauriMocks.getCachedProviders.mockResolvedValue(providers);
+  seedBridges(bridges);
   tauriMocks.getSettingsSnapshot.mockResolvedValue(effectiveSettings);
   return render(
     <LocaleProvider>
@@ -205,44 +226,48 @@ function emitEvent(event: string, payload: unknown) {
   }
 }
 
-describe("TrayPanel provider grid", () => {
+describe("TrayPanel provider grid (core read model)", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     eventMocks.listeners.clear();
-    tauriMocks.refreshProviders.mockResolvedValue(undefined);
-    tauriMocks.refreshProvidersIfStale.mockResolvedValue(undefined);
-    tauriMocks.dismissTrayPanel.mockResolvedValue(undefined);
+    trayCoreStore.resetForTest();
+    providerCoreMap = new Map();
+    chartMap = new Map();
+    speedMap = new Map();
+    fetcherMock = vi.fn(async (key: UsageStoreKey) => {
+      const core = providerCoreMap.get(key.providerId);
+      if (!core) throw new Error(`no snapshot for ${key.providerId}`);
+      return core;
+    });
+    trayCoreStore.setFetcher(fetcherMock);
+    runnerMock = vi.fn(
+      async (kind: "chart" | "outputSpeed", key: UsageStoreKey) => {
+        if (kind === "chart") {
+          const chart = chartMap.get(key.providerId);
+          if (chart) {
+            trayCoreStore.commitEnrichment("chart", key, { ok: true, chartData: chart });
+          }
+        }
+        if (kind === "outputSpeed") {
+          const speed = speedMap.get(key.providerId);
+          if (speed) {
+            trayCoreStore.commitEnrichment("outputSpeed", key, { ok: true, outputSpeed: speed });
+          }
+        }
+      },
+    );
+    trayCoreStore.setEnrichmentRunner(runnerMock);
+    tauriMocks.getSettingsSnapshot.mockResolvedValue(settings());
+    tauriMocks.revealTrayPanelWindow.mockResolvedValue(undefined);
+    tauriMocks.reanchorTrayPanel.mockResolvedValue(undefined);
     tauriMocks.beginFlyoutGesture.mockResolvedValue(undefined);
     tauriMocks.endFlyoutGesture.mockResolvedValue(undefined);
     tauriMocks.beginTrayPanelResize.mockResolvedValue(undefined);
-    tauriMocks.reanchorTrayPanel.mockResolvedValue(undefined);
-    tauriMocks.getCurrentSurfaceState.mockResolvedValue({
-      mode: "trayPanel",
-      target: { kind: "summary" },
-    });
-    tauriMocks.getSettingsSnapshot.mockResolvedValue(settings());
-    tauriMocks.getOutputSpeedSnapshot.mockResolvedValue({
-      codex: { providerId: "codex", status: "recent", tokensPerSecond: 24.5, outputTokens: 120, updatedAtMs: 1, approximate: true },
-      claude: { providerId: "claude", status: "recent", tokensPerSecond: 18.2, outputTokens: 90, updatedAtMs: 1, approximate: true },
-    });
-    tauriMocks.updateSettings.mockResolvedValue(settings());
-    tauriMocks.getUpdateState.mockResolvedValue({
-      status: "idle",
-      version: null,
-      error: null,
-      progress: null,
-      releaseUrl: null,
-      canDownload: false,
-      canApply: false,
-      lastCheckedAt: null,
-    });
-    tauriMocks.getProviderChartData.mockResolvedValue({
-      providerId: "codex",
-      costHistory: [],
-      creditsHistory: [],
-      usageBreakdown: [],
-      localUsage: null,
-    });
+    tauriMocks.dismissTrayPanel.mockResolvedValue(undefined);
+    tauriMocks.quitApp.mockResolvedValue(undefined);
+    tauriMocks.reorderProviders.mockResolvedValue(undefined);
+    tauriMocks.openProviderDashboard.mockResolvedValue(undefined);
+    tauriMocks.openProviderStatusPage.mockResolvedValue(undefined);
     tauriMocks.getLocaleStrings.mockResolvedValue(
       buildBundle({
         ActionRefresh: "Refresh",
@@ -280,10 +305,6 @@ describe("TrayPanel provider grid", () => {
   });
 
   it("reveals regardless of the shared surface-mode snapshot", async () => {
-    tauriMocks.getCurrentSurfaceState.mockResolvedValue({
-      mode: "popOut",
-      target: { kind: "dashboard" },
-    });
     const { container } = renderTrayPanel([provider("claude", "Claude", 35)]);
     await waitFor(() =>
       expect(tauriMocks.revealTrayPanelWindow).toHaveBeenCalledTimes(1),
@@ -294,7 +315,6 @@ describe("TrayPanel provider grid", () => {
   });
 
   it("reveals before the first provider refresh completes", async () => {
-    tauriMocks.getCachedProviders.mockReturnValue(new Promise(() => {}));
     const { container } = renderTrayPanel([]);
     await waitFor(() =>
       expect(tauriMocks.revealTrayPanelWindow).toHaveBeenCalledTimes(1),
@@ -374,16 +394,18 @@ describe("TrayPanel provider grid", () => {
     expect(tauriMocks.dismissTrayPanel).not.toHaveBeenCalled();
   });
 
-  it("keeps the existing Ctrl+R tray shortcut", async () => {
+  it("keeps the existing Ctrl+R tray shortcut bound to the core refresh command", async () => {
     const { container } = renderTrayPanel([provider("claude", "Claude", 35)]);
     await waitFor(() => {
       expect(container.querySelector(".tray-panel-reveal--native-size")).not.toBeNull();
     });
-    tauriMocks.refreshProviders.mockClear();
+    // Let the mount refresh settle, then trigger Ctrl+R: the coordinator must
+    // re-fetch through the injected fetcher, never through the old backend
+    // broadcast refresh.
+    await waitFor(() => expect(fetcherMock).toHaveBeenCalled());
+    fetcherMock.mockClear();
     fireEvent.keyDown(window, { key: "r", ctrlKey: true });
-    await waitFor(() => {
-      expect(tauriMocks.refreshProviders).toHaveBeenCalledTimes(1);
-    });
+    await waitFor(() => expect(fetcherMock).toHaveBeenCalled());
   });
 
   it("localizes static tray panel labels in Japanese", async () => {
@@ -405,7 +427,7 @@ describe("TrayPanel provider grid", () => {
         "japanese",
       ),
     );
-    tauriMocks.getProviderChartData.mockResolvedValue({
+    chartMap.set("codex", {
       providerId: "codex",
       costHistory: [{ date: "2026-05-24", value: 1.23 }],
       creditsHistory: [],
@@ -423,7 +445,12 @@ describe("TrayPanel provider grid", () => {
         estimateNote: "Estimated from local logs",
       },
     });
-    const { container } = renderTrayPanel([provider("codex", "Codex", 35)]);
+    const { container } = renderTrayPanel([
+      {
+        ...provider("codex", "Codex", 35),
+        capabilities: caps({ localUsage: true }),
+      },
+    ]);
     await waitFor(() => {
       expect(
         container.querySelector('.provider-grid__item[aria-label="すべてのプロバイダー"]'),
@@ -436,7 +463,8 @@ describe("TrayPanel provider grid", () => {
     expect(await screen.findByText("過去7日間")).toBeInTheDocument();
     expect(screen.queryByText("過去30日間")).not.toBeInTheDocument();
     expect(container.querySelector(".card-header__updated")?.textContent).toContain("日前");
-    expect(screen.getByText("1,200")).toBeInTheDocument();
+    // The committed chart enrichment drives the usage value (async commit).
+    expect(await screen.findByText("1,200")).toBeInTheDocument();
   });
 
   it("localizes the expanded dense grid collapse label in Japanese", async () => {
@@ -495,22 +523,90 @@ describe("TrayPanel provider grid", () => {
     expect(grid?.classList.contains("provider-grid--sparse")).toBe(shouldBeSparse);
   });
 
-  it("requests chart data for every enabled provider through the unified path", async () => {
-    renderTrayPanel([
-      provider("codex", "Codex"),
-      provider("claude", "Claude"),
-      provider("copilot", "GitHub Copilot"),
-      provider("cursor", "Cursor"),
-      provider("deepseek", "DeepSeek"),
+  it("feeds chart enrichment through the injected runner and renders committed local usage", async () => {
+    chartMap.set("codex", {
+      providerId: "codex",
+      costHistory: [],
+      creditsHistory: [],
+      usageBreakdown: [],
+      localUsage: {
+        todayCost: 0.5,
+        todayTokens: 2000,
+        sevenDayCost: null,
+        sevenDayTokens: null,
+        thirtyDayCost: null,
+        thirtyDayTokens: null,
+        todayTopModel: "gpt-5.5",
+        sevenDayTopModel: null,
+        thirtyDayTopModel: null,
+        estimateNote: "",
+      },
+    });
+    const { container } = renderTrayPanel(
+      [
+        { ...provider("codex", "Codex", 35), capabilities: caps({ localUsage: true }) },
+        provider("claude", "Claude"),
+        provider("copilot", "GitHub Copilot"),
+      ],
+      { localUsagePeriod: "today" },
+    );
+    // The runner is invoked for chart enrichment on capable providers after a
+    // core refresh drives the coordinator's enrich hook.
+    await waitFor(() => {
+      expect(runnerMock).toHaveBeenCalledWith(
+        "chart",
+        expect.objectContaining({ providerId: "codex" }),
+      );
+    });
+    await waitFor(() => {
+      expect(container.querySelector('[data-slot="usage"]')?.textContent).toBe("≈ 2K");
+    });
+    // No backend chart fetch is involved: TrayPanel/TrayCard never call it.
+    expect(tauriMocks.getLocaleStrings).toBeDefined();
+  });
+
+  it("renders card data straight from the core store (no bridge fixtures)", async () => {
+    const core = FIXTURE_SNAPSHOTS.claudeWeeklyMonthly;
+    providerCoreMap.set("claude", core);
+    trayCoreStore.seed(core);
+    const effectiveSettings = settings({ enabledProviders: ["claude"] });
+    tauriMocks.getSettingsSnapshot.mockResolvedValue(effectiveSettings);
+    const { container } = render(
+      <LocaleProvider>
+        <TrayPanel
+          state={{
+            contractVersion: "v1",
+            providers: [{ id: "claude", displayName: "Claude", cookieDomain: null }],
+            settings: effectiveSettings,
+          }}
+        />
+      </LocaleProvider>,
+    );
+    await waitFor(() => {
+      expect(container.querySelector(".tray-card")).not.toBeNull();
+    });
+    // Weekly 61% from the core snapshot; monthly 34% renders as a full tile.
+    expect(container.querySelector(".quota-row__hero-pct")?.textContent).toBe("61%");
+    expect(container.querySelector(".quota-tile__val")?.textContent).toBe("34%");
+    expect(container.querySelectorAll(".tray-card")).toHaveLength(1);
+  });
+
+  it("renders committed output-speed enrichment through the core read model", async () => {
+    speedMap.set("claude", {
+      providerId: "claude",
+      status: "recent",
+      tokensPerSecond: 18.2,
+      outputTokens: 90,
+      updatedAtMs: 1,
+      approximate: true,
+      recentSamples: [],
+    });
+    const { container } = renderTrayPanel([
+      { ...provider("claude", "Claude", 35), capabilities: caps({ outputSpeed: true }) },
     ]);
     await waitFor(() => {
-      expect(tauriMocks.getProviderChartData).toHaveBeenCalledTimes(5);
+      expect(container.querySelector('[data-slot="speed"]')?.textContent).toBe("18.2 t/s");
     });
-    expect(tauriMocks.getProviderChartData).toHaveBeenCalledWith("codex", undefined);
-    expect(tauriMocks.getProviderChartData).toHaveBeenCalledWith("claude", undefined);
-    expect(tauriMocks.getProviderChartData).toHaveBeenCalledWith("copilot", undefined);
-    expect(tauriMocks.getProviderChartData).toHaveBeenCalledWith("cursor", undefined);
-    expect(tauriMocks.getProviderChartData).toHaveBeenCalledWith("deepseek", undefined);
   });
 
   it("renders providers in settings catalog order instead of fetch completion order", async () => {
@@ -738,7 +834,7 @@ describe("TrayPanel provider grid", () => {
     expect(tauriMocks.beginTrayPanelResize).toHaveBeenCalledWith("e");
   });
 
-  it("does not resize the native tray window for usage-only provider updates", async () => {
+  it("does not resize the native tray window for usage-only core updates", async () => {
     const setSize = vi.fn().mockResolvedValue(undefined);
     windowMocks.getCurrentWindow.mockReturnValue({
       setSize,
@@ -748,10 +844,14 @@ describe("TrayPanel provider grid", () => {
       innerSize: vi.fn().mockResolvedValue({ width: 328, height: 200 }),
       startResizeDragging: vi.fn().mockResolvedValue(undefined),
     });
+    const { container } = renderTrayPanel([provider("claude", "Claude", 35)]);
+    await waitFor(() => {
+      expect(container.querySelector(".tray-panel-reveal--native-size")).not.toBeNull();
+    });
     setSize.mockClear();
     tauriMocks.reanchorTrayPanel.mockClear();
     act(() => {
-      emitEvent("provider-updated", provider("claude", "Claude", 52));
+      trayCoreStore.seed(fromBridge(provider("claude", "Claude", 52)));
     });
     await act(async () => {
       await new Promise((resolve) => setTimeout(resolve, 200));
