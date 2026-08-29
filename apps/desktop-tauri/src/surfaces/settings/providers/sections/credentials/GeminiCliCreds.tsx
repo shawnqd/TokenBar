@@ -3,9 +3,9 @@ import type { LocaleKey } from "../../../../../i18n/keys";
 import type { GeminiCliStatus } from "../../../../../types/bridge";
 import {
   getGeminiCliSignedIn,
-  openPath,
-  openProviderDashboard,
 } from "../../../../../lib/tauri";
+import { useDispatchAction } from "../../../../../core/useCoreBridge";
+import { requireActionResult } from "../../../../../core/actionDispatcher";
 import {
   ProviderAuthMethod,
   ProviderSection,
@@ -25,6 +25,7 @@ interface Props {
  * credentials folder (when signed in) or a hint to install the CLI.
  */
 export function GeminiCliCreds({ providerId, t }: Props) {
+  const dispatch = useDispatchAction();
   const [status, setStatus] = useState<GeminiCliStatus | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -46,13 +47,20 @@ export function GeminiCliCreds({ providerId, t }: Props) {
 
   const handleOpenFolder = () => {
     if (!status.credentialsPath) return;
-    void openPath(status.credentialsPath).catch((e) => setError(String(e)));
+    void requireActionResult(
+      dispatch({
+        type: "openPath",
+        target: { kind: "app" },
+        path: status.credentialsPath,
+      }),
+    ).catch((e) => setError(String(e)));
   };
 
   const handleSetup = () => {
-    // No CLI-install auto-flow; we open the upstream project page via the
-    // provider's dashboard invariant (Gemini provider advertises it).
-    void openProviderDashboard(providerId).catch((e) => setError(String(e)));
+    void dispatch({
+      type: "openExternalUsage",
+      target: { kind: "provider", providerId },
+    }).catch((e) => setError(String(e)));
   };
 
   return (

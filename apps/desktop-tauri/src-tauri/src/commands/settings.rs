@@ -690,7 +690,9 @@ pub async fn update_settings(
     if enabled_providers_changed {
         let enabled_ids = settings.get_enabled_provider_ids();
         let state = app.state::<Mutex<AppState>>();
-        invalidate_provider_refresh_and_prune_disabled(&state, &enabled_ids)?;
+        if let Some(projection) = invalidate_provider_refresh_and_prune_disabled(&state, &enabled_ids)? {
+            crate::events::emit_provider_projection_updated(&app, &projection);
+        }
     }
     if timeout_recovery_disabled {
         // Turning the policy off is an explicit request to resume ordinary

@@ -15,7 +15,6 @@ import { useCallback, useMemo, useSyncExternalStore } from "react";
 import type {
   EnrichmentKind,
   EnrichmentScheduler,
-  ProviderCapability,
   ProviderSnapshot,
   RefreshCoordinator,
   UsageFetcher,
@@ -24,10 +23,6 @@ import type {
   UsageStoreKey,
 } from "../../core";
 import {
-  createEnrichmentScheduler,
-  createRefreshCoordinator,
-  createUsageStore,
-  keyFromSnapshot,
   usageStoreKey,
 } from "../../core";
 import type { ProviderChartData, ProviderOutputSpeed } from "../../types/bridge";
@@ -70,17 +65,6 @@ let state: TrayCoreStoreState = {
   enrich: Object.freeze({}),
 };
 
-function capabilitiesMap(): Record<string, ProviderCapability> {
-  const map: Record<string, ProviderCapability> = {};
-  if (!coordinator) return map;
-  for (const record of Object.values(coordinator.getSnapshot().records)) {
-    if (record.snapshot) {
-      map[record.snapshot.providerId] = record.snapshot.capabilities;
-    }
-  }
-  return map;
-}
-
 function rebuild(): void {
   state = {
     version: state.version + 1,
@@ -96,34 +80,14 @@ function rebuild(): void {
   }
 }
 
-function buildRuntime(): void {
-  store = createUsageStore();
-  scheduler = createEnrichmentScheduler({
-    capabilities: () => capabilitiesMap(),
-    ttlMs: {},
-    runner: async (kind, key) => {
-      if (!runnerSlot) throw new Error("tray: no enrichment runner wired");
-      await runnerSlot(kind, key);
-    },
-  });
-  coordinator = createRefreshCoordinator({
-    store,
-    fetcher: (key) => {
-      if (!fetcherSlot) {
-        return Promise.reject(new Error("tray: no fetcher wired"));
-      }
-      return fetcherSlot(key);
-    },
-    enrich: async (snapshot) => {
-      const key = keyFromSnapshot(snapshot);
-      // kick the capability-gated enrichment kinds that the tray reads;
-      // the injected runner commits the results.
-      await scheduler!.trigger("outputSpeed", key, { manual: true }).catch(() => {});
-      await scheduler!.trigger("chart", key, { manual: true }).catch(() => {});
-    },
-  });
-  if (storeUnsub) storeUnsub();
-  storeUnsub = store.subscribe(rebuild);
+function isTestRuntime(): boolean {
+  return (import.meta as { env?: { MODE?: string } }).env?.MODE === "test";
+}
+
+function assertTestRuntime(api: string): void {
+  if (!isTestRuntime()) {
+    throw new Error(`tray core ${api} is test-only`);
+  }
 }
 
 /** Bind this read-model to the process-wide runtime. Production only. */
@@ -139,6 +103,7 @@ export function attachTrayCoreRuntime(deps: {
   store = deps.store;
   coordinator = deps.coordinator;
   scheduler = deps.scheduler;
+  enrichByKey.clear();
   storeUnsub = store.subscribe(rebuild);
   rebuild();
 }
@@ -187,16 +152,26 @@ async function refreshAll(
   opts?: { manual?: boolean },
 ): Promise<void> {
   if (!coordinator || keys.length === 0) return;
-  await Promise.allSettled(keys.map((key) => coordinator!.refresh(key, opts)));
+  await coordinator.refreshAll(keys, opts);
   rebuild();
 }
 
 function setFetcher(fetcher: UsageFetcher | undefined): void {
+  assertTestRuntime("setFetcher");
   fetcherSlot = fetcher;
 }
 
+function getFetcher(): UsageFetcher | undefined {
+  return fetcherSlot;
+}
+
 function setEnrichmentRunner(runner: EnrichmentRunner | undefined): void {
+  assertTestRuntime("setEnrichmentRunner");
   runnerSlot = runner;
+}
+
+function getEnrichmentRunner(): EnrichmentRunner | undefined {
+  return runnerSlot;
 }
 
 async function triggerEnrichment(
@@ -216,6 +191,7 @@ function commitEnrichment(
   key: UsageStoreKey,
   result: { ok: boolean; chartData?: ProviderChartData | null; outputSpeed?: ProviderOutputSpeed | null },
 ): void {
+  assertTestRuntime("commitEnrichment");
   const id = `${kind}::${usageStoreKey(key)}`;
   enrichByKey.set(id, {
     kind,
@@ -260,28 +236,15 @@ function speedCapableKeys(): UsageStoreKey[] {
 
 /** Push a snapshot directly into the store (tests / cache seeding). */
 function seed(snapshot: ProviderSnapshot): UsageRecord {
-  if (!store) buildRuntime();
-  return store!.upsert(snapshot);
+  assertTestRuntime("seed");
+  if (!store) {
+    throw new Error("tray: core projection not attached");
+  }
+  return store.upsert(snapshot);
 }
 
-/** Tear down for tests only: fresh isolated store/coordinator/scheduler. */
 function resetForTest(): void {
-  for (const listener of [...listeners]) listeners.delete(listener);
-  try {
-    coordinator?.destroy();
-  } catch {
-    // ignore
-  }
-  scheduler?.destroy();
-  if (storeUnsub) {
-    storeUnsub();
-    storeUnsub = null;
-  }
-  enrichByKey.clear();
-  fetcherSlot = undefined;
-  runnerSlot = undefined;
-  buildRuntime();
-  rebuild();
+  throw new Error("tray: use resetTrayCoreForTest from trayCoreStore.testSupport");
 }
 
 export const trayCoreStore = {
@@ -294,7 +257,9 @@ export const trayCoreStore = {
   refresh,
   refreshAll,
   setFetcher,
+  getFetcher,
   setEnrichmentRunner,
+  getEnrichmentRunner,
   triggerEnrichment,
   commitEnrichment,
   getChartData,

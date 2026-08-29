@@ -3,10 +3,9 @@ import type { LocaleKey } from "../../../../../i18n/keys";
 import type { JetbrainsIde } from "../../../../../types/bridge";
 import {
   listJetbrainsDetectedIdes,
-  openPath,
-  refreshProviders,
-  setJetbrainsIdePath,
 } from "../../../../../lib/tauri";
+import { useDispatchAction } from "../../../../../core/useCoreBridge";
+import { requireActionResult } from "../../../../../core/actionDispatcher";
 import {
   ProviderAuthMethod,
   ProviderSection,
@@ -29,6 +28,7 @@ interface Props {
  * provider refresh so new installs surface without restart.
  */
 export function JetBrainsCreds({ t }: Props) {
+  const dispatch = useDispatchAction();
   const [ides, setIdes] = useState<JetbrainsIde[]>([]);
   const [customPath, setCustomPath] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -58,13 +58,21 @@ export function JetBrainsCreds({ t }: Props) {
     : t("CredsStatusNotDetected");
 
   const handleOpenFolder = (path: string) => {
-    void openPath(path).catch((e) => setError(String(e)));
+    void requireActionResult(
+      dispatch({ type: "openPath", target: { kind: "app" }, path }),
+    ).catch((e) => setError(String(e)));
   };
 
   const handleSavePath = async () => {
     setBusy(true);
     try {
-      await setJetbrainsIdePath(customPath.trim());
+      await requireActionResult(
+        dispatch({
+          type: "setIdePath",
+          target: { kind: "app" },
+          path: customPath.trim(),
+        }),
+      );
       await reload();
     } catch (e) {
       setError(String(e));
@@ -76,7 +84,7 @@ export function JetBrainsCreds({ t }: Props) {
   const handleRefresh = async () => {
     setBusy(true);
     try {
-      await refreshProviders();
+      await dispatch({ type: "refresh" });
       await reload();
     } catch (e) {
       setError(String(e));

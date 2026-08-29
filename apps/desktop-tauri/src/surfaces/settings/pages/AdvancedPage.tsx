@@ -1,5 +1,6 @@
 import { useState } from "react";
-import { resetSettings } from "../../../lib/tauri";
+import { useDispatchAction } from "../../../core/useCoreBridge";
+import { requireActionResult } from "../../../core/actionDispatcher";
 import { useLocale } from "../../../hooks/useLocale";
 import type { UpdateChannel } from "../../../types/bridge";
 import type { SettingsPageProps } from "./pageTypes";
@@ -12,6 +13,7 @@ export default function AdvancedPage({
   saving,
 }: SettingsPageProps) {
   const { t } = useLocale();
+  const dispatch = useDispatchAction();
   const [confirmReset, setConfirmReset] = useState(false);
   const [note, setNote] = useState<string | null>(null);
   const diagnostics = useAdvancedDiagnostics();
@@ -97,7 +99,9 @@ export default function AdvancedPage({
           onCancel={() => setConfirmReset(false)}
           onConfirm={() => {
             setConfirmReset(false);
-            void resetSettings()
+            void requireActionResult(
+              dispatch({ type: "resetSettings", target: { kind: "settings" } }),
+            )
               .then(() => setNote("已重置全部设置"))
               .catch((error) => setNote(String(error)));
           }}

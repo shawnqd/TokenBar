@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from "react";
 import type {
   ProviderCatalogEntry,
-  ProviderUsageSnapshot,
   SettingsUpdate,
 } from "../../../types/bridge";
 import type { BootstrapState } from "../../../types/bridge";
@@ -14,11 +13,9 @@ import {
 } from "../providers/ProvidersSidebar";
 import { ProviderDetailPane } from "../providers/ProviderDetailPane";
 import { CookieFileImport, COOKIE_IMPORT_ID } from "../providers/CookieFileImport";
-import { primaryQuotaState, quotaDisplayContext } from "../../../lib/quotaDisplay";
-import { getProviderBalance } from "../../../lib/providerBalance";
+import { quotaDisplayContext } from "../../../lib/quotaDisplay";
 import { formatRelativeUpdated } from "../../../lib/relativeTime";
-import { reorderProviders } from "../../../lib/tauri";
-import { useProviders } from "../../../hooks/useProviders";
+
 import type { ProviderSnapshot } from "../../../core/snapshot";
 import { projectSurface } from "../../../core/projection";
 import type { UsageStore } from "../../../core/usageStore";
@@ -30,11 +27,7 @@ interface ProvidersTabProps {
   providers: ProviderCatalogEntry[];
   set: (patch: SettingsUpdate) => void;
   saving: boolean;
-  /** Injected core store (test/refresh path). When provided, the tab reads
-   *  `ProviderSnapshot` via the unified store; otherwise it falls back to the
-   *  legacy `useProviders` bridge for backward compat while the integration
-   *  owner wires the global store. Empty store renders the empty/loading state
-   *  without fabricating values. */
+  /** Injected core store. Empty/missing store renders loading, not fabricated values. */
   coreStore?: UsageStore | null;
   /** Injected dispatcher for `openProviderDetail`. Selection stays local; the
    *  dispatcher is a side-effect so other surfaces can observe the intent. */
@@ -74,14 +67,8 @@ export default function ProvidersTab({
   dispatcher,
 }: ProvidersTabProps) {
   const { t } = useLocale();
-  const legacy = useProviders({ refreshOnMount: false });
   const coreSnapshots = useCoreSnapshotList(coreStore);
-  const snapshotsBridge: ProviderUsageSnapshot[] = legacy.providers as ProviderUsageSnapshot[];
-  // Prefer core snapshots when a store is injected (even if currently empty —
-  // that empty is the "store empty" loading state required by the spec).
-  const hasCoreInjection = coreStore !== undefined;
   const coreMap = useMemo(() => new Map(coreSnapshots.map((s) => [s.providerId, s])), [coreSnapshots]);
-  const bridgeMap = useMemo(() => new Map(snapshotsBridge.map((s) => [s.providerId, s])), [snapshotsBridge]);
 
   const actionDispatcher = useActionDispatcher(dispatcher ?? undefined);
   const [selectedId, setSelectedId] = useState<string | null>(
@@ -127,33 +114,22 @@ export default function ProvidersTab({
   };
 
   const rows: ProviderSidebarRow[] = useMemo(() => {
-    if (hasCoreInjection) {
-      return orderedProviders.map((p) => {
-        const isOn = enabled.has(p.id);
-        const snap = coreMap.get(p.id) ?? null;
-        return {
-          id: p.id,
-          displayName: p.displayName,
-          enabled: isOn,
-          status: deriveProviderStatusFromCore(isOn, snap),
-          subtitlePrimary: providerSidebarSubtitleFromCore(p.id, isOn, snap, t),
-          subtitleSecondary: providerSidebarMetricFromCore(snap),
-        };
-      });
-    }
     return orderedProviders.map((p) => {
       const isOn = enabled.has(p.id);
-      const snap = bridgeMap.get(p.id) ?? null;
+      const snap = coreMap.get(p.id) ?? null;
       return {
         id: p.id,
         displayName: p.displayName,
         enabled: isOn,
-        status: deriveProviderStatus(isOn, snap),
-        subtitlePrimary: providerSidebarSubtitle(p.id, isOn, snap, t),
-        subtitleSecondary: providerSidebarMetric(snap),
+        status: deriveProviderStatusFromCore(isOn, snap),
+        subtitlePrimary: providerSidebarSubtitleFromCore(p.id, isOn, snap, t),
+        subtitleSecondary: providerSidebarMetricFromCore(
+          snap,
+          settings.dashboardShowAsUsed !== false,
+        ),
       };
     });
-  }, [enabled, orderedProviders, snapshotsBridge, t, hasCoreInjection, coreMap, bridgeMap]);
+  }, [enabled, orderedProviders, t, coreMap, settings.dashboardShowAsUsed]);
 
   const normalizedSearch = searchText.trim().toLowerCase();
   const visibleRows = useMemo(
@@ -194,9 +170,15 @@ export default function ProvidersTab({
       .map((id) => byId.get(id))
       .filter((p): p is ProviderCatalogEntry => Boolean(p));
     setOrderedProviders(next);
-    void reorderProviders(nextIds).catch(() => {
-      setOrderedProviders(providers);
-    });
+    void (actionDispatcher as ActionDispatcher)
+      .dispatch({
+        type: "reorderProviders",
+        target: { kind: "summary" },
+        providerIds: nextIds,
+      })
+      .catch(() => {
+        setOrderedProviders(providers);
+      });
   };
 
   // During bootstrap the catalog can arrive one render before the selection
@@ -205,11 +187,7 @@ export default function ProvidersTab({
   const detailProviderId = selectedId ?? visibleRows[0]?.id ?? null;
   const selectedEntry =
     orderedProviders.find((p) => p.id === detailProviderId) ?? null;
-  const selectedSnapshot = hasCoreInjection
-    ? (coreMap.get(detailProviderId ?? "") ?? null)
-    : (bridgeMap.get(detailProviderId ?? "") ?? null);
-  const selectedBridgeSnapshot = hasCoreInjection ? null : (selectedSnapshot as ProviderUsageSnapshot | null);
-  const selectedCoreSnapshot = hasCoreInjection ? (selectedSnapshot as ProviderSnapshot | null) : null;
+  const selectedCoreSnapshot = coreMap.get(detailProviderId ?? "") ?? null;
 
   return (
     <div className="providers-tab-content">
@@ -230,7 +208,7 @@ export default function ProvidersTab({
           <ProviderDetailPane
             key={detailProviderId ?? "no-provider"}
             providerId={detailProviderId}
-            providerSnapshot={selectedBridgeSnapshot}
+            providerSnapshot={null}
             coreSnapshot={selectedCoreSnapshot}
             cookieDomain={selectedEntry?.cookieDomain ?? null}
             display={quotaDisplayContext(settings, "dashboard")}
@@ -259,63 +237,6 @@ function mergeFilteredOrder(
 
 // ── Provider sidebar subtitle helpers (port of
 //    rust/src/native_ui/preferences.rs::provider_sidebar_subtitle). ─────
-
-function deriveProviderStatus(
-  isEnabled: boolean,
-  snap: ProviderUsageSnapshot | null,
-): ProviderSidebarStatus {
-  if (!isEnabled) return "disabled";
-  if (!snap) return "loading";
-  if (snap.error) return "error";
-  const updatedMs = new Date(snap.updatedAt).getTime();
-  if (Number.isFinite(updatedMs)) {
-    const ageMins = (Date.now() - updatedMs) / 60_000;
-    if (ageMins > 10) return "stale";
-  }
-  return "ok";
-}
-
-/**
- * Minimal port of `provider_sidebar_source_hint`
- * (rust/src/native_ui/preferences.rs:3753). When we have a live snapshot the
- * backend-supplied `sourceLabel` wins; otherwise we fall back to the neutral
- * "Not detected" / "Disabled" copy.
- */
-function providerSidebarSubtitle(
-  _providerId: string,
-  isEnabled: boolean,
-  snap: ProviderUsageSnapshot | null,
-  t: (key: LocaleKey) => string,
-): string {
-  if (!isEnabled) {
-    return t("ProviderDisabled");
-  }
-  if (!snap || snap.error) {
-    // TODO(lane-s-i18n): 未配置
-    return "未配置";
-  }
-  const updatedMs = new Date(snap.updatedAt).getTime();
-  const time = Number.isFinite(updatedMs)
-    ? formatRelativeUpdated(updatedMs, t)
-    : t("UpdatedJustNow");
-  // TODO(lane-s-i18n): 已登录 · 时间
-  return `已登录 · ${time}`;
-}
-
-function providerSidebarMetric(
-  snap: ProviderUsageSnapshot | null,
-): string | undefined {
-  if (!snap?.primary) return undefined;
-  if (primaryQuotaState(snap) !== "quota") {
-    const balance = getProviderBalance(snap).balance;
-    if (balance?.kind === "balance" && !balance.unavailable) {
-      return balance.amount;
-    }
-    return undefined;
-  }
-  if (!Number.isFinite(snap.primary.usedPercent)) return undefined;
-  return `${Math.round(Math.max(0, snap.primary.usedPercent))}%`;
-}
 
 function deriveProviderStatusFromCore(
   isEnabled: boolean,
@@ -347,13 +268,12 @@ function providerSidebarSubtitleFromCore(
 
 function providerSidebarMetricFromCore(
   snap: ProviderSnapshot | null,
+  showAsUsed: boolean,
 ): string | undefined {
   if (!snap) return undefined;
-  // Use projection so the sidebar metric matches the taskbar strip's hero cell.
-  const proj = projectSurface(snap);
+  const proj = projectSurface(snap, { showAsUsed });
   if (proj.primary) {
-    // Real quota window present → show its percent
-    if (proj.primary.fillPercent != null) return `${Math.round(proj.primary.usedPercent)}%`;
+    if (proj.primary.fillPercent != null) return `${Math.round(proj.primary.fillPercent)}%`;
   }
   if (proj.balance) return proj.balance.amountText;
   return undefined;

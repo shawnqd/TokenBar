@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { render, waitFor } from "@testing-library/react";
 import { fromBridge } from "../../../core";
 import { trayCoreStore } from "../../../surfaces/tray/trayCoreStore";
+import { resetTrayCoreForTest } from "../../../surfaces/tray/trayCoreStore.testSupport";
 import type {
   ProviderUsageSnapshot,
   RateWindowSnapshot,
@@ -80,7 +81,7 @@ function renderPreview() {
 describe("TrayPanelPreview (core read model)", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    trayCoreStore.resetForTest();
+    resetTrayCoreForTest();
     tauriMocks.getLocaleStrings.mockResolvedValue(buildBundle({}));
     tauriMocks.getProviderChartData.mockResolvedValue({
       providerId: "claude",

@@ -6,7 +6,7 @@ vi.mock("../../../hooks/useLocale", () => ({
 }));
 
 vi.mock("../../../lib/tauri", () => ({
-  playNotificationSound: vi.fn().mockResolvedValue(undefined),
+  invokeSurfaceAction: vi.fn().mockResolvedValue("ok"),
 }));
 
 import NotificationsTab from "./NotificationsTab";

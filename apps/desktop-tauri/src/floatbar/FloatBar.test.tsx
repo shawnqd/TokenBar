@@ -42,9 +42,12 @@ import type {
   SettingsSnapshot,
 } from "../types/bridge";
 import {
-  __clearFloatBarStoreForTest,
   setFloatBarLocalCostFetcher,
 } from "./floatBarStore";
+import {
+  __clearFloatBarStoreForTest,
+  seedFloatBarFromCacheForTest,
+} from "./floatBarStore.testSupport";
 import { TASKBAR_PROVIDER_AUTO } from "../types/bridge";
 
 function rateWindow(
@@ -179,7 +182,8 @@ function bootstrap(settingsOverrides: Partial<SettingsSnapshot> = {}): Bootstrap
   };
 }
 
-function renderFloatBar(state: BootstrapState) {
+async function renderFloatBar(state: BootstrapState) {
+  await seedFloatBarFromCacheForTest();
   return render(
     <LocaleProvider>
       <FloatBar state={state} />
@@ -228,7 +232,7 @@ describe("FloatBar", () => {
     ]);
     tauriMocks.getSettingsSnapshot.mockResolvedValue(settings());
 
-    const { container } = renderFloatBar(bootstrap());
+    const { container } = await renderFloatBar(bootstrap());
     await waitFor(() => {
       const pills = container.querySelectorAll(".floatbar__pill");
       expect(pills.length).toBe(2);
@@ -259,7 +263,7 @@ describe("FloatBar", () => {
       estimateNote: "Estimated from local logs",
     });
 
-    renderFloatBar(bootstrap({ floatBarShowCost: true }));
+    await renderFloatBar(bootstrap({ floatBarShowCost: true }));
 
     await waitFor(() => {
       expect(tauriMocks.getProviderLocalUsageSummary).toHaveBeenCalledWith("codex");
@@ -275,7 +279,7 @@ describe("FloatBar", () => {
       settings({ floatBarShowAsUsed: false }),
     );
 
-    const { container } = renderFloatBar(bootstrap({ floatBarShowAsUsed: false }));
+    const { container } = await renderFloatBar(bootstrap({ floatBarShowAsUsed: false }));
 
     await waitFor(() => {
       const title = container
@@ -297,7 +301,7 @@ describe("FloatBar", () => {
     };
     tauriMocks.getSettingsSnapshot.mockResolvedValue(settings(overrides));
 
-    const { container } = renderFloatBar(bootstrap(overrides));
+    const { container } = await renderFloatBar(bootstrap(overrides));
 
     await waitFor(() => {
       const title = container
@@ -312,7 +316,7 @@ describe("FloatBar", () => {
     tauriMocks.getCachedProviders.mockResolvedValue([snapshot("claude", "Claude", 75)]);
     tauriMocks.getSettingsSnapshot.mockResolvedValue(settings());
 
-    const { container } = renderFloatBar(bootstrap());
+    const { container } = await renderFloatBar(bootstrap());
     await waitFor(() => {
       expect(container.querySelector(".floatbar__pill--warn")).not.toBeNull();
     });
@@ -324,7 +328,7 @@ describe("FloatBar", () => {
     ]);
     tauriMocks.getSettingsSnapshot.mockResolvedValue(settings());
 
-    const { container } = renderFloatBar(bootstrap());
+    const { container } = await renderFloatBar(bootstrap());
     await waitFor(() => {
       expect(container.querySelector(".floatbar__pill--crit")).not.toBeNull();
     });
@@ -339,7 +343,7 @@ describe("FloatBar", () => {
       settings({ floatBarProviderIds: ["codex"] }),
     );
 
-    const { container } = renderFloatBar(
+    const { container } = await renderFloatBar(
       bootstrap({ floatBarProviderIds: ["codex"] }),
     );
     await waitFor(() => {
@@ -363,7 +367,7 @@ describe("FloatBar", () => {
     };
     tauriMocks.getSettingsSnapshot.mockResolvedValue(settings(withEntries));
 
-    const { container } = renderFloatBar(bootstrap(withEntries));
+    const { container } = await renderFloatBar(bootstrap(withEntries));
     await waitFor(() => {
       const pills = container.querySelectorAll(".floatbar__pill");
       expect(pills.length).toBe(2);
@@ -385,7 +389,7 @@ describe("FloatBar", () => {
     };
     tauriMocks.getSettingsSnapshot.mockResolvedValue(settings(both));
 
-    const { container } = renderFloatBar(bootstrap(both));
+    const { container } = await renderFloatBar(bootstrap(both));
     await waitFor(() => {
       const pills = container.querySelectorAll(".floatbar__pill");
       expect(pills.length).toBe(1);
@@ -409,7 +413,7 @@ describe("FloatBar", () => {
     };
     tauriMocks.getSettingsSnapshot.mockResolvedValue(settings(withAuto));
 
-    const { container } = renderFloatBar(bootstrap(withAuto));
+    const { container } = await renderFloatBar(bootstrap(withAuto));
     await waitFor(() => {
       const pills = container.querySelectorAll(".floatbar__pill");
       // auto session -> claude, auto weekly -> codex (positional)
@@ -429,7 +433,7 @@ describe("FloatBar", () => {
       settings({ enabledProviders: [] }),
     );
 
-    const { container } = renderFloatBar(bootstrap({ enabledProviders: [] }));
+    const { container } = await renderFloatBar(bootstrap({ enabledProviders: [] }));
     await waitFor(() => {
       expect(container.querySelectorAll(".floatbar__pill").length).toBe(0);
       expect(container.querySelector(".floatbar__empty")).not.toBeNull();
@@ -440,7 +444,7 @@ describe("FloatBar", () => {
     tauriMocks.getCachedProviders.mockResolvedValue([]);
     tauriMocks.getSettingsSnapshot.mockResolvedValue(settings());
 
-    const { container } = renderFloatBar(bootstrap());
+    const { container } = await renderFloatBar(bootstrap());
     await waitFor(() => {
       expect(container.querySelector(".floatbar__empty")).not.toBeNull();
     });
@@ -452,7 +456,7 @@ describe("FloatBar", () => {
       settings({ floatBarDarkText: true, floatBarOpacity: 45 }),
     );
 
-    const { container } = renderFloatBar(
+    const { container } = await renderFloatBar(
       bootstrap({ floatBarDarkText: true, floatBarOpacity: 45 }),
     );
 
@@ -468,7 +472,7 @@ describe("FloatBar", () => {
     tauriMocks.getCachedProviders.mockResolvedValue([]);
     tauriMocks.getSettingsSnapshot.mockResolvedValue(settings({ floatBarScale: 150 }));
 
-    const { container } = renderFloatBar(bootstrap({ floatBarScale: 150 }));
+    const { container } = await renderFloatBar(bootstrap({ floatBarScale: 150 }));
 
     await waitFor(() => {
       const bar = container.querySelector<HTMLElement>(".floatbar");
@@ -484,7 +488,7 @@ describe("FloatBar", () => {
     ]);
     tauriMocks.getSettingsSnapshot.mockResolvedValue(settings());
 
-    const { container } = renderFloatBar(bootstrap());
+    const { container } = await renderFloatBar(bootstrap());
 
     await waitFor(() => {
       const title = container
@@ -505,7 +509,7 @@ describe("FloatBar", () => {
       settings({ floatBarShowResetInline: true }),
     );
 
-    const { container } = renderFloatBar(
+    const { container } = await renderFloatBar(
       bootstrap({ floatBarShowResetInline: true }),
     );
 
@@ -538,7 +542,7 @@ describe("FloatBar", () => {
     };
     tauriMocks.getSettingsSnapshot.mockResolvedValue(settings(withWindows));
 
-    const { container } = renderFloatBar(bootstrap(withWindows));
+    const { container } = await renderFloatBar(bootstrap(withWindows));
 
     await waitFor(() => {
       const resets = container.querySelectorAll(".floatbar__reset");
@@ -563,7 +567,7 @@ describe("FloatBar", () => {
     };
     tauriMocks.getSettingsSnapshot.mockResolvedValue(settings(monthlyOnly));
 
-    const { container } = renderFloatBar(bootstrap(monthlyOnly));
+    const { container } = await renderFloatBar(bootstrap(monthlyOnly));
 
     await waitFor(() => {
       expect(container.querySelector(".floatbar__pill")).not.toBeNull();
@@ -584,7 +588,7 @@ describe("FloatBar", () => {
     };
     tauriMocks.getSettingsSnapshot.mockResolvedValue(settings(both));
 
-    const { container } = renderFloatBar(bootstrap(both));
+    const { container } = await renderFloatBar(bootstrap(both));
 
     await waitFor(() => {
       expect(container.querySelector(".floatbar__pill")).not.toBeNull();
@@ -598,7 +602,7 @@ describe("FloatBar", () => {
       tauriMocks.getCachedProviders.mockResolvedValue([]);
       tauriMocks.getSettingsSnapshot.mockResolvedValue(settings());
       await act(async () => {
-        renderFloatBar(bootstrap({ refreshIntervalSecs: 60 }));
+        await renderFloatBar(bootstrap({ refreshIntervalSecs: 60 }));
       });
 
       // FloatBar should not call refreshProvidersIfStale on mount; it uses core store sync instead
@@ -625,7 +629,7 @@ describe("FloatBar", () => {
         snapshot("claude", "Claude", 71, { resetsAt: RESETS_AT }),
       ]);
       tauriMocks.getSettingsSnapshot.mockResolvedValue(effective);
-      const { container, unmount } = renderFloatBar({
+      const { container, unmount } = await renderFloatBar({
         contractVersion: "v1",
         providers: [],
         settings: effective,
@@ -660,7 +664,7 @@ describe("FloatBar", () => {
           snapshot("claude", "Claude", 71, { resetsAt: RESETS_AT }),
         ]);
         tauriMocks.getSettingsSnapshot.mockResolvedValue(effective);
-        const { container, unmount } = renderFloatBar({
+        const { container, unmount } = await renderFloatBar({
           contractVersion: "v1",
           providers: [],
           settings: effective,

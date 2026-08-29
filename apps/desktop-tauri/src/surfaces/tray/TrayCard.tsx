@@ -741,15 +741,20 @@ export default function TrayCard({
     [projection.layers.quota, bridge, t],
   );
   const hero = views[0] ?? null;
-  const secondary = views[1] ?? null;
+  // Three measurable cycles (OpenCode Go / density-preview): one hero on top
+  // and two tiles side by side. Two cycles keep the HTML full-width secondary
+  // under the hero. Four or more keep hero + full-width secondary + remaining
+  // 2-col extras (Antigravity).
+  const pairExtras = views.length === 3;
+  const secondary = pairExtras ? null : (views[1] ?? null);
   const extraTiles = useMemo(() => {
-    const rest = views.slice(2);
+    const rest = pairExtras ? views.slice(1) : views.slice(2);
     const count = rest.length;
     return rest.map((w, idx) => ({
       ...w,
       fullWidth: count === 1 || (count > 1 && idx === count - 1 && count % 2 === 1),
     }));
-  }, [views]);
+  }, [views, pairExtras]);
 
   const localUsage = core.error ? null : chartData?.localUsage ?? null;
   const usageLead = localUsage ? resolveLocalUsageLead(localUsagePeriod, localUsage) : null;

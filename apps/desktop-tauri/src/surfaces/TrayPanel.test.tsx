@@ -2,6 +2,9 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-libra
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { FIXTURE_SNAPSHOTS, fromBridge, type ProviderSnapshot, type UsageStoreKey } from "../core";
 import { trayCoreStore } from "./tray/trayCoreStore";
+import { resetTrayCoreForTest } from "./tray/trayCoreStore.testSupport";
+import { disposeAppRuntime } from "../appRuntime";
+import { setCoreBridgeDispatcher, setCoreBridgeStore, setCoreBridgeCoordinator } from "../core/useCoreBridge";
 import type {
   ProviderCapabilitiesSnapshot,
   ProviderChartData,
@@ -237,7 +240,11 @@ describe("TrayPanel provider grid (core read model)", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     eventMocks.listeners.clear();
-    trayCoreStore.resetForTest();
+    disposeAppRuntime();
+    setCoreBridgeStore(null);
+    setCoreBridgeCoordinator(null);
+    setCoreBridgeDispatcher(null);
+    resetTrayCoreForTest();
     providerCoreMap = new Map();
     chartMap = new Map();
     speedMap = new Map();
@@ -271,6 +278,7 @@ describe("TrayPanel provider grid (core read model)", () => {
     tauriMocks.endFlyoutGesture.mockResolvedValue(undefined);
     tauriMocks.beginTrayPanelResize.mockResolvedValue(undefined);
     tauriMocks.dismissTrayPanel.mockResolvedValue(undefined);
+    tauriMocks.invokeSurfaceAction.mockResolvedValue("ok");
     tauriMocks.quitApp.mockResolvedValue(undefined);
     tauriMocks.reorderProviders.mockResolvedValue(undefined);
     tauriMocks.openProviderDashboard.mockResolvedValue(undefined);
@@ -385,7 +393,10 @@ describe("TrayPanel provider grid (core read model)", () => {
     });
     fireEvent.keyDown(window, { key: "Escape" });
     await waitFor(() => {
-      expect(tauriMocks.dismissTrayPanel).toHaveBeenCalledTimes(1);
+      expect(tauriMocks.invokeSurfaceAction).toHaveBeenCalledWith({
+        type: "dismiss",
+        target: { kind: "summary" },
+      });
     });
   });
 
@@ -398,7 +409,9 @@ describe("TrayPanel provider grid (core read model)", () => {
     fireEvent.keyDown(window, { key: "Escape", shiftKey: true });
     fireEvent.keyDown(window, { key: "Escape", altKey: true });
     fireEvent.keyDown(window, { key: "Escape", metaKey: true });
-    expect(tauriMocks.dismissTrayPanel).not.toHaveBeenCalled();
+    expect(tauriMocks.invokeSurfaceAction).not.toHaveBeenCalledWith(
+      expect.objectContaining({ type: "dismiss" }),
+    );
   });
 
   it("keeps the existing Ctrl+R tray shortcut bound to the core refresh command", async () => {
@@ -406,13 +419,44 @@ describe("TrayPanel provider grid (core read model)", () => {
     await waitFor(() => {
       expect(container.querySelector(".tray-panel-reveal--native-size")).not.toBeNull();
     });
-    // Let the mount refresh settle, then trigger Ctrl+R: the coordinator must
-    // re-fetch through the injected fetcher, never through the old backend
-    // broadcast refresh.
-    await waitFor(() => expect(fetcherMock).toHaveBeenCalled());
-    fetcherMock.mockClear();
+    await waitFor(() =>
+      expect(fetcherMock).toHaveBeenCalledWith(
+        expect.objectContaining({ providerId: "claude" }),
+      ),
+    );
+    const initialCalls = fetcherMock.mock.calls.length;
     fireEvent.keyDown(window, { key: "r", ctrlKey: true });
-    await waitFor(() => expect(fetcherMock).toHaveBeenCalled());
+    await waitFor(() =>
+      expect(fetcherMock.mock.calls.length).toBeGreaterThan(initialCalls),
+    );
+    expect(tauriMocks.invokeSurfaceAction).not.toHaveBeenCalledWith(
+      expect.objectContaining({ type: "refresh" }),
+    );
+  });
+
+  it("spins the footer refresh icon while a manual refresh is in flight", async () => {
+    const { container } = renderTrayPanel([provider("claude", "Claude", 35)]);
+    await waitFor(() => {
+      expect(container.querySelector(".footer-row__icon")).not.toBeNull();
+    });
+    let release!: () => void;
+    const hold = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    fetcherMock.mockImplementation(async (key: UsageStoreKey) => {
+      await hold;
+      const core = providerCoreMap.get(key.providerId);
+      if (!core) throw new Error(`no snapshot for ${key.providerId}`);
+      return core;
+    });
+    fireEvent.click(container.querySelectorAll(".footer-row")[0]!);
+    await waitFor(() => {
+      expect(container.querySelector(".footer-row__icon.is-spinning")).not.toBeNull();
+    });
+    release();
+    await waitFor(() => {
+      expect(container.querySelector(".footer-row__icon.is-spinning")).toBeNull();
+    });
   });
 
   it("localizes static tray panel labels in Japanese", async () => {

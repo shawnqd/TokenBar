@@ -2,6 +2,9 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { TEST_PROVIDER_CATALOG } from "../../../test/providerCatalog";
 import type { SettingsSnapshot } from "../../../types/bridge";
+import { createUsageStore } from "../../../core/usageStore";
+import { fromBridge } from "../../../core/fromBridge";
+import { bridgeRateWindow, bridgeSnapshot } from "../../../core/fixtures";
 import ProvidersPage from "./ProvidersPage";
 import TrayPanelPage from "./TrayPanelPage";
 import { buildProviderCatalog } from "./htmlFixture";
@@ -76,35 +79,6 @@ vi.mock("../../../lib/tauri", () => ({
   invokeSurfaceAction: tauriMocks.invokeSurfaceAction,
 }));
 
-vi.mock("../../../hooks/useProviders", () => ({
-  useProviders: () => ({
-    providers: [
-      {
-        providerId: "claude",
-        displayName: "Claude",
-        primary: {
-          usedPercent: 41,
-          remainingPercent: 59,
-          kind: "session",
-          windowMinutes: 300,
-          resetsAt: null,
-          resetDescription: "3h",
-          isExhausted: false,
-          reservePercent: null,
-          reserveDescription: null,
-        },
-        updatedAt: new Date().toISOString(),
-        error: null,
-      },
-    ],
-    isRefreshing: false,
-    refresh: vi.fn(),
-    lastRefresh: null,
-    hasCachedData: true,
-    hasLoadedCache: true,
-  }),
-}));
-
 vi.mock("../../../hooks/useOutputSpeedSnapshot", () => ({
   useOutputSpeedSnapshot: () => null,
 }));
@@ -124,6 +98,27 @@ const snapshot = {
   trayScalePercent: 100,
   providerMetrics: {},
 } as unknown as SettingsSnapshot;
+
+function claudeLiveStore() {
+  const store = createUsageStore();
+  store.upsert(
+    fromBridge(
+      bridgeSnapshot({
+        providerId: "claude",
+        displayName: "Claude",
+        updatedAt: new Date().toISOString(),
+        primary: bridgeRateWindow({
+          kind: "session",
+          windowMinutes: 300,
+          usedPercent: 41,
+          remainingPercent: 59,
+          resetDescription: "3h",
+        }),
+      }),
+    ),
+  );
+  return store;
+}
 
 describe("V5 settings pages from HTML", () => {
   tauriMocks.getProviderDetail.mockResolvedValue({
@@ -277,7 +272,7 @@ describe("V5 settings pages from HTML", () => {
 
   it("renders live quota from getProviderDetail instead of the HTML fixture percents", async () => {
     render(
-      <ProvidersPage settings={snapshot} set={() => {}} saving={false} />,
+      <ProvidersPage settings={snapshot} set={() => {}} saving={false} coreStore={claudeLiveStore()} />,
     );
     expect(await screen.findByText("41%")).toBeInTheDocument();
     expect(screen.queryByText("62%")).not.toBeInTheDocument();
@@ -290,6 +285,7 @@ describe("V5 settings pages from HTML", () => {
         settings={{ ...snapshot, dashboardShowAsUsed: false }}
         set={() => {}}
         saving={false}
+        coreStore={claudeLiveStore()}
       />,
     );
     expect(await screen.findAllByText("59%")).not.toHaveLength(0);
@@ -349,7 +345,7 @@ describe("V5 settings pages from HTML", () => {
 
   it("lists a relative update time without 已登录 or 更新 after minutes", () => {
     render(
-      <ProvidersPage settings={snapshot} set={() => {}} saving={false} />,
+      <ProvidersPage settings={snapshot} set={() => {}} saving={false} coreStore={claudeLiveStore()} />,
     );
     expect(screen.queryByText(/已登录/)).not.toBeInTheDocument();
     expect(screen.getByText("刚刚更新")).toBeInTheDocument();

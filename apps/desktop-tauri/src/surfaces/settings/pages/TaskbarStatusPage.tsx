@@ -1,7 +1,6 @@
 import { useEffect, useMemo, useState, useSyncExternalStore, useCallback } from "react";
 import { useFontPicker } from "../../../hooks/useFontPicker";
 import { useLocale } from "../../../hooks/useLocale";
-import { getTaskbarPreviewLines } from "../../../lib/tauri";
 import type {
   TaskbarEntry,
   TaskbarStripCell,
@@ -114,34 +113,10 @@ export default function TaskbarStatusPage({
     () => (hasCoreInjection ? deriveTaskbarCellsFromSnapshots(coreSnapshots, entries, settings.taskbarShowAsUsed ?? true) : []),
     [hasCoreInjection, coreSnapshots, entries, settings.taskbarShowAsUsed],
   );
-  const [tauriCells, setTauriCells] = useState<TaskbarStripCell[]>([]);
-  useEffect(() => {
-    if (hasCoreInjection) return;
-    let cancelled = false;
-    getTaskbarPreviewLines()
-      .then((lines) => {
-        if (!cancelled) setTauriCells(lines);
-      })
-      .catch(() => {
-        if (!cancelled) setTauriCells([]);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [
-      hasCoreInjection,
-      enabled,
-      entries,
-      width,
-      iconSize,
-      iconStyle,
-      settings.taskbarWidgetFontSize,
-      settings.taskbarWidgetFontWeight,
-      settings.taskbarWidgetFontFamily,
-      settings.taskbarWidgetTextAlign,
-      settings.taskbarShowAsUsed,
-    ]);
-  const previewLines = hasCoreInjection ? coreCells : tauriCells;
+  // A preview is valid only when it is derived from the injected process
+  // projection. The old no-store native preview made Settings a second
+  // production read path and could display data from a different refresh.
+  const previewLines = hasCoreInjection ? coreCells : [];
 
   useEffect(() => {
     setWeightDraft(settings.taskbarWidgetFontWeight ?? 400);

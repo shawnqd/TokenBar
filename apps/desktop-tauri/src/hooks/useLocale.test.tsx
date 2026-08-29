@@ -4,7 +4,7 @@ import { buildBundle } from "../test/localeHarness";
 
 vi.mock("../lib/tauri", () => ({
   getLocaleStrings: vi.fn(),
-  setUiLanguage: vi.fn(),
+  invokeSurfaceAction: vi.fn(),
 }));
 
 vi.mock("@tauri-apps/api/event", () => ({

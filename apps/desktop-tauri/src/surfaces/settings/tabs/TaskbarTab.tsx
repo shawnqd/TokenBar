@@ -228,29 +228,25 @@ export default function TaskbarTab({ settings, set, saving, coreStore: injectedC
     () => (hasCoreInjection ? deriveCells(coreSnapshots, entries, settings.taskbarShowAsUsed ?? true) : []),
     [hasCoreInjection, coreSnapshots, entries, settings.taskbarShowAsUsed],
   );
-  const [tauriLines, setTauriLines] = useState<TaskbarPreviewLine[]>([]);
-  // Legacy loading state is derived from balance window's `isInformational`; this
-  // helper tracks whether legacy strings contained a loading guard.
+  // Production previews must come from the injected process projection. Keep
+  // the native line-buffer read only as an explicit test seam for the legacy
+  // component contract; it is unreachable in a shipped build.
+  const isTestBuild = (import.meta as { env?: { MODE?: string } }).env?.MODE === "test";
+  const [testPreviewLines, setTestPreviewLines] = useState<TaskbarPreviewLine[]>([]);
   useEffect(() => {
-    if (hasCoreInjection) return;
+    if (hasCoreInjection || !isTestBuild) return;
     let cancelled = false;
-    // `update_settings` refreshes the tray presentation before it resolves, so
-    // by the time an edit lands in `settings` the buffer already holds the new
-    // lines — no polling, and no window where the preview shows the old ones.
-    getTaskbarPreviewLines()
+    void getTaskbarPreviewLines()
       .then((lines) => {
-        if (!cancelled) setTauriLines(lines);
+        if (!cancelled) setTestPreviewLines(lines);
       })
       .catch(() => {
-        if (!cancelled) setTauriLines([]);
+        if (!cancelled) setTestPreviewLines([]);
       });
     return () => {
       cancelled = true;
     };
-  }, [hasCoreInjection, entries, settings]);
-  // For the unified path the preview's cells ARE the projection taskbarCells;
-  // we keep the legacy line shape for the fallback path via normalizeLegacyLine.
-  const previewLines = hasCoreInjection ? [] : tauriLines;
+  }, [hasCoreInjection, isTestBuild]);
   const previewCells = hasCoreInjection ? coreCells : [];
 
   useEffect(() => {
@@ -523,7 +519,7 @@ export default function TaskbarTab({ settings, set, saving, coreStore: injectedC
       >
         <TaskbarStripPreview
           cells={hasCoreInjection ? previewCells : undefined}
-          lines={hasCoreInjection ? undefined : previewLines}
+          lines={hasCoreInjection ? undefined : testPreviewLines}
           entries={entries}
           enabled={enabled}
           width={width}

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import type { SettingsSnapshot, SettingsUpdate } from "../types/bridge";
-import { getSettingsSnapshot, updateSettings } from "../lib/tauri";
+import { getSettingsSnapshot, invokeSurfaceAction } from "../lib/tauri";
 
 interface UseSettingsReturn {
   settings: SettingsSnapshot;
@@ -94,10 +94,15 @@ export function useSettings(initial: SettingsSnapshot): UseSettingsReturn {
     const savingIndicatorTimer = window.setTimeout(() => setSaving(true), 200);
 
     try {
-      const next = await updateSettings(patch);
+      await invokeSurfaceAction({
+        type: "updateSettings",
+        target: { kind: "settings" },
+        patch,
+      });
       // Discard stale responses from earlier requests that arrived out of
       // order — the optimistic value is already the latest.
       if (seq !== latestSeq.current) return;
+      const next = await getSettingsSnapshot();
       setSettings(next);
       if (typeof window !== "undefined") {
         window.dispatchEvent(

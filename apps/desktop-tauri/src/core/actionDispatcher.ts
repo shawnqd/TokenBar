@@ -38,10 +38,53 @@ export function routeAction(action: SurfaceAction): string {
     case "openExternalUsage":
     case "openExternalStatus":
     case "triggerLogin":
+    case "setApiKey":
+    case "removeApiKey":
+    case "setManualCookie":
+    case "removeManualCookie":
+    case "openProviderLogin":
+    case "captureProviderLogin":
+    case "addTokenAccount":
+    case "removeTokenAccount":
+    case "setActiveTokenAccount":
+    case "revokeCredentials":
+    case "setCookieSource":
+    case "setRegion":
+    case "setWorkspaceId":
+    case "setGatewayUrl":
       return "provider";
+    case "dismiss":
+    case "reorderProviders":
+    case "closeProviderLogin":
+      return "summary";
+    case "clearCache":
+    case "importCookieFile":
+    case "resetSettings":
+    case "closeSettings":
+    case "updateSettings":
+    case "setUiLanguage":
+    case "playNotificationSound":
+      return "settings";
+    case "openExternalUrl":
+    case "openPath":
+    case "setIdePath":
+    case "registerGlobalShortcut":
+    case "unregisterGlobalShortcut":
+      return "app";
     default:
       return "unknown";
   }
+}
+
+/** Throw when dispatch did not handle the action so callers can keep try/catch. */
+export async function requireActionResult(
+  result: Promise<ActionResult> | ActionResult,
+): Promise<unknown> {
+  const resolved = await result;
+  if (resolved.status !== "handled") {
+    throw new Error(resolved.error ?? resolved.status);
+  }
+  return resolved.data;
 }
 
 export interface ActionDispatcherOptions {

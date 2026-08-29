@@ -1,10 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { useLocale } from "../../../hooks/useLocale";
 import { invoke } from "@tauri-apps/api/core";
-import {
-  registerGlobalShortcut,
-  unregisterGlobalShortcut,
-} from "../../../lib/tauri";
+import { invokeSurfaceAction } from "../../../lib/tauri";
 import { ShortcutCapture } from "../../../components/ShortcutCapture";
 import { Field, Select, Toggle } from "../../../components/FormControls";
 import type { Language, LanguageOption } from "../../../types/bridge";
@@ -46,7 +43,11 @@ export default function GeneralTab({ settings, set, saving }: TabProps) {
     async (accelerator: string) => {
       setShortcutError(null);
       try {
-        await registerGlobalShortcut(accelerator).catch(() => {});
+        await invokeSurfaceAction({
+          type: "registerGlobalShortcut",
+          target: { kind: "app" },
+          accelerator,
+        }).catch(() => {});
         set({ globalShortcut: accelerator });
       } catch (err: unknown) {
         setShortcutError(err instanceof Error ? err.message : String(err));
@@ -58,7 +59,10 @@ export default function GeneralTab({ settings, set, saving }: TabProps) {
   const clearShortcut = useCallback(async () => {
     setShortcutError(null);
     try {
-      await unregisterGlobalShortcut().catch(() => {});
+      await invokeSurfaceAction({
+        type: "unregisterGlobalShortcut",
+        target: { kind: "app" },
+      }).catch(() => {});
       set({ globalShortcut: "" });
     } catch (err: unknown) {
       setShortcutError(err instanceof Error ? err.message : String(err));

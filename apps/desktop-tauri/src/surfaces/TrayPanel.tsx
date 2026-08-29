@@ -9,9 +9,7 @@ import type { ProviderSnapshot, UsageStoreKey } from "../core";
 import {
   beginFlyoutGesture,
   beginTrayPanelResize,
-  dismissTrayPanel,
   endFlyoutGesture,
-  reorderProviders,
 } from "../lib/tauri";
 import { useDispatchAction } from "../core/useCoreBridge";
 import { useSettings } from "../hooks/useSettings";
@@ -98,7 +96,6 @@ export default function TrayPanel({ state }: { state: BootstrapState }) {
   const { t } = useLocale();
   const trayState = useTrayCoreState();
   const records = useTrayCoreRecords();
-  const refreshAllCommand = useTrayRefreshAllCommand();
   const outputSpeed = useOutputSpeedSnapshot(
     settings.outputSpeedEnabled !== false,
   );
@@ -128,10 +125,14 @@ export default function TrayPanel({ state }: { state: BootstrapState }) {
     }
     return map;
   }, [records]);
-  const isRefreshing = records.some(
+  const dispatchAction = useDispatchAction();
+  const refreshReplica = useTrayRefreshAllCommand();
+  const [refreshPending, setRefreshPending] = useState(false);
+  const replicaRefreshing = records.some(
     (record) =>
       record.displayState === "refreshing" || record.displayState === "loading",
   );
+  const isRefreshing = refreshPending || replicaRefreshing;
   const hasCachedData = records.some(
     (record) => record.snapshot != null || record.lastGood != null,
   );
@@ -255,13 +256,13 @@ export default function TrayPanel({ state }: { state: BootstrapState }) {
     if (refreshKeys.length === 0) return;
     initialRefreshRequested.current = true;
     const timer = window.setTimeout(() => {
-      void refreshAllCommand(refreshKeys, {
+      void refreshReplica(refreshKeys, {
         manual: settings.refreshAllProvidersOnMenuOpen,
       }).catch(() => {});
     }, TRAY_INITIAL_REFRESH_DELAY_MS);
     return () => window.clearTimeout(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [refreshAllCommand, refreshKeys, settings.refreshAllProvidersOnMenuOpen]);
+  }, [refreshReplica, refreshKeys, settings.refreshAllProvidersOnMenuOpen]);
 
   // Committed chart/local-usage enrichment per provider, read from the core
   // store so TrayCard receives injected results (never a direct tauri call).
@@ -314,7 +315,6 @@ export default function TrayPanel({ state }: { state: BootstrapState }) {
     if (event.target === event.currentTarget) setRevealSettled(true);
   }, []);
 
-  const dispatchAction = useDispatchAction();
   const openSettings = useCallback(() => {
     void dispatchAction({
       type: "openSettings",
@@ -325,10 +325,12 @@ export default function TrayPanel({ state }: { state: BootstrapState }) {
     void dispatchAction({ type: "quit", target: { kind: "app" } }).catch(() => {});
   }, [dispatchAction]);
   const handleRefresh = useCallback(() => {
-    void dispatchAction({ type: "refresh" }).catch(() => {});
-    void refreshAllCommand(refreshKeys, { manual: true }).catch(() => {});
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [dispatchAction, refreshAllCommand, refreshKeys]);
+    if (refreshPending) return;
+    setRefreshPending(true);
+    void refreshReplica(refreshKeys, { manual: true })
+      .catch(() => {})
+      .finally(() => setRefreshPending(false));
+  }, [refreshReplica, refreshKeys, refreshPending]);
 
   // Keyboard shortcuts — Esc dismiss, Ctrl+R refresh, Ctrl+, settings, Ctrl+Q quit.
   useEffect(() => {
@@ -341,7 +343,10 @@ export default function TrayPanel({ state }: { state: BootstrapState }) {
         !e.metaKey
       ) {
         e.preventDefault();
-        void dismissTrayPanel().catch(() => {});
+        void dispatchAction({
+          type: "dismiss",
+          target: { kind: "summary" },
+        }).catch(() => {});
         return;
       }
       if (!e.ctrlKey || e.shiftKey || e.altKey || e.metaKey) return;
@@ -362,14 +367,18 @@ export default function TrayPanel({ state }: { state: BootstrapState }) {
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [handleRefresh, openSettings, requestQuit]);
+  }, [handleRefresh, openSettings, requestQuit, dispatchAction]);
 
   const handleGridClick = useCallback((providerId: string | null) => {
     setSelectedProviderId(providerId);
   }, []);
   const handleReorder = useCallback((orderedIds: string[]) => {
-    void reorderProviders(orderedIds).catch(() => {});
-  }, []);
+    void dispatchAction({
+      type: "reorderProviders",
+      target: { kind: "summary" },
+      providerIds: orderedIds,
+    }).catch(() => {});
+  }, [dispatchAction]);
   const handleGestureStart = useCallback(() => {
     void beginFlyoutGesture().catch(() => {});
   }, []);

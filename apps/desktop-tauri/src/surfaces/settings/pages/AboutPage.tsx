@@ -1,6 +1,8 @@
 import { useEffect, useState } from "react";
 import { useLocale } from "../../../hooks/useLocale";
-import { getAppInfo, openExternalUrl } from "../../../lib/tauri";
+import { getAppInfo } from "../../../lib/tauri";
+import { useDispatchAction } from "../../../core/useCoreBridge";
+import { requireActionResult } from "../../../core/actionDispatcher";
 import type { AppInfoBridge } from "../../../types/bridge";
 import type { LocaleKey } from "../../../i18n/keys";
 import type { SettingsPageProps } from "./pageTypes";
@@ -26,6 +28,7 @@ const LINKS: { labelKey: LocaleKey; url: string; text: string }[] = [
 
 export default function AboutPage(_props: SettingsPageProps) {
   const { t } = useLocale();
+  const dispatch = useDispatchAction();
   const [appInfo, setAppInfo] = useState<AppInfoBridge | null>(null);
   const [linkError, setLinkError] = useState<string | null>(null);
 
@@ -35,7 +38,9 @@ export default function AboutPage(_props: SettingsPageProps) {
 
   const open = (url: string) => {
     setLinkError(null);
-    openExternalUrl(url).catch((error) => setLinkError(String(error)));
+    void requireActionResult(
+      dispatch({ type: "openExternalUrl", target: { kind: "app" }, url }),
+    ).catch((error) => setLinkError(String(error)));
   };
 
   return (

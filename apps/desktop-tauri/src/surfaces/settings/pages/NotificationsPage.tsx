@@ -1,6 +1,6 @@
 import { useCallback, useState } from "react";
 import { useLocale } from "../../../hooks/useLocale";
-import { playNotificationSound } from "../../../lib/tauri";
+import { invokeSurfaceAction } from "../../../lib/tauri";
 import type { SettingsPageProps } from "./pageTypes";
 import { V5Field, V5Num, V5Section, V5Toggle } from "./v5Controls";
 
@@ -15,7 +15,10 @@ export default function NotificationsPage({
 
   const testSound = useCallback(() => {
     setPlaying(true);
-    void playNotificationSound().catch(() => {});
+    void invokeSurfaceAction({
+      type: "playNotificationSound",
+      target: { kind: "settings" },
+    }).catch(() => {});
     window.setTimeout(() => setPlaying(false), 1500);
   }, []);
 

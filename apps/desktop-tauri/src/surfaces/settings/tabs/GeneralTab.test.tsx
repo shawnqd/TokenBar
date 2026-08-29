@@ -18,8 +18,7 @@ vi.mock("@tauri-apps/api/core", () => ({
 }));
 
 vi.mock("../../../lib/tauri", () => ({
-  registerGlobalShortcut: vi.fn().mockResolvedValue(undefined),
-  unregisterGlobalShortcut: vi.fn().mockResolvedValue(undefined),
+  invokeSurfaceAction: vi.fn().mockResolvedValue("ok"),
 }));
 
 import GeneralTab from "./GeneralTab";

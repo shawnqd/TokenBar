@@ -2,12 +2,10 @@ import { useCallback, useEffect, useState } from "react";
 import type { ProviderTokenAccountsBridge } from "../../../types/bridge";
 import { useLocale } from "../../../hooks/useLocale";
 import {
-  addTokenAccount,
   getTokenAccounts,
-  removeTokenAccount,
-  setActiveTokenAccount,
-  triggerProviderLogin,
 } from "../../../lib/tauri";
+import { useDispatchAction } from "../../../core/useCoreBridge";
+import { requireActionResult } from "../../../core/actionDispatcher";
 
 interface Props {
   providerId: string;
@@ -33,6 +31,7 @@ interface Props {
  */
 export function TokenAccountsPanel({ providerId, compact = false }: Props) {
   const { t } = useLocale();
+  const dispatch = useDispatchAction();
   const [data, setData] = useState<ProviderTokenAccountsBridge | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -69,11 +68,15 @@ export function TokenAccountsPanel({ providerId, compact = false }: Props) {
     setBusy(true);
     setError(null);
     try {
-      const next = await addTokenAccount(
-        providerId,
-        addLabel.trim(),
-        addToken.trim(),
+      await requireActionResult(
+        dispatch({
+          type: "addTokenAccount",
+          target: { kind: "provider", providerId },
+          label: addLabel.trim(),
+          token: addToken.trim(),
+        }),
       );
+      const next = await getTokenAccounts(providerId);
       setData(next);
       setAddLabel("");
       setAddToken("");
@@ -89,7 +92,14 @@ export function TokenAccountsPanel({ providerId, compact = false }: Props) {
     setBusy(true);
     setError(null);
     try {
-      const next = await removeTokenAccount(providerId, accountId);
+      await requireActionResult(
+        dispatch({
+          type: "removeTokenAccount",
+          target: { kind: "provider", providerId },
+          accountId,
+        }),
+      );
+      const next = await getTokenAccounts(providerId);
       setData(next);
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : String(err));
@@ -103,7 +113,14 @@ export function TokenAccountsPanel({ providerId, compact = false }: Props) {
     setBusy(true);
     setError(null);
     try {
-      const next = await setActiveTokenAccount(providerId, accountId);
+      await requireActionResult(
+        dispatch({
+          type: "setActiveTokenAccount",
+          target: { kind: "provider", providerId },
+          accountId,
+        }),
+      );
+      const next = await getTokenAccounts(providerId);
       setData(next);
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : String(err));
@@ -117,7 +134,10 @@ export function TokenAccountsPanel({ providerId, compact = false }: Props) {
     setBusy(true);
     setError(null);
     try {
-      await triggerProviderLogin(providerId);
+      await dispatch({
+        type: "triggerLogin",
+        target: { kind: "provider", providerId },
+      });
       await load();
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : String(err));

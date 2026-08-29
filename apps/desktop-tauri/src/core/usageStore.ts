@@ -79,7 +79,7 @@ export function createUsageStore(options: { fetcher?: UsageFetcher } = {}): Usag
     const id = usageStoreKey(key);
     generations.set(id, (generations.get(id) ?? 0) + 1);
     const previous = state.records[id];
-    const record = writeRecord(key, previous, snapshot, snapshot.error);
+    const record = recordFromSnapshot(key, previous, snapshot, snapshot.error);
     commit(id, record);
     return record;
   };
@@ -144,7 +144,7 @@ export function createUsageStore(options: { fetcher?: UsageFetcher } = {}): Usag
       return state.records[id] ?? emptyRecord(key);
     }
     const previous = state.records[id];
-    const record = writeRecord(key, previous, snapshot, snapshot.error);
+    const record = recordFromSnapshot(key, previous, snapshot, snapshot.error);
     commit(id, record);
     return record;
   }
@@ -195,7 +195,14 @@ export function createUsageStore(options: { fetcher?: UsageFetcher } = {}): Usag
   };
 }
 
-function writeRecord(
+/**
+ * Convert one already-published snapshot into the local read-model shape.
+ *
+ * This helper deliberately does not own refreshes or emit events.  The
+ * process projection adapter uses it while applying a versioned full
+ * projection; `createUsageStore` uses it for the isolated unit-test store.
+ */
+export function recordFromSnapshot(
   key: UsageStoreKey,
   previous: UsageRecord | undefined,
   snapshot: ProviderSnapshot,

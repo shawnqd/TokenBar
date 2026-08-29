@@ -2,7 +2,7 @@ import { renderHook, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
 vi.mock("../lib/tauri", () => ({
-  openExternalUrl: vi.fn(),
+  invokeSurfaceAction: vi.fn(),
   getTaskbarFontFamilies: vi.fn().mockResolvedValue([
     {
       name: "Bahnschrift",

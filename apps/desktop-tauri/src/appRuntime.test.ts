@@ -17,6 +17,7 @@ vi.mock("./lib/tauri", () => ({
   refreshProvidersIfStale: vi.fn(async () => {}),
   quitApp: vi.fn(async () => {}),
   invokeSurfaceAction: vi.fn(async () => "wired"),
+  getProviderProjection: vi.fn(async () => ({ version: 0, snapshots: [] })),
   getProviderLocalUsageSummary: vi.fn(async () => null),
 }));
 vi.mock("@tauri-apps/api/event", () => ({
@@ -53,13 +54,13 @@ describe("appRuntime", () => {
     expect(hasAppRuntime()).toBe(false);
   });
 
-  it("seedFromBridge upserts snapshots into the shared store", () => {
+  it("seedFromBridge applies snapshots into the read-only projection replica", () => {
     const r = buildAppRuntime();
-    const snap = {
+    const snap = bridgeSnapshot({
       providerId: "codex",
-      accountKey: "acc",
-      sourceKey: "src",
-    };
+      accountEmail: "acc",
+      sourceLabel: "src",
+    });
     r.seedFromBridge([snap as never]);
     const key: UsageStoreKey = { providerId: "codex", accountKey: "acc", sourceKey: "src" };
     expect(r.store.get(key)?.snapshot).not.toBeNull();
@@ -72,23 +73,23 @@ describe("appRuntime", () => {
     ).rejects.toThrow(/no snapshot/i);
   });
 
-  it("fetchForKey triggers a stale backend round when the store has no record", async () => {
+  it("fetchForKey only reads the process cache and never starts a second refresh", async () => {
     const tauri = await import("./lib/tauri");
     vi.mocked(tauri.getCachedProviders).mockResolvedValue([]);
     const r = buildAppRuntime();
     await expect(
       r.fetchProvider({ providerId: "codex", accountKey: "a", sourceKey: "s" }),
     ).rejects.toThrow(/no snapshot/i);
-    expect(tauri.refreshProvidersIfStale).toHaveBeenCalled();
+    expect(tauri.refreshProvidersIfStale).not.toHaveBeenCalled();
+    expect(tauri.refreshProviders).not.toHaveBeenCalled();
   });
 
-  it("fetchForKey prefers the cache row that matches the account email", async () => {
-    const tauri = await import("./lib/tauri");
-    vi.mocked(tauri.getCachedProviders).mockResolvedValue([
+  it("fetchForKey reads the matching row from the process projection", async () => {
+    const r = buildAppRuntime();
+    r.seedFromBridge([
       bridgeSnapshot({ providerId: "codex", accountEmail: "team@x.com" }),
       bridgeSnapshot({ providerId: "codex", accountEmail: "me@x.com" }),
-    ]);
-    const r = buildAppRuntime();
+    ] as never);
     const snap = await r.fetchProvider({ providerId: "codex", accountKey: "me@x.com", sourceKey: "auto" });
     expect(snap.accountEmail).toBe("me@x.com");
   });

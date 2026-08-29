@@ -10,3 +10,5 @@ export * from "./surfaceRegistry";
 export * from "./actionDispatcher";
 export * from "./useCoreBridge";
 export * from "./runtimeDiagnostics";
+export * from "./projectionRuntime";
+export * from "./enrichmentAccess";

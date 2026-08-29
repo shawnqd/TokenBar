@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const tauriMocks = vi.hoisted(() => ({
   getAppInfo: vi.fn(),
-  openExternalUrl: vi.fn(),
+  invokeSurfaceAction: vi.fn(),
 }));
 
 vi.mock("../../../lib/tauri", () => tauriMocks);
@@ -12,6 +12,8 @@ vi.mock("../../../hooks/useLocale", () => ({
 }));
 import AboutTab from "./AboutTab";
 import type { SettingsSnapshot } from "../../../types/bridge";
+import { createActionDispatcher } from "../../../core/actionDispatcher";
+import { setCoreBridgeDispatcher } from "../../../core/useCoreBridge";
 
 const settings: SettingsSnapshot = {
   enabledProviders: [],
@@ -90,7 +92,18 @@ describe("AboutTab", () => {
       updateChannel: "stable",
       tagline: "Keep agent limits in view.",
     });
-    tauriMocks.openExternalUrl.mockResolvedValue(undefined);
+    tauriMocks.invokeSurfaceAction.mockResolvedValue("ok");
+    setCoreBridgeDispatcher(
+      createActionDispatcher(
+        {},
+        {
+          fallback: async (action) => {
+            const data = await tauriMocks.invokeSurfaceAction(action);
+            return { status: "handled", data };
+          },
+        },
+      ),
+    );
   });
 
   it("opens about links through the Tauri URL bridge", async () => {
@@ -100,29 +113,35 @@ describe("AboutTab", () => {
     fireEvent.click(screen.getByRole("button", { name: "AboutLinkWebsite" }));
     fireEvent.click(screen.getByRole("button", { name: "AboutLinkOriginalProject" }));
 
-    expect(tauriMocks.openExternalUrl).toHaveBeenNthCalledWith(
-      1,
-      "https://github.com/Finesssee/Win-CodexBar",
-    );
-    expect(tauriMocks.openExternalUrl).toHaveBeenNthCalledWith(
-      2,
-      "https://codexbar.app",
-    );
-    expect(tauriMocks.openExternalUrl).toHaveBeenNthCalledWith(
-      3,
-      "https://github.com/steipete/CodexBar",
-    );
+    await waitFor(() => {
+      expect(tauriMocks.invokeSurfaceAction).toHaveBeenCalledTimes(3);
+    });
+    expect(tauriMocks.invokeSurfaceAction).toHaveBeenNthCalledWith(1, {
+      type: "openExternalUrl",
+      target: { kind: "app" },
+      url: "https://github.com/Finesssee/Win-CodexBar",
+    });
+    expect(tauriMocks.invokeSurfaceAction).toHaveBeenNthCalledWith(2, {
+      type: "openExternalUrl",
+      target: { kind: "app" },
+      url: "https://codexbar.app",
+    });
+    expect(tauriMocks.invokeSurfaceAction).toHaveBeenNthCalledWith(3, {
+      type: "openExternalUrl",
+      target: { kind: "app" },
+      url: "https://github.com/steipete/CodexBar",
+    });
   });
 
   it("shows a link error if the OS browser launch fails", async () => {
-    tauriMocks.openExternalUrl.mockRejectedValue("no browser");
+    tauriMocks.invokeSurfaceAction.mockRejectedValue("no browser");
 
     render(<AboutTab settings={settings} set={vi.fn()} saving={false} />);
 
     fireEvent.click(await screen.findByRole("button", { name: "AboutLinkWebsite" }));
 
     await waitFor(() => {
-      expect(screen.getByText("StateError: no browser")).toBeInTheDocument();
+      expect(screen.getByText(/no browser/)).toBeInTheDocument();
     });
   });
 });

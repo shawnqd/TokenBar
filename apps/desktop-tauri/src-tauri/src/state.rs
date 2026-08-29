@@ -126,6 +126,9 @@ pub struct AppState {
     /// the background refresh loop leaves the provider's last result alone.
     pub timeout_paused_providers: HashSet<ProviderId>,
     pub provider_cache_updated_at: Option<std::time::Instant>,
+    /// Monotonic version of the full provider projection published to every
+    /// WebView. Only the process refresh owner advances this value.
+    pub provider_projection_version: u64,
     pub provider_refresh_started_at: Option<std::time::Instant>,
     pub provider_refresh_generation: u64,
     pub is_refreshing: bool,
@@ -194,6 +197,7 @@ impl AppState {
             transient_provider_failure_counts: HashMap::new(),
             timeout_paused_providers: HashSet::new(),
             provider_cache_updated_at: None,
+            provider_projection_version: 0,
             provider_refresh_started_at: None,
             provider_refresh_generation: 0,
             is_refreshing: false,

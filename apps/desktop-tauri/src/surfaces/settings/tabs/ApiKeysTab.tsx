@@ -3,9 +3,9 @@ import { useLocale } from "../../../hooks/useLocale";
 import {
   getApiKeyProviders,
   getApiKeys,
-  removeApiKey,
-  setApiKey,
 } from "../../../lib/tauri";
+import { useDispatchAction } from "../../../core/useCoreBridge";
+import { requireActionResult } from "../../../core/actionDispatcher";
 import type {
   ApiKeyInfoBridge,
   ApiKeyProviderInfoBridge,
@@ -14,6 +14,7 @@ import type {
 
 export default function ApiKeysTab({ providers }: { providers: ProviderCatalogEntry[] }) {
   const { t } = useLocale();
+  const dispatch = useDispatchAction();
   const [keys, setKeys] = useState<ApiKeyInfoBridge[]>([]);
   const [apiKeyProviders, setApiKeyProviders] = useState<
     ApiKeyProviderInfoBridge[]
@@ -45,11 +46,15 @@ export default function ApiKeysTab({ providers }: { providers: ProviderCatalogEn
     setBusy(true);
     setError(null);
     try {
-      const next = await setApiKey(
-        providerId,
-        editValue.trim(),
-        editLabel.trim() || undefined,
+      await requireActionResult(
+        dispatch({
+          type: "setApiKey",
+          target: { kind: "provider", providerId },
+          apiKey: editValue.trim(),
+          label: editLabel.trim() || undefined,
+        }),
       );
+      const next = await getApiKeys();
       setKeys(next);
       setEditingId(null);
       setEditValue("");
@@ -65,7 +70,13 @@ export default function ApiKeysTab({ providers }: { providers: ProviderCatalogEn
     setBusy(true);
     setError(null);
     try {
-      const next = await removeApiKey(providerId);
+      await requireActionResult(
+        dispatch({
+          type: "removeApiKey",
+          target: { kind: "provider", providerId },
+        }),
+      );
+      const next = await getApiKeys();
       setKeys(next);
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : String(err));

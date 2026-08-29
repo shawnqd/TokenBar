@@ -67,7 +67,7 @@ fn test_japanese_menu_card_locale_values_are_translated() {
         (LocaleKey::DetailWindowPrimary, "プライマリ"),
         (LocaleKey::DetailWindowSecondary, "セカンダリ"),
         (LocaleKey::DetailWindowModelSpecific, "モデル別"),
-        (LocaleKey::DetailWindowTertiary, "第3枠"),
+        (LocaleKey::DetailWindowTertiary, "月間"),
         (LocaleKey::DetailWindowExhausted, "使い切りました"),
         (LocaleKey::DetailPaceTitle, "今週のペース"),
         (LocaleKey::DetailPaceOnTrack, "順調"),

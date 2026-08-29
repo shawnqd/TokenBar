@@ -13,6 +13,7 @@ use std::fs::{self, File};
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Instant;
 
 #[cfg(test)]
 use crate::codex_costs::scan_codex_file_cost;
@@ -852,9 +853,26 @@ pub fn has_cost_usage_sources() -> bool {
         || scanner.get_claude_projects_dir().exists()
 }
 
-/// Get daily cost history for the last N days
-/// Returns Vec of (date_string, cost_usd) sorted by date
+/// Get daily cost history for the last N days.
+/// Returns Vec of (date_string, cost_usd) sorted by date.
 pub fn get_daily_cost_history(provider: &str, days: u32) -> Vec<(String, f64)> {
+    get_daily_cost_history_with_budget(provider, days, None, None).0
+}
+
+/// Cancellation/deadline-aware daily history used by the desktop chart path.
+///
+/// The old helper had no cancellation boundary and could walk a user's entire
+/// local transcript tree while a chart command (or its unit test) waited.  Keep
+/// the legacy API above for callers that intentionally want an unbounded scan,
+/// but give interactive callers a bounded path.  The boolean reports whether
+/// the scan stopped before visiting the complete requested window.
+pub fn get_daily_cost_history_with_budget(
+    provider: &str,
+    days: u32,
+    cancel: Option<&AtomicBool>,
+    deadline: Option<Instant>,
+) -> (Vec<(String, f64)>, bool) {
+    let stopped = || is_cancelled(cancel) || deadline.is_some_and(|limit| Instant::now() >= limit);
     let scanner = CostScanner::new(days);
     let today = Local::now().date_naive();
     let mut daily_costs: HashMap<String, f64> = HashMap::new();
@@ -871,13 +889,22 @@ pub fn get_daily_cost_history(provider: &str, days: u32) -> Vec<(String, f64)> {
             // Scan Codex logs by day across Windows and WSL session roots.
             let sessions_dirs = scanner.get_codex_sessions_dirs();
             for days_ago in 0..days {
+                if stopped() {
+                    break;
+                }
                 let date = today - Duration::days(days_ago as i64);
                 let date_str = date.format("%Y-%m-%d").to_string();
                 let range = CostUsageDayRange::new(date, date);
                 let mut day_cost = 0.0;
 
                 for sessions_dir in sessions_dirs.iter().filter(|dir| dir.exists()) {
+                    if stopped() {
+                        break;
+                    }
                     for scan_date in codex_scan_dates(&range) {
+                        if stopped() {
+                            break;
+                        }
                         let year = scan_date.format("%Y").to_string();
                         let month = scan_date.format("%m").to_string();
                         let day = scan_date.format("%d").to_string();
@@ -887,6 +914,9 @@ pub fn get_daily_cost_history(provider: &str, days: u32) -> Vec<(String, f64)> {
                         }
                         if let Ok(entries) = fs::read_dir(&day_dir) {
                             for entry in entries.flatten() {
+                                if stopped() {
+                                    break;
+                                }
                                 let path = entry.path();
                                 if path.extension().is_some_and(|e| e == "jsonl") {
                                     day_cost += scan_codex_file_cost_for_range(&path, &range);
@@ -906,11 +936,11 @@ pub fn get_daily_cost_history(provider: &str, days: u32) -> Vec<(String, f64)> {
                 let cutoff = Utc::now() - Duration::days(days as i64);
                 let mut seen = HashSet::new();
                 let mut handle_file = |path: &Path| {
-                    for_each_claude_usage_record(path, &cutoff, &mut seen, None, |record| {
+                    for_each_claude_usage_record(path, &cutoff, &mut seen, cancel, |record| {
                         add_claude_record_to_daily_costs(&mut daily_costs, record);
                     });
                 };
-                scanner.walk_claude_files(&projects_dir, &cutoff, None, &mut handle_file);
+                scanner.walk_claude_files(&projects_dir, &cutoff, cancel, &mut handle_file);
             }
         }
         _ => {}
@@ -919,7 +949,7 @@ pub fn get_daily_cost_history(provider: &str, days: u32) -> Vec<(String, f64)> {
     // Convert to sorted vector
     let mut result: Vec<(String, f64)> = daily_costs.into_iter().collect();
     result.sort_by(|a, b| a.0.cmp(&b.0));
-    result
+    (result, stopped())
 }
 
 #[cfg(test)]

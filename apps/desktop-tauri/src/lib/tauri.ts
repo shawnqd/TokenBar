@@ -200,6 +200,14 @@ export function getCachedProviders(): Promise<ProviderUsageSnapshot[]> {
   return invoke<ProviderUsageSnapshot[]>("get_cached_providers");
 }
 
+export function getProviderProjection(): Promise<
+  import("../types/bridge").VersionedProviderProjection
+> {
+  return invoke<import("../types/bridge").VersionedProviderProjection>(
+    "get_provider_projection",
+  );
+}
+
 export function getOutputSpeedSnapshot(): Promise<OutputSpeedSnapshot> {
   return invoke<OutputSpeedSnapshot>("get_output_speed_snapshot");
 }

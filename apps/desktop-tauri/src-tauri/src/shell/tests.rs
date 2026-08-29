@@ -307,7 +307,9 @@ fn larger_visible_destination_reclamps_preserved_top_left() {
     let reclamped =
         reclamp_preserved_visible_position(current_top_left, &monitor, SurfaceMode::Settings, 1.0);
 
-    assert_eq!(reclamped, (792, 292));
+    // Settings 1120×780 on a 1920×1080 work area: side/top margin 8,
+    // bottom uses TASKBAR_GAP_DIP (6) so max = (1920-1120-8, 1080-780-6).
+    assert_eq!(reclamped, (792, 294));
 }
 
 #[test]
@@ -877,7 +879,8 @@ fn remembered_settings_position_clamps_using_stored_size() {
     let position =
         remembered_surface_position_with_monitors(SurfaceMode::Settings, stored, &[monitor], None);
 
-    assert_eq!(position, Some((392, 292)));
+    // Stored 600×500 on a 1000×800 work area: max = (1000-600-8, 800-500-6).
+    assert_eq!(position, Some((392, 294)));
 }
 
 #[test]

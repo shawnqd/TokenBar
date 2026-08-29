@@ -24,22 +24,6 @@ const FACTORY_ALLOWLIST = {
   "core/usageStore.ts": { owner: "core", reason: "store definition", remove: "never" },
   "core/refreshCoordinator.ts": { owner: "core", reason: "coordinator definition / optional store", remove: "never" },
   "core/enrichmentScheduler.ts": { owner: "core", reason: "scheduler definition", remove: "never" },
-  "appRuntime.ts": { owner: "045", reason: "single production runtime factory", remove: "never" },
-  "core/useCoreBridge.ts": {
-    owner: "045",
-    reason: "unbooted fallback + createCoreBridgeForTest",
-    remove: "when every surface waits for ensureAppRuntimeBooted",
-  },
-  "surfaces/tray/trayCoreStore.ts": {
-    owner: "045",
-    reason: "resetForTest isolation; production uses attachTrayCoreRuntime",
-    remove: "when TrayPanel tests boot exclusively through appRuntime",
-  },
-  "floatbar/floatBarStore.ts": {
-    owner: "045",
-    reason: "test fallback store when core bridge is unset",
-    remove: "when FloatBar tests always attach the shared store",
-  },
 };
 
 const DIRECT_COMMANDS = [
@@ -53,6 +37,32 @@ const DIRECT_COMMANDS = [
   "quitApp(",
   "triggerProviderLogin(",
   "refreshProviders(",
+  "setApiKey(",
+  "removeApiKey(",
+  "setManualCookie(",
+  "removeManualCookie(",
+  "importCookieFile(",
+  "openProviderLogin(",
+  "captureProviderLogin(",
+  "closeProviderLogin(",
+  "addTokenAccount(",
+  "removeTokenAccount(",
+  "setActiveTokenAccount(",
+  "revokeProviderCredentials(",
+  "setProviderCookieSource(",
+  "setProviderRegion(",
+  "resetSettings(",
+  "closeSettingsWindow(",
+  "openExternalUrl(",
+  "openPath(",
+  "setProviderWorkspaceId(",
+  "setProviderGatewayUrl(",
+  "setJetbrainsIdePath(",
+  "updateSettings(",
+  "registerGlobalShortcut(",
+  "unregisterGlobalShortcut(",
+  "setUiLanguage(",
+  "playNotificationSound(",
 ];
 
 const DIRECT_COMMAND_ALLOWLIST = {
@@ -67,57 +77,16 @@ const DIRECT_COMMAND_ALLOWLIST = {
     reason: "single core chart loader used by enrichment/previews",
     remove: "never",
   },
-  "hooks/useProviders.ts": {
+  "core/enrichmentAccess.ts": {
     owner: "045",
-    reason: "legacy adapter; production settings pass refreshOnMount:false",
-    remove: "when ProvidersPage/Tab drop the hook",
+    reason: "read-only local-usage adapter; Rust owns the cache and scan lock",
+    remove: "never",
   },
   "core/actionDispatcher.ts": { owner: "045", reason: "may document invoke names", remove: "never" },
-  "surfaces/settings/providers/ProviderDetailPane.tsx": {
-    owner: "045",
-    reason: "detail pane still mixes credential commands; dashboard/login should move to dispatcher",
-    remove: "when ProviderDetailPane dispatches SurfaceAction for login/usage/status/refresh",
-  },
-  "surfaces/settings/pages/ProvidersPage.tsx": {
-    owner: "045",
-    reason: "auth-body login still uses triggerProviderLogin during credential capture",
-    remove: "when AuthBody uses dispatcher.triggerLogin",
-  },
-  "surfaces/settings/providers/sections/credentials/GeminiCliCreds.tsx": {
-    owner: "045",
-    reason: "bespoke CLI credential control opens the provider console",
-    remove: "when CLI creds dispatch openExternalUsage",
-  },
-  "surfaces/settings/providers/sections/credentials/JetBrainsCreds.tsx": {
-    owner: "045",
-    reason: "bespoke IDE credential refresh",
-    remove: "when JetBrains creds dispatch refresh",
-  },
-  "surfaces/settings/providers/sections/credentials/VertexAiCreds.tsx": {
-    owner: "045",
-    reason: "bespoke gcloud console link",
-    remove: "when Vertex creds dispatch openExternalUsage",
-  },
-  "surfaces/settings/tokens/TokenAccountsPanel.tsx": {
-    owner: "045",
-    reason: "token-account login is a credential capture, not a surface action yet",
-    remove: "when token accounts dispatch triggerLogin",
-  },
 };
 
 const LEGACY_HOOKS = ["useProviders"];
-const LEGACY_ALLOWLIST = {
-  "surfaces/settings/pages/ProvidersPage.tsx": {
-    owner: "045",
-    reason: "migration adapter; refreshOnMount is false when core is present",
-    remove: "when the page reads only the injected UsageStore",
-  },
-  "surfaces/settings/tabs/ProvidersTab.tsx": {
-    owner: "045",
-    reason: "migration adapter; refreshOnMount is false",
-    remove: "when the tab reads only the injected UsageStore",
-  },
-};
+const LEGACY_ALLOWLIST = {};
 
 function* walk(dir) {
   for (const entry of readdirSync(dir)) {
@@ -136,7 +105,7 @@ function relativePath(file, root) {
 }
 
 function isTestFile(rel) {
-  return /\.(test|spec)\./.test(rel) || /\/test\//.test(rel);
+  return /\.(test|spec)\./.test(rel) || /\/test\//.test(rel) || /\.testSupport\./.test(rel);
 }
 
 export function checkCoreConsumption(root = srcRoot) {

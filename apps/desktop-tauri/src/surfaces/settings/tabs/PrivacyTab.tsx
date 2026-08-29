@@ -2,6 +2,8 @@ import { useCallback, useEffect, useState } from "react";
 import { useLocale } from "../../../hooks/useLocale";
 import { Field, Toggle } from "../../../components/FormControls";
 import type { TabProps } from "../../Settings";
+import { getSafeDiagnostics } from "../../../lib/tauri";
+import { useDispatchAction } from "../../../core/useCoreBridge";
 
 function formatCodexSessionsDirs(paths: string[]): string {
   return paths.join("; ");
@@ -16,6 +18,8 @@ function parseCodexSessionsDirs(value: string): string[] {
 
 export default function PrivacyTab({ settings, set, saving }: TabProps) {
   const { t } = useLocale();
+  const dispatch = useDispatchAction();
+  const [note, setNote] = useState<string | null>(null);
   const [codexDirsDraft, setCodexDirsDraft] = useState(() =>
     formatCodexSessionsDirs(settings.codexCustomSessionsDirs),
   );
@@ -110,30 +114,51 @@ export default function PrivacyTab({ settings, set, saving }: TabProps) {
         <div className="settings-section__group">
           <Field
             label={t("SettingsClearCache")}
-            description={t("SettingsNotWired")}
+            description={t("SettingsLocalDataSources")}
           >
             <button
               type="button"
-              className="settings-v5-mock"
-              disabled
-              aria-disabled="true"
+              disabled={saving}
+              onClick={() => {
+                void dispatch({
+                  type: "clearCache",
+                  target: { kind: "settings" },
+                })
+                  .then(() => setNote("cache-cleared"))
+                  .catch((error) => setNote(String(error)));
+              }}
             >
-              {t("SettingsNotWired")}
+              {t("SettingsClearCache")}
             </button>
           </Field>
           <Field
             label={t("SettingsExportDiagnostics")}
-            description={t("SettingsNotWired")}
+            description={t("SettingsLocalDataSources")}
           >
             <button
               type="button"
-              className="settings-v5-mock"
-              disabled
-              aria-disabled="true"
+              disabled={saving}
+              onClick={() => {
+                void getSafeDiagnostics()
+                  .then((data) => {
+                    const blob = new Blob([JSON.stringify(data, null, 2)], {
+                      type: "application/json",
+                    });
+                    const url = URL.createObjectURL(blob);
+                    const a = document.createElement("a");
+                    a.href = url;
+                    a.download = `codexbar-diagnostics-${new Date().toISOString().slice(0, 10)}.json`;
+                    a.click();
+                    URL.revokeObjectURL(url);
+                    setNote("diagnostics-exported");
+                  })
+                  .catch((error) => setNote(String(error)));
+              }}
             >
-              {t("SettingsNotWired")}
+              {t("SettingsExportDiagnostics")}
             </button>
           </Field>
+          {note ? <p className="settings-section__hint">{note}</p> : null}
         </div>
         <p className="settings-section__hint">{t("SettingsLocalDataSources")}</p>
       </section>

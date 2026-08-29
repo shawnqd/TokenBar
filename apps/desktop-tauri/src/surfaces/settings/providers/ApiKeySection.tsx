@@ -3,9 +3,9 @@ import { useLocale } from "../../../hooks/useLocale";
 import {
   getApiKeyProviders,
   getApiKeys,
-  removeApiKey,
-  setApiKey,
 } from "../../../lib/tauri";
+import { useDispatchAction } from "../../../core/useCoreBridge";
+import { requireActionResult } from "../../../core/actionDispatcher";
 import type {
   ApiKeyInfoBridge,
   ApiKeyProviderInfoBridge,
@@ -27,6 +27,7 @@ interface Props {
  */
 export function ApiKeySection({ providerId }: Props) {
   const { t } = useLocale();
+  const dispatch = useDispatchAction();
   const [info, setInfo] = useState<ApiKeyProviderInfoBridge | null>(null);
   const [saved, setSaved] = useState<ApiKeyInfoBridge | null>(null);
   const [loaded, setLoaded] = useState(false);
@@ -88,11 +89,15 @@ export function ApiKeySection({ providerId }: Props) {
     setBusy(true);
     setError(null);
     try {
-      const next = await setApiKey(
-        providerId,
-        editValue.trim(),
-        editLabel.trim() || undefined,
+      await requireActionResult(
+        dispatch({
+          type: "setApiKey",
+          target: { kind: "provider", providerId },
+          apiKey: editValue.trim(),
+          label: editLabel.trim() || undefined,
+        }),
       );
+      const next = await getApiKeys();
       setSaved(next.find((k) => k.providerId === providerId) ?? null);
       setEditing(false);
       setEditValue("");
@@ -108,7 +113,13 @@ export function ApiKeySection({ providerId }: Props) {
     setBusy(true);
     setError(null);
     try {
-      const next = await removeApiKey(providerId);
+      await requireActionResult(
+        dispatch({
+          type: "removeApiKey",
+          target: { kind: "provider", providerId },
+        }),
+      );
+      const next = await getApiKeys();
       setSaved(next.find((k) => k.providerId === providerId) ?? null);
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : String(err));

@@ -9,7 +9,7 @@ import {
   whitelistEntry,
   type FontInstallGuide,
 } from "../lib/fontWhitelist";
-import { getTaskbarFontFamilies, openExternalUrl } from "../lib/tauri";
+import { getTaskbarFontFamilies, invokeSurfaceAction } from "../lib/tauri";
 import type { TaskbarFontFamily } from "../types/bridge";
 
 /**
@@ -77,7 +77,11 @@ export function useFontPicker(currentFamily: string) {
 
   const openInstallPage = useCallback(() => {
     if (!install) return;
-    void openExternalUrl(install.url);
+    void invokeSurfaceAction({
+      type: "openExternalUrl",
+      target: { kind: "app" },
+      url: install.url,
+    });
   }, [install]);
 
   const confirmInstalled = useCallback(

@@ -1,7 +1,8 @@
 import { useState } from "react";
 import type { RegionOption } from "../../../../types/bridge";
 import type { LocaleKey } from "../../../../i18n/keys";
-import { setProviderRegion } from "../../../../lib/tauri";
+import { useDispatchAction } from "../../../../core/useCoreBridge";
+import { requireActionResult } from "../../../../core/actionDispatcher";
 import { Select } from "../../../../components/FormControls";
 
 interface Props {
@@ -26,6 +27,7 @@ export function RegionSection({
   t,
   onChanged,
 }: Props) {
+  const dispatch = useDispatchAction();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -38,7 +40,13 @@ export function RegionSection({
     setBusy(true);
     setError(null);
     try {
-      await setProviderRegion(providerId, value);
+      await requireActionResult(
+        dispatch({
+          type: "setRegion",
+          target: { kind: "provider", providerId },
+          region: value,
+        }),
+      );
       onChanged();
     } catch (e) {
       setError(String(e));

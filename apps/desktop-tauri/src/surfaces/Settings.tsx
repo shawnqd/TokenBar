@@ -8,7 +8,8 @@ import type {
 import { useSettings } from "../hooks/useSettings";
 import { useSurfaceTarget } from "../hooks/useSurfaceMode";
 import { useLocale } from "../hooks/useLocale";
-import { closeSettingsWindow } from "../lib/tauri";
+import { useDispatchAction } from "../core/useCoreBridge";
+import { requireActionResult } from "../core/actionDispatcher";
 import type { UsageStore } from "../core/usageStore";
 import type { ActionDispatcher } from "../core/actionDispatcher";
 import SettingsNav from "./settings/SettingsNav";
@@ -68,6 +69,7 @@ export default function Settings({
 }) {
   const { settings, saving, error, update } = useSettings(state.settings);
   const { t } = useLocale();
+  const dispatch = useDispatchAction(dispatcher ?? undefined);
   const shellTarget = useSurfaceTarget("settings");
   const resolvedInitial: SettingsNavId =
     propTab && isSettingsTab(propTab)
@@ -162,7 +164,7 @@ export default function Settings({
       if (document.querySelector("[data-settings-dialog]")) return;
       event.preventDefault();
       if (onRequestClose) onRequestClose();
-      else void closeSettingsWindow();
+      else void requireActionResult(dispatch({ type: "closeSettings", target: { kind: "settings" } }));
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
@@ -201,7 +203,11 @@ export default function Settings({
           <button
             className="settings-titlebar__control settings-titlebar__control--close"
             onClick={() =>
-              onRequestClose ? onRequestClose() : void closeSettingsWindow()
+              onRequestClose
+                ? onRequestClose()
+                : void requireActionResult(
+                    dispatch({ type: "closeSettings", target: { kind: "settings" } }),
+                  )
             }
             aria-label={t("WindowClose")}
             title={t("WindowClose")}

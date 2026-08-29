@@ -3,10 +3,10 @@ import { listen } from "@tauri-apps/api/event";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import {
   checkForUpdates,
-  closeSettingsWindow,
   downloadUpdate,
   getBootstrapState,
   getSettingsSnapshot,
+  invokeSurfaceAction,
   revealSettingsWindow,
 } from "./lib/tauri";
 import { useSurfaceSnapshot } from "./hooks/useSurfaceSnapshot";
@@ -334,14 +334,14 @@ function DetachedSettingsReadyContent({
     if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
       closingRef.current = false;
       setWindowMotion("idle");
-      void closeSettingsWindow();
+      void invokeSurfaceAction({ type: "closeSettings", target: { kind: "settings" } });
       return;
     }
 
     setWindowMotion("closing");
     closeTimerRef.current = setTimeout(() => {
       closeTimerRef.current = null;
-      void closeSettingsWindow()
+      void invokeSurfaceAction({ type: "closeSettings", target: { kind: "settings" } })
         .catch(() => undefined)
         .finally(() => {
           closingRef.current = false;

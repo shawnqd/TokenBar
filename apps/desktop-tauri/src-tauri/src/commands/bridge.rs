@@ -172,6 +172,16 @@ pub struct ProviderUsageSnapshot {
     pub capabilities: codexbar::core::ProviderCapabilities,
 }
 
+/// The only provider read model published across WebViews. `version` is
+/// advanced by the process refresh owner whenever the authoritative cache is
+/// changed; consumers must apply the complete list atomically.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VersionedProviderProjection {
+    pub version: u64,
+    pub snapshots: Vec<ProviderUsageSnapshot>,
+}
+
 pub(crate) fn pace_stage_str(stage: codexbar::core::PaceStage) -> &'static str {
     use codexbar::core::PaceStage;
     match stage {

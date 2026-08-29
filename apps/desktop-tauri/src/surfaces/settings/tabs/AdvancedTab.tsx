@@ -3,11 +3,13 @@ import { useLocale } from "../../../hooks/useLocale";
 import { Field, SegmentedControl, Toggle } from "../../../components/FormControls";
 import type { UpdateChannel } from "../../../types/bridge";
 import type { TabProps } from "../../Settings";
-import { resetSettings } from "../../../lib/tauri";
+import { useDispatchAction } from "../../../core/useCoreBridge";
+import { requireActionResult } from "../../../core/actionDispatcher";
 import { useAdvancedDiagnostics } from "../AdvancedDiagnostics";
 
 export default function AdvancedTab({ settings, set, saving }: TabProps) {
   const { t } = useLocale();
+  const dispatch = useDispatchAction();
   const diagnostics = useAdvancedDiagnostics();
   const [resetNote, setResetNote] = useState<string | null>(null);
 
@@ -97,7 +99,9 @@ export default function AdvancedTab({ settings, set, saving }: TabProps) {
               className="settings-v5-mock settings-v5-mock--danger"
               disabled={saving}
               onClick={() => {
-                void resetSettings()
+                void requireActionResult(
+                  dispatch({ type: "resetSettings", target: { kind: "settings" } }),
+                )
                   .then(() => setResetNote("reset"))
                   .catch((error) => setResetNote(String(error)));
               }}

@@ -6,7 +6,9 @@
 //! reads to the right cached bundle.
 
 use codexbar::core::OpenAIDashboardCacheStore;
-use codexbar::cost_scanner::{CostScanner, CostSummary, get_daily_cost_history};
+use codexbar::cost_scanner::{
+    CostScanner, CostSummary, get_daily_cost_history_with_budget,
+};
 use codexbar::locale::{self, LocaleKey};
 use codexbar::settings::Settings;
 use serde::{Deserialize, Serialize};
@@ -21,6 +23,10 @@ use std::time::{Duration, Instant};
 
 const LOCAL_USAGE_TTL: Duration = Duration::from_secs(30);
 const PROVIDER_CHART_TTL: Duration = Duration::from_secs(5 * 60);
+/// Interactive chart reads must not wait on an unbounded local transcript
+/// walk. The background prewarm path remains uncapped, while an on-demand
+/// chart returns a bounded/partial bundle and lets the next TTL pass retry.
+const INTERACTIVE_CHART_SCAN_BUDGET: Duration = Duration::from_secs(3);
 // v3: ProviderLocalUsageSummary gained per-period top-model fields; discard v2
 // caches so the new fields are recomputed instead of loading as null.
 const PROVIDER_CHART_CACHE_VERSION: u8 = 3;
@@ -155,11 +161,22 @@ pub async fn get_provider_local_usage_summary(
 }
 
 #[cfg(test)]
-pub(crate) fn build_provider_chart_data(
+pub(crate) fn build_provider_chart_data_without_local_io(
     provider_id: String,
     account_email: Option<String>,
 ) -> ProviderChartData {
-    build_provider_chart_data_with_cancel(provider_id, account_email, None)
+    // Account-scoping tests must not walk the user's live transcript tree.
+    // Production requests use `build_provider_chart_data_with_cancel`, while
+    // this fixture deliberately exercises only the dashboard-cache portion.
+    let (credits_history, usage_breakdown) =
+        load_openai_dashboard_chart_data(&provider_id, account_email.as_deref());
+    ProviderChartData {
+        provider_id,
+        cost_history: Vec::new(),
+        credits_history,
+        usage_breakdown,
+        local_usage: None,
+    }
 }
 
 fn build_provider_chart_data_with_cancel(
@@ -169,15 +186,26 @@ fn build_provider_chart_data_with_cancel(
 ) -> ProviderChartData {
     // Keep one year available so the UI's 7 day / 30 day / quarter / year
     // switch changes the actual data window instead of only relabelling it.
-    let raw_cost = get_daily_cost_history(&provider_id, 365);
+    let deadline = cancel
+        .as_ref()
+        .map(|_| Instant::now() + INTERACTIVE_CHART_SCAN_BUDGET);
+    let (raw_cost, cost_scan_stopped) =
+        get_daily_cost_history_with_budget(&provider_id, 365, cancel.as_deref(), deadline);
     let cost_history: Vec<DailyCostPoint> = raw_cost
         .into_iter()
         .map(|(date, value)| DailyCostPoint { date, value })
         .collect();
 
+    if cost_scan_stopped {
+        // A bounded read is preferable to freezing the Settings/Tray detail
+        // surface. Keep the result honest: do not present a partial history as
+        // complete, and hold local-usage retry for the short degraded TTL.
+        record_local_usage_fetch_failure(&provider_id, CostFetchFailure::TimedOut);
+    }
+
     let (credits_history, usage_breakdown) =
         load_openai_dashboard_chart_data(&provider_id, account_email.as_deref());
-    let local_usage = if cancel
+    let local_usage = if cost_scan_stopped || cancel
         .as_deref()
         .is_some_and(|flag| flag.load(Ordering::Relaxed))
     {
@@ -690,10 +718,21 @@ mod tests {
         refresh_provider_local_usage_cache, token_cost_cache_is_fresh,
     };
     use codexbar::settings::Language;
+    use std::sync::{Mutex, OnceLock};
     use std::time::{Duration, Instant};
+
+    // These tests intentionally exercise process-wide caches. Serialize the
+    // module so parallel Rust test execution cannot clear another case's
+    // fixture halfway through its assertion (which otherwise poisons the
+    // mutex and produces misleading failures).
+    fn test_guard() -> std::sync::MutexGuard<'static, ()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(())).lock().unwrap()
+    }
 
     #[test]
     fn japanese_estimate_note_is_localized() {
+        let _test_guard = test_guard();
         assert_eq!(
             localized_estimate_note("codex", Language::Japanese),
             "ローカルログから推定したもので、請求書と異なる場合があります"
@@ -706,6 +745,7 @@ mod tests {
 
     #[test]
     fn english_estimate_note_is_localized() {
+        let _test_guard = test_guard();
         assert_eq!(
             localized_estimate_note("codex", Language::English),
             "Estimated from local logs; may differ from your bill"
@@ -718,6 +758,7 @@ mod tests {
 
     #[test]
     fn provider_chart_cache_reuses_prewarmed_data_for_account_view() {
+        let _test_guard = test_guard();
         clear_provider_local_usage_cache();
         let data = ProviderChartData::empty("cache-test".to_string());
         cache_provider_chart_data(&data, None);
@@ -734,6 +775,7 @@ mod tests {
 
     #[test]
     fn hard_failure_marks_enrichment_degraded_and_allows_immediate_retry() {
+        let _test_guard = test_guard();
         clear_provider_local_usage_cache();
         record_local_usage_fetch_failure("codex", CostFetchFailure::Failed);
 
@@ -754,6 +796,7 @@ mod tests {
 
     #[test]
     fn timed_out_enrichment_holds_degraded_state_until_ttl() {
+        let _test_guard = test_guard();
         clear_provider_local_usage_cache();
         record_local_usage_fetch_failure("codex", CostFetchFailure::TimedOut);
 
@@ -774,6 +817,7 @@ mod tests {
 
     #[test]
     fn enrichment_failure_marks_only_the_scanned_provider() {
+        let _test_guard = test_guard();
         clear_provider_local_usage_cache();
         record_local_usage_fetch_failure("codex", CostFetchFailure::Failed);
 
@@ -787,6 +831,7 @@ mod tests {
 
     #[test]
     fn enrichment_pass_stores_success_and_marks_failed_scan_degraded() {
+        let _test_guard = test_guard();
         clear_provider_local_usage_cache();
         let summary = ProviderLocalUsageSummary {
             today_cost: Some(1.0),
@@ -818,6 +863,7 @@ mod tests {
 
     #[test]
     fn enrichment_pass_with_unknown_provider_records_degradation_without_scanning() {
+        let _test_guard = test_guard();
         clear_provider_local_usage_cache();
         tauri::async_runtime::block_on(refresh_provider_local_usage_cache(vec![
             "not-a-local-provider".to_string(),
@@ -842,6 +888,7 @@ mod tests {
 
     #[test]
     fn enrichment_ttl_is_independent_of_provider_quota_cache() {
+        let _test_guard = test_guard();
         // A degraded enrichment entry expiring does not make the core quota
         // cache stale: the core snapshot keeps publishing on its own clock.
         let now = Instant::now();

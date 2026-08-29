@@ -8,7 +8,7 @@ import {
   type ReactNode,
 } from "react";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
-import { getLocaleStrings, setUiLanguage } from "../lib/tauri";
+import { getLocaleStrings, invokeSurfaceAction } from "../lib/tauri";
 import type {
   Language,
   LocaleChangedPayload,
@@ -85,7 +85,11 @@ export function LocaleProvider({ children }: { children: ReactNode }) {
 
   const setLanguage = useCallback(
     async (language: Language) => {
-      await setUiLanguage(language);
+      await invokeSurfaceAction({
+        type: "setUiLanguage",
+        target: { kind: "settings" },
+        language,
+      });
       // The backend emits `locale-changed`, but also refetch eagerly in
       // case we beat the listener registration.
       await load(language);

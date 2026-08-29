@@ -1,21 +1,12 @@
 import { useCallback, useSyncExternalStore } from "react";
-import { usageStoreKey, type UsageStoreKey, type UsageRecord, type UsageStore, createUsageStore } from "./usageStore";
-import { createRefreshCoordinator, type RefreshCoordinator } from "./refreshCoordinator";
-import { createActionDispatcher, type ActionDispatcher, type DispatchHandler } from "./actionDispatcher";
-import type { SurfaceActionKind } from "./actions";
-
-// Global defaults for surface consumption without explicit injection
-const defaultStore: UsageStore = createUsageStore();
-const defaultCoordinator: RefreshCoordinator = createRefreshCoordinator({
-  store: defaultStore,
-  fetcher: async () => {
-    throw new Error("RefreshCoordinator has no fetcher - provide one via setCoreBridgeStore or createRefreshCoordinator");
-  },
-});
+import { usageStoreKey, type UsageStoreKey, type UsageRecord, type UsageStore } from "./usageStore";
+import { type RefreshCoordinator } from "./refreshCoordinator";
+import { createActionDispatcher, type ActionDispatcher } from "./actionDispatcher";
 
 let globalStore: UsageStore | null = null;
 let globalCoordinator: RefreshCoordinator | null = null;
 let globalDispatcher: ActionDispatcher | null = null;
+let fallbackDispatcher: ActionDispatcher | null = null;
 
 export function setCoreBridgeStore(store: UsageStore | null): void {
   globalStore = store;
@@ -27,6 +18,7 @@ export function setCoreBridgeCoordinator(coord: RefreshCoordinator | null): void
 
 export function setCoreBridgeDispatcher(dispatcher: ActionDispatcher | null): void {
   globalDispatcher = dispatcher;
+  fallbackDispatcher = null;
 }
 
 export function getCoreBridgeStore(): UsageStore | null {
@@ -34,11 +26,19 @@ export function getCoreBridgeStore(): UsageStore | null {
 }
 
 function resolveStore(override?: UsageStore): UsageStore {
-  return override ?? globalStore ?? defaultStore;
+  const store = override ?? globalStore;
+  if (!store) {
+    throw new Error("core bridge store not attached");
+  }
+  return store;
 }
 
 function resolveCoordinator(override?: RefreshCoordinator): RefreshCoordinator {
-  return override ?? globalCoordinator ?? defaultCoordinator;
+  const coordinator = override ?? globalCoordinator;
+  if (!coordinator) {
+    throw new Error("core bridge coordinator not attached");
+  }
+  return coordinator;
 }
 
 export function useCoreSnapshot(
@@ -67,12 +67,9 @@ export function useRefreshCommand(
   );
 }
 
-export function useActionDispatcher(
-  dispatcherOverride?: ActionDispatcher,
-): ActionDispatcher | ((action: Parameters<ActionDispatcher["dispatch"]>[0]) => Promise<ReturnType<ActionDispatcher["dispatch"]>>) {
-  const dispatcher = dispatcherOverride ?? globalDispatcher;
-  if (!dispatcher) {
-    return createActionDispatcher(
+function getFallbackDispatcher(): ActionDispatcher {
+  if (!fallbackDispatcher) {
+    fallbackDispatcher = createActionDispatcher(
       {},
       {
         fallback: async (action) => {
@@ -83,7 +80,13 @@ export function useActionDispatcher(
       },
     );
   }
-  return dispatcher;
+  return fallbackDispatcher;
+}
+
+export function useActionDispatcher(
+  dispatcherOverride?: ActionDispatcher,
+): ActionDispatcher | ((action: Parameters<ActionDispatcher["dispatch"]>[0]) => Promise<ReturnType<ActionDispatcher["dispatch"]>>) {
+  return dispatcherOverride ?? globalDispatcher ?? getFallbackDispatcher();
 }
 
 // Convenience hook that directly returns dispatch function
@@ -92,29 +95,4 @@ export function useDispatchAction(
 ): ActionDispatcher["dispatch"] {
   const d = useActionDispatcher(dispatcherOverride) as ActionDispatcher;
   return useCallback((action) => d.dispatch(action), [d]);
-}
-
-// For testing: create isolated bridge with custom store/coordinator
-export function createCoreBridgeForTest(opts: {
-  store?: UsageStore;
-  coordinator?: RefreshCoordinator;
-  handlers?: Partial<Record<SurfaceActionKind, DispatchHandler>>;
-}): {
-  store: UsageStore;
-  coordinator: RefreshCoordinator;
-  dispatcher: ActionDispatcher;
-} {
-  const store = opts.store ?? createUsageStore();
-  const coordinator =
-    opts.coordinator ??
-    createRefreshCoordinator({
-      store,
-      fetcher: async (k) => {
-        const rec = store.get(k);
-        if (rec?.snapshot) return rec.snapshot;
-        throw new Error("no snapshot");
-      },
-    });
-  const dispatcher = createActionDispatcher(opts.handlers ?? {});
-  return { store, coordinator, dispatcher };
 }

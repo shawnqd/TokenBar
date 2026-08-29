@@ -89,9 +89,13 @@ describe("TrayCard OpenCode Go projection (core read model)", () => {
     });
     const labels = Array.from(container.querySelectorAll(".quota-row__label, .quota-tile__label"))
       .map((el) => el.textContent);
-    // OpenCode Go layout: weekly is now a full tile in the grid, not the hero secondary.
+    // OpenCode Go layout: 5h hero on top, weekly + monthly as a 2-col pair.
     // Tiles use the short cycle labels (周/月) so label + reset share a line.
     expect(labels).toEqual(["5 小时额度", "周", "月"]);
+    const grid = container.querySelector(".tiles-grid-2col");
+    expect(grid?.querySelectorAll(".quota-tile")).toHaveLength(2);
+    expect(grid?.querySelector(".quota-tile--full")).toBeNull();
+    expect(container.querySelector(".quota-stage .quota-tile")).toBeNull();
     const heroPct = container.querySelector(".quota-row__hero-pct");
     expect(heroPct?.textContent).toBe("72%");
     // Zen balance surfaces through the balance block, not as a quota tile.

@@ -2,37 +2,19 @@ import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore
 import Sortable from "sortablejs";
 import { ProviderIcon } from "../../../components/providers/ProviderIcon";
 import { getProviderIcon } from "../../../components/providers/providerIcons";
-import { useProviders } from "../../../hooks/useProviders";
-import { getProviderBalance } from "../../../lib/providerBalance";
 import type { ProviderSnapshot } from "../../../core/snapshot";
 import { projectSurface } from "../../../core/projection";
 import type { UsageStore } from "../../../core/usageStore";
-import { useActionDispatcher } from "../../../core/useCoreBridge";
-import type { ActionDispatcher } from "../../../core/actionDispatcher";
+import { useActionDispatcher, useDispatchAction } from "../../../core/useCoreBridge";
+import { requireActionResult, type ActionDispatcher } from "../../../core/actionDispatcher";
 import {
-  primaryQuotaState,
   quotaDisplayContext,
-  quotaPercentContext,
-  quotaPercentDisplay,
 } from "../../../lib/quotaDisplay";
 import {
-  captureProviderLogin,
-  closeProviderLogin,
-  openProviderLogin,
-  removeManualCookie,
-  reorderProviders,
   getProviderRegionOptions,
-  revokeProviderCredentials,
-  setProviderRegion,
-  setManualCookie,
-  setProviderCookieSource,
-  setApiKey,
-  removeApiKey,
-  triggerProviderLogin,
   getApiKeys,
   getGeminiCliSignedIn,
   getManualCookies,
-  importCookieFile,
 } from "../../../lib/tauri";
 import type {
   MetricPreference,
@@ -88,6 +70,7 @@ function AuthBody({
   onConfirm: (text: string, action: () => void) => void;
   onCredentialChange: () => void;
 }) {
+  const dispatch = useDispatchAction();
   const [cookieText, setCookieText] = useState("");
   const [keyLabel, setKeyLabel] = useState("");
   const [keyValue, setKeyValue] = useState("");
@@ -105,7 +88,12 @@ function AuthBody({
             className="s5-primary"
             onClick={() => {
               onLoginOpen(true);
-              void openProviderLogin(provider.id)
+              void requireActionResult(
+                dispatch({
+                  type: "openProviderLogin",
+                  target: { kind: "provider", providerId: provider.id },
+                }),
+              )
                 .then(() => onNote("已打开登录窗"))
                 .catch((error) => onNote(String(error)));
             }}
@@ -118,7 +106,12 @@ function AuthBody({
                 type="button"
                 className="s5-ghost"
                 onClick={() =>
-                  void captureProviderLogin(provider.id)
+                  void requireActionResult(
+                    dispatch({
+                      type: "captureProviderLogin",
+                      target: { kind: "provider", providerId: provider.id },
+                    }),
+                  )
                     .then(() => {
                       onNote("已捕获网页会话");
                       onCredentialChange();
@@ -133,7 +126,12 @@ function AuthBody({
                 className="s5-ghost"
                 onClick={() => {
                   onLoginOpen(false);
-                  void closeProviderLogin().catch(() => {});
+                  void requireActionResult(
+                    dispatch({
+                      type: "closeProviderLogin",
+                      target: { kind: "summary" },
+                    }),
+                  ).catch(() => {});
                 }}
               >
                 关闭
@@ -159,7 +157,13 @@ function AuthBody({
               type="button"
               className="s5-ghost"
               onClick={() =>
-                void setManualCookie(provider.id, cookieText.trim())
+                void requireActionResult(
+                  dispatch({
+                    type: "setManualCookie",
+                    target: { kind: "provider", providerId: provider.id },
+                    cookieHeader: cookieText.trim(),
+                  }),
+                )
                   .then(() => {
                     setCookieText("");
                     onNote("已保存网页会话");
@@ -176,7 +180,12 @@ function AuthBody({
                 className="s5-ghost danger"
                 onClick={() =>
                   onConfirm(`删除后需重新登录 ${provider.name}。`, () =>
-                    void removeManualCookie(provider.id)
+                    void requireActionResult(
+                      dispatch({
+                        type: "removeManualCookie",
+                        target: { kind: "provider", providerId: provider.id },
+                      }),
+                    )
                       .then(() => {
                         onNote("已删除网页会话");
                         onCredentialChange();
@@ -203,7 +212,13 @@ function AuthBody({
                 { value: "manual", label: "只用我保存的" },
               ]}
               onChange={(value) =>
-                void setProviderCookieSource(provider.id, value)
+                void requireActionResult(
+                  dispatch({
+                    type: "setCookieSource",
+                    target: { kind: "provider", providerId: provider.id },
+                    source: value,
+                  }),
+                )
                   .then(() => onNote("已更新会话读取位置"))
                   .catch((error) => onNote(String(error)))
               }
@@ -229,7 +244,12 @@ function AuthBody({
             type="button"
             className="s5-primary"
             onClick={() =>
-              void (gemini ? getGeminiCliSignedIn() : triggerProviderLogin(provider.id))
+              void (gemini
+                ? getGeminiCliSignedIn()
+                : dispatch({
+                    type: "triggerLogin",
+                    target: { kind: "provider", providerId: provider.id },
+                  }))
                 .then(() => onNote(gemini ? "检测完成" : "已发起登录"))
                 .catch((error) => onNote(String(error)))
             }
@@ -275,7 +295,14 @@ function AuthBody({
             type="button"
             className="s5-primary"
             onClick={() =>
-              void setApiKey(provider.id, keyValue.trim(), keyLabel.trim() || undefined)
+              void requireActionResult(
+                dispatch({
+                  type: "setApiKey",
+                  target: { kind: "provider", providerId: provider.id },
+                  apiKey: keyValue.trim(),
+                  label: keyLabel.trim() || undefined,
+                }),
+              )
                 .then(() => {
                   setKeyValue("");
                   setKeyLabel("");
@@ -293,7 +320,12 @@ function AuthBody({
               className="s5-ghost danger"
               onClick={() =>
                 onConfirm(`删除 ${provider.name} 的密钥，不影响其他服务商。`, () =>
-                  void removeApiKey(provider.id)
+                  void requireActionResult(
+                    dispatch({
+                      type: "removeApiKey",
+                      target: { kind: "provider", providerId: provider.id },
+                    }),
+                  )
                     .then(() => {
                       onNote("已删除密钥");
                       onCredentialChange();
@@ -356,23 +388,11 @@ export default function ProvidersPage({
 }: SettingsPageProps & { coreStore?: UsageStore | null; dispatcher?: ActionDispatcher | null }) {
   const enabled = settings.enabledProviders ?? [];
   const motion = settings.enableAnimations !== false;
-  const legacy = useProviders({ refreshOnMount: false });
   const coreSnapshots = useCoreSnapshotListForPage(injectedCoreStore);
-  const hasCoreInjection = injectedCoreStore !== undefined;
-  const snapshotsBridge = legacy.providers;
-  const snapshotByIdBridge = useMemo(
-    () => new Map(snapshotsBridge.map((row) => [row.providerId, row])),
-    [snapshotsBridge],
-  );
-  const snapshotByIdCore = useMemo(
+  const snapshotById = useMemo(
     () => new Map(coreSnapshots.map((row) => [row.providerId, row])),
     [coreSnapshots],
   );
-  // Unified map: when injected, core is source of truth; empty injected store
-  // renders the empty/loading state without fabricating.
-  const snapshotById: Map<string, unknown> = hasCoreInjection ? (snapshotByIdCore as Map<string, unknown>) : (snapshotByIdBridge as Map<string, unknown>);
-  // Keep the legacy refresh timer for backward compat when no core store.
-  const refresh = legacy.refresh;
   const actionDispatcher = useActionDispatcher(injectedDispatcher ?? undefined);
   const [nowMs, setNowMs] = useState(() => Date.now());
   const [query, setQuery] = useState("");
@@ -393,10 +413,9 @@ export default function ProvidersPage({
   useEffect(() => {
     const timer = window.setInterval(() => {
       setNowMs(Date.now());
-      if (!hasCoreInjection) refresh();
     }, 60_000);
     return () => window.clearInterval(timer);
-  }, [refresh, hasCoreInjection]);
+  }, []);
   const [authById, setAuthById] = useState<Record<string, AuthMethod>>({});
   const [loginOpen, setLoginOpen] = useState(false);
   const [note, setNote] = useState<string | null>(null);
@@ -481,7 +500,13 @@ export default function ProvidersPage({
           const nextIds = catalog
             .map((p) => p.id)
             .map((id) => (visibleIds.has(id) ? (nextVisible.shift() ?? id) : id));
-          void reorderProviders(nextIds).catch(() => setNote("排序保存失败"));
+          void (actionDispatcher as ActionDispatcher)
+            .dispatch({
+              type: "reorderProviders",
+              target: { kind: "summary" },
+              providerIds: nextIds,
+            })
+            .catch(() => setNote("排序保存失败"));
         },
       });
       return () => sortable.destroy();
@@ -545,46 +570,23 @@ export default function ProvidersPage({
   };
 
   const rowMeta = (id: string, isOn: boolean) => {
-    const snapAny = snapshotById.get(id) ?? null;
+    const snap = snapshotById.get(id) ?? null;
     if (!isOn) return { sub: "未配置", metric: "", problem: false };
-    // Core snapshot path
-    if (hasCoreInjection) {
-      const snap = snapAny as ProviderSnapshot | null;
-      if (!snap || snap.error || snap.displayState === "error" || snap.displayState === "authRequired") {
-        return { sub: "未配置", metric: "", problem: Boolean(snap?.error) };
-      }
-      const updatedMs = snap.updatedAt ? Date.parse(snap.updatedAt) : NaN;
-      const time = Number.isFinite(updatedMs) ? listUpdatedLabel(updatedMs, nowMs) : "刚刚更新";
-      let metric = "";
-      const proj = projectSurface(snap);
-      if (proj.primary && proj.primary.fillPercent != null) {
-        metric = `${Math.round(proj.primary.usedPercent)}%`;
-      } else if (proj.balance) {
-        metric = proj.balance.amountText;
-      }
-      const stale = Number.isFinite(updatedMs) && nowMs - updatedMs > 10 * 60_000;
-      return { sub: time, metric, problem: stale || snap.displayState === "stale" };
-    }
-    const snap = snapAny as unknown as import("../../../types/bridge").ProviderUsageSnapshot | null;
-    if (!snap || snap.error) {
+    if (!snap || snap.error || snap.displayState === "error" || snap.displayState === "authRequired") {
       return { sub: "未配置", metric: "", problem: Boolean(snap?.error) };
     }
-    const updatedMs = new Date(snap.updatedAt).getTime();
-    const time = Number.isFinite(updatedMs)
-      ? listUpdatedLabel(updatedMs, nowMs)
-      : "刚刚更新";
+    const updatedMs = snap.updatedAt ? Date.parse(snap.updatedAt) : NaN;
+    const time = Number.isFinite(updatedMs) ? listUpdatedLabel(updatedMs, nowMs) : "刚刚更新";
     let metric = "";
-    if (primaryQuotaState(snap) === "quota" && snap.primary && Number.isFinite(snap.primary.usedPercent)) {
-      metric = `${quotaPercentDisplay(snap.primary, quotaPercentContext(settings, "dashboard")).rounded}%`;
-    } else {
-      const balance = getProviderBalance(snap).balance;
-      if (balance?.kind === "balance" && !balance.unavailable) {
-        metric = balance.amount;
-      }
+    const showAsUsed = settings.dashboardShowAsUsed !== false;
+    const proj = projectSurface(snap, { showAsUsed });
+    if (proj.primary && proj.primary.fillPercent != null) {
+      metric = `${Math.round(proj.primary.fillPercent)}%`;
+    } else if (proj.balance) {
+      metric = proj.balance.amountText;
     }
-    const stale =
-      Number.isFinite(updatedMs) && nowMs - updatedMs > 10 * 60_000;
-    return { sub: time, metric, problem: stale };
+    const stale = Number.isFinite(updatedMs) && nowMs - updatedMs > 10 * 60_000;
+    return { sub: time, metric, problem: stale || snap.displayState === "stale" };
   };
 
   const who = selectedProvider
@@ -739,7 +741,14 @@ export default function ProvidersPage({
                     className="s5-primary"
                     onClick={() => {
                       const ids = COOKIE_IMPORT_TARGETS.filter((id) => cookieTargets[id]);
-                      void importCookieFile(cookieFileContents, ids)
+                      void requireActionResult(
+                        (actionDispatcher as ActionDispatcher).dispatch({
+                          type: "importCookieFile",
+                          target: { kind: "settings" },
+                          contents: cookieFileContents,
+                          providerIds: ids,
+                        }),
+                      )
                         .then(() => {
                           setCookieFile(false);
                           setCookieFileContents("");
@@ -907,7 +916,13 @@ export default function ProvidersPage({
                     onChange={(value) => {
                       setRegionBusy(true);
                       setRegionError(null);
-                      void setProviderRegion(selectedProvider.id, value)
+                      void requireActionResult(
+                        (actionDispatcher as ActionDispatcher).dispatch({
+                          type: "setRegion",
+                          target: { kind: "provider", providerId: selectedProvider.id },
+                          region: value,
+                        }),
+                      )
                         .then(() => setRegionValue(value))
                         .catch((error) => setRegionError(String(error)))
                         .finally(() => setRegionBusy(false));
@@ -927,7 +942,12 @@ export default function ProvidersPage({
                     setConfirm({
                       text: `撤销 ${selectedProvider.name} 的本地凭据。不会删除账号本身。`,
                       action: () => {
-                        void revokeProviderCredentials(selectedProvider.id)
+                        void requireActionResult(
+                          (actionDispatcher as ActionDispatcher).dispatch({
+                            type: "revokeCredentials",
+                            target: { kind: "provider", providerId: selectedProvider.id },
+                          }),
+                        )
                           .then(() => setNote(null))
                           .catch((error) => setNote(String(error)));
                       },

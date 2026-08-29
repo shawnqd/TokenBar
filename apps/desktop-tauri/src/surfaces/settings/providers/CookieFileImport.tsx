@@ -1,5 +1,7 @@
 import { useRef, useState, type DragEvent } from "react";
-import { importCookieFile, previewCookieFile } from "../../../lib/tauri";
+import { previewCookieFile } from "../../../lib/tauri";
+import { useDispatchAction } from "../../../core/useCoreBridge";
+import { requireActionResult } from "../../../core/actionDispatcher";
 import type { CookieFilePreviewBridge } from "../../../types/bridge";
 
 /** Sentinel "provider id" for the pinned sidebar row that selects this pane
@@ -9,6 +11,7 @@ export const COOKIE_IMPORT_ID = "__cookie_import__";
 /** Detail-pane view for importing a user-exported browser Cookie file,
  * reached by selecting the pinned "批量导入 Cookie" row in the sidebar. */
 export function CookieFileImport() {
+  const dispatch = useDispatchAction();
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [contents, setContents] = useState<string | null>(null);
   const [fileName, setFileName] = useState<string | null>(null);
@@ -59,7 +62,14 @@ export function CookieFileImport() {
     setBusy(true);
     setError(null);
     try {
-      await importCookieFile(contents, selected);
+      await requireActionResult(
+        dispatch({
+          type: "importCookieFile",
+          target: { kind: "settings" },
+          contents,
+          providerIds: selected,
+        }),
+      );
       resetSelection();
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));

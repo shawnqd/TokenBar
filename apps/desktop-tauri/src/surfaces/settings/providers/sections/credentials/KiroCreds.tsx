@@ -1,7 +1,9 @@
 import { useEffect, useState } from "react";
 import type { LocaleKey } from "../../../../../i18n/keys";
 import type { KiroStatus } from "../../../../../types/bridge";
-import { getKiroStatus, openPath } from "../../../../../lib/tauri";
+import { getKiroStatus } from "../../../../../lib/tauri";
+import { useDispatchAction } from "../../../../../core/useCoreBridge";
+import { requireActionResult } from "../../../../../core/actionDispatcher";
 import {
   ProviderAuthMethod,
   ProviderSection,
@@ -18,6 +20,7 @@ interface Props {
  * plus a hint string (either the detected CLI path or a not-found error).
  */
 export function KiroCreds({ t }: Props) {
+  const dispatch = useDispatchAction();
   const [status, setStatus] = useState<KiroStatus | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -39,7 +42,9 @@ export function KiroCreds({ t }: Props) {
 
   const handleOpenFolder = () => {
     if (!status.hint) return;
-    void openPath(status.hint).catch((e) => setError(String(e)));
+    void requireActionResult(
+      dispatch({ type: "openPath", target: { kind: "app" }, path: status.hint }),
+    ).catch((e) => setError(String(e)));
   };
 
   return (

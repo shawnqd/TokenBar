@@ -84,17 +84,6 @@ vi.mock("../lib/tauri", () => ({
   invokeSurfaceAction: vi.fn(async () => "ok"),
 }));
 
-vi.mock("../hooks/useProviders", () => ({
-  useProviders: () => ({
-    providers: [],
-    isRefreshing: false,
-    refresh: vi.fn(),
-    lastRefresh: null,
-    hasCachedData: false,
-    hasLoadedCache: true,
-  }),
-}));
-
 vi.mock("../hooks/useOutputSpeedSnapshot", () => ({
   useOutputSpeedSnapshot: () => null,
 }));

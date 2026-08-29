@@ -636,6 +636,12 @@ export interface ProviderUsageSnapshot {
   capabilities?: ProviderCapabilitiesSnapshot;
 }
 
+/** Full, monotonically-versioned projection published by the Rust process. */
+export interface VersionedProviderProjection {
+  version: number;
+  snapshots: ProviderUsageSnapshot[];
+}
+
 export interface WayfinderRouteSummary {
   name: string;
   requests: number;

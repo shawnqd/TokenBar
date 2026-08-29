@@ -1,6 +1,8 @@
 import { useEffect, useState } from "react";
 import { useLocale } from "../../../hooks/useLocale";
-import { getAppInfo, openExternalUrl } from "../../../lib/tauri";
+import { getAppInfo } from "../../../lib/tauri";
+import { useDispatchAction } from "../../../core/useCoreBridge";
+import { requireActionResult } from "../../../core/actionDispatcher";
 import type { AppInfoBridge } from "../../../types/bridge";
 import type { LocaleKey } from "../../../i18n/keys";
 import type { TabProps } from "../../Settings";
@@ -23,6 +25,7 @@ const ABOUT_LINKS: { labelKey: LocaleKey; url: string }[] = [
 
 export default function AboutTab({}: TabProps) {
   const { t } = useLocale();
+  const dispatch = useDispatchAction();
   const [appInfo, setAppInfo] = useState<AppInfoBridge | null>(null);
   const [linkError, setLinkError] = useState<string | null>(null);
 
@@ -32,7 +35,9 @@ export default function AboutTab({}: TabProps) {
 
   const openAboutLink = (url: string) => {
     setLinkError(null);
-    openExternalUrl(url).catch((error) => {
+    void requireActionResult(
+      dispatch({ type: "openExternalUrl", target: { kind: "app" }, url }),
+    ).catch((error) => {
       setLinkError(String(error));
     });
   };

@@ -4,16 +4,6 @@ import { describe, expect, it, vi } from "vitest";
 vi.mock("../../../hooks/useLocale", () => ({
   useLocale: () => ({ t: (key: string) => key, language: "english" }),
 }));
-vi.mock("../../../hooks/useProviders", () => ({
-  useProviders: () => ({
-    providers: [],
-    isRefreshing: false,
-    refresh: () => {},
-    lastRefresh: null,
-    hasCachedData: false,
-    hasLoadedCache: true,
-  }),
-}));
 vi.mock("../../../hooks/useOutputSpeedSnapshot", () => ({
   useOutputSpeedSnapshot: () => null,
 }));

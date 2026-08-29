@@ -1,7 +1,8 @@
 import { useState } from "react";
 import type { CookieSourceOption } from "../../../../types/bridge";
 import type { LocaleKey } from "../../../../i18n/keys";
-import { setProviderCookieSource } from "../../../../lib/tauri";
+import { useDispatchAction } from "../../../../core/useCoreBridge";
+import { requireActionResult } from "../../../../core/actionDispatcher";
 
 interface Props {
   providerId: string;
@@ -25,6 +26,7 @@ export function CookieSourceSection({
   t,
   onChanged,
 }: Props) {
+  const dispatch = useDispatchAction();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -39,7 +41,13 @@ export function CookieSourceSection({
     setBusy(true);
     setError(null);
     try {
-      await setProviderCookieSource(providerId, value);
+      await requireActionResult(
+        dispatch({
+          type: "setCookieSource",
+          target: { kind: "provider", providerId },
+          source: value,
+        }),
+      );
       onChanged();
     } catch (e) {
       setError(String(e));

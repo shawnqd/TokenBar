@@ -2,9 +2,9 @@ import { useCallback, useEffect, useState } from "react";
 import { useLocale } from "../../../hooks/useLocale";
 import {
   getManualCookies,
-  removeManualCookie,
-  setManualCookie,
 } from "../../../lib/tauri";
+import { useDispatchAction } from "../../../core/useCoreBridge";
+import { requireActionResult } from "../../../core/actionDispatcher";
 import { Select } from "../../../components/FormControls";
 import type {
   CookieInfoBridge,
@@ -13,6 +13,7 @@ import type {
 
 export default function CookiesTab({ providers }: { providers: ProviderCatalogEntry[] }) {
   const { t } = useLocale();
+  const dispatch = useDispatchAction();
   const [cookies, setCookies] = useState<CookieInfoBridge[]>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -41,7 +42,14 @@ export default function CookiesTab({ providers }: { providers: ProviderCatalogEn
     setBusy(true);
     setError(null);
     try {
-      const next = await setManualCookie(addProviderId, addCookieValue.trim());
+      await requireActionResult(
+        dispatch({
+          type: "setManualCookie",
+          target: { kind: "provider", providerId: addProviderId },
+          cookieHeader: addCookieValue.trim(),
+        }),
+      );
+      const next = await getManualCookies();
       setCookies(next);
       setAddProviderId("");
       setAddCookieValue("");
@@ -56,7 +64,13 @@ export default function CookiesTab({ providers }: { providers: ProviderCatalogEn
     setBusy(true);
     setError(null);
     try {
-      const next = await removeManualCookie(providerId);
+      await requireActionResult(
+        dispatch({
+          type: "removeManualCookie",
+          target: { kind: "provider", providerId },
+        }),
+      );
+      const next = await getManualCookies();
       setCookies(next);
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : String(err));

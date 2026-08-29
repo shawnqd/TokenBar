@@ -26,12 +26,9 @@ import {
   getProviderDetail,
   getProviderRegionOptions,
   getTokenAccountProviders,
-  openProviderDashboard,
-  openProviderStatusPage,
-  refreshProviders,
-  revokeProviderCredentials,
-  triggerProviderLogin,
 } from "../../../lib/tauri";
+import { useDispatchAction } from "../../../core/useCoreBridge";
+import { requireActionResult } from "../../../core/actionDispatcher";
 import { listen } from "@tauri-apps/api/event";
 
 import { IdentitySection } from "./sections/IdentitySection";
@@ -122,6 +119,7 @@ export function ProviderDetailPane({
   onSettingsChange,
 }: Props) {
   const { t } = useLocale();
+  const dispatch = useDispatchAction();
   const [detail, setDetail] = useState<ProviderDetail | null>(null);
   const [cookieOptions, setCookieOptions] = useState<CookieSourceOption[]>([]);
   const [regionOptions, setRegionOptions] = useState<RegionOption[]>([]);
@@ -273,7 +271,7 @@ export function ProviderDetailPane({
     if (!detail) return;
     setBusy(true);
     try {
-      await refreshProviders();
+      await dispatch({ type: "refresh" });
     } catch (e) {
       setError(String(e));
     } finally {
@@ -285,9 +283,12 @@ export function ProviderDetailPane({
     if (!detail) return;
     setBusy(true);
     try {
-      await triggerProviderLogin(detail.id);
+      await dispatch({
+        type: "triggerLogin",
+        target: { kind: "provider", providerId: detail.id },
+      });
       setCredentialRevision((value) => value + 1);
-      await refreshProviders();
+      await dispatch({ type: "refresh" });
       await load(detail.id);
     } catch (e) {
       setError(String(e));
@@ -301,7 +302,12 @@ export function ProviderDetailPane({
     setBusy(true);
     setError(null);
     try {
-      await revokeProviderCredentials(detail.id);
+      await requireActionResult(
+        dispatch({
+          type: "revokeCredentials",
+          target: { kind: "provider", providerId: detail.id },
+        }),
+      );
       setCredentialRevision((value) => value + 1);
       await load(detail.id);
     } catch (e) {
@@ -313,12 +319,18 @@ export function ProviderDetailPane({
 
   const handleOpenDashboard = () => {
     if (!detail) return;
-    void openProviderDashboard(detail.id).catch((e) => setError(String(e)));
+    void dispatch({
+      type: "openExternalUsage",
+      target: { kind: "provider", providerId: detail.id },
+    }).catch((e) => setError(String(e)));
   };
 
   const handleOpenStatusPage = () => {
     if (!detail) return;
-    void openProviderStatusPage(detail.id).catch((e) => setError(String(e)));
+    void dispatch({
+      type: "openExternalStatus",
+      target: { kind: "provider", providerId: detail.id },
+    }).catch((e) => setError(String(e)));
   };
 
   const handleCopyError = () => {
@@ -329,7 +341,10 @@ export function ProviderDetailPane({
 
   const handleBuyCredits = () => {
     if (detail?.buyCreditsUrl) {
-      void openProviderDashboard(detail.id).catch((e) => setError(String(e)));
+      void dispatch({
+        type: "openExternalUsage",
+        target: { kind: "provider", providerId: detail.id },
+      }).catch((e) => setError(String(e)));
     }
   };
 

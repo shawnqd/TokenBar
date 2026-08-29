@@ -3,9 +3,9 @@ import type { LocaleKey } from "../../../../../i18n/keys";
 import {
   getProviderWorkspaceId,
   getProviderGatewayUrl,
-  setProviderWorkspaceId,
-  setProviderGatewayUrl,
 } from "../../../../../lib/tauri";
+import { useDispatchAction } from "../../../../../core/useCoreBridge";
+import { requireActionResult } from "../../../../../core/actionDispatcher";
 import { ProviderSection } from "../../shell/ProviderWorkspace";
 
 interface Props {
@@ -26,6 +26,7 @@ interface Props {
  * and renders nothing.
  */
 export function OpenAiExtras({ providerId = "codex", t }: Props) {
+  const dispatch = useDispatchAction();
   const [projectId, setProjectId] = useState("");
   const [savedProjectId, setSavedProjectId] = useState("");
   const [busy, setBusy] = useState(false);
@@ -59,9 +60,21 @@ export function OpenAiExtras({ providerId = "codex", t }: Props) {
     try {
       const next = projectId.trim();
       if (providerId === "wayfinder") {
-        await setProviderGatewayUrl(providerId, next);
+        await requireActionResult(
+          dispatch({
+            type: "setGatewayUrl",
+            target: { kind: "provider", providerId },
+            gatewayUrl: next,
+          }),
+        );
       } else {
-        await setProviderWorkspaceId(providerId, next);
+        await requireActionResult(
+          dispatch({
+            type: "setWorkspaceId",
+            target: { kind: "provider", providerId },
+            workspaceId: next,
+          }),
+        );
       }
       setSavedProjectId(next);
     } catch (e) {

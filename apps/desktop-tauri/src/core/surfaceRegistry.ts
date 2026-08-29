@@ -1,4 +1,5 @@
 import { recordLifecycleTrace } from "./runtimeDiagnostics";
+import { getCoreBridgeStore } from "./useCoreBridge";
 
 export type SurfaceKind =
   | "trayPanel"
@@ -35,15 +36,41 @@ export interface SurfaceDescriptor {
   targetKinds: string[];
 }
 
-function noop(): void {}
+const surfaceUnsubs = new Map<SurfaceKind, () => void>();
 
-function makeLifecycle(): SurfaceLifecycle {
+function hostLifecycle(kind: SurfaceKind): SurfaceLifecycle {
   return {
-    create: noop,
-    prepare: noop,
-    reveal: noop,
-    hide: noop,
-    dispose: noop,
+    create: () => {
+      recordLifecycleTrace(`builtin:${kind}`, "create");
+    },
+    prepare: () => {
+      // Replica already seeded by ensureAppRuntimeBooted. Prepare only
+      // asserts the process cache is attached for this surface.
+      if (!getCoreBridgeStore() && kind !== "taskbarStatus") {
+        recordLifecycleTrace(`builtin:${kind}`, "prepare", "replica not attached");
+      }
+    },
+    reveal: () => {
+      const store = getCoreBridgeStore();
+      const previous = surfaceUnsubs.get(kind);
+      if (previous) previous();
+      if (store) {
+        surfaceUnsubs.set(
+          kind,
+          store.subscribe(() => {
+            notifyHost();
+          }),
+        );
+      }
+    },
+    hide: () => {
+      recordLifecycleTrace(`builtin:${kind}`, "hide");
+    },
+    dispose: () => {
+      const unsub = surfaceUnsubs.get(kind);
+      if (unsub) unsub();
+      surfaceUnsubs.delete(kind);
+    },
   };
 }
 
@@ -55,7 +82,7 @@ export const SURFACE_DESCRIPTORS: Record<SurfaceKind, SurfaceDescriptor> = {
     hostType: "tauri-webview",
     settingsNamespace: null,
     requiredCapabilities: [],
-    lifecycle: makeLifecycle(),
+    lifecycle: hostLifecycle("trayPanel"),
     version: "1.0.0",
     targetKinds: ["summary", "provider"],
   },
@@ -66,7 +93,7 @@ export const SURFACE_DESCRIPTORS: Record<SurfaceKind, SurfaceDescriptor> = {
     hostType: "tauri-webview",
     settingsNamespace: "floatBar",
     requiredCapabilities: ["hasQuota"],
-    lifecycle: makeLifecycle(),
+    lifecycle: hostLifecycle("floatBar"),
     version: "1.0.0",
     targetKinds: ["provider"],
   },
@@ -77,7 +104,7 @@ export const SURFACE_DESCRIPTORS: Record<SurfaceKind, SurfaceDescriptor> = {
     hostType: "native-child",
     settingsNamespace: "taskbar",
     requiredCapabilities: ["hasQuota", "hasBalance"],
-    lifecycle: makeLifecycle(),
+    lifecycle: hostLifecycle("taskbarStatus"),
     version: "1.0.0",
     targetKinds: ["provider"],
   },
@@ -88,7 +115,7 @@ export const SURFACE_DESCRIPTORS: Record<SurfaceKind, SurfaceDescriptor> = {
     hostType: "tauri-webview",
     settingsNamespace: "settings",
     requiredCapabilities: [],
-    lifecycle: makeLifecycle(),
+    lifecycle: hostLifecycle("settings"),
     version: "1.0.0",
     targetKinds: ["settings"],
   },
@@ -244,7 +271,25 @@ export async function deactivateSurface(kind: SurfaceKind): Promise<void> {
   notifyHost();
 }
 
+export function subscribeSurface(
+  kind: SurfaceKind,
+  listener: () => void,
+): () => void {
+  if (!active.has(kind)) {
+    return () => {};
+  }
+  return subscribeHost(listener);
+}
+
 export function resetSurfaceHostForTest(): void {
+  for (const unsub of surfaceUnsubs.values()) {
+    try {
+      unsub();
+    } catch {
+      // test reset
+    }
+  }
+  surfaceUnsubs.clear();
   active.clear();
   hostListeners.clear();
 }

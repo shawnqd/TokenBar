@@ -1,6 +1,6 @@
 use super::*;
 use serde::Deserialize;
-use tauri::Emitter;
+use tauri::{Emitter, Manager};
 
 // ── SurfaceRegistry host primitives ────────────────────────────────
 //
@@ -54,6 +54,8 @@ pub enum SurfaceAction {
     Refresh {
         #[serde(default)]
         target: Option<WireSurfaceTarget>,
+        #[serde(default)]
+        force: bool,
     },
     OpenSettings {
         target: WireSurfaceTarget,
@@ -76,6 +78,137 @@ pub enum SurfaceAction {
     },
     TriggerLogin {
         target: WireSurfaceTarget,
+    },
+    Dismiss {
+        #[serde(default)]
+        target: Option<WireSurfaceTarget>,
+    },
+    ReorderProviders {
+        #[serde(default)]
+        target: Option<WireSurfaceTarget>,
+        #[serde(rename = "providerIds", default)]
+        provider_ids: Vec<String>,
+    },
+    ClearCache {
+        #[serde(default)]
+        target: Option<WireSurfaceTarget>,
+    },
+    SetApiKey {
+        target: WireSurfaceTarget,
+        #[serde(rename = "apiKey")]
+        api_key: String,
+        #[serde(default)]
+        label: Option<String>,
+    },
+    RemoveApiKey {
+        target: WireSurfaceTarget,
+    },
+    SetManualCookie {
+        target: WireSurfaceTarget,
+        #[serde(rename = "cookieHeader")]
+        cookie_header: String,
+    },
+    RemoveManualCookie {
+        target: WireSurfaceTarget,
+    },
+    ImportCookieFile {
+        #[serde(default)]
+        target: Option<WireSurfaceTarget>,
+        contents: String,
+        #[serde(rename = "providerIds", default)]
+        provider_ids: Vec<String>,
+    },
+    OpenProviderLogin {
+        target: WireSurfaceTarget,
+    },
+    CaptureProviderLogin {
+        target: WireSurfaceTarget,
+    },
+    CloseProviderLogin {
+        #[serde(default)]
+        target: Option<WireSurfaceTarget>,
+    },
+    AddTokenAccount {
+        target: WireSurfaceTarget,
+        label: String,
+        token: String,
+    },
+    RemoveTokenAccount {
+        target: WireSurfaceTarget,
+        #[serde(rename = "accountId")]
+        account_id: String,
+    },
+    SetActiveTokenAccount {
+        target: WireSurfaceTarget,
+        #[serde(rename = "accountId")]
+        account_id: String,
+    },
+    RevokeCredentials {
+        target: WireSurfaceTarget,
+    },
+    SetCookieSource {
+        target: WireSurfaceTarget,
+        source: String,
+    },
+    SetRegion {
+        target: WireSurfaceTarget,
+        region: String,
+    },
+    ResetSettings {
+        #[serde(default)]
+        target: Option<WireSurfaceTarget>,
+    },
+    CloseSettings {
+        #[serde(default)]
+        target: Option<WireSurfaceTarget>,
+    },
+    OpenExternalUrl {
+        #[serde(default)]
+        target: Option<WireSurfaceTarget>,
+        url: String,
+    },
+    OpenPath {
+        #[serde(default)]
+        target: Option<WireSurfaceTarget>,
+        path: String,
+    },
+    SetWorkspaceId {
+        target: WireSurfaceTarget,
+        #[serde(rename = "workspaceId")]
+        workspace_id: String,
+    },
+    SetGatewayUrl {
+        target: WireSurfaceTarget,
+        #[serde(rename = "gatewayUrl")]
+        gateway_url: String,
+    },
+    SetIdePath {
+        #[serde(default)]
+        target: Option<WireSurfaceTarget>,
+        path: String,
+    },
+    UpdateSettings {
+        #[serde(default)]
+        target: Option<WireSurfaceTarget>,
+        patch: super::SettingsUpdate,
+    },
+    RegisterGlobalShortcut {
+        #[serde(default)]
+        target: Option<WireSurfaceTarget>,
+        accelerator: String,
+    },
+    UnregisterGlobalShortcut {
+        #[serde(default)]
+        target: Option<WireSurfaceTarget>,
+    },
+    SetUiLanguage {
+        #[serde(default)]
+        target: Option<WireSurfaceTarget>,
+        language: String,
+    },
+    PlayNotificationSound {
+        #[serde(default)]
+        target: Option<WireSurfaceTarget>,
     },
 }
 
@@ -118,8 +251,12 @@ pub async fn surface_action(
     action: SurfaceAction,
 ) -> Result<String, String> {
     match action {
-        SurfaceAction::Refresh { .. } => {
-            crate::commands::refresh_providers(app).await?;
+        SurfaceAction::Refresh { force, .. } => {
+            if force {
+                crate::commands::refresh_providers(app).await?;
+            } else {
+                crate::commands::refresh_providers_if_stale(app).await?;
+            }
             Ok("refreshed".to_string())
         }
         SurfaceAction::OpenSettings { target } => {
@@ -161,6 +298,166 @@ pub async fn surface_action(
             let provider_id = provider_id_of(&target)?.to_string();
             crate::commands::trigger_provider_login(app, provider_id.clone()).await?;
             Ok(format!("trigger_login:{provider_id}"))
+        }
+        SurfaceAction::Dismiss { .. } => {
+            crate::shell::flyout_window::hide(&app)?;
+            Ok("dismissed".to_string())
+        }
+        SurfaceAction::ReorderProviders { provider_ids, .. } => {
+            crate::commands::reorder_providers(app, provider_ids)?;
+            Ok("reordered".to_string())
+        }
+        SurfaceAction::ClearCache { .. } => {
+            crate::commands::clear_provider_local_usage_cache();
+            Ok("cache_cleared".to_string())
+        }
+        SurfaceAction::SetApiKey {
+            target,
+            api_key,
+            label,
+        } => {
+            let provider_id = provider_id_of(&target)?.to_string();
+            crate::commands::set_api_key(provider_id.clone(), api_key, label)?;
+            Ok(format!("set_api_key:{provider_id}"))
+        }
+        SurfaceAction::RemoveApiKey { target } => {
+            let provider_id = provider_id_of(&target)?.to_string();
+            crate::commands::remove_api_key(provider_id.clone())?;
+            Ok(format!("remove_api_key:{provider_id}"))
+        }
+        SurfaceAction::SetManualCookie {
+            target,
+            cookie_header,
+        } => {
+            let provider_id = provider_id_of(&target)?.to_string();
+            crate::commands::set_manual_cookie(provider_id.clone(), cookie_header)?;
+            Ok(format!("set_manual_cookie:{provider_id}"))
+        }
+        SurfaceAction::RemoveManualCookie { target } => {
+            let provider_id = provider_id_of(&target)?.to_string();
+            crate::commands::remove_manual_cookie(provider_id.clone())?;
+            Ok(format!("remove_manual_cookie:{provider_id}"))
+        }
+        SurfaceAction::ImportCookieFile {
+            contents,
+            provider_ids,
+            ..
+        } => {
+            crate::commands::import_cookie_file(contents, provider_ids)?;
+            Ok("import_cookie_file".to_string())
+        }
+        SurfaceAction::OpenProviderLogin { target } => {
+            let provider_id = provider_id_of(&target)?.to_string();
+            crate::commands::open_provider_login(app, provider_id.clone())?;
+            Ok(format!("open_provider_login:{provider_id}"))
+        }
+        SurfaceAction::CaptureProviderLogin { target } => {
+            let provider_id = provider_id_of(&target)?.to_string();
+            crate::commands::capture_provider_login(app, provider_id.clone()).await?;
+            Ok(format!("capture_provider_login:{provider_id}"))
+        }
+        SurfaceAction::CloseProviderLogin { .. } => {
+            crate::commands::close_provider_login(app)?;
+            Ok("close_provider_login".to_string())
+        }
+        SurfaceAction::AddTokenAccount {
+            target,
+            label,
+            token,
+        } => {
+            let provider_id = provider_id_of(&target)?.to_string();
+            crate::commands::add_token_account(provider_id.clone(), label, token)?;
+            Ok(format!("add_token_account:{provider_id}"))
+        }
+        SurfaceAction::RemoveTokenAccount {
+            target,
+            account_id,
+        } => {
+            let provider_id = provider_id_of(&target)?.to_string();
+            crate::commands::remove_token_account(provider_id.clone(), account_id)?;
+            Ok(format!("remove_token_account:{provider_id}"))
+        }
+        SurfaceAction::SetActiveTokenAccount {
+            target,
+            account_id,
+        } => {
+            let provider_id = provider_id_of(&target)?.to_string();
+            crate::commands::set_active_token_account(provider_id.clone(), account_id)?;
+            Ok(format!("set_active_token_account:{provider_id}"))
+        }
+        SurfaceAction::RevokeCredentials { target } => {
+            let provider_id = provider_id_of(&target)?.to_string();
+            crate::commands::revoke_provider_credentials(provider_id.clone())?;
+            Ok(format!("revoke_credentials:{provider_id}"))
+        }
+        SurfaceAction::SetCookieSource { target, source } => {
+            let provider_id = provider_id_of(&target)?.to_string();
+            crate::commands::set_provider_cookie_source(provider_id.clone(), source)?;
+            Ok(format!("set_cookie_source:{provider_id}"))
+        }
+        SurfaceAction::SetRegion { target, region } => {
+            let provider_id = provider_id_of(&target)?.to_string();
+            crate::commands::set_provider_region(provider_id.clone(), region)?;
+            Ok(format!("set_region:{provider_id}"))
+        }
+        SurfaceAction::ResetSettings { .. } => {
+            crate::commands::reset_settings()?;
+            Ok("reset_settings".to_string())
+        }
+        SurfaceAction::UpdateSettings { patch, .. } => {
+            crate::commands::update_settings(app, patch).await?;
+            Ok("settings_updated".to_string())
+        }
+        SurfaceAction::CloseSettings { .. } => {
+            if let Some(window) = app.get_webview_window(crate::shell::settings_window::SETTINGS_LABEL)
+            {
+                crate::shell::settings_window::dismiss(&app, &window)?;
+            }
+            Ok("close_settings".to_string())
+        }
+        SurfaceAction::OpenExternalUrl { url, .. } => {
+            crate::commands::open_external_url(url)?;
+            Ok("open_external_url".to_string())
+        }
+        SurfaceAction::OpenPath { path, .. } => {
+            crate::commands::open_path(path)?;
+            Ok("open_path".to_string())
+        }
+        SurfaceAction::SetWorkspaceId {
+            target,
+            workspace_id,
+        } => {
+            let provider_id = provider_id_of(&target)?.to_string();
+            crate::commands::set_provider_workspace_id(provider_id.clone(), workspace_id)?;
+            Ok(format!("set_workspace_id:{provider_id}"))
+        }
+        SurfaceAction::SetGatewayUrl {
+            target,
+            gateway_url,
+        } => {
+            let provider_id = provider_id_of(&target)?.to_string();
+            crate::commands::set_provider_gateway_url(provider_id.clone(), gateway_url)?;
+            Ok(format!("set_gateway_url:{provider_id}"))
+        }
+        SurfaceAction::SetIdePath { path, .. } => {
+            crate::commands::set_jetbrains_ide_path(path)?;
+            Ok("set_ide_path".to_string())
+        }
+        SurfaceAction::RegisterGlobalShortcut { accelerator, .. } => {
+            crate::commands::register_global_shortcut(app, accelerator.clone())?;
+            Ok(format!("register_global_shortcut:{accelerator}"))
+        }
+        SurfaceAction::UnregisterGlobalShortcut { .. } => {
+            crate::commands::unregister_global_shortcut(app)?;
+            Ok("unregister_global_shortcut".to_string())
+        }
+        SurfaceAction::SetUiLanguage { language, .. } => {
+            crate::commands::set_ui_language(app, language.clone())?;
+            Ok(format!("set_ui_language:{language}"))
+        }
+        SurfaceAction::PlayNotificationSound { .. } => {
+            crate::commands::play_notification_sound()?;
+            Ok("play_notification_sound".to_string())
         }
     }
 }
@@ -480,7 +777,7 @@ mod tests_surface_action {
         )
         .expect("refresh with id");
         match a {
-            SurfaceAction::Refresh { target } => match target {
+            SurfaceAction::Refresh { target, .. } => match target {
                 Some(super::WireSurfaceTarget::Provider { provider_id }) => {
                     assert_eq!(provider_id, "codex")
                 }
@@ -499,5 +796,91 @@ mod tests_surface_action {
             r#"{"type":"openExternalUsage","providerId":"codex"}"#,
         );
         assert!(flat.is_err(), "flat providerId must not deserialize");
+    }
+
+    #[test]
+    fn surface_action_deserializes_dismiss_reorder_and_clear_cache() {
+        let _: SurfaceAction = serde_json::from_str(
+            r#"{"type":"dismiss","target":{"kind":"summary"}}"#,
+        )
+        .expect("dismiss");
+        let reorder: SurfaceAction = serde_json::from_str(
+            r#"{"type":"reorderProviders","target":{"kind":"summary"},"providerIds":["claude","codex"]}"#,
+        )
+        .expect("reorder");
+        match reorder {
+            SurfaceAction::ReorderProviders { provider_ids, .. } => {
+                assert_eq!(provider_ids, ["claude", "codex"]);
+            }
+            _ => panic!("wrong variant"),
+        }
+        let _: SurfaceAction = serde_json::from_str(
+            r#"{"type":"clearCache","target":{"kind":"settings"}}"#,
+        )
+        .expect("clearCache");
+    }
+
+    #[test]
+    fn surface_action_deserializes_credential_and_account_writes() {
+        let _: SurfaceAction = serde_json::from_str(
+            r#"{"type":"setApiKey","target":{"kind":"provider","providerId":"openrouter"},"apiKey":"sk-test","label":"prod"}"#,
+        )
+        .expect("setApiKey");
+        let _: SurfaceAction = serde_json::from_str(
+            r#"{"type":"setManualCookie","target":{"kind":"provider","providerId":"claude"},"cookieHeader":"a=b"}"#,
+        )
+        .expect("setManualCookie");
+        let import: SurfaceAction = serde_json::from_str(
+            r#"{"type":"importCookieFile","target":{"kind":"settings"},"contents":"netscape","providerIds":["claude"]}"#,
+        )
+        .expect("importCookieFile");
+        match import {
+            SurfaceAction::ImportCookieFile { provider_ids, .. } => {
+                assert_eq!(provider_ids, ["claude"]);
+            }
+            _ => panic!("wrong variant"),
+        }
+        let _: SurfaceAction = serde_json::from_str(
+            r#"{"type":"addTokenAccount","target":{"kind":"provider","providerId":"codex"},"label":"work","token":"tok"}"#,
+        )
+        .expect("addTokenAccount");
+        let _: SurfaceAction = serde_json::from_str(
+            r#"{"type":"openExternalUrl","target":{"kind":"app"},"url":"https://example.com"}"#,
+        )
+        .expect("openExternalUrl");
+        let _: SurfaceAction = serde_json::from_str(
+            r#"{"type":"closeSettings","target":{"kind":"settings"}}"#,
+        )
+        .expect("closeSettings");
+        let update: SurfaceAction = serde_json::from_str(
+            r#"{"type":"updateSettings","target":{"kind":"settings"},"patch":{"theme":"dark"}}"#,
+        )
+        .expect("updateSettings");
+        match update {
+            SurfaceAction::UpdateSettings { .. } => {}
+            _ => panic!("wrong variant"),
+        }
+        let _: SurfaceAction = serde_json::from_str(
+            r#"{"type":"registerGlobalShortcut","target":{"kind":"app"},"accelerator":"Ctrl+Shift+U"}"#,
+        )
+        .expect("registerGlobalShortcut");
+        let _: SurfaceAction = serde_json::from_str(
+            r#"{"type":"unregisterGlobalShortcut","target":{"kind":"app"}}"#,
+        )
+        .expect("unregisterGlobalShortcut");
+        let lang: SurfaceAction = serde_json::from_str(
+            r#"{"type":"setUiLanguage","target":{"kind":"settings"},"language":"chinese"}"#,
+        )
+        .expect("setUiLanguage");
+        match lang {
+            SurfaceAction::SetUiLanguage { language, .. } => {
+                assert_eq!(language, "chinese");
+            }
+            _ => panic!("wrong variant"),
+        }
+        let _: SurfaceAction = serde_json::from_str(
+            r#"{"type":"playNotificationSound","target":{"kind":"settings"}}"#,
+        )
+        .expect("playNotificationSound");
     }
 }

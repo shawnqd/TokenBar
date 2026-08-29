@@ -293,6 +293,9 @@ describe("App window-label routing", () => {
       expect(tauriMocks.getBootstrapState).toHaveBeenCalled();
       expect(tauriMocks.getLocaleStrings).toHaveBeenCalled();
     });
+    await waitFor(() => {
+      expect(container.querySelector("main.shell")).toBeNull();
+    });
     expect(queryByTestId("surface-tray-panel")).toBeNull();
     expect(container.firstChild).toBeNull();
   });

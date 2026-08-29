@@ -1,12 +1,9 @@
 import { useCallback, useEffect, useState } from "react";
 import {
-  captureProviderLogin,
-  closeProviderLogin,
   getManualCookies,
-  openProviderLogin,
-  removeManualCookie,
-  setManualCookie,
 } from "../../../lib/tauri";
+import { useDispatchAction } from "../../../core/useCoreBridge";
+import { requireActionResult } from "../../../core/actionDispatcher";
 import { useLocale } from "../../../hooks/useLocale";
 import type { CookieInfoBridge } from "../../../types/bridge";
 import {
@@ -39,6 +36,7 @@ function cookiePlaceholder(
  */
 export function CookieSection({ providerId, cookieDomain }: Props) {
   const { t } = useLocale();
+  const dispatch = useDispatchAction();
   const [saved, setSaved] = useState<CookieInfoBridge | null>(null);
   const [loaded, setLoaded] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -76,12 +74,14 @@ export function CookieSection({ providerId, cookieDomain }: Props) {
     // Switching providers must not leave a window open that is signed in to
     // the provider the user just navigated away from.
     setLoginOpen(false);
-    void closeProviderLogin().catch(() => {});
+    void requireActionResult(
+      dispatch({ type: "closeProviderLogin", target: { kind: "summary" } }),
+    ).catch(() => {});
     void reload(signal);
     return () => {
       signal.stale = true;
     };
-  }, [reload, cookieDomain, providerId]);
+  }, [reload, cookieDomain, providerId, dispatch]);
 
   if (cookieDomain === null) return null;
   if (!loaded) return null;
@@ -90,7 +90,13 @@ export function CookieSection({ providerId, cookieDomain }: Props) {
     setBusy(true);
     setError(null);
     try {
-      const next = await removeManualCookie(providerId);
+      await requireActionResult(
+        dispatch({
+          type: "removeManualCookie",
+          target: { kind: "provider", providerId },
+        }),
+      );
+      const next = await getManualCookies();
       setSaved(next.find((c) => c.providerId === providerId) ?? null);
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : String(err));
@@ -105,7 +111,14 @@ export function CookieSection({ providerId, cookieDomain }: Props) {
     setError(null);
     setNotice(null);
     try {
-      const next = await setManualCookie(providerId, pasteValue.trim());
+      await requireActionResult(
+        dispatch({
+          type: "setManualCookie",
+          target: { kind: "provider", providerId },
+          cookieHeader: pasteValue.trim(),
+        }),
+      );
+      const next = await getManualCookies();
       setSaved(next.find((c) => c.providerId === providerId) ?? null);
       setPasteValue("");
     } catch (err: unknown) {
@@ -120,7 +133,12 @@ export function CookieSection({ providerId, cookieDomain }: Props) {
     setError(null);
     setNotice(null);
     try {
-      await openProviderLogin(providerId);
+      await requireActionResult(
+        dispatch({
+          type: "openProviderLogin",
+          target: { kind: "provider", providerId },
+        }),
+      );
       setLoginOpen(true);
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : String(err));
@@ -134,7 +152,13 @@ export function CookieSection({ providerId, cookieDomain }: Props) {
     setError(null);
     setNotice(null);
     try {
-      const next = await captureProviderLogin(providerId);
+      await requireActionResult(
+        dispatch({
+          type: "captureProviderLogin",
+          target: { kind: "provider", providerId },
+        }),
+      );
+      const next = await getManualCookies();
       setSaved(next.find((c) => c.providerId === providerId) ?? null);
       setLoginOpen(false);
       setNotice(t("ProviderLoginCaptured"));
@@ -150,7 +174,9 @@ export function CookieSection({ providerId, cookieDomain }: Props) {
   const handleCloseLogin = async () => {
     setBusy(true);
     try {
-      await closeProviderLogin();
+      await requireActionResult(
+        dispatch({ type: "closeProviderLogin", target: { kind: "summary" } }),
+      );
       setLoginOpen(false);
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : String(err));

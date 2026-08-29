@@ -28,16 +28,9 @@ const tauriMocks = vi.hoisted(() => ({
   setUiLanguage: vi.fn(),
 }));
 
-const useProvidersMock = vi.hoisted(() => ({
-  fn: vi.fn(),
-}));
-
 vi.mock("../../lib/tauri", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../lib/tauri")>()),
   ...tauriMocks,
-}));
-vi.mock("../../hooks/useProviders", () => ({
-  useProviders: (...args: unknown[]) => useProvidersMock.fn(...args),
 }));
 vi.mock("../../hooks/useOutputSpeedSnapshot", () => ({
   useOutputSpeedSnapshot: () => null,
@@ -134,35 +127,6 @@ describe("L3c core wiring — Settings side reads unified core store", () => {
     ]);
     tauriMocks.getApiKeys.mockResolvedValue([]);
     tauriMocks.getManualCookies.mockResolvedValue([]);
-    // legacy hook default — will be overridden per test where core should win
-    useProvidersMock.fn.mockReturnValue({
-      providers: [
-        {
-          providerId: "claude",
-          displayName: "Claude",
-          primary: { usedPercent: 11, remainingPercent: 89, kind: "weekly", windowMinutes: 7 * 24 * 60, resetsAt: null, resetDescription: null, isExhausted: false, reservePercent: null, reserveDescription: null },
-          primaryLabel: "Weekly",
-          secondary: null,
-          modelSpecific: null,
-          tertiary: null,
-          extraRateWindows: [],
-          cost: null,
-          planName: null,
-          accountEmail: null,
-          sourceLabel: "auto",
-          updatedAt: new Date().toISOString(),
-          error: null,
-          pace: null,
-          accountOrganization: null,
-          trayStatusLabel: null,
-        },
-      ],
-      isRefreshing: false,
-      refresh: vi.fn(),
-      lastRefresh: null,
-      hasCachedData: true,
-      hasLoadedCache: true,
-    });
   });
 
   it("MenuCard — quota windows and error come from coreSnapshot projection, not bridge fallback", async () => {
@@ -413,22 +377,6 @@ describe("L3c core wiring — Settings side reads unified core store", () => {
       }),
     );
     store.upsert(snap);
-
-    // Mock legacy to return 11% so we can tell which source wins
-    useProvidersMock.fn.mockReturnValue({
-      providers: [{
-        providerId: "claude",
-        displayName: "Claude",
-        primary: { usedPercent: 11, remainingPercent: 89, kind: "weekly", windowMinutes: 7 * 24 * 60, resetsAt: null, resetDescription: null, isExhausted: false, reservePercent: null, reserveDescription: null },
-        updatedAt: new Date().toISOString(),
-        error: null,
-      }],
-      isRefreshing: false,
-      refresh: vi.fn(),
-      lastRefresh: null,
-      hasCachedData: true,
-      hasLoadedCache: true,
-    });
 
     render(<ProvidersPage settings={settings as unknown as SettingsSnapshot} set={() => {}} saving={false} catalog={[{ id: "claude", displayName: "Claude" } as unknown as import("../../types/bridge").ProviderCatalogEntry]} coreStore={store} />);
 

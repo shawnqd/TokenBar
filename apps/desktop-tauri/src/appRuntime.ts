@@ -1,28 +1,26 @@
 /**
  * App-level core runtime (CORE-05/07).
  *
- * Single UsageStore + RefreshCoordinator + EnrichmentScheduler +
- * ActionDispatcher shared by every surface. Created once per WebView entry;
- * the app shell wires the real Tauri fetcher/enrichment runner in, seeds the
- * store from cached bridge snapshots, and subscribes to provider-updated
- * events. `useCoreBridge` and `trayCoreStore` consume the same instances so
- * tray, float bar, taskbar preview and Settings read one snapshot.
+ * One read-only projection replica + action dispatcher per WebView. Rust owns
+ * the process refresh/enrichment writer and publishes a monotonically-versioned
+ * full projection; this shell only subscribes and renders that projection.
+ * `useCoreBridge` and `trayCoreStore` consume the same replica in this WebView
+ * so tray, float bar, taskbar preview and Settings never create a writer.
  */
 import { listen } from "@tauri-apps/api/event";
 import {
-  createUsageStore,
   type UsageFetcher,
   type UsageStore,
   type UsageStoreKey,
 } from "./core/usageStore";
 import {
-  createRefreshCoordinator,
-  type RefreshCoordinator,
-} from "./core/refreshCoordinator";
+  buildProjectionCoordinator,
+} from "./core/projectionRuntime";
 import {
-  createEnrichmentScheduler,
-  type EnrichmentScheduler,
-} from "./core/enrichmentScheduler";
+  buildProjectionEnrichmentScheduler,
+} from "./core/projectionRuntime";
+import type { RefreshCoordinator } from "./core/refreshCoordinator";
+import type { EnrichmentScheduler } from "./core/enrichmentScheduler";
 import {
   createActionDispatcher,
   type ActionDispatcher,
@@ -32,20 +30,15 @@ import {
   setCoreBridgeCoordinator,
   setCoreBridgeDispatcher,
 } from "./core/useCoreBridge";
-import { fromBridge } from "./core/fromBridge";
-import { attachTrayCoreRuntime, trayCoreStore } from "./surfaces/tray/trayCoreStore";
-import { attachFloatBarStore, setFloatBarLocalCostFetcher } from "./floatbar/floatBarStore";
-import type { ProviderCapability, ProviderSnapshot } from "./core/snapshot";
-import type { ProviderUsageSnapshot } from "./types/bridge";
-import {
-  getCachedProviders,
-  getOutputSpeedSnapshot,
-  getProviderChartData,
-  invokeSurfaceAction,
-  refreshProviders,
-  refreshProvidersIfStale,
-  getProviderLocalUsageSummary,
-} from "./lib/tauri";
+import { buildProjectionStore, type ProjectionStore } from "./core/projectionRuntime";
+import { attachTrayCoreRuntime } from "./surfaces/tray/trayCoreStore";
+import { attachFloatBarStore } from "./floatbar/floatBarStore";
+import type { ProviderSnapshot } from "./core/snapshot";
+import type {
+  ProviderUsageSnapshot,
+  VersionedProviderProjection,
+} from "./types/bridge";
+import { invokeSurfaceAction, getProviderProjection } from "./lib/tauri";
 import {
   activateSurface,
   activeSurfaces as listActiveSurfaces,
@@ -69,16 +62,6 @@ export interface AppRuntime {
   dispose: () => void;
 }
 
-function capabilitiesOf(store: UsageStore): () => Record<string, ProviderCapability> {
-  return () => {
-    const map: Record<string, ProviderCapability> = {};
-    for (const record of Object.values(store.getSnapshot().records)) {
-      if (record.snapshot) map[record.snapshot.providerId] = record.snapshot.capabilities;
-    }
-    return map;
-  };
-}
-
 /**
  * Resolve one provider snapshot for a store key.
  *
@@ -86,10 +69,8 @@ function capabilitiesOf(store: UsageStore): () => Record<string, ProviderCapabil
  *   we look up by providerId, then prefer the cached row whose
  *   accountEmail matches the store key; the Rust cache keeps one row
  *   per provider, so exact multi-account isolation is bounded by it.
- * - When the store has no snapshot or the cached one is stale, we trigger
- *   one stale-aware backend round before reading the cache again, so a
- *   manual refresh (Ctrl+R / refresh on open) actually reaches the backend
- *   while automatic TTL reads stay cheap.
+ * - Replica fill only: never calls refresh_providers. Manual refresh goes
+ *   through `surface_action` so Rust remains the process writer.
  * - Unknown data returns the record/error, never a fabricated percentage.
  */
 async function fetchForKey(
@@ -97,36 +78,8 @@ async function fetchForKey(
   key: UsageStoreKey,
 ): Promise<ProviderSnapshot> {
   const record = store.get(key);
-  const staleMs = 15 * 60 * 1000;
-  const stale =
-    record == null ||
-    record.snapshot == null ||
-    record.snapshot.updatedAt == null ||
-    Date.now() - Date.parse(record.snapshot.updatedAt) > staleMs;
-  if (stale) {
-    await refreshProvidersIfStale().catch(() => {});
-  }
-  const cached = await getCachedProviders();
-  const matches = cached.filter((s) => s.providerId === key.providerId);
-  // The backend cache stores one row per provider (upsert by providerId), so
-  // exact multi-account matching cannot be honored on this bridge surface;
-  // match the closest row by the fields the bridge actually carries, then
-  // fall back to the sole cached row.
-  const found =
-    matches.find((s) => s.accountEmail === key.accountKey) ??
-    matches.find((s) => s.sourceLabel === key.sourceKey) ??
-    matches[0];
-  if (found) {
-    try {
-      return (fromBridge(found as unknown as Parameters<typeof fromBridge>[0]) as unknown) as ProviderSnapshot;
-    } catch {
-      // fall through to the cached record below
-    }
-  }
   if (record?.snapshot) return record.snapshot;
-  throw new Error(
-    "app-runtime: no snapshot for " + key.providerId,
-  );
+  throw new Error("core projection: no snapshot for " + key.providerId);
 }
 
 /**
@@ -145,42 +98,8 @@ async function fetchForKey(
  */
 
 export function buildAppRuntime(): AppRuntime {
-  const store = createUsageStore();
-
-  const scheduler = createEnrichmentScheduler({
-    capabilities: capabilitiesOf(store),
-    ttlMs: {},
-    runner: async (kind, key) => {
-      const snapshot = store.get(key)?.snapshot;
-      if (!snapshot) return;
-      if (kind === "chart" && snapshot.capabilities.supportsCharts) {
-        const data = await getProviderChartData(key.providerId);
-        trayCoreStore.commitEnrichment("chart", key, { ok: true, chartData: data });
-      } else if (kind === "outputSpeed" && snapshot.capabilities.supportsOutputSpeed) {
-        const out = await getOutputSpeedSnapshot();
-        const perProvider = (out as unknown as Record<string, import("./types/bridge").ProviderOutputSpeed>)[key.providerId];
-        if (perProvider) {
-          trayCoreStore.commitEnrichment("outputSpeed", key, { ok: true, outputSpeed: perProvider });
-        }
-      } else if (kind === "localCost" && snapshot.capabilities.supportsLocalCost) {
-        await getProviderLocalUsageSummary(key.providerId).catch(() => null);
-      }
-    },
-  });
-
-  const coordinator = createRefreshCoordinator({
-    store,
-    fetcher: (key) => fetchForKey(store, key),
-    enrich: async (snapshot) => {
-      const key: UsageStoreKey = {
-        providerId: snapshot.providerId,
-        accountKey: snapshot.accountKey,
-        sourceKey: snapshot.sourceKey,
-      };
-      await scheduler.trigger("outputSpeed", key, { manual: true }).catch(() => {});
-      await scheduler.trigger("chart", key, { manual: true }).catch(() => {});
-    },
-  });
+  const store = buildProjectionStore();
+  const scheduler = buildProjectionEnrichmentScheduler();
 
   const dispatcher = createActionDispatcher(
     {},
@@ -191,6 +110,13 @@ export function buildAppRuntime(): AppRuntime {
       },
     },
   );
+
+  const coordinator = buildProjectionCoordinator({
+    store,
+    dispatchRefresh: (opts) =>
+      invokeSurfaceAction({ type: "refresh", force: opts?.force }),
+    readProjection: getProviderProjection,
+  });
 
   attachTrayCoreRuntime({ store, coordinator, scheduler });
   attachFloatBarStore(store);
@@ -210,20 +136,26 @@ export function buildAppRuntime(): AppRuntime {
     dispatcher,
     fetchProvider: (key) => fetchForKey(store, key),
     seedFromBridge: (snapshots) => {
-      for (const s of snapshots) {
-        try {
-          store.upsert((fromBridge(s as unknown as Parameters<typeof fromBridge>[0]) as unknown) as never);
-        } catch {
-          // malformed snapshot: skip, never fabricate
-        }
-      }
+      // Compatibility entry for existing boot fixtures. Production boot and
+      // events use the versioned full projection below.
+      store.applyProjection({
+        version: Math.max(0, store.projectionVersion() + 1),
+        snapshots,
+      });
     },
     activeSurfaces: () => listActiveSurfaces(),
     activate: (kind, settings) => activateSurface(kind, settings),
     kindFromWindowLabel,
-    refreshAll: async (opts) => {
-      if (opts?.force) await refreshProviders();
-      else await refreshProvidersIfStale();
+    refreshAll: async () => {
+      // `RefreshCoordinator.refreshAll([])` is intentionally a no-op for
+      // selector callers. The app-level command has no key list, so dispatch
+      // the process-owned refresh directly and then pull the new projection.
+      await invokeSurfaceAction({ type: "refresh", force: true });
+      try {
+        (store as ProjectionStore).applyProjection(await getProviderProjection());
+      } catch {
+        // The projection event will repair this replica when the backend emits.
+      }
     },
     dispose: () => {
       setCoreBridgeStore(null);
@@ -246,48 +178,22 @@ export function hasAppRuntime(): boolean {
   return runtime != null;
 }
 
-/** Seed the shared store from the backend cache on boot. */
+/** Seed the read-only replica from the process-owned full projection on boot. */
 export async function seedAppRuntime(r: AppRuntime): Promise<void> {
   try {
-    const cached = await getCachedProviders();
-    r.seedFromBridge(cached);
+    (r.store as ProjectionStore).applyProjection(await getProviderProjection());
   } catch {
-    // backend not ready yet: surfaces render empty/loading states
+    // backend not ready yet: surfaces render empty/unknown states
   }
 }
 
-/** Wire shared provider events into the store and tray store. */
+/** Wire the process-owned full projection event into this WebView replica. */
 export function startAppRuntimeWiring(r: AppRuntime): void {
-  trayCoreStore.setFetcher(r.fetchProvider);
-  setFloatBarLocalCostFetcher(async (providerId) => {
-    const summary = await import("./lib/tauri").then((m) =>
-      m.getProviderLocalUsageSummary(providerId),
-    );
-    return summary == null ||
-      summary.todayCost == null && summary.thirtyDayCost == null
-      ? null
-      : { todayCost: summary.todayCost ?? 0, thirtyDayCost: summary.thirtyDayCost ?? 0 };
-  });
-  trayCoreStore.setEnrichmentRunner(async (kind, key) => {
-    const snapshot = r.store.get(key)?.snapshot;
-    if (!snapshot) return;
-    if (kind === "chart" && snapshot.capabilities.supportsCharts) {
-      const data = await getProviderChartData(key.providerId);
-      trayCoreStore.commitEnrichment("chart", key, { ok: true, chartData: data });
-    } else if (kind === "outputSpeed" && snapshot.capabilities.supportsOutputSpeed) {
-      const out = await getOutputSpeedSnapshot();
-      const perProvider = (out as unknown as Record<string, import("./types/bridge").ProviderOutputSpeed>)[key.providerId];
-      if (perProvider) {
-        trayCoreStore.commitEnrichment("outputSpeed", key, { ok: true, outputSpeed: perProvider });
-      }
-    }
-  });
-
-  void listen<ProviderUsageSnapshot>("provider-updated", (evt) => {
+  void listen<VersionedProviderProjection>("provider-projection-updated", (evt) => {
     try {
-      r.seedFromBridge([evt.payload]);
+      (r.store as ProjectionStore).applyProjection(evt.payload);
     } catch {
-      // malformed event payload: ignore
+      // malformed projection: ignore; the next full read repairs the replica
     }
   })
     .then((unlisten) => stopListeners.push(unlisten))

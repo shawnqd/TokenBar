@@ -1,8 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
-import {
-  clearProviderLocalUsageCache,
-  getSafeDiagnostics,
-} from "../../../lib/tauri";
+import { getSafeDiagnostics } from "../../../lib/tauri";
+import { useDispatchAction } from "../../../core/useCoreBridge";
 import { useLocale } from "../../../hooks/useLocale";
 import type { SettingsPageProps } from "./pageTypes";
 import { ConfirmDialog, V5Field, V5Section, V5Toggle } from "./v5Controls";
@@ -24,6 +22,7 @@ export default function PrivacyPage({
   saving,
 }: SettingsPageProps) {
   const { t } = useLocale();
+  const dispatch = useDispatchAction();
   const [draft, setDraft] = useState(() =>
     formatDirs(settings.codexCustomSessionsDirs),
   );
@@ -151,7 +150,10 @@ export default function PrivacyPage({
           onCancel={() => setConfirm(null)}
           onConfirm={() => {
             setConfirm(null);
-            void clearProviderLocalUsageCache()
+            void dispatch({
+              type: "clearCache",
+              target: { kind: "settings" },
+            })
                 .then(() => setMockNote("缓存已清理"))
                 .catch((error) => setMockNote(String(error)));
           }}

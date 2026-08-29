@@ -16,7 +16,7 @@ const eventMocks = vi.hoisted(() => {
 
 const tauriMocks = vi.hoisted(() => ({
   getSettingsSnapshot: vi.fn(),
-  updateSettings: vi.fn(),
+  invokeSurfaceAction: vi.fn(),
 }));
 
 vi.mock("@tauri-apps/api/event", () => eventMocks);
@@ -69,7 +69,7 @@ describe("useSettings live sync", () => {
     });
 
     tauriMocks.getSettingsSnapshot.mockResolvedValue(snapshot(false));
-    tauriMocks.updateSettings
+    tauriMocks.invokeSurfaceAction
       .mockResolvedValueOnce(firstPromise)
       .mockResolvedValueOnce(secondPromise);
 
@@ -92,12 +92,13 @@ describe("useSettings live sync", () => {
       } as SettingsUpdate);
     });
 
-    // Resolve the SECOND (latest) call first — it should win
+    // Resolve the SECOND (latest) persist first — then the hook re-reads.
+    tauriMocks.getSettingsSnapshot.mockResolvedValue({
+      ...snapshot(false),
+      taskbarWidgetIconGapPx: 8,
+    } as unknown as SettingsSnapshot);
     await act(async () => {
-      resolveSecond({
-        ...snapshot(false),
-        taskbarWidgetIconGapPx: 8,
-      } as unknown as SettingsSnapshot);
+      resolveSecond("ok" as unknown as SettingsSnapshot);
     });
     await waitFor(() => {
       expect(result.current.settings).toHaveProperty(
@@ -108,10 +109,7 @@ describe("useSettings live sync", () => {
 
     // Now resolve the FIRST (stale) call — its response must be discarded
     await act(async () => {
-      resolveFirst({
-        ...snapshot(false),
-        taskbarWidgetIconGapPx: 5,
-      } as unknown as SettingsSnapshot);
+      resolveFirst("ok" as unknown as SettingsSnapshot);
     });
     // Give React a microtask to flush any state update from the stale response
     await new Promise((r) => setTimeout(r, 50));

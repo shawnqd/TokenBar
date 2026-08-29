@@ -3,6 +3,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { LocaleProvider } from "../../../i18n/LocaleProvider";
 import { buildBundle } from "../../../test/localeHarness";
 import { CookieSection } from "./CookieSection";
+import { createActionDispatcher } from "../../../core/actionDispatcher";
+import { setCoreBridgeDispatcher } from "../../../core/useCoreBridge";
 
 const tauriMocks = vi.hoisted(() => ({
   getLocaleStrings: vi.fn(),
@@ -13,6 +15,7 @@ const tauriMocks = vi.hoisted(() => ({
   openProviderLogin: vi.fn(),
   captureProviderLogin: vi.fn(),
   closeProviderLogin: vi.fn(),
+  invokeSurfaceAction: vi.fn(),
 }));
 
 const eventMocks = vi.hoisted(() => ({ listen: vi.fn() }));
@@ -47,7 +50,18 @@ describe("CookieSection", () => {
     tauriMocks.getLocaleStrings.mockResolvedValue(buildBundle());
     eventMocks.listen.mockResolvedValue(() => {});
     tauriMocks.getManualCookies.mockResolvedValue([]);
-    tauriMocks.closeProviderLogin.mockResolvedValue(undefined);
+    tauriMocks.invokeSurfaceAction.mockResolvedValue("ok");
+    setCoreBridgeDispatcher(
+      createActionDispatcher(
+        {},
+        {
+          fallback: async (action) => {
+            const data = await tauriMocks.invokeSurfaceAction(action);
+            return { status: "handled", data };
+          },
+        },
+      ),
+    );
   });
 
   /**
@@ -75,12 +89,12 @@ describe("CookieSection", () => {
   });
 
   it("stores the session the login window captured", async () => {
-    tauriMocks.openProviderLogin.mockResolvedValue({
-      providerId: "cursor",
-      provider: "Cursor",
-      url: "https://cursor.com/",
+    tauriMocks.invokeSurfaceAction.mockImplementation(async (action: { type: string }) => {
+      if (action.type === "captureProviderLogin") {
+        tauriMocks.getManualCookies.mockResolvedValue([savedCookie()]);
+      }
+      return "ok";
     });
-    tauriMocks.captureProviderLogin.mockResolvedValue([savedCookie()]);
 
     renderSection();
 
@@ -88,7 +102,10 @@ describe("CookieSection", () => {
     await click(await screen.findByText("ProviderLoginCapture"));
 
     await waitFor(() =>
-      expect(tauriMocks.captureProviderLogin).toHaveBeenCalledWith("cursor"),
+      expect(tauriMocks.invokeSurfaceAction).toHaveBeenCalledWith({
+        type: "captureProviderLogin",
+        target: { kind: "provider", providerId: "cursor" },
+      }),
     );
     expect(await screen.findByText("BrowserCookieSavedBadge")).toBeInTheDocument();
     expect(screen.queryByText("ProviderLoginCapture")).not.toBeInTheDocument();
@@ -100,14 +117,12 @@ describe("CookieSection", () => {
    * force the user to start over.
    */
   it("keeps the window open when capture finds no session yet", async () => {
-    tauriMocks.openProviderLogin.mockResolvedValue({
-      providerId: "cursor",
-      provider: "Cursor",
-      url: "https://cursor.com/",
+    tauriMocks.invokeSurfaceAction.mockImplementation(async (action: { type: string }) => {
+      if (action.type === "captureProviderLogin") {
+        throw new Error("No Cursor session found yet.");
+      }
+      return "ok";
     });
-    tauriMocks.captureProviderLogin.mockRejectedValue(
-      new Error("No Cursor session found yet."),
-    );
 
     renderSection();
 
@@ -129,7 +144,7 @@ describe("CookieSection", () => {
     await screen.findByText("ProviderLoginOpen");
     // Mounting also clears any stale window, so only calls made *after* this
     // point prove the provider switch itself did the closing.
-    tauriMocks.closeProviderLogin.mockClear();
+    tauriMocks.invokeSurfaceAction.mockClear();
 
     rerender(
       <LocaleProvider>
@@ -138,7 +153,10 @@ describe("CookieSection", () => {
     );
 
     await waitFor(() =>
-      expect(tauriMocks.closeProviderLogin).toHaveBeenCalled(),
+      expect(tauriMocks.invokeSurfaceAction).toHaveBeenCalledWith({
+        type: "closeProviderLogin",
+        target: { kind: "summary" },
+      }),
     );
   });
 });

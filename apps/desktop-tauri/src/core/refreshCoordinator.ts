@@ -46,7 +46,10 @@ export interface RefreshCoordinator {
     key: UsageStoreKey,
     opts?: { manual?: boolean },
   ) => Promise<UsageRecord>;
-  refreshAll: (keys: UsageStoreKey[]) => Promise<UsageRecord[]>;
+  refreshAll: (
+    keys: UsageStoreKey[],
+    opts?: { manual?: boolean },
+  ) => Promise<UsageRecord[]>;
   startScheduler: (
     intervalMs: number,
     keysProvider?: () => UsageStoreKey[],
@@ -323,8 +326,9 @@ export function createRefreshCoordinator(
 
   const refreshAll = async (
     keys: UsageStoreKey[],
+    opts?: { manual?: boolean },
   ): Promise<UsageRecord[]> => {
-    const results = await Promise.allSettled(keys.map((k) => refresh(k)));
+    const results = await Promise.allSettled(keys.map((k) => refresh(k, opts)));
     return results.map((r, idx) => {
       if (r.status === "fulfilled") return r.value;
       const k = keys[idx];

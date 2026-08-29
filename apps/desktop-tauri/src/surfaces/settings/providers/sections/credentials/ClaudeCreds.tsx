@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import type { LocaleKey } from "../../../../../i18n/keys";
-import { getSettingsSnapshot, updateSettings } from "../../../../../lib/tauri";
+import { getSettingsSnapshot, invokeSurfaceAction } from "../../../../../lib/tauri";
 import { ProviderSection } from "../../shell/ProviderWorkspace";
 
 interface Props {
@@ -34,9 +34,12 @@ export function ClaudeCreds({ t }: Props) {
   const toggle = async (next: boolean) => {
     setSaving(true);
     try {
-      const updated = await updateSettings({
-        claudeAvoidKeychainPrompts: next,
+      await invokeSurfaceAction({
+        type: "updateSettings",
+        target: { kind: "settings" },
+        patch: { claudeAvoidKeychainPrompts: next },
       });
+      const updated = await getSettingsSnapshot();
       setValue(updated.claudeAvoidKeychainPrompts);
     } catch (e) {
       setError(String(e));

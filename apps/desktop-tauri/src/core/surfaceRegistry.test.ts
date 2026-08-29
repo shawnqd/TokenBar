@@ -12,6 +12,7 @@ import {
   isSurfaceActive,
   surfaceHostError,
   resetSurfaceHostForTest,
+  subscribeSurface,
 } from "./surfaceRegistry";
 import type { SurfaceKind } from "./surfaceRegistry";
 
@@ -143,5 +144,18 @@ describe("SurfaceRegistry host", () => {
 
     await deactivateSurface("trayPanel");
     expect(isSurfaceActive("trayPanel")).toBe(false);
+  });
+
+  it("subscribeSurface is a no-op until the surface is active, then follows the host", async () => {
+    const idle = vi.fn();
+    const stopIdle = subscribeSurface("trayPanel", idle);
+    stopIdle();
+    expect(idle).not.toHaveBeenCalled();
+    await activateSurface("trayPanel");
+    const live = vi.fn();
+    const stop = subscribeSurface("trayPanel", live);
+    expect(isSurfaceActive("trayPanel")).toBe(true);
+    stop();
+    await deactivateSurface("trayPanel");
   });
 });

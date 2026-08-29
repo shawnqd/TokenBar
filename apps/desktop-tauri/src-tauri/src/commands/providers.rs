@@ -190,28 +190,39 @@ pub(crate) fn upsert_provider_cache(
 pub(crate) fn prune_provider_cache_to_enabled(
     cache: &mut Vec<ProviderUsageSnapshot>,
     enabled_ids: &[ProviderId],
-) {
+) -> bool {
+    let before = cache.len();
     cache.retain(|snapshot| {
         enabled_ids
             .iter()
             .any(|id| id.cli_name() == snapshot.provider_id)
     });
+    cache.len() != before
 }
 
 pub(crate) fn invalidate_provider_refresh_and_prune_disabled(
     state: &tauri::State<'_, Mutex<AppState>>,
     enabled_ids: &[ProviderId],
-) -> Result<(), String> {
+) -> Result<Option<VersionedProviderProjection>, String> {
     let mut guard = state.lock().map_err(|e| e.to_string())?;
     guard.provider_refresh_generation = guard.provider_refresh_generation.wrapping_add(1);
-    prune_provider_cache_to_enabled(&mut guard.provider_cache, enabled_ids);
+    let pruned = prune_provider_cache_to_enabled(&mut guard.provider_cache, enabled_ids);
+    let projection = if pruned {
+        guard.provider_projection_version = guard.provider_projection_version.wrapping_add(1);
+        Some(VersionedProviderProjection {
+            version: guard.provider_projection_version,
+            snapshots: guard.provider_cache.clone(),
+        })
+    } else {
+        None
+    };
     guard
         .transient_provider_failure_counts
         .retain(|id, _| enabled_ids.contains(id));
     guard
         .timeout_paused_providers
         .retain(|id| enabled_ids.contains(id));
-    Ok(())
+    Ok(projection)
 }
 
 fn is_current_provider_refresh_generation(guard: &AppState, generation: u64) -> bool {
@@ -238,10 +249,23 @@ async fn do_refresh_providers_with_policy(
     };
 
     let inputs = ProviderRefreshInputs::load();
-    if let Ok(mut guard) = state.lock()
+    let pruned_projection = if let Ok(mut guard) = state.lock()
         && is_current_provider_refresh_generation(&guard, generation)
+        && prune_provider_cache_to_enabled(&mut guard.provider_cache, &inputs.enabled_ids)
     {
-        prune_provider_cache_to_enabled(&mut guard.provider_cache, &inputs.enabled_ids);
+        guard.provider_projection_version = guard.provider_projection_version.wrapping_add(1);
+        Some(VersionedProviderProjection {
+            version: guard.provider_projection_version,
+            snapshots: guard.provider_cache.clone(),
+        })
+    } else {
+        None
+    };
+    // Pruning disabled providers is itself a projection change. Publish it
+    // before refresh-started so every WebView drops removed rows immediately,
+    // including the zero-enabled-provider case.
+    if let Some(projection) = pruned_projection.as_ref() {
+        events::emit_provider_projection_updated(app, projection);
     }
     events::emit_refresh_started(app);
     let enabled_count = inputs.enabled_ids.len();
@@ -412,8 +436,14 @@ async fn refresh_provider(
         }
         let snapshot = preserve_last_good_transient_failure(&mut guard, id, snapshot);
         upsert_provider_cache(&mut guard.provider_cache, snapshot.clone());
+        guard.provider_projection_version = guard.provider_projection_version.wrapping_add(1);
+        let projection = VersionedProviderProjection {
+            version: guard.provider_projection_version,
+            snapshots: guard.provider_cache.clone(),
+        };
         drop(guard);
         events::emit_provider_updated(&app, &snapshot);
+        events::emit_provider_projection_updated(&app, &projection);
     } else {
         events::emit_provider_updated(&app, &snapshot);
     }
@@ -655,4 +685,23 @@ pub fn get_cached_providers(
         .lock()
         .map(|guard| guard.provider_cache.clone())
         .unwrap_or_default()
+}
+
+/// Read the complete authoritative provider projection and its monotonic
+/// version. Frontends consume this once at boot and then follow the matching
+/// `provider-projection-updated` event; no WebView performs a partial upsert.
+#[tauri::command]
+pub fn get_provider_projection(
+    state: tauri::State<'_, Mutex<AppState>>,
+) -> VersionedProviderProjection {
+    state
+        .lock()
+        .map(|guard| VersionedProviderProjection {
+            version: guard.provider_projection_version,
+            snapshots: guard.provider_cache.clone(),
+        })
+        .unwrap_or_else(|_| VersionedProviderProjection {
+            version: 0,
+            snapshots: Vec::new(),
+        })
 }

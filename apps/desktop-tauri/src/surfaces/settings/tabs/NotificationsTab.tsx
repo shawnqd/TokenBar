@@ -1,6 +1,6 @@
 import { useCallback, useState } from "react";
 import { useLocale } from "../../../hooks/useLocale";
-import { playNotificationSound } from "../../../lib/tauri";
+import { invokeSurfaceAction } from "../../../lib/tauri";
 import { Field, NumberInput, Toggle } from "../../../components/FormControls";
 import type { TabProps } from "../../Settings";
 
@@ -11,7 +11,10 @@ export default function NotificationsTab({ settings, set, saving }: TabProps) {
 
   const handleTestSound = useCallback(() => {
     setPlayingSound(true);
-    void playNotificationSound().catch(() => {});
+    void invokeSurfaceAction({
+      type: "playNotificationSound",
+      target: { kind: "settings" },
+    }).catch(() => {});
     window.setTimeout(() => setPlayingSound(false), 1500);
   }, []);
 

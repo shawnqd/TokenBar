@@ -3,9 +3,9 @@ import type { LocaleKey } from "../../../../../i18n/keys";
 import type { VertexAiStatus } from "../../../../../types/bridge";
 import {
   getVertexAiStatus,
-  openPath,
-  openProviderDashboard,
 } from "../../../../../lib/tauri";
+import { useDispatchAction } from "../../../../../core/useCoreBridge";
+import { requireActionResult } from "../../../../../core/actionDispatcher";
 import {
   ProviderAuthMethod,
   ProviderSection,
@@ -23,6 +23,7 @@ interface Props {
  * `rust/src/native_ui/preferences.rs::render_provider_detail_panel` (~5611).
  */
 export function VertexAiCreds({ providerId, t }: Props) {
+  const dispatch = useDispatchAction();
   const [status, setStatus] = useState<VertexAiStatus | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -44,11 +45,20 @@ export function VertexAiCreds({ providerId, t }: Props) {
 
   const handleOpenFolder = () => {
     if (!status.credentialsPath) return;
-    void openPath(status.credentialsPath).catch((e) => setError(String(e)));
+    void requireActionResult(
+      dispatch({
+        type: "openPath",
+        target: { kind: "app" },
+        path: status.credentialsPath,
+      }),
+    ).catch((e) => setError(String(e)));
   };
 
   const handleSetup = () => {
-    void openProviderDashboard(providerId).catch((e) => setError(String(e)));
+    void dispatch({
+      type: "openExternalUsage",
+      target: { kind: "provider", providerId },
+    }).catch((e) => setError(String(e)));
   };
 
   return (

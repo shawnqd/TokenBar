@@ -2,10 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { ShortcutCapture } from "../../../components/ShortcutCapture";
 import { useLocale } from "../../../hooks/useLocale";
-import {
-  registerGlobalShortcut,
-  unregisterGlobalShortcut,
-} from "../../../lib/tauri";
+import { invokeSurfaceAction } from "../../../lib/tauri";
 import type { Language, LanguageOption } from "../../../types/bridge";
 import type { LocaleKey } from "../../../i18n/keys";
 import type { SettingsPageProps } from "./pageTypes";
@@ -50,7 +47,11 @@ export default function GeneralPage({
     async (accelerator: string) => {
       setShortcutError(null);
       try {
-        await registerGlobalShortcut(accelerator).catch(() => {});
+        await invokeSurfaceAction({
+          type: "registerGlobalShortcut",
+          target: { kind: "app" },
+          accelerator,
+        }).catch(() => {});
         set({ globalShortcut: accelerator });
       } catch (err: unknown) {
         setShortcutError(err instanceof Error ? err.message : String(err));
@@ -62,7 +63,10 @@ export default function GeneralPage({
   const clearShortcut = useCallback(async () => {
     setShortcutError(null);
     try {
-      await unregisterGlobalShortcut().catch(() => {});
+      await invokeSurfaceAction({
+        type: "unregisterGlobalShortcut",
+        target: { kind: "app" },
+      }).catch(() => {});
       set({ globalShortcut: "" });
     } catch (err: unknown) {
       setShortcutError(err instanceof Error ? err.message : String(err));
