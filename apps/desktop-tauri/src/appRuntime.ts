@@ -103,9 +103,13 @@ async function fetchForKey(
   }
   const cached = await getCachedProviders();
   const matches = cached.filter((s) => s.providerId === key.providerId);
+  // The backend cache stores one row per provider (upsert by providerId), so
+  // exact multi-account matching cannot be honored on this bridge surface;
+  // match the closest row by the fields the bridge actually carries, then
+  // fall back to the sole cached row.
   const found =
-    matches.find((s) => (s as unknown as { sourceKey?: string }).sourceKey === key.sourceKey) ??
-    matches.find((s) => (s as unknown as { accountKey?: string }).accountKey === key.accountKey) ??
+    matches.find((s) => s.accountEmail === key.accountKey) ??
+    matches.find((s) => s.sourceLabel === key.sourceKey) ??
     matches[0];
   if (found) {
     try {
@@ -119,6 +123,21 @@ async function fetchForKey(
     "app-runtime: no snapshot for " + key.providerId,
   );
 }
+
+/**
+ * Generation-domain note (review round 2, M5).
+ *
+ * UsageStore and RefreshCoordinator keep independent generation counters:
+ * the coordinator bumps per refresh round, the store per upsert/seed. An
+ * in-flight coordinator fetch resolving AFTER a fresh seed /
+ * provider-updated event could overwrite the newer snapshot with the
+ * older result.
+ *
+ * Accepted risk, no live repro observed: the fetcher re-reads the same
+ * backend cache the seed used, the Rust side coalesces refetches, and
+ * surfaces re-render from the store. Coupling the two counters would
+ * serialize seeds, so this is documented instead.
+ */
 
 export function buildAppRuntime(): AppRuntime {
   const store = createUsageStore();

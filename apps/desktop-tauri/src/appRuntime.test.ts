@@ -1,6 +1,7 @@
 ﻿import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 import { buildAppRuntime, disposeAppRuntime, getAppRuntime, hasAppRuntime } from "./appRuntime";
 import { createUsageStore, usageStoreKey } from "./core/usageStore";
+import { bridgeSnapshot } from "./core/fixtures";
 import { createActionDispatcher } from "./core/actionDispatcher";
 import type { UsageStoreKey } from "./core/usageStore";
 
@@ -69,6 +70,26 @@ describe("appRuntime", () => {
     ).rejects.toThrow(/no snapshot/i);
   });
 
+  it("fetchForKey triggers a stale backend round when the store has no record", async () => {
+    const tauri = await import("./lib/tauri");
+    vi.mocked(tauri.getCachedProviders).mockResolvedValue([]);
+    const r = buildAppRuntime();
+    await expect(
+      r.fetchProvider({ providerId: "codex", accountKey: "a", sourceKey: "s" }),
+    ).rejects.toThrow(/no snapshot/i);
+    expect(tauri.refreshProvidersIfStale).toHaveBeenCalled();
+  });
+
+  it("fetchForKey prefers the cache row that matches the account email", async () => {
+    const tauri = await import("./lib/tauri");
+    vi.mocked(tauri.getCachedProviders).mockResolvedValue([
+      bridgeSnapshot({ providerId: "codex", accountEmail: "team@x.com" }),
+      bridgeSnapshot({ providerId: "codex", accountEmail: "me@x.com" }),
+    ]);
+    const r = buildAppRuntime();
+    const snap = await r.fetchProvider({ providerId: "codex", accountKey: "me@x.com", sourceKey: "auto" });
+    expect(snap.accountEmail).toBe("me@x.com");
+  });
   it("dispose clears bridge globals so later hooks fail closed", () => {
     const r = buildAppRuntime();
     expect(() => r.dispose()).not.toThrow();

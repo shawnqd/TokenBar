@@ -152,12 +152,8 @@ export default function ProviderUsageCard({
       return;
     }
     let cancelled = false;
-    // eslint-disable-next-line no-console
-    console.log("[PUC] effect running, chartLoader=", typeof chartLoader, "default=", typeof defaultChartLoader);
     (chartLoader ?? defaultChartLoader)(detail.id, detail.email ?? undefined)
       .then((data) => {
-        // eslint-disable-next-line no-console
-        console.log("[PUC] chart resolved", JSON.stringify(data && { providerId: data.providerId, hasLocal: Boolean(data.localUsage) }));
         if (!cancelled) setCharts(data);
       })
       .catch(() => {

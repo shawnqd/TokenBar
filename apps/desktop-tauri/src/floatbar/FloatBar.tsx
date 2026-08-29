@@ -34,7 +34,6 @@ import { TASKBAR_PROVIDER_AUTO } from "../types/bridge";
 import { windowByKind } from "../lib/quotaWindows";
 import { FLOAT_BAR_CONFIG_CHANGED_EVENT, resizeFloatBar } from "./api";
 import "./FloatBar.css";
-import { useCoreSnapshot } from "../core/useCoreBridge";
 import {
   floatBarStore,
   ensureFloatBarStoreSync,
@@ -468,8 +467,7 @@ export default function FloatBar({
   );
 
   // ---- Core snapshot consumption ----
-  // Evidence of useCoreSnapshot usage (required by task) – read first entry via core hook.
-  // The actual visible list is derived from floatBarEntries via the shared store.
+  // The visible list derives from floatBarEntries and reads the shared store.
   const effectiveEntries = useMemo(
     () => resolveFloatBarEntries(settings),
     [settings.floatBarEntries, settings.floatBarProviderIds],
@@ -478,14 +476,6 @@ export default function FloatBar({
     () => expandFloatBarEntries(effectiveEntries, settings.enabledProviders ?? []),
     [effectiveEntries, settings.enabledProviders],
   );
-  // Demonstrate useCoreSnapshot for compliance (first entry)
-  const firstEntryKey = useMemo(() => {
-    const first = expandedEntries[0];
-    if (!first) return { providerId: "__none__", accountKey: "default", sourceKey: "default" };
-    return { providerId: first.providerId, accountKey: "default", sourceKey: "default" };
-  }, [expandedEntries]);
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  const _coreEvidence = useCoreSnapshot(firstEntryKey, floatBarStore);
 
   const coreSnapshots = useFloatBarSnapshots(floatBarStore);
   const bridgeSnapshots: ProviderUsageSnapshot[] = preview?.providers ?? [];
