@@ -53,9 +53,10 @@ export type EnrichmentRunner = (
   key: UsageStoreKey,
 ) => Promise<void>;
 
-let store: UsageStore;
-let coordinator: RefreshCoordinator;
-let scheduler: EnrichmentScheduler;
+let store: UsageStore | null = null;
+let coordinator: RefreshCoordinator | null = null;
+let scheduler: EnrichmentScheduler | null = null;
+let storeUnsub: (() => void) | null = null;
 
 let fetcherSlot: UsageFetcher | undefined;
 let runnerSlot: EnrichmentRunner | undefined;
@@ -71,6 +72,7 @@ let state: TrayCoreStoreState = {
 
 function capabilitiesMap(): Record<string, ProviderCapability> {
   const map: Record<string, ProviderCapability> = {};
+  if (!coordinator) return map;
   for (const record of Object.values(coordinator.getSnapshot().records)) {
     if (record.snapshot) {
       map[record.snapshot.providerId] = record.snapshot.capabilities;
@@ -82,7 +84,7 @@ function capabilitiesMap(): Record<string, ProviderCapability> {
 function rebuild(): void {
   state = {
     version: state.version + 1,
-    records: coordinator.getSnapshot().records,
+    records: coordinator?.getSnapshot().records ?? Object.freeze({}),
     enrich: Object.freeze({ ...Object.fromEntries(enrichByKey) }),
   };
   for (const listener of [...listeners]) {
@@ -116,14 +118,30 @@ function buildRuntime(): void {
       const key = keyFromSnapshot(snapshot);
       // kick the capability-gated enrichment kinds that the tray reads;
       // the injected runner commits the results.
-      await scheduler.trigger("outputSpeed", key, { manual: true }).catch(() => {});
-      await scheduler.trigger("chart", key, { manual: true }).catch(() => {});
+      await scheduler!.trigger("outputSpeed", key, { manual: true }).catch(() => {});
+      await scheduler!.trigger("chart", key, { manual: true }).catch(() => {});
     },
   });
-  store.subscribe(rebuild);
+  if (storeUnsub) storeUnsub();
+  storeUnsub = store.subscribe(rebuild);
 }
 
-buildRuntime();
+/** Bind this read-model to the process-wide runtime. Production only. */
+export function attachTrayCoreRuntime(deps: {
+  store: UsageStore;
+  coordinator: RefreshCoordinator;
+  scheduler: EnrichmentScheduler;
+}): void {
+  if (storeUnsub) {
+    storeUnsub();
+    storeUnsub = null;
+  }
+  store = deps.store;
+  coordinator = deps.coordinator;
+  scheduler = deps.scheduler;
+  storeUnsub = store.subscribe(rebuild);
+  rebuild();
+}
 
 function getSnapshot(): TrayCoreStoreState {
   return state;
@@ -142,10 +160,11 @@ function subscribe(listener: () => void): () => void {
 
 /** Read the store record for one provider key (coordinator view). */
 function getRecord(key: UsageStoreKey): UsageRecord | undefined {
-  return coordinator.get(key);
+  return coordinator?.get(key);
 }
 
 function listRecords(): UsageRecord[] {
+  if (!coordinator) return [];
   return Object.values(coordinator.getSnapshot().records);
 }
 
@@ -157,6 +176,9 @@ function refresh(
   key: UsageStoreKey,
   opts?: { manual?: boolean },
 ): Promise<UsageRecord> {
+  if (!coordinator) {
+    return Promise.reject(new Error("tray: core runtime not attached"));
+  }
   return coordinator.refresh(key, opts);
 }
 
@@ -164,8 +186,8 @@ async function refreshAll(
   keys: UsageStoreKey[],
   opts?: { manual?: boolean },
 ): Promise<void> {
-  if (!fetcherSlot || keys.length === 0) return;
-  await Promise.allSettled(keys.map((key) => coordinator.refresh(key, opts)));
+  if (!coordinator || keys.length === 0) return;
+  await Promise.allSettled(keys.map((key) => coordinator!.refresh(key, opts)));
   rebuild();
 }
 
@@ -182,6 +204,7 @@ async function triggerEnrichment(
   key: UsageStoreKey,
   opts?: { manual?: boolean; mode?: "minimal" | "compact" | "detailed" | "full" },
 ): Promise<boolean> {
+  if (!scheduler) return false;
   const ok = await scheduler.trigger(kind, key, opts);
   rebuild();
   return ok;
@@ -237,10 +260,11 @@ function speedCapableKeys(): UsageStoreKey[] {
 
 /** Push a snapshot directly into the store (tests / cache seeding). */
 function seed(snapshot: ProviderSnapshot): UsageRecord {
-  return store.upsert(snapshot);
+  if (!store) buildRuntime();
+  return store!.upsert(snapshot);
 }
 
-/** Tear down for tests only: fresh store/coordinator/scheduler, no slots. */
+/** Tear down for tests only: fresh isolated store/coordinator/scheduler. */
 function resetForTest(): void {
   for (const listener of [...listeners]) listeners.delete(listener);
   try {
@@ -249,6 +273,10 @@ function resetForTest(): void {
     // ignore
   }
   scheduler?.destroy();
+  if (storeUnsub) {
+    storeUnsub();
+    storeUnsub = null;
+  }
   enrichByKey.clear();
   fetcherSlot = undefined;
   runnerSlot = undefined;

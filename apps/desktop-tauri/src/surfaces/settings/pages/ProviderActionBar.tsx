@@ -1,12 +1,7 @@
 import { useEffect, useState } from "react";
 import type { ProviderDetail } from "../../../types/bridge";
-import {
-  getProviderDetail,
-  openProviderDashboard,
-  openProviderStatusPage,
-  refreshProviders,
-  triggerProviderLogin,
-} from "../../../lib/tauri";
+import { getProviderDetail } from "../../../lib/tauri";
+import { useDispatchAction } from "../../../core/useCoreBridge";
 
 function IconRefresh() {
   return (
@@ -67,6 +62,7 @@ export default function ProviderActionBar({
 }) {
   const [detail, setDetail] = useState<ProviderDetail | null>(null);
   const [busy, setBusy] = useState(false);
+  const dispatch = useDispatchAction();
 
   useEffect(() => {
     let cancelled = false;
@@ -106,7 +102,7 @@ export default function ProviderActionBar({
         disabled={busy}
         onClick={() =>
             void run(async () => {
-              await refreshProviders();
+              await dispatch({ type: "refresh" });
               const next = await getProviderDetail(providerId);
               setDetail(next);
               onDetail?.(next);
@@ -123,8 +119,11 @@ export default function ProviderActionBar({
           disabled={busy}
           onClick={() =>
             void run(async () => {
-              await triggerProviderLogin(providerId);
-              await refreshProviders();
+              await dispatch({
+                type: "triggerLogin",
+                target: { kind: "provider", providerId },
+              });
+              await dispatch({ type: "refresh" });
             })
           }
         >
@@ -137,7 +136,14 @@ export default function ProviderActionBar({
           type="button"
           className="s5-pd-act"
           disabled={busy}
-          onClick={() => void run(() => openProviderDashboard(providerId))}
+          onClick={() =>
+            void run(() =>
+              dispatch({
+                type: "openExternalUsage",
+                target: { kind: "provider", providerId },
+              }).then(() => undefined),
+            )
+          }
         >
           <IconDash />
           用量页
@@ -148,7 +154,14 @@ export default function ProviderActionBar({
           type="button"
           className="s5-pd-act"
           disabled={busy}
-          onClick={() => void run(() => openProviderStatusPage(providerId))}
+          onClick={() =>
+            void run(() =>
+              dispatch({
+                type: "openExternalStatus",
+                target: { kind: "provider", providerId },
+              }).then(() => undefined),
+            )
+          }
         >
           <IconStatus />
           状态
@@ -159,7 +172,14 @@ export default function ProviderActionBar({
           type="button"
           className="s5-pd-act"
           disabled={busy}
-          onClick={() => void run(() => openProviderDashboard(providerId))}
+          onClick={() =>
+            void run(() =>
+              dispatch({
+                type: "openExternalUsage",
+                target: { kind: "provider", providerId },
+              }).then(() => undefined),
+            )
+          }
         >
           <IconBuy />
           买额度

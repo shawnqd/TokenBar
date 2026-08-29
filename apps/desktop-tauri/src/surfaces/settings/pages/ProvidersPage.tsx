@@ -21,7 +21,9 @@ import {
   openProviderLogin,
   removeManualCookie,
   reorderProviders,
+  getProviderRegionOptions,
   revokeProviderCredentials,
+  setProviderRegion,
   setManualCookie,
   setProviderCookieSource,
   setApiKey,
@@ -37,6 +39,7 @@ import type {
   ProviderDetail,
   ApiKeyInfoBridge,
   CookieInfoBridge,
+  RegionOption,
 } from "../../../types/bridge";
 import type { SettingsPageProps } from "./pageTypes";
 import ProviderActionBar from "./ProviderActionBar";
@@ -353,7 +356,7 @@ export default function ProvidersPage({
 }: SettingsPageProps & { coreStore?: UsageStore | null; dispatcher?: ActionDispatcher | null }) {
   const enabled = settings.enabledProviders ?? [];
   const motion = settings.enableAnimations !== false;
-  const legacy = useProviders({ refreshOnMount: true });
+  const legacy = useProviders({ refreshOnMount: false });
   const coreSnapshots = useCoreSnapshotListForPage(injectedCoreStore);
   const hasCoreInjection = injectedCoreStore !== undefined;
   const snapshotsBridge = legacy.providers;
@@ -412,6 +415,10 @@ export default function ProvidersPage({
   const [apiKeys, setApiKeys] = useState<ApiKeyInfoBridge[]>([]);
     const [manualCookies, setManualCookies] = useState<CookieInfoBridge[]>([]);
   const [detail, setDetail] = useState<ProviderDetail | null>(null);
+  const [regionOptions, setRegionOptions] = useState<RegionOption[]>([]);
+  const [regionValue, setRegionValue] = useState("");
+  const [regionError, setRegionError] = useState<string | null>(null);
+  const [regionBusy, setRegionBusy] = useState(false);
 
     const reloadCredentials = useCallback(async () => {
       try {
@@ -481,6 +488,30 @@ export default function ProvidersPage({
     }, [saving, catalog]);
 
   const selectedProvider = catalog.find((p) => p.id === selected);
+  useEffect(() => {
+    if (!selectedProvider) {
+      setRegionOptions([]);
+      setRegionValue("");
+      setRegionError(null);
+      return;
+    }
+    let cancelled = false;
+    setRegionError(null);
+    void getProviderRegionOptions(selectedProvider.id)
+      .then((options) => {
+        if (cancelled) return;
+        setRegionOptions(options);
+        setRegionValue(selectedProvider.region ?? options[0]?.value ?? "");
+      })
+      .catch((error) => {
+        if (cancelled) return;
+        setRegionOptions([]);
+        setRegionError(String(error));
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedProvider?.id, selectedProvider?.region]);
   const method =
     (selectedProvider &&
       (authById[selectedProvider.id] ?? selectedProvider.primary)) ||
@@ -852,16 +883,35 @@ export default function ProvidersPage({
                   }
                 />
               </div>
-              {selectedProvider.region ? (
+              {selectedProvider.region || regionOptions.length > 0 ? (
                 <div className="s5-pd-row">
-                  <div className="s5-field-label">区域</div>
+                  <div>
+                    <div className="s5-field-label">区域</div>
+                    {regionError ? (
+                      <div className="s5-field-help">{regionError}</div>
+                    ) : null}
+                  </div>
                   <V5Select
-                    value="美国东部"
-                    options={[
-                      { value: "美国东部", label: "美国东部" },
-                      { value: "美国西部", label: "美国西部" },
-                    ]}
-                    onChange={() => {}}
+                    value={regionValue || selectedProvider.region || regionOptions[0]?.value || ""}
+                    options={
+                      regionOptions.length > 0
+                        ? regionOptions
+                        : [
+                            {
+                              value: selectedProvider.region ?? "",
+                              label: selectedProvider.region ?? "",
+                            },
+                          ]
+                    }
+                    disabled={saving || regionBusy || regionOptions.length === 0}
+                    onChange={(value) => {
+                      setRegionBusy(true);
+                      setRegionError(null);
+                      void setProviderRegion(selectedProvider.id, value)
+                        .then(() => setRegionValue(value))
+                        .catch((error) => setRegionError(String(error)))
+                        .finally(() => setRegionBusy(false));
+                    }}
                   />
                 </div>
               ) : null}

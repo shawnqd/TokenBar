@@ -42,6 +42,18 @@ vi.mock("../../../lib/tauri", () => ({
   getProviderLocalUsageSummary: vi.fn().mockResolvedValue(null),
   refreshProvidersIfStale: vi.fn().mockResolvedValue(undefined),
   getSettingsSnapshot: vi.fn().mockResolvedValue({}),
+  getSafeDiagnostics: vi.fn().mockResolvedValue({
+    appVersion: "0.0.0-test",
+    platform: "test",
+    schemaVersion: 1,
+    enabledProviders: [],
+    providerCookieSources: {},
+    hasManualCookies: [],
+    hasApiKeys: [],
+    hidePersonalInfo: false,
+    refreshIntervalSecs: 300,
+  }),
+  resetSettings: vi.fn(),
 }));
 
 import FloatBarTab from "./FloatBarTab";

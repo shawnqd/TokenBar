@@ -29,6 +29,10 @@ export function setCoreBridgeDispatcher(dispatcher: ActionDispatcher | null): vo
   globalDispatcher = dispatcher;
 }
 
+export function getCoreBridgeStore(): UsageStore | null {
+  return globalStore;
+}
+
 function resolveStore(override?: UsageStore): UsageStore {
   return override ?? globalStore ?? defaultStore;
 }
@@ -68,9 +72,16 @@ export function useActionDispatcher(
 ): ActionDispatcher | ((action: Parameters<ActionDispatcher["dispatch"]>[0]) => Promise<ReturnType<ActionDispatcher["dispatch"]>>) {
   const dispatcher = dispatcherOverride ?? globalDispatcher;
   if (!dispatcher) {
-    // fallback no-op dispatcher that returns unknown
-    const noop = createActionDispatcher({});
-    return noop;
+    return createActionDispatcher(
+      {},
+      {
+        fallback: async (action) => {
+          const { invokeSurfaceAction } = await import("../lib/tauri");
+          const data = await invokeSurfaceAction(action);
+          return { status: "handled", data };
+        },
+      },
+    );
   }
   return dispatcher;
 }

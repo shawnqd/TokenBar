@@ -14,7 +14,7 @@ import type {
 import { fromBridge, projectSurface, type ProjectedWindow, type ProviderSnapshot } from "../../core";
 import { useLocale } from "../../hooks/useLocale";
 import { useResetDisplay } from "../../hooks/useFormattedResetTime";
-import { openProviderDashboard, openProviderStatusPage } from "../../lib/tauri";
+
 import {
   forecastMarkerPercent,
   quotaForecastDisplay,
@@ -56,6 +56,8 @@ export interface TrayCardProps {
   /** Committed chart/local-usage enrichment result injected by the owning
    *  surface; null/absent hides the usage slot (capability-gated). */
   chartData?: ProviderChartData | null;
+  onOpenExternalUsage?: (providerId: string) => void;
+  onOpenExternalStatus?: (providerId: string) => void;
 }
 
 type PaceTone = "reserve" | "deficit" | "onpace";
@@ -698,6 +700,8 @@ export default function TrayCard({
   showProviderIcon = true,
   detail = false,
   chartData = null,
+  onOpenExternalUsage,
+  onOpenExternalStatus,
 }: TrayCardProps) {
   const { t, language } = useLocale();
 
@@ -791,12 +795,12 @@ export default function TrayCard({
         {hasContext && (
           <div className={`context-actions${canDashboard && canStatus ? "" : " context-actions--single"}`}>
             {canDashboard && (
-              <button type="button" className="context-btn" onClick={() => void openProviderDashboard(core.providerId)}>
+              <button type="button" className="context-btn" onClick={() => onOpenExternalUsage?.(core.providerId)}>
                 <ChartIcon />{t("ActionUsageDashboard")}
               </button>
             )}
             {canStatus && (
-              <button type="button" className="context-btn" onClick={() => void openProviderStatusPage(core.providerId)}>
+              <button type="button" className="context-btn" onClick={() => onOpenExternalStatus?.(core.providerId)}>
                 <StatBarsIcon />{t("ActionStatusPage")}
               </button>
             )}
@@ -946,12 +950,12 @@ export default function TrayCard({
       {hasContext && (
         <div className={`context-actions${canDashboard && canStatus ? "" : " context-actions--single"}`}>
           {canDashboard && (
-            <button type="button" className="context-btn" onClick={() => void openProviderDashboard(core.providerId)}>
+            <button type="button" className="context-btn" onClick={() => onOpenExternalUsage?.(core.providerId)}>
               <ChartIcon />{t("ActionUsageDashboard")}
             </button>
           )}
           {canStatus && (
-            <button type="button" className="context-btn" onClick={() => void openProviderStatusPage(core.providerId)}>
+            <button type="button" className="context-btn" onClick={() => onOpenExternalStatus?.(core.providerId)}>
               <StatBarsIcon />{t("ActionStatusPage")}
             </button>
           )}

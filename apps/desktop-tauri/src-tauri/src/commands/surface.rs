@@ -21,44 +21,89 @@ use tauri::Emitter;
 // unified `surface_action` thin router below. The router is intentionally
 // thin — it contains no new surface behavior, quota logic, auth or
 // secure-storage changes — it only routes to the primitives listed above.
-// Frontend invoke signature (do not edit frontend files directly):
+// Frontend invoke signature — nested target matches TS `SurfaceAction`:
 // ```ts
-// invoke<string>("surface_action", { action: { type: "openSettings", tab: "general" } })
-// invoke<string>("surface_action", { action: { type: "openExternalUsage", providerId: "codex" } })
+// invoke<string>("surface_action", { action: { type: "openSettings", target: { kind: "settings", tab: "general" } } })
+// invoke<string>("surface_action", { action: { type: "openExternalUsage", target: { kind: "provider", providerId: "codex" } } })
 // ```
-// where `action` is `SurfaceAction` (tag = "type", rename_all = "camelCase").
 
 // ── Unified thin router for TS SurfaceRegistry (CORE-05) ─────────────
 
-#[allow(non_snake_case, dead_code)]
+#[derive(Debug, Clone, Deserialize)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum WireSurfaceTarget {
+    App,
+    Summary,
+    Settings {
+        #[serde(default)]
+        tab: Option<String>,
+    },
+    Provider {
+        #[serde(rename = "providerId")]
+        provider_id: String,
+    },
+    ProviderOptional {
+        #[serde(rename = "providerId")]
+        provider_id: Option<String>,
+    },
+}
+
 #[derive(Debug, Clone, Deserialize)]
 #[serde(tag = "type", rename_all = "camelCase")]
 pub enum SurfaceAction {
     Refresh {
         #[serde(default)]
-        providerId: Option<String>,
+        target: Option<WireSurfaceTarget>,
     },
     OpenSettings {
-        #[serde(default)]
-        tab: Option<String>,
+        target: WireSurfaceTarget,
     },
-    Quit,
-    SelectProvider {
+    Quit {
         #[serde(default)]
-        providerId: Option<String>,
+        target: Option<WireSurfaceTarget>,
+    },
+    SelectProvider {
+        target: WireSurfaceTarget,
     },
     OpenProviderDetail {
-        providerId: String,
+        target: WireSurfaceTarget,
     },
     OpenExternalUsage {
-        providerId: String,
+        target: WireSurfaceTarget,
     },
     OpenExternalStatus {
-        providerId: String,
+        target: WireSurfaceTarget,
     },
     TriggerLogin {
-        providerId: String,
+        target: WireSurfaceTarget,
     },
+}
+
+fn provider_id_of(target: &WireSurfaceTarget) -> Result<&str, String> {
+    match target {
+        WireSurfaceTarget::Provider { provider_id } => Ok(provider_id),
+        WireSurfaceTarget::ProviderOptional {
+            provider_id: Some(id),
+        } => Ok(id),
+        _ => Err("missing providerId".to_string()),
+    }
+}
+
+fn settings_tab_of(target: &WireSurfaceTarget) -> String {
+    match target {
+        WireSurfaceTarget::Settings { tab } => {
+            tab.clone().unwrap_or_else(|| "general".to_string())
+        }
+        _ => "general".to_string(),
+    }
+}
+
+fn optional_provider_id(target: &WireSurfaceTarget) -> Option<&str> {
+    match target {
+        WireSurfaceTarget::Provider { provider_id } => Some(provider_id.as_str()),
+        WireSurfaceTarget::ProviderOptional { provider_id } => provider_id.as_deref(),
+        _ => None,
+    }
 }
 
 /// Thin router for the TS SurfaceRegistry / actionDispatcher.
@@ -77,42 +122,45 @@ pub async fn surface_action(
             crate::commands::refresh_providers(app).await?;
             Ok("refreshed".to_string())
         }
-        SurfaceAction::OpenSettings { tab } => {
-            let tab = tab.unwrap_or_else(|| "general".to_string());
+        SurfaceAction::OpenSettings { target } => {
+            let tab = settings_tab_of(&target);
             crate::shell::settings_window::open_or_focus(&app, &tab)
                 .map(|_| format!("open_settings:{tab}"))
         }
-        SurfaceAction::Quit => {
+        SurfaceAction::Quit { .. } => {
             app.exit(0);
             Ok("quit".to_string())
         }
-        SurfaceAction::SelectProvider { providerId } => {
+        SurfaceAction::SelectProvider { target } => {
             crate::shell::flyout_window::open_or_focus(&app, None)
                 .map_err(|e| e.to_string())?;
-            if let Some(pid) = providerId {
-                let _ = app.emit("flyout-select-provider", pid.clone());
+            if let Some(pid) = optional_provider_id(&target) {
+                let _ = app.emit("flyout-select-provider", pid.to_string());
                 return Ok(format!("select_provider:{pid}"));
             }
             Ok("select_provider".to_string())
         }
-        SurfaceAction::OpenProviderDetail { providerId } => {
-            // Detail pane is hosted in Settings → Providers tab.
+        SurfaceAction::OpenProviderDetail { target } => {
+            let provider_id = provider_id_of(&target)?;
             crate::shell::settings_window::open_or_focus(&app, "providers")
                 .map_err(|e| e.to_string())?;
             let _ = app.emit("settings-change-tab", "providers");
-            Ok(format!("open_provider_detail:{providerId}"))
+            Ok(format!("open_provider_detail:{provider_id}"))
         }
-        SurfaceAction::OpenExternalUsage { providerId } => {
-            crate::commands::open_provider_dashboard(providerId.clone())?;
-            Ok(format!("open_external_usage:{providerId}"))
+        SurfaceAction::OpenExternalUsage { target } => {
+            let provider_id = provider_id_of(&target)?.to_string();
+            crate::commands::open_provider_dashboard(provider_id.clone())?;
+            Ok(format!("open_external_usage:{provider_id}"))
         }
-        SurfaceAction::OpenExternalStatus { providerId } => {
-            crate::commands::open_provider_status_page(providerId.clone())?;
-            Ok(format!("open_external_status:{providerId}"))
+        SurfaceAction::OpenExternalStatus { target } => {
+            let provider_id = provider_id_of(&target)?.to_string();
+            crate::commands::open_provider_status_page(provider_id.clone())?;
+            Ok(format!("open_external_status:{provider_id}"))
         }
-        SurfaceAction::TriggerLogin { providerId } => {
-            crate::commands::trigger_provider_login(app, providerId.clone()).await?;
-            Ok(format!("trigger_login:{providerId}"))
+        SurfaceAction::TriggerLogin { target } => {
+            let provider_id = provider_id_of(&target)?.to_string();
+            crate::commands::trigger_provider_login(app, provider_id.clone()).await?;
+            Ok(format!("trigger_login:{provider_id}"))
         }
     }
 }
@@ -378,33 +426,47 @@ mod tests_surface_action {
         let a: SurfaceAction =
             serde_json::from_str(r#"{"type":"refresh"}"#).expect("refresh");
         matches!(a, SurfaceAction::Refresh { .. });
-        let b: SurfaceAction =
-            serde_json::from_str(r#"{"type":"openSettings","tab":"general"}"#).expect("openSettings");
+        let b: SurfaceAction = serde_json::from_str(
+            r#"{"type":"openSettings","target":{"kind":"settings","tab":"general"}}"#,
+        )
+        .expect("openSettings");
         match b {
-            SurfaceAction::OpenSettings { tab } => assert_eq!(tab.as_deref(), Some("general")),
+            SurfaceAction::OpenSettings { target } => match target {
+                super::WireSurfaceTarget::Settings { tab } => {
+                    assert_eq!(tab.as_deref(), Some("general"))
+                }
+                _ => panic!("wrong target"),
+            },
             _ => panic!("wrong variant"),
         }
-        let c: SurfaceAction = serde_json::from_str(r#"{"type":"quit"}"#).expect("quit");
-        matches!(c, SurfaceAction::Quit);
+        let c: SurfaceAction =
+            serde_json::from_str(r#"{"type":"quit","target":{"kind":"app"}}"#).expect("quit");
+        matches!(c, SurfaceAction::Quit { .. });
     }
 
     #[test]
     fn surface_action_deserializes_provider_variants() {
         let cases = [
-            (r#"{"type":"selectProvider","providerId":"codex"}"#, "selectProvider"),
             (
-                r#"{"type":"openProviderDetail","providerId":"claude"}"#,
+                r#"{"type":"selectProvider","target":{"kind":"providerOptional","providerId":"codex"}}"#,
+                "selectProvider",
+            ),
+            (
+                r#"{"type":"openProviderDetail","target":{"kind":"provider","providerId":"claude"}}"#,
                 "openProviderDetail",
             ),
             (
-                r#"{"type":"openExternalUsage","providerId":"codex"}"#,
+                r#"{"type":"openExternalUsage","target":{"kind":"provider","providerId":"codex"}}"#,
                 "openExternalUsage",
             ),
             (
-                r#"{"type":"openExternalStatus","providerId":"codex"}"#,
+                r#"{"type":"openExternalStatus","target":{"kind":"provider","providerId":"codex"}}"#,
                 "openExternalStatus",
             ),
-            (r#"{"type":"triggerLogin","providerId":"codex"}"#, "triggerLogin"),
+            (
+                r#"{"type":"triggerLogin","target":{"kind":"provider","providerId":"codex"}}"#,
+                "triggerLogin",
+            ),
         ];
         for (json, _) in cases {
             let _: SurfaceAction = serde_json::from_str(json).expect(json);
@@ -412,15 +474,30 @@ mod tests_surface_action {
     }
 
     #[test]
-    fn surface_action_refresh_accepts_optional_provider_id() {
-        let a: SurfaceAction =
-            serde_json::from_str(r#"{"type":"refresh","providerId":"codex"}"#).expect("refresh with id");
+    fn surface_action_refresh_accepts_optional_provider_target() {
+        let a: SurfaceAction = serde_json::from_str(
+            r#"{"type":"refresh","target":{"kind":"provider","providerId":"codex"}}"#,
+        )
+        .expect("refresh with id");
         match a {
-            SurfaceAction::Refresh { providerId } => assert_eq!(providerId.as_deref(), Some("codex")),
+            SurfaceAction::Refresh { target } => match target {
+                Some(super::WireSurfaceTarget::Provider { provider_id }) => {
+                    assert_eq!(provider_id, "codex")
+                }
+                _ => panic!("wrong target"),
+            },
             _ => panic!("wrong variant"),
         }
         let b: SurfaceAction =
-            serde_json::from_str(r#"{"type":"refresh","providerId":null}"#).expect("refresh null");
+            serde_json::from_str(r#"{"type":"refresh","target":null}"#).expect("refresh null");
         matches!(b, SurfaceAction::Refresh { .. });
+    }
+
+    #[test]
+    fn flat_action_shape_is_rejected() {
+        let flat = serde_json::from_str::<SurfaceAction>(
+            r#"{"type":"openExternalUsage","providerId":"codex"}"#,
+        );
+        assert!(flat.is_err(), "flat providerId must not deserialize");
     }
 }

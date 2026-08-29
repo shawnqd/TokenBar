@@ -9,3 +9,4 @@ export * from "./enrichmentScheduler";
 export * from "./surfaceRegistry";
 export * from "./actionDispatcher";
 export * from "./useCoreBridge";
+export * from "./runtimeDiagnostics";

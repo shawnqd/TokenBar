@@ -44,3 +44,12 @@ export type SurfaceAction =
       type: "triggerLogin";
       target: Extract<SurfaceTarget, { kind: "provider" }>;
     };
+
+/**
+ * Canonical TS ↔ Rust wire payload. The in-process SurfaceAction *is* the
+ * invoke body: nested `target.kind` / `target.providerId` / `target.tab`.
+ * Rust `commands::surface_action` deserializes this exact JSON.
+ */
+export function surfaceActionWire(action: SurfaceAction): SurfaceAction {
+  return action;
+}

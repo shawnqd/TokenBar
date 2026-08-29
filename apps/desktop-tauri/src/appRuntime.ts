@@ -33,24 +33,27 @@ import {
   setCoreBridgeDispatcher,
 } from "./core/useCoreBridge";
 import { fromBridge } from "./core/fromBridge";
-import { trayCoreStore } from "./surfaces/tray/trayCoreStore";
-import { setFloatBarLocalCostFetcher } from "./floatbar/floatBarStore";
+import { attachTrayCoreRuntime, trayCoreStore } from "./surfaces/tray/trayCoreStore";
+import { attachFloatBarStore, setFloatBarLocalCostFetcher } from "./floatbar/floatBarStore";
 import type { ProviderCapability, ProviderSnapshot } from "./core/snapshot";
-import { canActivate, listSurfaces, type SurfaceDescriptor } from "./core/surfaceRegistry";
 import type { ProviderUsageSnapshot } from "./types/bridge";
 import {
   getCachedProviders,
   getOutputSpeedSnapshot,
   getProviderChartData,
-  openSettingsWindow,
-  openFlyoutWindow,
-  openProviderDashboard,
-  openProviderStatusPage,
-  triggerProviderLogin,
+  invokeSurfaceAction,
   refreshProviders,
   refreshProvidersIfStale,
-  quitApp,
+  getProviderLocalUsageSummary,
 } from "./lib/tauri";
+import {
+  activateSurface,
+  activeSurfaces as listActiveSurfaces,
+  kindFromWindowLabel,
+  type SurfaceDescriptor,
+  type SurfaceKind,
+} from "./core/surfaceRegistry";
+import { recordRefreshTrace } from "./core/runtimeDiagnostics";
 
 export interface AppRuntime {
   store: UsageStore;
@@ -60,7 +63,9 @@ export interface AppRuntime {
   fetchProvider: UsageFetcher;
   seedFromBridge: (snapshots: ProviderUsageSnapshot[]) => void;
   refreshAll: (opts?: { force?: boolean }) => Promise<void>;
-  activeSurfaces: (settings: Record<string, unknown>) => SurfaceDescriptor[];
+  activeSurfaces: (settings?: Record<string, unknown>) => SurfaceDescriptor[];
+  activate: (kind: SurfaceKind, settings?: Record<string, unknown>) => Promise<void>;
+  kindFromWindowLabel: typeof kindFromWindowLabel;
   dispose: () => void;
 }
 
@@ -149,9 +154,16 @@ export function buildAppRuntime(): AppRuntime {
       const snapshot = store.get(key)?.snapshot;
       if (!snapshot) return;
       if (kind === "chart" && snapshot.capabilities.supportsCharts) {
-        await getProviderChartData(key.providerId);
+        const data = await getProviderChartData(key.providerId);
+        trayCoreStore.commitEnrichment("chart", key, { ok: true, chartData: data });
       } else if (kind === "outputSpeed" && snapshot.capabilities.supportsOutputSpeed) {
-        await getOutputSpeedSnapshot();
+        const out = await getOutputSpeedSnapshot();
+        const perProvider = (out as unknown as Record<string, import("./types/bridge").ProviderOutputSpeed>)[key.providerId];
+        if (perProvider) {
+          trayCoreStore.commitEnrichment("outputSpeed", key, { ok: true, outputSpeed: perProvider });
+        }
+      } else if (kind === "localCost" && snapshot.capabilities.supportsLocalCost) {
+        await getProviderLocalUsageSummary(key.providerId).catch(() => null);
       }
     },
   });
@@ -170,49 +182,22 @@ export function buildAppRuntime(): AppRuntime {
     },
   });
 
-  const dispatcher = createActionDispatcher({
-    refresh: async () => {
-      await refreshProviders();
-      return { status: "handled" };
+  const dispatcher = createActionDispatcher(
+    {},
+    {
+      fallback: async (action) => {
+        const data = await invokeSurfaceAction(action);
+        return { status: "handled", data };
+      },
     },
-    openSettings: async (action) => {
-      const target = action.target as { kind: string; tab?: string } | undefined;
-      await openSettingsWindow(target?.tab ?? "general");
-      return { status: "handled" };
-    },
-    quit: async () => {
-      await quitApp();
-      return { status: "handled" };
-    },
-    selectProvider: async () => {
-      // Opens the flyout; the tray panel reads core records directly and
-      // listens for flyout-select-provider to focus a specific provider.
-      await openFlyoutWindow().catch(() => {});
-      return { status: "handled" };
-    },
-    openProviderDetail: async () => {
-      await openSettingsWindow("providers");
-      return { status: "handled" };
-    },
-    openExternalUsage: async (action) => {
-      const t = action.target as { providerId?: string } | undefined;
-      if (!t?.providerId) return { status: "error", error: "missing providerId" };
-      await openProviderDashboard(t.providerId);
-      return { status: "handled" };
-    },
-    openExternalStatus: async (action) => {
-      const t = action.target as { providerId?: string } | undefined;
-      if (!t?.providerId) return { status: "error", error: "missing providerId" };
-      await openProviderStatusPage(t.providerId);
-      return { status: "handled" };
-    },
-    triggerLogin: async (action) => {
-      const t = action.target as { providerId?: string } | undefined;
-      if (!t?.providerId) return { status: "error", error: "missing providerId" };
-      await triggerProviderLogin(t.providerId);
-      return { status: "handled" };
-    },
-  });
+  );
+
+  attachTrayCoreRuntime({ store, coordinator, scheduler });
+  attachFloatBarStore(store);
+  coordinator.on("started", recordRefreshTrace);
+  coordinator.on("core-complete", recordRefreshTrace);
+  coordinator.on("enrichment-complete", recordRefreshTrace);
+  coordinator.on("failed", recordRefreshTrace);
 
   setCoreBridgeStore(store);
   setCoreBridgeCoordinator(coordinator);
@@ -233,14 +218,16 @@ export function buildAppRuntime(): AppRuntime {
         }
       }
     },
-    activeSurfaces: (settings) =>
-      listSurfaces().filter((s) => canActivate(s.kind, settings)),
+    activeSurfaces: () => listActiveSurfaces(),
+    activate: (kind, settings) => activateSurface(kind, settings),
+    kindFromWindowLabel,
     refreshAll: async (opts) => {
       if (opts?.force) await refreshProviders();
       else await refreshProvidersIfStale();
     },
     dispose: () => {
       setCoreBridgeStore(null);
+      setCoreBridgeCoordinator(null);
       setCoreBridgeDispatcher(null);
     },
   };
@@ -298,9 +285,7 @@ export function startAppRuntimeWiring(r: AppRuntime): void {
 
   void listen<ProviderUsageSnapshot>("provider-updated", (evt) => {
     try {
-      const snapshot = fromBridge(evt.payload as unknown as Parameters<typeof fromBridge>[0]) as unknown as never;
       r.seedFromBridge([evt.payload]);
-      trayCoreStore.seed(snapshot);
     } catch {
       // malformed event payload: ignore
     }

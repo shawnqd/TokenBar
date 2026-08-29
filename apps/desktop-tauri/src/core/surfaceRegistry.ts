@@ -1,3 +1,5 @@
+import { recordLifecycleTrace } from "./runtimeDiagnostics";
+
 export type SurfaceKind =
   | "trayPanel"
   | "floatBar"
@@ -150,4 +152,99 @@ export async function runLifecycle(
   const fn = desc.lifecycle[phase];
   if (!fn) return;
   await fn();
+}
+
+export type WindowSurfaceKind = Exclude<SurfaceKind, "taskbarStatus">;
+
+const active = new Map<SurfaceKind, { at: number; error?: string }>();
+const hostListeners = new Set<() => void>();
+
+function notifyHost(): void {
+  for (const listener of [...hostListeners]) {
+    try {
+      listener();
+    } catch {
+      // surface subscribers must not break the host
+    }
+  }
+}
+
+/** Window label is host input; the returned kind is what production routing uses. */
+export function kindFromWindowLabel(label: string): WindowSurfaceKind | null {
+  if (label === "settings") return "settings";
+  if (label === "floatbar") return "floatBar";
+  if (label === "flyout") return "trayPanel";
+  return null;
+}
+
+export function subscribeHost(listener: () => void): () => void {
+  hostListeners.add(listener);
+  return () => {
+    hostListeners.delete(listener);
+  };
+}
+
+export function activeSurfaces(): SurfaceDescriptor[] {
+  const out: SurfaceDescriptor[] = [];
+  for (const kind of active.keys()) {
+    const desc = getSurface(kind);
+    if (desc) out.push(desc);
+  }
+  return out;
+}
+
+export function isSurfaceActive(kind: SurfaceKind): boolean {
+  return active.has(kind);
+}
+
+export function surfaceHostError(kind: SurfaceKind): string | undefined {
+  return active.get(kind)?.error;
+}
+
+export async function activateSurface(
+  kind: SurfaceKind,
+  settings?: Record<string, unknown>,
+): Promise<void> {
+  const desc = getSurface(kind);
+  if (!desc) {
+    recordLifecycleTrace(kind, "activate", `unknown surface ${kind}`);
+    return;
+  }
+  if (settings && !canActivate(kind, settings)) {
+    recordLifecycleTrace(kind, "skip", "activation policy blocked");
+    return;
+  }
+  try {
+    await runLifecycle(kind, "create");
+    await runLifecycle(kind, "prepare");
+    await runLifecycle(kind, "reveal");
+    active.set(kind, { at: Date.now() });
+    recordLifecycleTrace(desc.pluginId, "reveal");
+  } catch (error) {
+    const msg = error instanceof Error ? error.message : String(error);
+    active.set(kind, { at: Date.now(), error: msg });
+    recordLifecycleTrace(desc.pluginId, "reveal", msg);
+  }
+  notifyHost();
+}
+
+export async function deactivateSurface(kind: SurfaceKind): Promise<void> {
+  const desc = getSurface(kind);
+  try {
+    if (desc) {
+      await runLifecycle(kind, "hide");
+      await runLifecycle(kind, "dispose");
+    }
+  } catch (error) {
+    const msg = error instanceof Error ? error.message : String(error);
+    recordLifecycleTrace(desc?.pluginId ?? kind, "dispose", msg);
+  }
+  active.delete(kind);
+  recordLifecycleTrace(desc?.pluginId ?? kind, "hide");
+  notifyHost();
+}
+
+export function resetSurfaceHostForTest(): void {
+  active.clear();
+  hostListeners.clear();
 }

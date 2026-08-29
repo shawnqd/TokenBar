@@ -9,6 +9,7 @@ use serde::Serialize;
 pub struct SafeDiagnostics {
     pub app_version: String,
     pub platform: String,
+    pub schema_version: u8,
     pub enabled_providers: Vec<String>,
     pub provider_cookie_sources: HashMap<String, String>,
     pub has_manual_cookies: Vec<String>,
@@ -56,6 +57,7 @@ fn safe_diagnostics_from(
     SafeDiagnostics {
         app_version: env!("CARGO_PKG_VERSION").to_string(),
         platform: std::env::consts::OS.to_string(),
+        schema_version: 1,
         enabled_providers,
         provider_cookie_sources,
         has_manual_cookies,

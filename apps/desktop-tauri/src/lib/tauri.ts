@@ -152,6 +152,13 @@ export function openSettingsWindow(tab: string): Promise<void> {
   return invoke<void>("open_settings_window", { tab });
 }
 
+/** Production surface-action wire. Nested TS SurfaceAction is the payload. */
+export function invokeSurfaceAction(
+  action: import("../core/actions").SurfaceAction,
+): Promise<string> {
+  return invoke<string>("surface_action", { action });
+}
+
 export function revealSettingsWindow(): Promise<boolean> {
   return invoke<boolean>("reveal_settings_window");
 }

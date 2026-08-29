@@ -60,6 +60,7 @@ export interface RefreshCoordinator {
   cancel: (key: UsageStoreKey) => void;
   destroy: () => void;
   getStore: () => UsageStore;
+  getTrace: () => RefreshEvent[];
 }
 
 function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
@@ -138,14 +139,13 @@ export function createRefreshCoordinator(
 
   let schedulerTimer: ReturnType<typeof setInterval> | null = null;
   let schedulerKeysProvider: (() => UsageStoreKey[]) | null = null;
+  const trace: RefreshEvent[] = [];
 
   function emit(
     kind: RefreshEventKind,
     key: UsageStoreKey,
     extra?: { error?: string },
   ) {
-    const set = eventListeners.get(kind);
-    if (!set || set.size === 0) return;
     const ev: RefreshEvent = {
       kind,
       key,
@@ -153,6 +153,10 @@ export function createRefreshCoordinator(
       at: nowFn(),
       ...(extra?.error ? { error: extra.error } : {}),
     };
+    trace.push(ev);
+    if (trace.length > 48) trace.shift();
+    const set = eventListeners.get(kind);
+    if (!set || set.size === 0) return;
     for (const h of [...set]) {
       try {
         h(ev);
@@ -359,6 +363,7 @@ export function createRefreshCoordinator(
     inflight.clear();
     failureOverlay.clear();
     eventListeners.clear();
+    trace.length = 0;
   };
 
   return {
@@ -375,5 +380,6 @@ export function createRefreshCoordinator(
     cancel,
     destroy,
     getStore,
+    getTrace: () => [...trace],
   };
 }

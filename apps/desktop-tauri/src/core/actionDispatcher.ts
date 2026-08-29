@@ -44,14 +44,23 @@ export function routeAction(action: SurfaceAction): string {
   }
 }
 
+export interface ActionDispatcherOptions {
+  /**
+   * Used when a kind has no local handler. Production wires this to
+   * `invokeSurfaceAction` so every user action hits Rust `surface_action`.
+   */
+  fallback?: DispatchHandler;
+}
+
 export function createActionDispatcher(
-  handlers: Partial<Record<SurfaceActionKind, DispatchHandler>>,
+  handlers: Partial<Record<SurfaceActionKind, DispatchHandler>> = {},
+  options?: ActionDispatcherOptions,
 ): ActionDispatcher {
   const dispatch = async (action: SurfaceAction): Promise<ActionResult> => {
     const kind = (action as { type: SurfaceActionKind }).type;
-    const handler = handlers[kind];
+    const handler = handlers[kind] ?? options?.fallback;
     if (!handler) {
-      return { status: "unknown" };
+      return { status: "unknown", error: `unknown action: ${String(kind)}` };
     }
     try {
       const result = await handler(action);

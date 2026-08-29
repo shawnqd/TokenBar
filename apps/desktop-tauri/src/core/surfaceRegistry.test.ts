@@ -1,10 +1,17 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   SURFACE_DESCRIPTORS,
   getSurface,
   listSurfaces,
   canActivate,
   runLifecycle,
+  kindFromWindowLabel,
+  activateSurface,
+  deactivateSurface,
+  activeSurfaces,
+  isSurfaceActive,
+  surfaceHostError,
+  resetSurfaceHostForTest,
 } from "./surfaceRegistry";
 import type { SurfaceKind } from "./surfaceRegistry";
 
@@ -100,5 +107,41 @@ describe("SurfaceRegistry", () => {
 
   it("getSurface returns undefined for unknown kind", () => {
     expect(getSurface("unknown" as SurfaceKind)).toBeUndefined();
+  });
+});
+
+describe("SurfaceRegistry host", () => {
+  beforeEach(() => {
+    resetSurfaceHostForTest();
+  });
+  afterEach(() => {
+    resetSurfaceHostForTest();
+  });
+
+  it("kindFromWindowLabel maps host input labels", () => {
+    expect(kindFromWindowLabel("settings")).toBe("settings");
+    expect(kindFromWindowLabel("floatbar")).toBe("floatBar");
+    expect(kindFromWindowLabel("flyout")).toBe("trayPanel");
+    expect(kindFromWindowLabel("main")).toBeNull();
+  });
+
+  it("activate/deactivate populate activeSurfaces and isolate failures", async () => {
+    const tray = getSurface("trayPanel")!;
+    tray.lifecycle.reveal = vi.fn();
+    await activateSurface("trayPanel");
+    expect(activeSurfaces().map((s) => s.kind)).toContain("trayPanel");
+    expect(isSurfaceActive("trayPanel")).toBe(true);
+
+    const settings = getSurface("settings")!;
+    settings.lifecycle.create = vi.fn(() => {
+      throw new Error("settings boom");
+    });
+    await activateSurface("settings");
+    expect(isSurfaceActive("settings")).toBe(true);
+    expect(surfaceHostError("settings")).toMatch(/settings boom/);
+    expect(isSurfaceActive("trayPanel")).toBe(true);
+
+    await deactivateSurface("trayPanel");
+    expect(isSurfaceActive("trayPanel")).toBe(false);
   });
 });

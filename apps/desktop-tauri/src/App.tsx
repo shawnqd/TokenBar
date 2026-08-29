@@ -7,15 +7,18 @@ import {
   downloadUpdate,
   getBootstrapState,
   getSettingsSnapshot,
-  openFlyoutWindow,
   revealSettingsWindow,
 } from "./lib/tauri";
 import { useSurfaceSnapshot } from "./hooks/useSurfaceSnapshot";
 import { useTheme } from "./hooks/useTheme";
 import TrayPanel from "./surfaces/TrayPanel";
-import { FLOATBAR_WINDOW_LABEL } from "./floatbar/api";
 import { LocaleProvider } from "./i18n/LocaleProvider";
 import { ensureAppRuntimeBooted } from "./appRuntime";
+import {
+  activateSurface,
+  deactivateSurface,
+  kindFromWindowLabel,
+} from "./core/surfaceRegistry";
 import type { BootstrapState, ThemePreference } from "./types/bridge";
 import type { SurfaceSnapshot } from "./hooks/useSurfaceSnapshot";
 
@@ -29,19 +32,23 @@ function SurfaceFallback() {
   return null;
 }
 
+function currentSurfaceKind() {
+  return kindFromWindowLabel(getCurrentWebviewWindow().label);
+}
+
 /** True when running inside the detached Settings window. */
 function isSettingsWindow(): boolean {
-  return getCurrentWebviewWindow().label === "settings";
+  return currentSurfaceKind() === "settings";
 }
 
 /** True when running inside the detached FloatBar window. */
 function isFloatBarWindow(): boolean {
-  return getCurrentWebviewWindow().label === FLOATBAR_WINDOW_LABEL;
+  return currentSurfaceKind() === "floatBar";
 }
 
 /** True when running inside the detached "Open Tray Panel" window. */
 function isFlyoutWindow(): boolean {
-  return getCurrentWebviewWindow().label === "flyout";
+  return currentSurfaceKind() === "trayPanel";
 }
 
 /** Parse the initial Settings tab from the URL query string. */
@@ -64,13 +71,17 @@ function AppInner() {
 
   useEffect(() => {
     let disposed = false;
+    const kind = currentSurfaceKind();
     void ensureAppRuntimeBooted()
-      .then((r) => {
-        if (!disposed) setCore(r);
+      .then(async (r) => {
+        if (disposed) return;
+        if (kind) await r.activate(kind);
+        setCore(r);
       })
       .catch(() => {});
     return () => {
       disposed = true;
+      if (kind) void deactivateSurface(kind);
     };
   }, []);
   const [state, setState] = useState<BootstrapState | null>(null);
@@ -119,7 +130,14 @@ function AppInner() {
     // shortcut_bridge::plugin) already opens the tray panel natively; this
     // listener is the fallback for ad-hoc capture-mode registrations.
     const unlistenPromise = listen<string>("global-shortcut-triggered", () => {
-      void openFlyoutWindow().catch(() => {});
+      void ensureAppRuntimeBooted()
+        .then((r) =>
+          r.dispatcher.dispatch({
+            type: "selectProvider",
+            target: { kind: "providerOptional", providerId: null },
+          }),
+        )
+        .catch(() => {});
     });
 
     const unlistenSettingsChangePromise = isSettingsWindow()
@@ -171,6 +189,14 @@ function AppInner() {
       window.removeEventListener("codexbar:settings-updated", onSettingsUpdated);
     };
   }, [reloadBootstrapState]);
+
+  useEffect(() => {
+    if (!state?.settings.taskbarWidgetEnabled) return;
+    void activateSurface("taskbarStatus", { taskbarWidgetEnabled: true });
+    return () => {
+      void deactivateSurface("taskbarStatus");
+    };
+  }, [state?.settings.taskbarWidgetEnabled]);
 
   if (error) {
     return (

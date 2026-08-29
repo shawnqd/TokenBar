@@ -673,6 +673,7 @@ export interface RefreshCompletePayload {
 export interface SafeDiagnostics {
   appVersion: string;
   platform: string;
+  schemaVersion?: number;
   enabledProviders: string[];
   providerCookieSources: Record<string, string>;
   hasManualCookies: string[];

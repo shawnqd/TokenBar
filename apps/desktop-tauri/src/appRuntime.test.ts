@@ -16,6 +16,8 @@ vi.mock("./lib/tauri", () => ({
   refreshProviders: vi.fn(async () => {}),
   refreshProvidersIfStale: vi.fn(async () => {}),
   quitApp: vi.fn(async () => {}),
+  invokeSurfaceAction: vi.fn(async () => "wired"),
+  getProviderLocalUsageSummary: vi.fn(async () => null),
 }));
 vi.mock("@tauri-apps/api/event", () => ({
   listen: vi.fn(async () => () => {}),
@@ -90,6 +92,28 @@ describe("appRuntime", () => {
     const snap = await r.fetchProvider({ providerId: "codex", accountKey: "me@x.com", sourceKey: "auto" });
     expect(snap.accountEmail).toBe("me@x.com");
   });
+  it("dispatcher production fallback invokes nested surface_action", async () => {
+    const tauri = await import("./lib/tauri");
+    const r = buildAppRuntime();
+    const result = await r.dispatcher.dispatch({
+      type: "openSettings",
+      target: { kind: "settings", tab: "general" },
+    });
+    expect(result.status).toBe("handled");
+    expect(tauri.invokeSurfaceAction).toHaveBeenCalledWith({
+      type: "openSettings",
+      target: { kind: "settings", tab: "general" },
+    });
+  });
+
+  it("attaches tray to the same store", async () => {
+    const { trayCoreStore } = await import("./surfaces/tray/trayCoreStore");
+    const r = buildAppRuntime();
+    expect(r.activeSurfaces()).toEqual([]);
+    r.seedFromBridge([bridgeSnapshot({ providerId: "codex" })]);
+    expect(trayCoreStore.hasRecords()).toBe(true);
+  });
+
   it("dispose clears bridge globals so later hooks fail closed", () => {
     const r = buildAppRuntime();
     expect(() => r.dispose()).not.toThrow();

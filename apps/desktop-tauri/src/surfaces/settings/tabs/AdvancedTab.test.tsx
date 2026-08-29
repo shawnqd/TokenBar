@@ -5,6 +5,21 @@ vi.mock("../../../hooks/useLocale", () => ({
   useLocale: () => ({ t: (key: string) => key }),
 }));
 
+vi.mock("../../../lib/tauri", () => ({
+  getSafeDiagnostics: vi.fn(async () => ({
+    appVersion: "0.0.0-test",
+    platform: "test",
+    schemaVersion: 1,
+    enabledProviders: [],
+    providerCookieSources: {},
+    hasManualCookies: [],
+    hasApiKeys: [],
+    hidePersonalInfo: false,
+    refreshIntervalSecs: 300,
+  })),
+  resetSettings: vi.fn(async () => {}),
+}));
+
 import AdvancedTab from "./AdvancedTab";
 import type { SettingsSnapshot } from "../../../types/bridge";
 

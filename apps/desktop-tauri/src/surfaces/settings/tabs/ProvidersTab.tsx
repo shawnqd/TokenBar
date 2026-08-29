@@ -74,7 +74,7 @@ export default function ProvidersTab({
   dispatcher,
 }: ProvidersTabProps) {
   const { t } = useLocale();
-  const legacy = useProviders();
+  const legacy = useProviders({ refreshOnMount: false });
   const coreSnapshots = useCoreSnapshotList(coreStore);
   const snapshotsBridge: ProviderUsageSnapshot[] = legacy.providers as ProviderUsageSnapshot[];
   // Prefer core snapshots when a store is injected (even if currently empty —

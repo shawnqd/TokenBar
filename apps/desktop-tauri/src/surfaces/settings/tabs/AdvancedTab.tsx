@@ -1,10 +1,15 @@
+import { useState } from "react";
 import { useLocale } from "../../../hooks/useLocale";
 import { Field, SegmentedControl, Toggle } from "../../../components/FormControls";
 import type { UpdateChannel } from "../../../types/bridge";
 import type { TabProps } from "../../Settings";
+import { resetSettings } from "../../../lib/tauri";
+import { useAdvancedDiagnostics } from "../AdvancedDiagnostics";
 
 export default function AdvancedTab({ settings, set, saving }: TabProps) {
   const { t } = useLocale();
+  const diagnostics = useAdvancedDiagnostics();
+  const [resetNote, setResetNote] = useState<string | null>(null);
 
   return (
     <>
@@ -55,30 +60,27 @@ export default function AdvancedTab({ settings, set, saving }: TabProps) {
             label={t("SettingsRefreshTrace")}
             description={t("SettingsRefreshTraceHelper")}
           >
-            <button
-              type="button"
-              className="settings-v5-mock"
-              disabled
-              aria-disabled="true"
-            >
-              {t("SettingsNotWired")}
+            <button type="button" onClick={diagnostics.reload} disabled={diagnostics.loading}>
+              {diagnostics.loading ? "…" : "Reload"}
             </button>
+            <pre className="settings-v5-readonly" style={{ whiteSpace: "pre-wrap" }}>
+              {diagnostics.refreshTrace}
+            </pre>
           </Field>
           <Field
             label={t("SettingsSurfaceLifecycleTrace")}
-            description={t("SettingsNotWired")}
+            description={diagnostics.lifecycleTrace}
           >
-            <button
-              type="button"
-              className="settings-v5-mock"
-              disabled
-              aria-disabled="true"
-            >
-              {t("SettingsNotWired")}
-            </button>
+            <pre className="settings-v5-readonly" style={{ whiteSpace: "pre-wrap" }}>
+              {diagnostics.lifecycleTrace}
+            </pre>
           </Field>
           <Field label={t("SettingsSchemaVersion")}>
-            <span className="settings-v5-readonly">{t("SettingsNotWired")}</span>
+            <span className="settings-v5-readonly">{diagnostics.schemaVersion}</span>
+          </Field>
+          <Field label="Cache / diagnostics">
+            <span className="settings-v5-readonly">{diagnostics.cacheSummary}</span>
+            {diagnostics.error ? <p>{diagnostics.error}</p> : null}
           </Field>
         </div>
       </section>
@@ -93,11 +95,16 @@ export default function AdvancedTab({ settings, set, saving }: TabProps) {
             <button
               type="button"
               className="settings-v5-mock settings-v5-mock--danger"
-              disabled
-              aria-disabled="true"
+              disabled={saving}
+              onClick={() => {
+                void resetSettings()
+                  .then(() => setResetNote("reset"))
+                  .catch((error) => setResetNote(String(error)));
+              }}
             >
-              {t("SettingsNotWired")}
+              {t("SettingsResetAll")}
             </button>
+            {resetNote ? <p className="settings-v5-readonly">{resetNote}</p> : null}
           </Field>
         </div>
       </section>

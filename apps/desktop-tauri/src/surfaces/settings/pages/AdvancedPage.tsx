@@ -4,6 +4,7 @@ import { useLocale } from "../../../hooks/useLocale";
 import type { UpdateChannel } from "../../../types/bridge";
 import type { SettingsPageProps } from "./pageTypes";
 import { ConfirmDialog, V5Field, V5Section, V5Seg, V5Toggle } from "./v5Controls";
+import { useAdvancedDiagnostics } from "../AdvancedDiagnostics";
 
 export default function AdvancedPage({
   settings,
@@ -13,6 +14,7 @@ export default function AdvancedPage({
   const { t } = useLocale();
   const [confirmReset, setConfirmReset] = useState(false);
   const [note, setNote] = useState<string | null>(null);
+  const diagnostics = useAdvancedDiagnostics();
 
   return (
     <>
@@ -51,17 +53,24 @@ export default function AdvancedPage({
           label={t("SettingsRefreshTrace")}
           help={t("SettingsRefreshTraceHelper")}
         >
-          <button type="button" className="s5-ghost" disabled>
-            {t("SettingsNotWired")}
+          <button type="button" className="s5-ghost" onClick={diagnostics.reload} disabled={diagnostics.loading}>
+            {diagnostics.loading ? "…" : "刷新诊断"}
           </button>
+          <pre className="s5-unit" style={{ whiteSpace: "pre-wrap", marginTop: 8 }}>
+            {diagnostics.refreshTrace}
+          </pre>
         </V5Field>
         <V5Field label={t("SettingsSurfaceLifecycleTrace")}>
-          <button type="button" className="s5-ghost" disabled>
-            {t("SettingsNotWired")}
-          </button>
+          <pre className="s5-unit" style={{ whiteSpace: "pre-wrap" }}>
+            {diagnostics.lifecycleTrace}
+          </pre>
         </V5Field>
         <V5Field label={t("SettingsSchemaVersion")}>
-          <span className="s5-unit">{t("SettingsNotWired")}</span>
+          <span className="s5-unit">{diagnostics.schemaVersion}</span>
+        </V5Field>
+        <V5Field label="Cache / diagnostics">
+          <span className="s5-unit">{diagnostics.cacheSummary}</span>
+          {diagnostics.error ? <p className="s5-hint">{diagnostics.error}</p> : null}
         </V5Field>
       </V5Section>
 

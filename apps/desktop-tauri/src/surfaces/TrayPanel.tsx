@@ -11,10 +11,9 @@ import {
   beginTrayPanelResize,
   dismissTrayPanel,
   endFlyoutGesture,
-  openSettingsWindow,
-  quitApp as quitApplication,
   reorderProviders,
 } from "../lib/tauri";
+import { useDispatchAction } from "../core/useCoreBridge";
 import { useSettings } from "../hooks/useSettings";
 import { useLocale } from "../hooks/useLocale";
 import { useTrayPanelLayout } from "../hooks/useTrayPanelLayout";
@@ -248,11 +247,6 @@ export default function TrayPanel({ state }: { state: BootstrapState }) {
     return keys;
   }, [records, shownProviderIds]);
 
-  const handleRefresh = useCallback(() => {
-    void refreshAllCommand(refreshKeys, { manual: true }).catch(() => {});
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [refreshAllCommand, refreshKeys]);
-
   // Initial stale-aware refresh (manual when the "refresh on open" setting is
   // on). Runs once per surface mount, delayed so the flyout can paint first.
   const initialRefreshRequested = useRef(false);
@@ -320,12 +314,21 @@ export default function TrayPanel({ state }: { state: BootstrapState }) {
     if (event.target === event.currentTarget) setRevealSettled(true);
   }, []);
 
+  const dispatchAction = useDispatchAction();
   const openSettings = useCallback(() => {
-    void openSettingsWindow("general").catch(() => {});
-  }, []);
-  const quitApp = useCallback(() => {
-    void quitApplication();
-  }, []);
+    void dispatchAction({
+      type: "openSettings",
+      target: { kind: "settings", tab: "general" },
+    }).catch(() => {});
+  }, [dispatchAction]);
+  const requestQuit = useCallback(() => {
+    void dispatchAction({ type: "quit", target: { kind: "app" } }).catch(() => {});
+  }, [dispatchAction]);
+  const handleRefresh = useCallback(() => {
+    void dispatchAction({ type: "refresh" }).catch(() => {});
+    void refreshAllCommand(refreshKeys, { manual: true }).catch(() => {});
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [dispatchAction, refreshAllCommand, refreshKeys]);
 
   // Keyboard shortcuts — Esc dismiss, Ctrl+R refresh, Ctrl+, settings, Ctrl+Q quit.
   useEffect(() => {
@@ -353,13 +356,13 @@ export default function TrayPanel({ state }: { state: BootstrapState }) {
           break;
         case "q":
           e.preventDefault();
-          quitApp();
+          requestQuit();
           break;
       }
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [handleRefresh, openSettings, quitApp]);
+  }, [handleRefresh, openSettings, requestQuit]);
 
   const handleGridClick = useCallback((providerId: string | null) => {
     setSelectedProviderId(providerId);
@@ -428,6 +431,18 @@ export default function TrayPanel({ state }: { state: BootstrapState }) {
         showProviderIcon={settings.switcherShowsIcons}
         chartData={chartByProviderId.get(p.providerId) ?? null}
         detail={isDetailView}
+        onOpenExternalUsage={(providerId) => {
+          void dispatchAction({
+            type: "openExternalUsage",
+            target: { kind: "provider", providerId },
+          }).catch(() => {});
+        }}
+        onOpenExternalStatus={(providerId) => {
+          void dispatchAction({
+            type: "openExternalStatus",
+            target: { kind: "provider", providerId },
+          }).catch(() => {});
+        }}
       />
     );
   };
@@ -474,7 +489,7 @@ export default function TrayPanel({ state }: { state: BootstrapState }) {
         </span>
         <span className="footer-row__shortcut">Ctrl+,</span>
       </button>
-      <button type="button" className="footer-row" onClick={quitApp}>
+      <button type="button" className="footer-row" onClick={requestQuit}>
         <span className="footer-row__left">
           <span className="footer-row__icon"><PowerIcon /></span>
           <span className="footer-row__label">{t("MenuQuit")}</span>

@@ -28,6 +28,7 @@ const tauriMocks = vi.hoisted(() => ({
   setProviderCookieSource: vi.fn(),
   setApiKey: vi.fn(),
   removeApiKey: vi.fn(),
+  invokeSurfaceAction: vi.fn(async () => "ok"),
 }));
 
 vi.mock("../../../hooks/useLocale", () => ({
@@ -58,6 +59,21 @@ vi.mock("../../../lib/tauri", () => ({
   setProviderCookieSource: tauriMocks.setProviderCookieSource,
   setApiKey: tauriMocks.setApiKey,
   removeApiKey: tauriMocks.removeApiKey,
+  getProviderRegionOptions: vi.fn().mockResolvedValue([]),
+  setProviderRegion: vi.fn(),
+  getSafeDiagnostics: vi.fn().mockResolvedValue({
+    appVersion: "0.0.0-test",
+    platform: "test",
+    schemaVersion: 1,
+    enabledProviders: [],
+    providerCookieSources: {},
+    hasManualCookies: [],
+    hasApiKeys: [],
+    hidePersonalInfo: false,
+    refreshIntervalSecs: 300,
+  }),
+  resetSettings: vi.fn(),
+  invokeSurfaceAction: tauriMocks.invokeSurfaceAction,
 }));
 
 vi.mock("../../../hooks/useProviders", () => ({
@@ -240,15 +256,21 @@ describe("V5 settings pages from HTML", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "刷新" }));
     await waitFor(() => {
-      expect(tauriMocks.refreshProviders).toHaveBeenCalled();
+      expect(tauriMocks.invokeSurfaceAction).toHaveBeenCalledWith({ type: "refresh" });
     });
     fireEvent.click(screen.getByRole("button", { name: "用量页" }));
     await waitFor(() => {
-      expect(tauriMocks.openProviderDashboard).toHaveBeenCalledWith("claude");
+      expect(tauriMocks.invokeSurfaceAction).toHaveBeenCalledWith({
+        type: "openExternalUsage",
+        target: { kind: "provider", providerId: "claude" },
+      });
     });
     fireEvent.click(screen.getByRole("button", { name: "状态" }));
     await waitFor(() => {
-      expect(tauriMocks.openProviderStatusPage).toHaveBeenCalledWith("claude");
+      expect(tauriMocks.invokeSurfaceAction).toHaveBeenCalledWith({
+        type: "openExternalStatus",
+        target: { kind: "provider", providerId: "claude" },
+      });
     });
     expect(document.querySelector(".s5-pd-act")?.textContent).toMatch(/刷新/);
   });

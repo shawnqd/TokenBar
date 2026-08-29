@@ -6,6 +6,7 @@ const tauriMocks = vi.hoisted(() => ({
   getLocaleStrings: vi.fn(),
   openProviderDashboard: vi.fn(),
   openProviderStatusPage: vi.fn(),
+  invokeSurfaceAction: vi.fn(async () => "ok"),
 }));
 
 vi.mock("../../lib/tauri", () => tauriMocks);

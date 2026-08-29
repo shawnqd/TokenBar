@@ -3,35 +3,41 @@ import { listen } from "@tauri-apps/api/event";
 import { createUsageStore, type UsageStore } from "../core/usageStore";
 import { fromBridge } from "../core/fromBridge";
 import type { ProviderSnapshot } from "../core/snapshot";
+import { getCoreBridgeStore } from "../core/useCoreBridge";
 import { getCachedProviders } from "../lib/tauri";
 import type { ProviderUsageSnapshot } from "../types/bridge";
 
-function createClearableStore(): UsageStore & { clearForTest: () => void } {
+function createClearableStore(): UsageStore & {
+  clearForTest: () => void;
+  bind: (next: UsageStore) => void;
+} {
   let current: UsageStore = createUsageStore();
-  const store: UsageStore & { clearForTest: () => void } = {
-    subscribe: (cb) => current.subscribe(cb),
-    getSnapshot: () => current.getSnapshot(),
-    getServerSnapshot: () => current.getServerSnapshot(),
-    get: (k) => current.get(k),
-    upsert: (s) => current.upsert(s),
-    refresh: (k) => (current as any).refresh?.(k),
-    setFetcher: (f) => (current as any).setFetcher?.(f),
-  } as UsageStore & { clearForTest: () => void };
-  store.clearForTest = () => {
-    current = createUsageStore();
+  const rebind = (store: UsageStore & { clearForTest: () => void; bind: (next: UsageStore) => void }) => {
     store.subscribe = (cb) => current.subscribe(cb);
     store.getSnapshot = () => current.getSnapshot();
     store.getServerSnapshot = () => current.getServerSnapshot();
     store.get = (k) => current.get(k);
     store.upsert = (s) => current.upsert(s);
-    store.refresh = (k) => (current as any).refresh?.(k);
-    store.setFetcher = (f) => (current as any).setFetcher?.(f);
+    store.refresh = (k) => current.refresh(k);
+    store.setFetcher = (f) => current.setFetcher(f);
+  };
+  const store = {} as UsageStore & { clearForTest: () => void; bind: (next: UsageStore) => void };
+  rebind(store);
+  store.bind = (next: UsageStore) => {
+    current = next;
+    rebind(store);
+  };
+  store.clearForTest = () => {
+    current = createUsageStore();
+    rebind(store);
   };
   return store;
 }
 
-export const floatBarStore: UsageStore & { clearForTest: () => void } =
-  createClearableStore();
+export const floatBarStore: UsageStore & {
+  clearForTest: () => void;
+  bind: (next: UsageStore) => void;
+} = createClearableStore();
 
 let syncStarted = false;
 let stopSync: (() => void) | null = null;
@@ -59,7 +65,18 @@ export function setFloatBarLocalCostFetcher(
 
 
 
+/** Bind to the process-wide UsageStore so FloatBar is not a third cache. */
+export function attachFloatBarStore(store: UsageStore): void {
+  floatBarStore.bind(store);
+  stopFloatBarStoreSync();
+}
+
 export function ensureFloatBarStoreSync(): void {
+  const shared = getCoreBridgeStore();
+  if (shared) {
+    floatBarStore.bind(shared);
+    return;
+  }
   if (syncStarted) return;
   syncStarted = true;
   let cancelled = false;

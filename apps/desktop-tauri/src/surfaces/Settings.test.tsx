@@ -67,6 +67,21 @@ vi.mock("../lib/tauri", () => ({
   revokeProviderCredentials: vi.fn(),
   getProviderChartData: vi.fn().mockResolvedValue(null),
   getSettingsSnapshot: vi.fn().mockResolvedValue({ enableAnimations: false }),
+  getSafeDiagnostics: vi.fn().mockResolvedValue({
+    appVersion: "0.0.0-test",
+    platform: "test",
+    schemaVersion: 1,
+    enabledProviders: [],
+    providerCookieSources: {},
+    hasManualCookies: [],
+    hasApiKeys: [],
+    hidePersonalInfo: false,
+    refreshIntervalSecs: 300,
+  }),
+  resetSettings: vi.fn(),
+  getProviderRegionOptions: vi.fn().mockResolvedValue([]),
+  setProviderRegion: vi.fn(),
+  invokeSurfaceAction: vi.fn(async () => "ok"),
 }));
 
 vi.mock("../hooks/useProviders", () => ({

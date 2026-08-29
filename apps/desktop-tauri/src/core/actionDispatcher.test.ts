@@ -86,4 +86,26 @@ describe("actionDispatcher", () => {
     expect(r2.status).toBe("handled");
     expect(count).toBe(2);
   });
+
+  it("fallback invokes the canonical nested wire payload", async () => {
+    const seen: SurfaceAction[] = [];
+    const dispatcher = createActionDispatcher(
+      {},
+      {
+        fallback: async (action) => {
+          seen.push(action);
+          return { status: "handled" as const, data: "wired" };
+        },
+      },
+    );
+    const action: SurfaceAction = {
+      type: "openExternalUsage",
+      target: { kind: "provider", providerId: "codex" },
+    };
+    const res = await dispatcher.dispatch(action);
+    expect(res.status).toBe("handled");
+    expect(seen[0]).toEqual(action);
+    expect(JSON.stringify(seen[0])).toContain('"kind":"provider"');
+    expect(JSON.stringify(seen[0])).not.toMatch(/"providerId":"codex","type"/);
+  });
 });

@@ -26,6 +26,13 @@ const tauriMocks = vi.hoisted(() => ({
   openProviderDashboard: vi.fn(),
   openProviderStatusPage: vi.fn(),
   setSurfaceMode: vi.fn(),
+  invokeSurfaceAction: vi.fn(async () => "ok"),
+  getCachedProviders: vi.fn(async () => []),
+  refreshProviders: vi.fn(async () => {}),
+  refreshProvidersIfStale: vi.fn(async () => {}),
+  getOutputSpeedSnapshot: vi.fn(async () => ({})),
+  getProviderChartData: vi.fn(async () => null),
+  getProviderLocalUsageSummary: vi.fn(async () => null),
 }));
 
 const eventMocks = vi.hoisted(() => ({
