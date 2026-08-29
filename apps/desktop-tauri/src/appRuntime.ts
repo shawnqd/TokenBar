@@ -78,9 +78,9 @@ function capabilitiesOf(store: UsageStore): () => Record<string, ProviderCapabil
  * Resolve one provider snapshot for a store key.
  *
  * - The backend cache is authoritative for everything the bridge exposes:
- *   we look up by providerId first and refine with sourceKey/accountKey
- *   when the bridge snapshot carries them, so multi-account providers do
- *   not collapse into the first matching row (CORE-03 key isolation).
+ *   we look up by providerId, then prefer the cached row whose
+ *   accountEmail matches the store key; the Rust cache keeps one row
+ *   per provider, so exact multi-account isolation is bounded by it.
  * - When the store has no snapshot or the cached one is stale, we trigger
  *   one stale-aware backend round before reading the cache again, so a
  *   manual refresh (Ctrl+R / refresh on open) actually reaches the backend
