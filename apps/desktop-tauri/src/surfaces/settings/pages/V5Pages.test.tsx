@@ -34,6 +34,8 @@ vi.mock("../../../hooks/useLocale", () => ({
   useLocale: () => ({ t: (key: string) => key }),
 }));
 
+import { clearChartCache } from "../../../core/chartAccess";
+
 vi.mock("../../../lib/tauri", () => ({
   getProviderDetail: tauriMocks.getProviderDetail,
   refreshProviders: tauriMocks.refreshProviders,
@@ -138,6 +140,7 @@ describe("V5 settings pages from HTML", () => {
     lastError: null,
   });
   tauriMocks.getProviderChartData.mockResolvedValue(null);
+  clearChartCache();
   tauriMocks.getSettingsSnapshot.mockResolvedValue({ enableAnimations: false });
   tauriMocks.refreshProviders.mockResolvedValue(undefined);
   tauriMocks.openProviderDashboard.mockResolvedValue(undefined);
@@ -287,7 +290,7 @@ describe("V5 settings pages from HTML", () => {
   });
 
   it("adds tray-html usage approx and API equivalent, without extra stat tabs", async () => {
-    tauriMocks.getProviderChartData.mockResolvedValueOnce({
+    tauriMocks.getProviderChartData.mockResolvedValue({
       providerId: "claude",
       costHistory: [
         { date: "2026-08-10", value: 0.04 },

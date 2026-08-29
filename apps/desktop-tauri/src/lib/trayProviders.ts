@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Tray provider slot helpers — read-only now.
  *
  * The tray flyout no longer sources provider data here: usage comes from the
@@ -29,8 +29,10 @@ export interface TrayProviderSlot {
 const EMPTY_RATE_WINDOW: RateWindowSnapshot = {
   usedPercent: 0,
   remainingPercent: 100,
-  // A placeholder for a provider that has reported nothing yet: no length and
-  // no cycle, so nothing can name it one.
+  // A placeholder for a provider that has reported nothing yet: no length
+  // and no real data, so nothing may name it a real quota. Per CORE-03 the
+  // unknown window stays informational (never fabricate 0%/100%).
+  isInformational: true,
   kind: null,
   windowMinutes: null,
   resetsAt: null,

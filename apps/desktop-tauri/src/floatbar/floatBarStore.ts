@@ -36,6 +36,29 @@ export const floatBarStore: UsageStore & { clearForTest: () => void } =
 let syncStarted = false;
 let stopSync: (() => void) | null = null;
 
+let localCostFetcher: ((providerId: string) => Promise<{ todayCost: number; thirtyDayCost: number } | null>) | null = null;
+const localCostsCache = new Map<string, { cost: { todayCost: number; thirtyDayCost: number } | null; at: number }>();
+
+/**
+ * Inject the backend local-usage loader (wired by appRuntime). Components must
+ * never call the Tauri command themselves; they read the cache via
+ * `readLocalCost` / `invalidateLocalCosts` below.
+ */
+export function setFloatBarLocalCostFetcher(
+  fetcher:
+    | ((providerId: string) => Promise<{ todayCost: number; thirtyDayCost: number } | null>)
+    | null,
+): void {
+  if (fetcher == null) {
+    localCostFetcher = null;
+    localCostsCache.clear();
+    return;
+  }
+  localCostFetcher = fetcher;
+}
+
+
+
 export function ensureFloatBarStoreSync(): void {
   if (syncStarted) return;
   syncStarted = true;
@@ -81,6 +104,37 @@ export function ensureFloatBarStoreSync(): void {
 
 export function stopFloatBarStoreSync(): void {
   if (stopSync) stopSync();
+}
+
+export function hasFloatBarLocalCostFetcher(): boolean {
+  return localCostFetcher != null;
+}
+
+export function readFloatBarLocalCost(providerId: string): { todayCost: number; thirtyDayCost: number } | null {
+  const entry = localCostsCache.get(providerId);
+  if (!entry) return null;
+  if (Date.now() - entry.at > 15 * 60 * 1000) {
+    localCostsCache.delete(providerId);
+    return null;
+  }
+  return entry.cost;
+}
+
+export async function fetchFloatBarLocalCost(providerId: string): Promise<{ todayCost: number; thirtyDayCost: number } | null> {
+  if (!localCostFetcher) return null;
+  const hit = readFloatBarLocalCost(providerId);
+  if (hit) return hit;
+  try {
+    const cost = await localCostFetcher(providerId);
+    localCostsCache.set(providerId, { cost, at: Date.now() });
+    return cost;
+  } catch {
+    return null;
+  }
+}
+
+export function invalidateFloatBarLocalCosts(providerIds: string[]): void {
+  for (const id of providerIds) localCostsCache.delete(id);
 }
 
 export function useFloatBarSnapshots(store: UsageStore = floatBarStore): ProviderSnapshot[] {

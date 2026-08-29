@@ -17,8 +17,7 @@ import {
 } from "../lib/quotaDisplay";
 import { useLocale } from "../hooks/useLocale";
 import {
-  getProviderLocalUsageSummary,
-  getSettingsSnapshot,
+    getSettingsSnapshot,
 } from "../lib/tauri";
 import { ProviderIcon } from "../components/providers/ProviderIcon";
 import { getProviderIcon } from "../components/providers/providerIcons";
@@ -36,7 +35,13 @@ import { windowByKind } from "../lib/quotaWindows";
 import { FLOAT_BAR_CONFIG_CHANGED_EVENT, resizeFloatBar } from "./api";
 import "./FloatBar.css";
 import { useCoreSnapshot } from "../core/useCoreBridge";
-import { floatBarStore, ensureFloatBarStoreSync, useFloatBarSnapshots } from "./floatBarStore";
+import {
+  floatBarStore,
+  ensureFloatBarStoreSync,
+  useFloatBarSnapshots,
+  fetchFloatBarLocalCost,
+  hasFloatBarLocalCostFetcher,
+} from "./floatBarStore";
 import {
   expandFloatBarEntries,
   resolveFloatBarEntries,
@@ -549,6 +554,10 @@ export default function FloatBar({
       setLocalCosts({});
       return;
     }
+    if (!hasFloatBarLocalCostFetcher()) {
+      setLocalCosts({});
+      return;
+    }
     let cancelled = false;
     const targets = visibleCostTargets;
 
@@ -564,14 +573,14 @@ export default function FloatBar({
 
     Promise.allSettled(
       deduped.map(async (target) => {
-        const localUsage = await getProviderLocalUsageSummary(target.providerId);
-        if (!hasLocalCost(localUsage)) return null;
+        const localCost = await fetchFloatBarLocalCost(target.providerId);
+        if (!localCost) return null;
         return {
           key: target.key,
           providerId: target.providerId,
           displayName: target.displayName,
-          todayCost: localUsage.todayCost,
-          thirtyDayCost: localUsage.thirtyDayCost,
+          todayCost: localCost.todayCost,
+          thirtyDayCost: localCost.thirtyDayCost,
         } satisfies FloatBarCostSummary;
       }),
     )

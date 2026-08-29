@@ -1,4 +1,4 @@
-﻿/**
+/**
  * App-level core runtime (CORE-05/07).
  *
  * Single UsageStore + RefreshCoordinator + EnrichmentScheduler +
@@ -29,17 +29,21 @@ import {
 } from "./core/actionDispatcher";
 import {
   setCoreBridgeStore,
+  setCoreBridgeCoordinator,
   setCoreBridgeDispatcher,
 } from "./core/useCoreBridge";
 import { fromBridge } from "./core/fromBridge";
 import { trayCoreStore } from "./surfaces/tray/trayCoreStore";
+import { setFloatBarLocalCostFetcher } from "./floatbar/floatBarStore";
 import type { ProviderCapability, ProviderSnapshot } from "./core/snapshot";
+import { canActivate, listSurfaces, type SurfaceDescriptor } from "./core/surfaceRegistry";
 import type { ProviderUsageSnapshot } from "./types/bridge";
 import {
   getCachedProviders,
   getOutputSpeedSnapshot,
   getProviderChartData,
   openSettingsWindow,
+  openFlyoutWindow,
   openProviderDashboard,
   openProviderStatusPage,
   triggerProviderLogin,
@@ -56,6 +60,7 @@ export interface AppRuntime {
   fetchProvider: UsageFetcher;
   seedFromBridge: (snapshots: ProviderUsageSnapshot[]) => void;
   refreshAll: (opts?: { force?: boolean }) => Promise<void>;
+  activeSurfaces: (settings: Record<string, unknown>) => SurfaceDescriptor[];
   dispose: () => void;
 }
 
@@ -69,22 +74,50 @@ function capabilitiesOf(store: UsageStore): () => Record<string, ProviderCapabil
   };
 }
 
+/**
+ * Resolve one provider snapshot for a store key.
+ *
+ * - The backend cache is authoritative for everything the bridge exposes:
+ *   we look up by providerId first and refine with sourceKey/accountKey
+ *   when the bridge snapshot carries them, so multi-account providers do
+ *   not collapse into the first matching row (CORE-03 key isolation).
+ * - When the store has no snapshot or the cached one is stale, we trigger
+ *   one stale-aware backend round before reading the cache again, so a
+ *   manual refresh (Ctrl+R / refresh on open) actually reaches the backend
+ *   while automatic TTL reads stay cheap.
+ * - Unknown data returns the record/error, never a fabricated percentage.
+ */
 async function fetchForKey(
   store: UsageStore,
   key: UsageStoreKey,
 ): Promise<ProviderSnapshot> {
+  const record = store.get(key);
+  const staleMs = 15 * 60 * 1000;
+  const stale =
+    record == null ||
+    record.snapshot == null ||
+    record.snapshot.updatedAt == null ||
+    Date.now() - Date.parse(record.snapshot.updatedAt) > staleMs;
+  if (stale) {
+    await refreshProvidersIfStale().catch(() => {});
+  }
   const cached = await getCachedProviders();
-  const found = cached.find((s) => s.providerId === key.providerId);
+  const matches = cached.filter((s) => s.providerId === key.providerId);
+  const found =
+    matches.find((s) => (s as unknown as { sourceKey?: string }).sourceKey === key.sourceKey) ??
+    matches.find((s) => (s as unknown as { accountKey?: string }).accountKey === key.accountKey) ??
+    matches[0];
   if (found) {
     try {
       return (fromBridge(found as unknown as Parameters<typeof fromBridge>[0]) as unknown) as ProviderSnapshot;
     } catch {
-      // fall through to cached record below
+      // fall through to the cached record below
     }
   }
-  const record = store.get(key);
   if (record?.snapshot) return record.snapshot;
-  throw new Error(`app-runtime: no snapshot for ${key.providerId}`);
+  throw new Error(
+    "app-runtime: no snapshot for " + key.providerId,
+  );
 }
 
 export function buildAppRuntime(): AppRuntime {
@@ -133,6 +166,9 @@ export function buildAppRuntime(): AppRuntime {
       return { status: "handled" };
     },
     selectProvider: async () => {
+      // Opens the flyout; the tray panel reads core records directly and
+      // listens for flyout-select-provider to focus a specific provider.
+      await openFlyoutWindow().catch(() => {});
       return { status: "handled" };
     },
     openProviderDetail: async () => {
@@ -160,6 +196,7 @@ export function buildAppRuntime(): AppRuntime {
   });
 
   setCoreBridgeStore(store);
+  setCoreBridgeCoordinator(coordinator);
   setCoreBridgeDispatcher(dispatcher);
 
   const runtime: AppRuntime = {
@@ -177,6 +214,8 @@ export function buildAppRuntime(): AppRuntime {
         }
       }
     },
+    activeSurfaces: (settings) =>
+      listSurfaces().filter((s) => canActivate(s.kind, settings)),
     refreshAll: async (opts) => {
       if (opts?.force) await refreshProviders();
       else await refreshProvidersIfStale();
@@ -214,6 +253,15 @@ export async function seedAppRuntime(r: AppRuntime): Promise<void> {
 /** Wire shared provider events into the store and tray store. */
 export function startAppRuntimeWiring(r: AppRuntime): void {
   trayCoreStore.setFetcher(r.fetchProvider);
+  setFloatBarLocalCostFetcher(async (providerId) => {
+    const summary = await import("./lib/tauri").then((m) =>
+      m.getProviderLocalUsageSummary(providerId),
+    );
+    return summary == null ||
+      summary.todayCost == null && summary.thirtyDayCost == null
+      ? null
+      : { todayCost: summary.todayCost ?? 0, thirtyDayCost: summary.thirtyDayCost ?? 0 };
+  });
   trayCoreStore.setEnrichmentRunner(async (kind, key) => {
     const snapshot = r.store.get(key)?.snapshot;
     if (!snapshot) return;
@@ -270,5 +318,3 @@ export async function ensureAppRuntimeBooted(): Promise<AppRuntime> {
   if (stopListeners.length === 0) startAppRuntimeWiring(r);
   return r;
 }
-
-

@@ -174,6 +174,26 @@ export default function TrayPanel({ state }: { state: BootstrapState }) {
   );
   // Selection is local to the retained flyout WebView.
   const [selectedProviderId, setSelectedProviderId] = useState<string | null>(null);
+
+  /**
+   * Listen for the backend's "select provider" intent (tray context menu,
+   * proof harness, surface_action selectProvider). Each window only owns the
+   * events it publishes, so the flyout reacts to the one it cares about.
+   */
+  useEffect(() => {
+    let disposed = false;
+    let unlisten: (() => void) | null = null;
+    void listen<string | null>("flyout-select-provider", (event) => {
+      if (disposed) return;
+      setSelectedProviderId(event.payload || null);
+    }).then((fn) => {
+      unlisten = fn;
+    });
+    return () => {
+      disposed = true;
+      try { unlisten?.(); } catch { /* ignore */ }
+    };
+  }, []);
   const [gridExpanded, setGridExpanded] = useState(false);
   const [revealPhase, setRevealPhase] = useState<
     "parked" | "opening" | "closing"

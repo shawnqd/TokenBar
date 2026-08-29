@@ -6,8 +6,8 @@ import {
   quotaPercentDisplay,
   type QuotaDisplayContext,
 } from "../../../lib/quotaDisplay";
-import { getProviderChartData } from "../../../lib/tauri";
 import { providerCapabilities } from "../../../lib/providerCapabilities";
+import { defaultChartLoader } from "../../../core/chartAccess";
 import {
   isMeaningfulQuotaWindow,
   quotaWindowLabel,
@@ -128,10 +128,17 @@ export default function ProviderUsageCard({
   detail,
   display,
   localUsagePeriod,
+  chartLoader,
 }: {
   detail: ProviderDetail | null;
   display: QuotaDisplayContext;
   localUsagePeriod: LocalUsagePeriod;
+  /**
+   * Capability-aware chart loader injected by the caller. When not supplied,
+   * the card falls back to the shared Tauri read — the same read the tray
+   * and taskbar strips use (single backend call, no per-provider branching).
+   */
+  chartLoader?: (providerId: string, accountEmail?: string) => Promise<ProviderChartData>;
 }) {
   const { t } = useLocale();
   const [charts, setCharts] = useState<ProviderChartData | null>(null);
@@ -145,8 +152,12 @@ export default function ProviderUsageCard({
       return;
     }
     let cancelled = false;
-    getProviderChartData(detail.id, detail.email ?? undefined)
+    // eslint-disable-next-line no-console
+    console.log("[PUC] effect running, chartLoader=", typeof chartLoader, "default=", typeof defaultChartLoader);
+    (chartLoader ?? defaultChartLoader)(detail.id, detail.email ?? undefined)
       .then((data) => {
+        // eslint-disable-next-line no-console
+        console.log("[PUC] chart resolved", JSON.stringify(data && { providerId: data.providerId, hasLocal: Boolean(data.localUsage) }));
         if (!cancelled) setCharts(data);
       })
       .catch(() => {
@@ -155,7 +166,7 @@ export default function ProviderUsageCard({
     return () => {
       cancelled = true;
     };
-  }, [detail]);
+  }, [detail, chartLoader]);
 
   const days = RANGE_DAYS[range];
   const series = useMemo(

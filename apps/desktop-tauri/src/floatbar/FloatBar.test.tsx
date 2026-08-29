@@ -41,7 +41,10 @@ import type {
   ProviderUsageSnapshot,
   SettingsSnapshot,
 } from "../types/bridge";
-import { __clearFloatBarStoreForTest } from "./floatBarStore";
+import {
+  __clearFloatBarStoreForTest,
+  setFloatBarLocalCostFetcher,
+} from "./floatBarStore";
 import { TASKBAR_PROVIDER_AUTO } from "../types/bridge";
 
 function rateWindow(
@@ -188,9 +191,18 @@ describe("FloatBar", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     __clearFloatBarStoreForTest();
+    setFloatBarLocalCostFetcher(null);
     tauriMocks.refreshProviders.mockResolvedValue(undefined);
     tauriMocks.refreshProvidersIfStale.mockResolvedValue(undefined);
     tauriMocks.getProviderLocalUsageSummary.mockResolvedValue(null);
+    setFloatBarLocalCostFetcher(async (providerId) => {
+      const summary = await tauriMocks.getProviderLocalUsageSummary(providerId);
+      if (summary == null) return null;
+      return {
+        todayCost: summary.todayCost ?? 0,
+        thirtyDayCost: summary.thirtyDayCost ?? 0,
+      };
+    });
     tauriMocks.getLocaleStrings.mockResolvedValue(
       buildBundle({
         ResetsInHoursMinutes: "Resets in {}h {}m",

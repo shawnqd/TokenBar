@@ -16,7 +16,14 @@ const srcRoot = resolve(here, "../src");
 
 const SURFACE_DIRS = ["surfaces", "floatbar"];
 const LEGACY_HOOKS = ["useProviders"];
-const FORBIDDEN_CALLS = ["get_provider_chart_data", "scan_local_cost"];
+const FORBIDDEN_CALLS = [
+  // snake case: raw Tauri command names in surfaces
+  "get_provider_chart_data",
+  "scan_local_cost",
+  // camel case: wrapper fns surfaces may not call directly
+  "getProviderChartData(",
+  "getProviderLocalUsageSummary(",
+];
 
 // Only these files may keep the legacy useProviders migration fallback.
 // Remove once the app-core prewarm integration fully replaces it.
