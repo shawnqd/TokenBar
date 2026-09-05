@@ -77,6 +77,8 @@ export interface RateWindowSnapshot {
   reserveDescription: string | null;
   reserveWillLastToReset?: boolean;
   reserveEtaSeconds?: number | null;
+  /** Soonest-first RFC3339 expiry times for reset credits inventory. */
+  inventoryExpiresAt?: string[];
 }
 
 export interface TelemetrySnapshot {

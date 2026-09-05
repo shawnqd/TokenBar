@@ -56,13 +56,14 @@ impl SurfaceMode {
                 visible: true,
                 decorations: false,
                 resizable: true,
-                // Card is the HWND. Chrome is homemade CSS (no Win32
-                // caption). 328×776 is the design card.
-                width: 328.0,
+                // Card is the HWND minus the chrome gutter (flyout_window's
+                // CHROME_GUTTER_DIP). User preference: the panel opens at its
+                // minimum width — 320×776 is the default/min CARD size.
+                width: 320.0,
                 height: 776.0,
                 min_width: Some(320.0),
                 min_height: Some(380.0),
-                max_width: None,
+                max_width: Some(480.0),
                 max_height: None,
                 always_on_top: true,
                 blur_dismiss: true,
@@ -230,7 +231,7 @@ mod tests {
     #[test]
     fn tray_panel_properties() {
         let props = SurfaceMode::TrayPanel.window_properties();
-        assert_eq!(props.width, 328.0);
+        assert_eq!(props.width, 320.0);
         assert_eq!(props.height, 776.0);
     }
 
@@ -239,7 +240,7 @@ mod tests {
         let props = SurfaceMode::TrayPanel.window_properties();
         assert_eq!(props.min_width, Some(320.0));
         assert_eq!(props.min_height, Some(380.0));
-        assert_eq!(props.max_width, None);
+        assert_eq!(props.max_width, Some(480.0));
         assert_eq!(props.max_height, None);
     }
 

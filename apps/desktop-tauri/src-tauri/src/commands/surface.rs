@@ -243,15 +243,20 @@ fn optional_provider_id(target: &WireSurfaceTarget) -> Option<&str> {
 ///
 /// Every variant delegates to an existing host primitive (see table above)
 /// — no new provider, quota, auth or storage logic is introduced here.
-/// `refresh` ignores its optional `providerId` and refreshes all enabled
-/// providers, matching the existing `refresh_providers` semantics.
+/// `refresh` with a provider target refreshes only that provider. Tray/global
+/// refresh still has no target and refreshes every enabled provider.
 #[tauri::command]
 pub async fn surface_action(
     app: tauri::AppHandle,
     action: SurfaceAction,
 ) -> Result<String, String> {
     match action {
-        SurfaceAction::Refresh { force, .. } => {
+        SurfaceAction::Refresh { force, target } => {
+            if let Some(provider_id) = target.as_ref().and_then(optional_provider_id) {
+                let id = parse_provider_arg(provider_id)?;
+                crate::commands::do_refresh_one_provider(&app, id).await?;
+                return Ok(format!("refreshed:{provider_id}"));
+            }
             if force {
                 crate::commands::refresh_providers(app).await?;
             } else {
@@ -616,6 +621,17 @@ pub fn close_settings_window(
     window: tauri::WebviewWindow,
 ) -> Result<(), String> {
     crate::shell::settings_window::dismiss(&app, &window)
+}
+
+/// Titlebar minus: native `SC_MINIMIZE` so DWM zooms to the taskbar button
+/// and Explorer bounces the app icon. Close must not use this path.
+#[tauri::command]
+pub fn minimize_settings_window(window: tauri::WebviewWindow) -> Result<(), String> {
+    if window.label() != crate::shell::settings_window::SETTINGS_LABEL {
+        return Err("minimize_settings_window is only valid on the settings window".into());
+    }
+    crate::shell::dwm::minimize_settings_to_taskbar(&window);
+    Ok(())
 }
 
 #[tauri::command]

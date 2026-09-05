@@ -1,4 +1,4 @@
-﻿import { describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 
 import {
   FORECAST_UNAVAILABLE,
@@ -236,6 +236,25 @@ describe("quotaPercentDisplay", () => {
     expect(quotaPercentDisplay(rate({ usedPercent: Number.NaN }), ctx).percent).toBe(0);
     expect(quotaPercentDisplay(rate({ usedPercent: 140 }), ctx).percent).toBe(100);
     expect(quotaPercentDisplay(rate({ usedPercent: -20 }), ctx).percent).toBe(0);
+  });
+
+  it("preserves 0.1 decimal precision for sub-integer and fractional quotas", () => {
+    const subOne = rate({ usedPercent: 0.1 });
+    expect(quotaPercentDisplay(subOne, ctx)).toMatchObject({
+      semantics: "used",
+      percent: 0.1,
+      rounded: 0.1,
+      fillPercent: 0.1,
+    });
+    expect(quotaPercentDisplay(subOne, { ...ctx, showAsUsed: false })).toMatchObject({
+      semantics: "remaining",
+      percent: 99.9,
+      rounded: 99.9,
+      fillPercent: 99.9,
+    });
+
+    const fractional = rate({ usedPercent: 0.13 });
+    expect(quotaPercentDisplay(fractional, ctx).rounded).toBe(0.1);
   });
 
   it("marks informational rows so they are never drawn as a quota bar", () => {

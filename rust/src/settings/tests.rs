@@ -661,9 +661,9 @@ fn test_legacy_per_provider_fields_migrate_into_provider_configs() {
     assert_eq!(settings.cookie_source(ProviderId::Claude), "browser");
     assert_eq!(settings.cookie_source(ProviderId::Cursor), "manual");
     assert_eq!(settings.cookie_source(ProviderId::Alibaba), "manual");
-    // Untouched providers fall through to the default "manual" to avoid
-    // background browser-cookie reads unless the user opts into Automatic.
-    assert_eq!(settings.cookie_source(ProviderId::Amp), "manual");
+    // 2026-08-30 认证合同:未设置的 provider 默认 auto —— 启用且支持网页
+    // 会话的服务商自动读取浏览器 Cookie(docs/COOKIES.md)。
+    assert_eq!(settings.cookie_source(ProviderId::Amp), "auto");
 
     // Manual cookie headers + api regions
     assert_eq!(
@@ -773,8 +773,8 @@ fn test_new_format_provider_configs_only() {
         settings.manual_cookie_header(ProviderId::Alibaba),
         "ali=PLACEHOLDER"
     );
-    // Untouched providers still get their defaults.
-    assert_eq!(settings.cookie_source(ProviderId::Claude), "manual");
+    // Untouched providers still get their defaults(2026-08-30:默认 auto)。
+    assert_eq!(settings.cookie_source(ProviderId::Claude), "auto");
     assert_eq!(settings.api_region(ProviderId::Zai), "global");
 }
 
@@ -794,7 +794,7 @@ fn test_default_settings_skip_empty_provider_configs() {
 #[test]
 fn test_per_provider_defaults_applied() {
     let settings = Settings::default();
-    assert_eq!(settings.cookie_source(ProviderId::Codex), "manual");
+    assert_eq!(settings.cookie_source(ProviderId::Codex), "auto");
     assert_eq!(settings.usage_source(ProviderId::Codex), "auto");
     assert_eq!(settings.api_region(ProviderId::Alibaba), "singapore");
     assert_eq!(settings.api_region(ProviderId::Zai), "global");

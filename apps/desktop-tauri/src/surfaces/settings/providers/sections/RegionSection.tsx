@@ -14,7 +14,7 @@ interface Props {
 }
 
 /**
- * API-region dropdown for Alibaba / Z.ai / MiniMax.
+ * API-region dropdown for Alibaba / z.ai / MiniMax.
  *
  * Port of the region ComboBox rows in
  * `rust/src/native_ui/preferences.rs::render_provider_detail_panel`.

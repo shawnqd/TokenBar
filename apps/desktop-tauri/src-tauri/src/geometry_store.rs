@@ -18,8 +18,9 @@ const GEOMETRY_FILENAME: &str = "window_geometry.json";
 
 /// Bumped when the meaning of stored fields changes. v1 switched the stored
 /// window SIZE from physical to logical pixels, so legacy (versionless) files
-/// hold physical sizes that must be discarded on load.
-const GEOMETRY_VERSION: u32 = 2;
+/// hold physical sizes that must be discarded on load. v3 drops flyout sizes
+/// that were saved as physical pixels at 125% DPI (card 320 reopened as ~407).
+const GEOMETRY_VERSION: u32 = 3;
 
 /// Persisted window geometry entry. Size is optional because not every surface
 /// is resizable; we always persist position when available.
@@ -78,12 +79,21 @@ fn load_file() -> GeometryFile {
 /// (logical) size and re-persist correct dimensions on the first user move,
 /// instead of opening ~scale_factor too large on HiDPI displays.
 fn migrate(file: &mut GeometryFile) {
-    if file.version < GEOMETRY_VERSION {
+    if file.version < 2 {
         for geometry in file.entries.values_mut() {
             geometry.width = None;
             geometry.height = None;
         }
-        file.version = GEOMETRY_VERSION;
+        file.version = 2;
+    }
+    if file.version < 3 {
+        // v2 flyout sizes mixed physical pixels and the chrome gutter, so a
+        // 125% DPI session persisted ~407×952 instead of the 320×776 card.
+        if let Some(flyout) = file.entries.get_mut("flyout") {
+            flyout.width = None;
+            flyout.height = None;
+        }
+        file.version = 3;
     }
 }
 
@@ -202,12 +212,27 @@ mod tests {
     #[test]
     fn current_version_file_keeps_sizes() {
         let json =
-            r#"{"version":2,"entries":{"settings":{"x":10,"y":20,"width":1168,"height":828}}}"#;
+            r#"{"version":3,"entries":{"settings":{"x":10,"y":20,"width":1168,"height":828}}}"#;
         let mut file: GeometryFile = serde_json::from_str(json).unwrap();
         migrate(&mut file);
         let entry = file.entries.get("settings").unwrap();
         assert_eq!(entry.width, Some(1168));
         assert_eq!(entry.height, Some(828));
+    }
+
+    #[test]
+    fn v2_flyout_inflated_size_is_dropped() {
+        let json = r#"{"version":2,"entries":{"flyout":{"x":1983,"y":167,"width":407,"height":952},"settings":{"x":10,"y":20,"width":1168,"height":828}}}"#;
+        let mut file: GeometryFile = serde_json::from_str(json).unwrap();
+        migrate(&mut file);
+        assert_eq!(file.version, 3);
+        let flyout = file.entries.get("flyout").unwrap();
+        assert_eq!(flyout.width, None);
+        assert_eq!(flyout.height, None);
+        assert_eq!(flyout.x, 1983);
+        let settings = file.entries.get("settings").unwrap();
+        assert_eq!(settings.width, Some(1168));
+        assert_eq!(settings.height, Some(828));
     }
 
     #[test]

@@ -14,11 +14,6 @@ import {
   type UsageStoreState,
 } from "./usageStore";
 import type {
-  EnrichmentKind,
-  EnrichmentScheduler,
-  SurfaceDensity,
-} from "./enrichmentScheduler";
-import type {
   RefreshCoordinator,
   RefreshEvent,
   RefreshEventKind,
@@ -258,21 +253,10 @@ export function buildProjectionCoordinator(
   };
 }
 
-/** No-op facade retained for selectors while Rust owns enrichment scheduling. */
-export function buildProjectionEnrichmentScheduler(): EnrichmentScheduler {
-  return {
-    trigger: async (
-      _kind: EnrichmentKind,
-      _key: UsageStoreKey,
-      _opts?: { manual?: boolean; mode?: SurfaceDensity },
-    ) => false,
-    tick: async () => undefined,
-    getLastRun: () => null,
-    clear: () => undefined,
-    destroy: () => undefined,
-  };
-}
-
+// Enrichment scheduling: the real construction entry
+// (`buildProjectionEnrichmentScheduler`) lives beside the scheduler definition
+// in ./enrichmentScheduler so this module keeps no runtime factory. The
+// runtime wires a read-side runner; see appRuntime.ts.
 // Keep these type imports visible at the boundary so callers do not fall back
 // to the legacy writable runtime types for process actions.
 void (undefined as unknown as UsageFetcher);

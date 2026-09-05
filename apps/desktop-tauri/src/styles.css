@@ -17,6 +17,7 @@
      when the host font is available; Inter / Segoe UI remain as the
      Windows fallbacks. */
   font-family:
+    "MiSans VF",
     -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro",
     "Segoe UI Variable", Inter, "Segoe UI", system-ui, sans-serif;
   /* Force macOS-style thin font rendering instead of Windows ClearType
@@ -3320,7 +3321,6 @@ html {
   opacity: 0;
   font-size: 0.7rem;
   color: var(--provider-row-text-secondary);
-  cursor: grab;
   letter-spacing: -2px;
   transition: opacity 120ms ease;
 }
@@ -5066,6 +5066,18 @@ body:has(.menu-surface--popout) .popout-scale-shell,
   white-space: nowrap;
 }
 
+.menu-card__reset-credits-expiries {
+  list-style: none;
+  margin: 4px 0 0;
+  padding: 0 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  color: var(--text-secondary);
+  font-size: var(--font-caption);
+  font-variant-numeric: tabular-nums;
+}
+
 .pace-details-chart {
   display: flex;
   flex-direction: column;
@@ -5474,11 +5486,8 @@ body:has(.menu-surface--popout) .popout-scale-shell,
   filter: none;
 }
 
-/* Drag-to-reorder: grab cursor on draggable items, dim the one being dragged,
-   ring the drop target. The provider cards below follow the same order. */
-.provider-grid__item[draggable="true"] {
-  cursor: grab;
-}
+/* Drag-to-reorder: no grab cursor on hover/click (user request) — the
+   dragging state below still shows the grabbing cursor mid-drag. */
 .provider-grid__item--dragging {
   opacity: 0.4;
   cursor: grabbing;
@@ -5692,27 +5701,63 @@ body:has(.settings-window-frame) #root {
   overflow: hidden;
 }
 
+.settings-window-frame .settings {
+  transform-origin: 50% 115%;
+}
+
 .settings-window-frame .settings.settings-window-motion--visible {
-  animation: settings-window-fade-in 140ms ease-out both;
+  animation: settings-window-zoom-in 240ms cubic-bezier(0.23, 1, 0.32, 1) both;
 }
 
 .settings-window-frame .settings.settings-window-motion--closing {
-  animation: settings-window-fade-out 140ms ease-in both;
+  animation: settings-window-zoom-out 240ms cubic-bezier(0.4, 0, 1, 1) both;
 }
 
-@keyframes settings-window-fade-in {
-  from { opacity: 0.92; }
+.settings-window-frame:has(.settings-window-motion--visible)::before {
+  animation: settings-window-shadow-in 240ms cubic-bezier(0.23, 1, 0.32, 1) both;
+}
+
+.settings-window-frame:has(.settings-window-motion--closing)::before {
+  animation: settings-window-shadow-out 240ms cubic-bezier(0.4, 0, 1, 1) both;
+}
+
+@keyframes settings-window-zoom-in {
+  from {
+    opacity: 0;
+    transform: translateY(32px) scale(0.28);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes settings-window-zoom-out {
+  from {
+    opacity: 1;
+    transform: none;
+  }
+  to {
+    opacity: 0;
+    transform: translateY(40px) scale(0.22);
+  }
+}
+
+@keyframes settings-window-shadow-in {
+  from { opacity: 0; }
   to { opacity: 1; }
 }
 
-@keyframes settings-window-fade-out {
+@keyframes settings-window-shadow-out {
   from { opacity: 1; }
   to { opacity: 0; }
 }
 
 @media (prefers-reduced-motion: reduce) {
   .settings-window-frame .settings.settings-window-motion--visible,
-  .settings-window-frame .settings.settings-window-motion--closing {
+  .settings-window-frame .settings.settings-window-motion--closing,
+  .settings-window-frame:has(.settings-window-motion--visible)::before,
+  .settings-window-frame:has(.settings-window-motion--closing)::before {
     animation: none;
   }
 }
@@ -7455,11 +7500,11 @@ body:has(.settings-window-frame) #root {
 
    Single authoritative source for the tray flyout's density typography and
    spacing. The reference is a 660px-wide presentation card; the flyout is
-   328px. Scaling everything by the width ratio reproduces the layout
+   320px. Scaling everything by the width ratio reproduces the layout
    faithfully but drops body text to 8–9px, which is below what is
    comfortable to read on Windows. So this uses TWO scales:
 
-     k_geo  = 328 / 660 ≈ 0.497   — padding, radii, bar heights, dividers,
+     k_geo  = 320 / 660 ≈ 0.485   — padding, radii, bar heights, dividers,
                                     gaps. Geometry keeps each element's
                                     share of the card, so the layout is the
                                     reference drawn smaller.
@@ -7514,7 +7559,8 @@ body:has(.settings-window-frame) #root {
    Tray flyout authority
 
    Every selector for the dedicated flyout lives in this one continuous
-   section.  The native window is fixed at 328 x 776 logical px; this block
+   section.  The native card is fixed at 320 x 776 logical px; the native
+   window adds the 6 DIP chrome gutter on each side. This block
    owns its transparent reveal wrapper, shell, provider switcher, footer, and
    the three MenuCard density tiers.  Settings/PopOut keep the shared base
    component rules above.
@@ -9126,4 +9172,3 @@ body:has(.tray-panel-reveal) #root {
     min-width: 0;
   }
 }
-

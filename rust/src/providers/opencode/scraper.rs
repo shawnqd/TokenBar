@@ -480,12 +480,9 @@ impl OpenCodeUsageFetcher {
 
         match (percent, reset_in) {
             (Some(p), Some(r)) => {
-                let normalized_percent = if (0.0..=1.0).contains(&p) {
-                    p * 100.0
-                } else {
-                    p.clamp(0.0, 100.0)
-                };
-                Some((normalized_percent, r.max(0)))
+                // usagePercent is already scaled 0–100; sub-integer values
+                // like 0.1 are real sub-1% readings, not 0–1 fractions.
+                Some((p.clamp(0.0, 100.0), r.max(0)))
             }
             _ => None,
         }

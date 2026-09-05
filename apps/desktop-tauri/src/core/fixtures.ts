@@ -443,6 +443,30 @@ export const mimoBalanceBridge: ProviderDisplayModel = bridgeSnapshot({
   }),
 });
 
+/** z.ai / GLM BigModel CN: quota is absent in this fixture and the wallet is
+ * published as an informational named row with the upstream "available"
+ * suffix. This is the production shape that the tray balance adapter must
+ * promote into the shared balance layer. */
+export const zaiChinaBalanceBridge: ProviderDisplayModel = bridgeSnapshot({
+  providerId: "zai",
+  displayName: "GLM (BigModel CN)",
+  primaryLabel: "Usage",
+  primary: bridgeRateWindow({
+    isInformational: true,
+  }),
+  extraRateWindows: [
+    {
+      id: "zai-account-balance",
+      title: "Account balance",
+      usageKnown: true,
+      window: bridgeRateWindow({
+        isInformational: true,
+        resetDescription: "¥12.50 available",
+      }),
+    },
+  ],
+});
+
 /**
  * Sub2API is polymorphic: one parse yields subscription cycles, a key quota,
  * a wallet balance or an unknown payload. No single snapshot shows all four,
@@ -647,6 +671,7 @@ export const FIXTURE_BRIDGES = {
   arkMultiWindow: arkMultiWindowBridge,
   deepseekBalance: deepseekBalanceBridge,
   mimoBalance: mimoBalanceBridge,
+  zaiChinaBalance: zaiChinaBalanceBridge,
   sub2apiFourShapes: sub2apiFourShapesBridge,
   copilotMultiWindow: copilotMultiWindowBridge,
   antigravityMultiFamily: antigravityMultiFamilyBridge,
@@ -676,6 +701,7 @@ export const FIXTURE_SNAPSHOTS = {
   arkMultiWindow: snapshotFromFixture(arkMultiWindowBridge),
   deepseekBalance: snapshotFromFixture(deepseekBalanceBridge),
   mimoBalance: snapshotFromFixture(mimoBalanceBridge),
+  zaiChinaBalance: snapshotFromFixture(zaiChinaBalanceBridge),
   sub2apiFourShapes: snapshotFromFixture(sub2apiFourShapesBridge),
   copilotMultiWindow: snapshotFromFixture(copilotMultiWindowBridge),
   antigravityMultiFamily: snapshotFromFixture(antigravityMultiFamilyBridge),

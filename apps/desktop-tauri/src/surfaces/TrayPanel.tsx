@@ -1,4 +1,4 @@
-﻿import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type AnimationEvent, type MouseEvent as ReactMouseEvent } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type AnimationEvent, type MouseEvent as ReactMouseEvent } from "react";
 import { listen } from "@tauri-apps/api/event";
 import type {
   BootstrapState,
@@ -59,10 +59,10 @@ const footerIconProps = {
 };
 const RefreshIcon = () => (
   <svg {...footerIconProps}>
-    <path d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" />
-    <path d="M3 3v5h5" />
-    <path d="M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16" />
-    <path d="M21 21v-5h-5" />
+    <path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8" />
+    <path d="M21 3v5h-5" />
+    <path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16" />
+    <path d="M3 21v-5h5" />
   </svg>
 );
 const GearIcon = () => (
@@ -277,10 +277,37 @@ export default function TrayPanel({ state }: { state: BootstrapState }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [records, trayState.version]);
 
+  // Trigger chart enrichment for all chart/local-usage capable providers.
+  // The runner caches results in memory and reads local logs from disk/cache.
+  const chartCapableSignature = useMemo(
+    () =>
+      trayCoreStore
+        .chartCapableKeys()
+        .map((key) => `${key.providerId}:${key.accountKey}:${key.sourceKey}`)
+        .join("|"),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [trayState.version],
+  );
+  useEffect(() => {
+    const keys = trayCoreStore.chartCapableKeys();
+    for (const key of keys) {
+      void trayCoreStore
+        .triggerEnrichment("chart", key, { manual: false })
+        .catch(() => {});
+    }
+  }, [chartCapableSignature]);
+
+
   useEffect(() => {
     let disposed = false;
     const unlisteners: Array<() => void> = [];
-    const replayReveal = () => setRevealPhase("opening");
+    const replayReveal = () => {
+      setRevealPhase("opening");
+      const body = document.querySelector<HTMLElement>(
+        ".tray-panel-reveal .flyout-body",
+      );
+      if (body) body.scrollTop = 0;
+    };
     const replayClose = () => setRevealPhase("closing");
     const parkReveal = () => setRevealPhase("parked");
 

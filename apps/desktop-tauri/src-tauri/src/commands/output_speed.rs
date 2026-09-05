@@ -8,7 +8,7 @@ use chrono::{DateTime, Utc};
 use serde::Serialize;
 use serde_json::Value;
 
-const MAX_TAIL_BYTES: u64 = 1024 * 1024;
+const MAX_TAIL_BYTES: u64 = 4 * 1024 * 1024;
 const MAX_RECENT_SAMPLES: usize = 20;
 const MAX_REASONABLE_TOKENS_PER_SECOND: f64 = 1000.0;
 
@@ -106,22 +106,59 @@ pub struct OutputSpeedSnapshot {
 pub fn get_output_speed_snapshot() -> OutputSpeedSnapshot {
     let settings = codexbar::settings::Settings::load();
     OutputSpeedSnapshot {
-        codex: newest_codex_session(&settings.codex_custom_sessions_dirs)
-            .and_then(|path| read_tail(&path).ok())
-            .map(|text| parse_codex_tail(&text))
-            .unwrap_or_else(|| ProviderOutputSpeed::unavailable("codex")),
-        claude: newest_file_in_roots(&claude_project_roots())
-            .and_then(|path| read_tail(&path).ok())
-            .map(|text| parse_claude_tail(&text))
-            .unwrap_or_else(|| ProviderOutputSpeed::unavailable("claude")),
-        grok: newest_grok_updates_log()
-            .and_then(|path| read_tail(&path).ok())
-            .map(|text| parse_grok_tail(&text))
-            .unwrap_or_else(|| ProviderOutputSpeed::unavailable("grok")),
+        codex: resolve_codex_speed(&settings.codex_custom_sessions_dirs),
+        claude: resolve_claude_speed(),
+        grok: resolve_grok_speed(),
     }
 }
 
-fn newest_codex_session(custom_dirs: &[String]) -> Option<PathBuf> {
+fn resolve_codex_speed(custom_dirs: &[String]) -> ProviderOutputSpeed {
+    let roots = codex_session_roots(custom_dirs);
+    let files = recent_matching_files_in_roots(&roots, &|_| true, 5);
+    for path in files {
+        if let Ok(text) = read_tail(&path) {
+            let speed = parse_codex_tail(&text);
+            if speed.status != "unavailable" || speed.tokens_per_second.is_some() {
+                return speed;
+            }
+        }
+    }
+    ProviderOutputSpeed::unavailable("codex")
+}
+
+fn resolve_claude_speed() -> ProviderOutputSpeed {
+    let roots = claude_project_roots();
+    let files = recent_matching_files_in_roots(&roots, &|_| true, 5);
+    for path in files {
+        if let Ok(text) = read_tail(&path) {
+            let speed = parse_claude_tail(&text);
+            if speed.status != "unavailable" || speed.tokens_per_second.is_some() {
+                return speed;
+            }
+        }
+    }
+    ProviderOutputSpeed::unavailable("claude")
+}
+
+fn resolve_grok_speed() -> ProviderOutputSpeed {
+    let roots = grok_roots();
+    let files = recent_matching_files_in_roots(
+        &roots,
+        &|path| path.file_name().is_some_and(|name| name == "updates.jsonl"),
+        5,
+    );
+    for path in files {
+        if let Ok(text) = read_tail(&path) {
+            let speed = parse_grok_tail(&text);
+            if speed.status != "unavailable" || speed.tokens_per_second.is_some() {
+                return speed;
+            }
+        }
+    }
+    ProviderOutputSpeed::unavailable("grok")
+}
+
+fn codex_session_roots(custom_dirs: &[String]) -> Vec<PathBuf> {
     let mut roots = Vec::new();
     if let Ok(home) = std::env::var("CODEX_HOME") {
         let home = home.trim();
@@ -138,7 +175,7 @@ fn newest_codex_session(custom_dirs: &[String]) -> Option<PathBuf> {
             .filter(|path| !path.trim().is_empty())
             .map(|path| normalize_sessions_root(PathBuf::from(path.trim()))),
     );
-    newest_file_in_roots(&roots)
+    roots
 }
 
 fn normalize_sessions_root(path: PathBuf) -> PathBuf {
@@ -155,12 +192,7 @@ fn claude_project_roots() -> Vec<PathBuf> {
         .unwrap_or_default()
 }
 
-/// The Grok CLI keeps one directory per session under `~/.grok/sessions`, and
-/// several `.jsonl` files inside each. Only `updates.jsonl` carries the usage
-/// record, so — unlike Codex and Claude, whose session file *is* the transcript
-/// — the newest file overall is the wrong pick here and the name has to be part
-/// of the search.
-fn newest_grok_updates_log() -> Option<PathBuf> {
+fn grok_roots() -> Vec<PathBuf> {
     let mut roots = Vec::new();
     if let Ok(home) = std::env::var("GROK_HOME") {
         let home = home.trim();
@@ -171,7 +203,7 @@ fn newest_grok_updates_log() -> Option<PathBuf> {
     if let Some(home) = user_home_dir() {
         roots.push(home.join(".grok").join("sessions"));
     }
-    newest_file_named_in_roots(&roots, "updates.jsonl")
+    roots
 }
 
 fn normalize_grok_sessions_root(path: PathBuf) -> PathBuf {
@@ -188,35 +220,22 @@ fn user_home_dir() -> Option<PathBuf> {
         .map(PathBuf::from)
 }
 
-fn newest_file_in_roots(roots: &[PathBuf]) -> Option<PathBuf> {
-    newest_matching_file_in_roots(roots, &|_| true)
-}
-
-fn newest_file_named_in_roots(roots: &[PathBuf], file_name: &str) -> Option<PathBuf> {
-    newest_matching_file_in_roots(roots, &|path| {
-        path.file_name().is_some_and(|name| name == file_name)
-    })
-}
-
-fn newest_matching_file_in_roots(
+fn recent_matching_files_in_roots(
     roots: &[PathBuf],
     accept: &dyn Fn(&Path) -> bool,
-) -> Option<PathBuf> {
-    let mut newest: Option<(SystemTime, PathBuf)> = None;
+    limit: usize,
+) -> Vec<PathBuf> {
+    let mut candidates: Vec<(SystemTime, PathBuf)> = Vec::new();
     for root in roots {
         visit_jsonl_files(root, &mut |path, modified| {
             if !accept(path) {
                 return;
             }
-            if newest
-                .as_ref()
-                .is_none_or(|(current, _)| modified > *current)
-            {
-                newest = Some((modified, path.to_path_buf()));
-            }
+            candidates.push((modified, path.to_path_buf()));
         });
     }
-    newest.map(|(_, path)| path)
+    candidates.sort_by(|(a, _), (b, _)| b.cmp(a));
+    candidates.into_iter().take(limit).map(|(_, path)| path).collect()
 }
 
 fn visit_jsonl_files(root: &Path, visit: &mut impl FnMut(&Path, SystemTime)) {

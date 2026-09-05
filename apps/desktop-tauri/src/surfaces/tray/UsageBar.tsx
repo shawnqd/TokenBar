@@ -30,7 +30,7 @@ export default function UsageBar({ window: w, label, compact }: UsageBarProps) {
           style={{ width: `${pct}%` }}
         />
       </div>
-      <span className="usage-bar__pct">{rawPct.toFixed(0)}%</span>
+      <span className="usage-bar__pct">{Number(rawPct.toFixed(1))}%</span>
     </div>
   );
 }

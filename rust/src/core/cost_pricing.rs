@@ -5,7 +5,8 @@
 
 #![allow(dead_code)]
 
-use super::models_dev_pricing;
+use super::{codex_routed_pricing, models_dev_pricing};
+use chrono::NaiveDate;
 use std::collections::HashMap;
 use std::sync::LazyLock;
 
@@ -315,28 +316,29 @@ static CODEX_PRICING: LazyLock<HashMap<&'static str, CodexPricing>> = LazyLock::
     m.insert(
         "gpt-5.6-terra",
         CodexPricing {
-            input_cost_per_token: 2.5e-6,
-            output_cost_per_token: 1.5e-5,
-            cache_read_input_cost_per_token: 2.5e-7,
+            // Upstream 0.50.1 post-2026-07-30 rates.
+            input_cost_per_token: 2e-6,
+            output_cost_per_token: 1.2e-5,
+            cache_read_input_cost_per_token: 2e-7,
             display_label: None,
             long_context: Some(CodexLongContextRates {
-                input_cost_per_token: 5e-6,
-                output_cost_per_token: 2.25e-5,
-                cache_read_input_cost_per_token: 5e-7,
+                input_cost_per_token: 4e-6,
+                output_cost_per_token: 1.8e-5,
+                cache_read_input_cost_per_token: 4e-7,
             }),
         },
     );
     m.insert(
         "gpt-5.6-luna",
         CodexPricing {
-            input_cost_per_token: 1e-6,
-            output_cost_per_token: 6e-6,
-            cache_read_input_cost_per_token: 1e-7,
+            input_cost_per_token: 2e-7,
+            output_cost_per_token: 1.2e-6,
+            cache_read_input_cost_per_token: 2e-8,
             display_label: None,
             long_context: Some(CodexLongContextRates {
-                input_cost_per_token: 2e-6,
-                output_cost_per_token: 9e-6,
-                cache_read_input_cost_per_token: 2e-7,
+                input_cost_per_token: 4e-7,
+                output_cost_per_token: 1.8e-6,
+                cache_read_input_cost_per_token: 4e-8,
             }),
         },
     );
@@ -613,6 +615,16 @@ impl CostUsagePricing {
         Self::normalize_codex_model(model) == Self::CODEX_UNATTRIBUTED_MODEL
     }
 
+    /// Provider-qualified routes are not native Codex subscription usage.
+    pub fn counts_toward_codex_subscription(model: &str) -> bool {
+        codex_routed_pricing::counts_toward_codex_subscription(model)
+    }
+
+    /// Return the known provider for a routed model, if one is available.
+    pub fn codex_routed_provider(model: &str) -> Option<&'static str> {
+        codex_routed_pricing::codex_routed_provider(model)
+    }
+
     /// Normalize a Codex model name for pricing lookup
     pub fn normalize_codex_model(raw: &str) -> String {
         let mut trimmed = raw.trim().to_string();
@@ -623,8 +635,11 @@ impl CostUsagePricing {
             return Self::CODEX_UNATTRIBUTED_MODEL.to_string();
         }
 
-        // Remove "openai/" prefix
-        if let Some(rest) = trimmed.strip_prefix("openai/") {
+        // Remove the explicit native route prefix without making the model
+        // id case-sensitive.
+        if let Some((prefix, rest)) = trimmed.split_once('/')
+            && prefix.eq_ignore_ascii_case("openai")
+        {
             trimmed = rest.to_string();
         }
 
@@ -695,6 +710,40 @@ impl CostUsagePricing {
     }
 
     /// Calculate cost for Codex usage in USD
+    pub fn codex_cost_usd_at_date(
+        model: &str,
+        input_tokens: u64,
+        cached_input_tokens: u64,
+        output_tokens: u64,
+        pricing_date: NaiveDate,
+    ) -> Option<f64> {
+        // Terra/Luna had a higher pre-cutover price.  Historical charts must
+        // use the rate in effect on the event day rather than today's table.
+        let cutoff = NaiveDate::from_ymd_opt(2026, 7, 30).expect("valid pricing cutoff");
+        if pricing_date < cutoff {
+            let key = Self::normalize_codex_model(model);
+            let rates = match (key.as_str(), input_tokens > CODEX_LONG_CONTEXT_THRESHOLD) {
+                ("gpt-5.6-terra", false) => Some((2.5e-6, 2.5e-7, 1.5e-5)),
+                ("gpt-5.6-terra", true) => Some((5e-6, 5e-7, 2.25e-5)),
+                ("gpt-5.6-luna", false) => Some((1e-6, 1e-7, 6e-6)),
+                ("gpt-5.6-luna", true) => Some((2e-6, 2e-7, 9e-6)),
+                _ => None,
+            };
+            if let Some((input_rate, cache_rate, output_rate)) = rates {
+                return Some(codex_cost_from_rates(
+                    input_tokens,
+                    cached_input_tokens,
+                    output_tokens,
+                    input_rate,
+                    cache_rate,
+                    output_rate,
+                ));
+            }
+        }
+        Self::codex_cost_usd(model, input_tokens, cached_input_tokens, output_tokens)
+    }
+
+    /// Calculate cost for Codex usage in USD
     pub fn codex_cost_usd(
         model: &str,
         input_tokens: u64,
@@ -740,7 +789,29 @@ impl CostUsagePricing {
             ));
         }
 
-        let pricing = models_dev_pricing::lookup("openai", model)?;
+        // Never guess an OpenAI price for a provider-qualified route.  The
+        // route either has its own provider catalog or remains explicitly
+        // unpriced; both cases are safer than inflating native Codex usage.
+        let (provider, lookup_model) = match codex_routed_pricing::codex_routed_provider(model) {
+            Some(provider) => (provider, codex_routed_pricing::strip_route_prefix(model)),
+            None if model
+                .trim()
+                .split_once('/')
+                .is_some_and(|(prefix, _)| !prefix.eq_ignore_ascii_case("openai")) =>
+            {
+                return None;
+            }
+            None => {
+                let lookup_model = model
+                    .trim()
+                    .split_once('/')
+                    .filter(|(prefix, _)| prefix.eq_ignore_ascii_case("openai"))
+                    .map(|(_, rest)| rest)
+                    .unwrap_or(model);
+                ("openai", lookup_model)
+            }
+        };
+        let pricing = models_dev_pricing::lookup(provider, lookup_model)?;
         let use_tier = pricing
             .threshold_tokens
             .is_some_and(|threshold| input_tokens > threshold);

@@ -3,6 +3,7 @@ import { useLocale } from "../../../hooks/useLocale";
 import { useResetDisplay } from "../../../hooks/useFormattedResetTime";
 import { getProviderDetailBalance } from "../../../lib/providerBalance";
 import {
+  formatResetDisplay,
   quotaPercentDisplay,
   type QuotaDisplayContext,
 } from "../../../lib/quotaDisplay";
@@ -12,6 +13,10 @@ import {
   isMeaningfulQuotaWindow,
   quotaWindowLabel,
 } from "../../../components/ProviderQuotaBlock";
+import {
+  isResetCreditsExtra,
+  parseResetCreditsCount,
+} from "../../../lib/quotaWindows";
 import type {
   DailyCostPoint,
   LocalUsagePeriod,
@@ -93,6 +98,61 @@ function QuotaBarRow({
   );
 }
 
+function ResetCreditsInventory({
+  extra,
+}: {
+  extra: NonNullable<ProviderDetail["extraRateWindows"]>[number];
+}) {
+  const { t } = useLocale();
+  const [nowMs, setNowMs] = useState(() => Date.now());
+  const count =
+    parseResetCreditsCount(extra.window.resetDescription) ??
+    extra.inventoryExpiresAt?.length ??
+    0;
+  const expiries = extra.inventoryExpiresAt ?? [];
+  const ticking = expiries.length > 0;
+  useEffect(() => {
+    if (!ticking) return;
+    const id = window.setInterval(() => setNowMs(Date.now()), 30_000);
+    return () => window.clearInterval(id);
+  }, [ticking]);
+  if (count <= 0 && expiries.length === 0) return null;
+  const rows = Math.max(count, expiries.length);
+  return (
+    <div className="s5-reset-inv">
+      <div className="s5-tc-row">
+        <span className="s5-tc-tag">{t("PanelResetCreditsTitle")}</span>
+        <span className="s5-pill">
+          {t("PanelResetCreditsRemaining")} {count || expiries.length}{" "}
+          {t("PanelResetCreditsUnit")}
+        </span>
+      </div>
+      {Array.from({ length: rows }, (_, index) => {
+        const iso = expiries[index];
+        const display = iso
+          ? formatResetDisplay({
+              resetsAt: iso,
+              resetDescription: null,
+              relative: false,
+              t,
+              nowMs,
+            })
+          : null;
+        return (
+          <div className="s5-reset-inv-row" key={iso ?? `missing-${index}`}>
+            <span>
+              第 {index + 1} {t("PanelResetCreditsUnit")}
+            </span>
+            <time dateTime={iso ?? undefined}>
+              {display ? `${display.text} 到期` : "未提供到期时间"}
+            </time>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 function rangeFromSettings(period: LocalUsagePeriod | undefined): RangeKey {
   if (period === "30d") return "30d";
   return "7d";
@@ -138,7 +198,10 @@ export default function ProviderUsageCard({
    * the card falls back to the shared Tauri read — the same read the tray
    * and taskbar strips use (single backend call, no per-provider branching).
    */
-  chartLoader?: (providerId: string, accountEmail?: string) => Promise<ProviderChartData>;
+  chartLoader?: (
+    providerId: string,
+    accountEmail?: string,
+  ) => Promise<ProviderChartData | null>;
 }) {
   const { t } = useLocale();
   const [charts, setCharts] = useState<ProviderChartData | null>(null);
@@ -216,7 +279,9 @@ export default function ProviderUsageCard({
       rate: detail.tertiary,
     });
   }
+  const resetCredits = (detail.extraRateWindows ?? []).find(isResetCreditsExtra);
   for (const extra of detail.extraRateWindows ?? []) {
+    if (isResetCreditsExtra(extra)) continue;
     if (!isMeaningfulQuotaWindow(extra.window)) continue;
     bars.push({ key: extra.id, label: extra.title, rate: extra.window });
   }
@@ -264,7 +329,7 @@ export default function ProviderUsageCard({
             ) : null}
           </>
         ) : null}
-        {bars.length === 0 && !balance.balance ? (
+        {bars.length === 0 && !balance.balance && !resetCredits ? (
           <div className="s5-chart-empty">还没有额度</div>
         ) : null}
         {bars.map((bar, index) => (
@@ -276,6 +341,7 @@ export default function ProviderUsageCard({
             hero={index === 0}
           />
         ))}
+        {resetCredits ? <ResetCreditsInventory extra={resetCredits} /> : null}
       </div>
 
       {!caps.localUsage ? null : (

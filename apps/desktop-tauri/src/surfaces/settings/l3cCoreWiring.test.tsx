@@ -19,6 +19,7 @@ const tauriMocks = vi.hoisted(() => ({
   getCredentialStorageStatus: vi.fn().mockResolvedValue(null),
   getProviderCookieSourceOptions: vi.fn().mockResolvedValue([]),
   getProviderRegionOptions: vi.fn().mockResolvedValue([]),
+  getProviderRegion: vi.fn().mockResolvedValue(null),
   getTaskbarPreviewLines: vi.fn().mockResolvedValue([]),
   getTaskbarWindowAvailability: vi.fn().mockResolvedValue({}),
   getTaskbarFontFamilies: vi.fn().mockResolvedValue([

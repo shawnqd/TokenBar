@@ -9,6 +9,8 @@ use std::io::{BufRead, BufReader, Read};
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
 use std::process::{Child, Command, Stdio};
+use std::sync::mpsc::{self, Sender};
+use std::thread;
 use std::time::{Duration, Instant};
 
 /// Result of a login attempt
@@ -130,13 +132,26 @@ where
     };
 
     let mut state = CliLoginState::new(timeout_secs, &on_phase, success_markers);
+    let (tx, rx) = mpsc::channel::<String>();
+    spawn_login_reader(child.stdout.take(), tx.clone());
+    spawn_login_reader(child.stderr.take(), tx);
 
-    if let Some(outcome) = read_login_stream(child.stdout.take(), &mut state) {
-        return stop_child_with_outcome(&mut child, state, outcome);
-    }
-
-    if let Some(outcome) = read_login_stream(child.stderr.take(), &mut state) {
-        return stop_child_with_outcome(&mut child, state, outcome);
+    // Read stdout and stderr concurrently. The previous sequential reads could
+    // wait forever on an open stdout pipe while the CLI was waiting for a
+    // browser callback on stderr, so the advertised login timeout never fired.
+    loop {
+        let remaining = state.timeout.saturating_sub(state.start.elapsed());
+        match rx.recv_timeout(remaining) {
+            Ok(line) => {
+                if let Some(outcome) = state.handle_line(&line) {
+                    return stop_child_with_outcome(&mut child, state, outcome);
+                }
+            }
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                return stop_child_with_outcome(&mut child, state, LoginOutcome::TimedOut);
+            }
+            Err(mpsc::RecvTimeoutError::Disconnected) => break,
+        }
     }
 
     wait_for_login_exit(child, state, &on_phase)
@@ -242,19 +257,21 @@ where
     }
 }
 
-fn read_login_stream<R, F>(
-    stream: Option<R>,
-    state: &mut CliLoginState<'_, F>,
-) -> Option<LoginOutcome>
+fn spawn_login_reader<R>(stream: Option<R>, tx: Sender<String>)
 where
-    R: Read,
-    F: Fn(LoginPhase),
+    R: Read + Send + 'static,
 {
-    let reader = BufReader::new(stream?);
-    reader
-        .lines()
-        .map_while(Result::ok)
-        .find_map(|line| state.handle_line(&line))
+    let Some(stream) = stream else {
+        return;
+    };
+    thread::spawn(move || {
+        let reader = BufReader::new(stream);
+        for line in reader.lines().map_while(Result::ok) {
+            if tx.send(line).is_err() {
+                break;
+            }
+        }
+    });
 }
 
 fn stop_child_with_outcome<F>(
@@ -277,18 +294,24 @@ fn wait_for_login_exit<F>(
 where
     F: Fn(LoginPhase),
 {
-    match child.wait() {
-        Ok(status) => {
-            if status.success() {
-                on_phase(LoginPhase::Complete);
-                state.into_result(LoginOutcome::Success)
-            } else {
-                state.into_result(LoginOutcome::Failed {
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                if status.success() {
+                    on_phase(LoginPhase::Complete);
+                    return state.into_result(LoginOutcome::Success);
+                }
+                return state.into_result(LoginOutcome::Failed {
                     status: status.code().unwrap_or(-1),
-                })
+                });
             }
+            Ok(None) if state.start.elapsed() > state.timeout => {
+                let _ = child.kill();
+                return state.into_result(LoginOutcome::TimedOut);
+            }
+            Ok(None) => thread::sleep(Duration::from_millis(25)),
+            Err(e) => return state.into_result(LoginOutcome::LaunchFailed(e.to_string())),
         }
-        Err(e) => state.into_result(LoginOutcome::LaunchFailed(e.to_string())),
     }
 }
 

@@ -49,7 +49,7 @@ const windowMocks = vi.hoisted(() => ({
     close: vi.fn().mockResolvedValue(undefined),
     scaleFactor: vi.fn().mockResolvedValue(1),
     onResized: vi.fn().mockResolvedValue(() => {}),
-    innerSize: vi.fn().mockResolvedValue({ width: 328, height: 200 }),
+    innerSize: vi.fn().mockResolvedValue({ width: 320, height: 200 }),
     startResizeDragging: vi.fn().mockResolvedValue(undefined),
   })),
   LogicalSize: vi.fn((width: number, height: number) => ({ width, height })),
@@ -844,7 +844,7 @@ describe("TrayPanel provider grid (core read model)", () => {
       close: vi.fn().mockResolvedValue(undefined),
       scaleFactor: vi.fn().mockResolvedValue(1),
       onResized: vi.fn().mockResolvedValue(() => {}),
-      innerSize: vi.fn().mockResolvedValue({ width: 328, height: 200 }),
+      innerSize: vi.fn().mockResolvedValue({ width: 320, height: 200 }),
       startResizeDragging: vi.fn().mockResolvedValue(undefined),
     });
     const { container } = renderTrayPanel([provider("claude", "Claude", 35)]);
@@ -892,7 +892,7 @@ describe("TrayPanel provider grid (core read model)", () => {
       close: vi.fn().mockResolvedValue(undefined),
       scaleFactor: vi.fn().mockResolvedValue(1),
       onResized: vi.fn().mockResolvedValue(() => {}),
-      innerSize: vi.fn().mockResolvedValue({ width: 328, height: 200 }),
+      innerSize: vi.fn().mockResolvedValue({ width: 320, height: 200 }),
       startResizeDragging: vi.fn().mockResolvedValue(undefined),
     });
     const { container } = renderTrayPanel([provider("claude", "Claude", 35)]);

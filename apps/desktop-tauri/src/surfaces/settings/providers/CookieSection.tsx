@@ -43,12 +43,6 @@ export function CookieSection({ providerId, cookieDomain }: Props) {
   const [error, setError] = useState<string | null>(null);
 
   const [pasteValue, setPasteValue] = useState("");
-  // Whether a sign-in window is open for this provider. The capture step is a
-  // deliberate button rather than a poll: only the user knows when the
-  // provider's own flow — SSO, a second factor, an org picker — is finished,
-  // and guessing would store a half-authenticated session.
-  const [loginOpen, setLoginOpen] = useState(false);
-  const [notice, setNotice] = useState<string | null>(null);
 
   const reload = useCallback(async (signal: { stale: boolean }) => {
     try {
@@ -68,15 +62,8 @@ export function CookieSection({ providerId, cookieDomain }: Props) {
     const signal = { stale: false };
     setLoaded(false);
     setError(null);
-    setNotice(null);
     setPasteValue("");
     setSaved(null);
-    // Switching providers must not leave a window open that is signed in to
-    // the provider the user just navigated away from.
-    setLoginOpen(false);
-    void requireActionResult(
-      dispatch({ type: "closeProviderLogin", target: { kind: "summary" } }),
-    ).catch(() => {});
     void reload(signal);
     return () => {
       signal.stale = true;
@@ -109,7 +96,6 @@ export function CookieSection({ providerId, cookieDomain }: Props) {
     if (!pasteValue.trim()) return;
     setBusy(true);
     setError(null);
-    setNotice(null);
     try {
       await requireActionResult(
         dispatch({
@@ -128,67 +114,9 @@ export function CookieSection({ providerId, cookieDomain }: Props) {
     }
   };
 
-  const handleOpenLogin = async () => {
-    setBusy(true);
-    setError(null);
-    setNotice(null);
-    try {
-      await requireActionResult(
-        dispatch({
-          type: "openProviderLogin",
-          target: { kind: "provider", providerId },
-        }),
-      );
-      setLoginOpen(true);
-    } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : String(err));
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const handleCaptureLogin = async () => {
-    setBusy(true);
-    setError(null);
-    setNotice(null);
-    try {
-      await requireActionResult(
-        dispatch({
-          type: "captureProviderLogin",
-          target: { kind: "provider", providerId },
-        }),
-      );
-      const next = await getManualCookies();
-      setSaved(next.find((c) => c.providerId === providerId) ?? null);
-      setLoginOpen(false);
-      setNotice(t("ProviderLoginCaptured"));
-    } catch (err: unknown) {
-      // The window stays open on failure — the usual cause is that sign-in
-      // has not finished yet, and closing it would throw away the progress.
-      setError(err instanceof Error ? err.message : String(err));
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const handleCloseLogin = async () => {
-    setBusy(true);
-    try {
-      await requireActionResult(
-        dispatch({ type: "closeProviderLogin", target: { kind: "summary" } }),
-      );
-      setLoginOpen(false);
-    } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : String(err));
-    } finally {
-      setBusy(false);
-    }
-  };
-
   return (
     <ProviderSection title={t("BrowserCookiesSectionTitle")}>
       {error && <ProviderStatusLine tone="error">{error}</ProviderStatusLine>}
-      {notice && <ProviderStatusLine tone="ok">{notice}</ProviderStatusLine>}
 
       <ProviderAuthMethod
         className="provider-auth-method--cookie"
@@ -210,36 +138,10 @@ export function CookieSection({ providerId, cookieDomain }: Props) {
           ) : null
         }
       >
-        <p className="provider-detail-helper">{t("ProviderLoginHint")}</p>
-        <div className="provider-login__actions">
-          <button
-            className="credential-btn credential-btn--primary"
-            disabled={busy}
-            onClick={() => void handleOpenLogin()}
-          >
-            {t("ProviderLoginOpen")}
-          </button>
-          {loginOpen && (
-            <>
-              <button
-                className="credential-btn credential-btn--primary"
-                disabled={busy}
-                onClick={() => void handleCaptureLogin()}
-              >
-                {t("ProviderLoginCapture")}
-              </button>
-              <button
-                className="credential-btn"
-                disabled={busy}
-                onClick={() => void handleCloseLogin()}
-              >
-                {t("ProviderLoginClose")}
-              </button>
-            </>
-          )}
-        </div>
-
-        <div className="credential-add-form">
+        <p className="provider-detail-helper">{t("BrowserCookieImportHint")}</p>
+        <details className="provider-detail-auth-advanced">
+          <summary>{t("TabAdvanced")}</summary>
+          <div className="credential-add-form">
           <textarea
             className="text-input credential-textarea"
             placeholder={cookiePlaceholder(providerId, t)}
@@ -255,7 +157,8 @@ export function CookieSection({ providerId, cookieDomain }: Props) {
           >
             {t("BrowserCookieSave")}
           </button>
-        </div>
+          </div>
+        </details>
       </ProviderAuthMethod>
     </ProviderSection>
   );

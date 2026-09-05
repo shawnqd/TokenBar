@@ -19,6 +19,7 @@ vi.mock("@tauri-apps/api/event", () => eventMocks);
 
 import { LocaleProvider } from "../i18n/LocaleProvider";
 import { buildBundle } from "../test/localeHarness";
+import { clearChartCache } from "../core/chartAccess";
 import type {
   QuotaCycleKind,
   LocalUsagePeriod,
@@ -113,6 +114,10 @@ function renderCard(
 
 describe("MenuCard", () => {
   beforeEach(() => {
+    // MenuCard now uses the shared chart loader. Clear an unfinished request
+    // from the previous test so a deliberately pending fixture cannot bleed
+    // into the next case.
+    clearChartCache();
     vi.clearAllMocks();
     tauriMocks.getLocaleStrings.mockResolvedValue(
       buildBundle({
@@ -747,6 +752,7 @@ describe("MenuCard", () => {
       id: "reset-credits",
       title: "Reset credits",
       window: rateWindow(0, { resetDescription: "3 reset credits available" }),
+      inventoryExpiresAt: ["2026-07-12T01:33:14Z", "2026-07-18T02:39:26Z"],
     }];
 
     const { container } = renderCard(snapshot);
@@ -754,6 +760,7 @@ describe("MenuCard", () => {
     expect(await screen.findByText("Extra resets")).toBeInTheDocument();
     expect(screen.getByText("Remaining 3 uses")).toBeInTheDocument();
     expect(container.querySelectorAll(".provider-quota")).toHaveLength(1);
+    expect(container.querySelectorAll(".menu-card__reset-credits-expiries li")).toHaveLength(2);
   });
 
   it("localizes the relative updated-at time in Japanese without duplicated prefix", async () => {

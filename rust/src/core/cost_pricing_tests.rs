@@ -1,4 +1,5 @@
 use super::*;
+use chrono::NaiveDate;
 
 #[test]
 fn test_normalize_codex_model() {
@@ -29,6 +30,16 @@ fn unattributed_codex_usage_stays_unpriced() {
     );
     assert!(CostUsagePricing::is_codex_unattributed_model("unknown"));
     assert!(CostUsagePricing::is_codex_unattributed_model("  "));
+}
+
+#[test]
+fn routed_codex_models_are_not_native_subscription_usage() {
+    assert!(CostUsagePricing::counts_toward_codex_subscription("gpt-5"));
+    assert!(CostUsagePricing::counts_toward_codex_subscription("OPENAI/gpt-5"));
+    assert!(!CostUsagePricing::counts_toward_codex_subscription("deepseek/model"));
+    assert!(!CostUsagePricing::counts_toward_codex_subscription("opencode-go-qwen/model"));
+    assert!(!CostUsagePricing::counts_toward_codex_subscription("codex-auto-review"));
+    assert!(CostUsagePricing::codex_cost_usd("acme/model", 1_000_000, 0, 1_000_000).is_none());
 }
 
 #[test]
@@ -159,8 +170,8 @@ fn test_gpt5_pro_cost() {
 fn test_gpt56_standard_pricing() {
     for (model, expected) in [
         ("gpt-5.6-sol", 0.0332),
-        ("gpt-5.6-terra", 0.0166),
-        ("gpt-5.6-luna", 0.00664),
+        ("gpt-5.6-terra", 0.01328),
+        ("gpt-5.6-luna", 0.001328),
     ] {
         let cost = CostUsagePricing::codex_cost_usd(model, 1_000, 400, 1_000);
         assert!((cost.unwrap() - expected).abs() < 1e-10, "{model}");
@@ -171,8 +182,8 @@ fn test_gpt56_standard_pricing() {
 fn test_gpt56_long_context_pricing() {
     for (model, expected) in [
         ("gpt-5.6-sol", 45.272001),
-        ("gpt-5.6-terra", 22.6360005),
-        ("gpt-5.6-luna", 9.0544002),
+        ("gpt-5.6-terra", 18.1088004),
+        ("gpt-5.6-luna", 1.81088004),
     ] {
         let cost = CostUsagePricing::codex_cost_usd(model, 272_001, 272_001, 1_000_000);
         assert!((cost.unwrap() - expected).abs() < 1e-10, "{model}");
@@ -183,12 +194,40 @@ fn test_gpt56_long_context_pricing() {
 fn test_gpt56_context_threshold_is_exclusive() {
     for (model, expected) in [
         ("gpt-5.6-sol", 0.136),
-        ("gpt-5.6-terra", 0.068),
-        ("gpt-5.6-luna", 0.0272),
+        ("gpt-5.6-terra", 0.0544),
+        ("gpt-5.6-luna", 0.00544),
     ] {
         let cost = CostUsagePricing::codex_cost_usd(model, 272_000, 272_000, 0);
         assert!((cost.unwrap() - expected).abs() < 1e-10, "{model}");
     }
+}
+
+#[test]
+fn test_gpt56_historical_rates_use_event_date() {
+    let before_cutover = NaiveDate::from_ymd_opt(2026, 7, 29).unwrap();
+    let after_cutover = NaiveDate::from_ymd_opt(2026, 7, 30).unwrap();
+
+    let before = CostUsagePricing::codex_cost_usd_at_date(
+        "gpt-5.6-terra",
+        1_000_000,
+        0,
+        1_000_000,
+        before_cutover,
+    )
+    .unwrap();
+    let after = CostUsagePricing::codex_cost_usd_at_date(
+        "gpt-5.6-terra",
+        1_000_000,
+        0,
+        1_000_000,
+        after_cutover,
+    )
+    .unwrap();
+
+    // One million input tokens exercises the long-context tier: the legacy
+    // Terra rate was $5/M input + $22.50/M output, then moved to $4/M + $18/M.
+    assert!((before - 27.5).abs() < 1e-10, "before={before}, after={after}");
+    assert!((after - 22.0).abs() < 1e-10, "before={before}, after={after}");
 }
 
 #[test]

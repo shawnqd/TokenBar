@@ -179,8 +179,10 @@ impl CodexApi {
                 // A real answer — including zero — supersedes earlier evidence.
                 record_reset_credit_sample(available_count);
                 if available_count > 0 {
-                    let window = reset_credits_rate_window(available_count);
-                    usage = usage.with_extra_rate_window("reset-credits", "Reset credits", window);
+                    usage = usage.with_named_rate_window(reset_credits_named(
+                        available_count,
+                        reset_credits.available_expiries(),
+                    ));
                 }
             }
             Err(error) => {
@@ -190,8 +192,10 @@ impl CodexApi {
                     "Codex reset credits temporarily unavailable ({error}); considering double-sample backfill"
                 );
                 if let Some(available_count) = try_backfill_reset_credit().filter(|&count| count > 0) {
-                    let window = reset_credits_rate_window(available_count);
-                    usage = usage.with_extra_rate_window("reset-credits", "Reset credits", window);
+                    usage = usage.with_named_rate_window(reset_credits_named(
+                        available_count,
+                        Vec::new(),
+                    ));
                 }
             }
         }
@@ -773,11 +777,41 @@ struct SpendControlLimitSnapshot {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+struct ResetCreditEntry {
+    #[serde(default)]
+    status: Option<String>,
+    #[serde(default, alias = "expiresAt")]
+    expires_at: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
 struct ResetCredits {
     #[serde(default)]
-    credits: Vec<serde_json::Value>,
+    credits: Vec<ResetCreditEntry>,
     #[serde(default)]
     available_count: u32,
+}
+
+impl ResetCredits {
+    fn available_expiries(&self) -> Vec<DateTime<Utc>> {
+        let mut out: Vec<DateTime<Utc>> = self
+            .credits
+            .iter()
+            .filter(|credit| credit.is_available())
+            .filter_map(|credit| parse_credit_expiry(credit.expires_at.as_deref()))
+            .collect();
+        out.sort();
+        out
+    }
+}
+
+impl ResetCreditEntry {
+    fn is_available(&self) -> bool {
+        match self.status.as_deref().map(str::trim) {
+            None | Some("") => true,
+            Some(status) => status.eq_ignore_ascii_case("available"),
+        }
+    }
 }
 
 /// The supplemental "N reset credits available" row.
@@ -793,6 +827,29 @@ fn reset_credits_rate_window(available_count: u32) -> RateWindow {
         if available_count == 1 { "" } else { "s" }
     );
     RateWindow::informational(description)
+}
+
+fn reset_credits_named(available_count: u32, expiries: Vec<DateTime<Utc>>) -> NamedRateWindow {
+    NamedRateWindow::new(
+        "reset-credits",
+        "Reset credits",
+        reset_credits_rate_window(available_count),
+    )
+    .with_inventory_expires_at(expiries)
+}
+
+fn parse_credit_expiry(raw: Option<&str>) -> Option<DateTime<Utc>> {
+    let raw = raw?.trim();
+    if raw.is_empty() {
+        return None;
+    }
+    if let Ok(parsed) = DateTime::parse_from_rfc3339(raw) {
+        return Some(parsed.with_timezone(&Utc));
+    }
+    if let Ok(n) = raw.parse::<i64>() {
+        return timestamp_to_datetime(Some(n));
+    }
+    None
 }
 
 /// Informational placeholder for a plan that has no active 5-hour session.
@@ -1024,6 +1081,42 @@ mod tests {
             .expect("reset credits");
         assert_eq!(credits.available_count, 2);
         assert_eq!(credits.credits.len(), 1);
+    }
+
+    #[test]
+    fn reset_credit_expiries_are_soonest_first_and_skip_ids() {
+        let credits = decode_reset_credits(
+            br#"{
+                "available_count": 2,
+                "credits": [
+                    {
+                        "id": "RateLimitResetCredit_secret",
+                        "status": "available",
+                        "title": "Full reset (Weekly + 5 hr)",
+                        "expires_at": "2026-07-18T02:39:26Z"
+                    },
+                    {
+                        "id": "RateLimitResetCredit_other",
+                        "status": "used",
+                        "expires_at": "2026-07-01T00:00:00Z"
+                    },
+                    {
+                        "status": "available",
+                        "expires_at": "2026-07-12T01:33:14Z"
+                    }
+                ]
+            }"#,
+        )
+        .expect("reset credits");
+        let expiries = credits.available_expiries();
+        assert_eq!(expiries.len(), 2);
+        assert_eq!(expiries[0], DateTime::parse_from_rfc3339("2026-07-12T01:33:14Z").unwrap().with_timezone(&Utc));
+        assert_eq!(expiries[1], DateTime::parse_from_rfc3339("2026-07-18T02:39:26Z").unwrap().with_timezone(&Utc));
+        let named = reset_credits_named(credits.available_count, expiries);
+        let encoded = serde_json::to_string(&named).expect("named");
+        assert!(!encoded.contains("RateLimitResetCredit"));
+        assert_eq!(named.inventory_expires_at.len(), 2);
+        assert_eq!(named.window.resets_at, named.inventory_expires_at.first().copied());
     }
 
     #[test]

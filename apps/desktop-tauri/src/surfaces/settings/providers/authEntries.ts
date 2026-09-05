@@ -44,7 +44,9 @@ export function userFacingAuthMethods(
       out.push(mapped);
     }
   }
-  if (out.length === 0) out.push("apiKey");
+  // An empty list is meaningful: the runtime capability query either says
+  // that this provider has no supported entry, or has not completed yet.
+  // Do not turn that state into a fabricated API-key control.
   return out;
 }
 
@@ -53,13 +55,18 @@ export interface AuthCapabilityInput {
   supportsOAuth: boolean;
   supportsCli: boolean;
   supportsApiKey: boolean;
+  /** P0(2026-08-30):网页会话能力与 Cookie 域名必须同时成立 ——
+   *  有域名不代表真实支持网页会话(能力与域名不得混用)。 */
+  supportsWeb: boolean;
+  /** Stable identifier for an executable login flow, when one really exists. */
+  loginFlow?: string | null;
 }
 
 export interface AuthEntryInput {
   providerId: string;
   /** `null` when the provider has no cookie domain at all. */
   cookieDomain: string | null;
-  /** `null` when there is nowhere for a browser sign-in to go. */
+  /** Kept for catalog compatibility; a dashboard URL is not a login capability. */
   dashboardUrl: string | null;
   /** `null` while `get_provider_auth_capabilities` has not answered yet. */
   capabilities: AuthCapabilityInput | null;
@@ -114,25 +121,24 @@ export function resolvePrimaryAuth(
  * used to do.
  */
 export function resolveAuthEntries(input: AuthEntryInput): AuthEntryDecision {
-  const { providerId, cookieDomain, dashboardUrl, capabilities, isBespoke } = input;
+  const { providerId, cookieDomain, capabilities, isBespoke } = input;
 
   // Codex keeps its long-standing carve-out: its own auto/manual/off cookie
   // *source* picker already covers cookies for this provider, so a second,
   // plain cookie-paste card would be redundant.
-  const cookie = cookieDomain !== null && providerId !== "codex";
-  const supportsOAuth = capabilities?.supportsOAuth ?? false;
-  const supportsCli = capabilities?.supportsCli ?? false;
-  // `triggerProviderLogin` only has a real destination when the provider
-  // advertises one, exactly as the 切换账号 quick action already gates itself.
-  // Bespoke components tell their own OAuth/CLI story, so this appears only
-  // where nothing else would.
-  const signIn = !isBespoke && (supportsOAuth || supportsCli) && dashboardUrl !== null;
+  const supportsWeb = capabilities?.supportsWeb ?? false;
+  const cookie = supportsWeb && cookieDomain !== null && providerId !== "codex";
+  // A provider may advertise CLI/OAuth support for probing an existing local
+  // session without exposing a runnable login command. Only the explicit
+  // loginFlow bridge capability is allowed to create a user-facing action.
+  // Bespoke components own their provider-specific sign-in UI.
+  const signIn = !isBespoke && capabilities?.loginFlow != null;
 
   const availability: AuthEntryAvailability = { bespoke: isBespoke, cookie, signIn };
   const primary = resolvePrimaryAuth(availability);
-  // `null` capabilities — not loaded yet, or the command is not registered —
-  // falls back to the old universal behaviour rather than hiding the entry.
-  const showApiKey = capabilities ? capabilities.supportsApiKey : true;
+  // `null` means the capability query has not completed. Do not manufacture
+  // an API-key or login entry during that loading window.
+  const showApiKey = capabilities?.supportsApiKey ?? false;
 
   // Preference order, filtered to what exists. `primary` leads by construction
   // because `resolvePrimaryAuth` walks this same order.
@@ -141,10 +147,5 @@ export function resolveAuthEntries(input: AuthEntryInput): AuthEntryDecision {
   if (availability.cookie) methods.push("cookie");
   if (availability.signIn) methods.push("signIn");
   if (showApiKey) methods.push("apiKey");
-  // `resolvePrimaryAuth` returns `apiKey` as its last resort even where the
-  // provider has none, so the list would otherwise come back empty and the
-  // zone would render nothing at all.
-  if (methods.length === 0) methods.push(primary);
-
   return { availability, primary, showApiKey, showCookieSource: providerId !== "codex", methods };
 }

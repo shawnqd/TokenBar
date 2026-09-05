@@ -167,9 +167,29 @@ export function projectSurface(
 }
 
 export function sortQuotaWindows(windows: RateWindowSnapshot[]): RateWindowSnapshot[] {
+  // Multi-family providers (Antigravity's Gemini / Claude-GPT pairs) publish
+  // their windows already grouped: family-major, five-hour before weekly. A
+  // global cycle sort interleaves the families (all 5h rows, then all weekly
+  // rows) and destroys the pair layout. When every window carries a shared
+  // title groupId, keep families adjacent — group first-appearance order,
+  // cycle sort within each group. Mixed providers keep the global cycle sort.
+  const hasGroups =
+    windows.length > 1 && windows.some((window) => window.groupId != null);
+  const groupOrder = new Map<string, number>();
+  if (hasGroups) {
+    for (const window of windows) {
+      const id = window.groupId ?? `__ungrouped_${window.id}__`;
+      if (!groupOrder.has(id)) groupOrder.set(id, groupOrder.size);
+    }
+  }
   return windows
     .map((window, index) => ({ window, index }))
     .sort((a, b) => {
+      if (hasGroups) {
+        const groupA = groupOrder.get(a.window.groupId ?? `__ungrouped_${a.window.id}__`) as number;
+        const groupB = groupOrder.get(b.window.groupId ?? `__ungrouped_${b.window.id}__`) as number;
+        if (groupA !== groupB) return groupA - groupB;
+      }
       const rank = windowSortRank(a.window) - windowSortRank(b.window);
       if (rank !== 0) return rank;
       const minutesA = a.window.windowMinutes ?? Number.POSITIVE_INFINITY;
@@ -385,7 +405,8 @@ function formatQuotaValue(
   if (!window.usageKnown) return "";
   const percent = showAsUsed ? window.usedPercent : window.remainingPercent;
   if (!Number.isFinite(percent)) return "";
-  return `${Math.round(Math.min(100, Math.max(0, percent)))}%`;
+  const clamped = Math.min(100, Math.max(0, percent));
+  return `${Number(clamped.toFixed(1))}%`;
 }
 
 function defaultResolveIcon(providerId: string): TaskbarStripIcon | null {

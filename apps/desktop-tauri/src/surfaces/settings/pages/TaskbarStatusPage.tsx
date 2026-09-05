@@ -4,6 +4,7 @@ import { useLocale } from "../../../hooks/useLocale";
 import type {
   TaskbarEntry,
   TaskbarStripCell,
+  TaskbarWindowKind,
   TaskbarWidgetPosition,
   TaskbarWidgetTextAlign,
 } from "../../../types/bridge";
@@ -14,6 +15,11 @@ import { SurfacePreviewFrame, type HtmlIconStyle } from "./HtmlSurfacePreviews";
 import { catalogChoices } from "./htmlFixture";
 import { V5EntryList } from "./V5EntryList";
 import { V5Field, V5Num, V5Section, V5Seg, V5Select, V5Toggle } from "./v5Controls";
+import {
+  taskbarWindowLabelFor,
+  taskbarWindowOptionsFor,
+  useTaskbarWindowAvailability,
+} from "../taskbarWindowOptions";
 import FontInstallDialog from "../FontInstallDialog";
 import type { ProviderSnapshot } from "../../../core/snapshot";
 import { projectSurface } from "../../../core/projection";
@@ -84,7 +90,7 @@ export default function TaskbarStatusPage({
   saving,
   coreStore: injectedCoreStore,
 }: SettingsPageProps & { coreStore?: UsageStore | null }) {
-  const { t } = useLocale();
+  const { t, language } = useLocale();
   const enabled = settings.taskbarWidgetEnabled;
   const off = !enabled;
   const iconSize = settings.taskbarWidgetIconSize ?? 14;
@@ -109,6 +115,21 @@ export default function TaskbarStatusPage({
 
   const hasCoreInjection = injectedCoreStore !== undefined;
   const coreSnapshots = useCoreSnapshotListForTaskbar(injectedCoreStore);
+  // The dropdown reads the same live capability map as the native strip. This
+  // keeps a balance/5h/day/week/month/speed choice visible only when the
+  // selected provider can actually resolve it.
+  const windowAvailability = useTaskbarWindowAvailability(enabled);
+  const windowOptionsFor = useCallback(
+    (entry: TaskbarEntry): TaskbarWindowKind[] =>
+      taskbarWindowOptionsFor(entry, windowAvailability, {
+        preserveSelection: false,
+      }),
+    [windowAvailability],
+  );
+  const windowLabelFor = useCallback(
+    (kind: TaskbarWindowKind) => taskbarWindowLabelFor(kind, t, language),
+    [language, t],
+  );
   const coreCells = useMemo(
     () => (hasCoreInjection ? deriveTaskbarCellsFromSnapshots(coreSnapshots, entries, settings.taskbarShowAsUsed ?? true) : []),
     [hasCoreInjection, coreSnapshots, entries, settings.taskbarShowAsUsed],
@@ -203,6 +224,8 @@ export default function TaskbarStatusPage({
             minEntries={0}
             addLabel="添加条目"
             disabled={saving || off}
+            windowOptionsFor={windowOptionsFor}
+            windowLabelFor={windowLabelFor}
           />
         </V5Section>
 
@@ -224,6 +247,8 @@ export default function TaskbarStatusPage({
             hiddenFrom={4}
             addLabel="添加条目"
             disabled={saving || off}
+            windowOptionsFor={windowOptionsFor}
+            windowLabelFor={windowLabelFor}
           />
         </V5Section>
 

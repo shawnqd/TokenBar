@@ -115,6 +115,8 @@ pub struct Settings {
     /// Show recent model output speed in the tray flyout.
     #[serde(default = "default_true")]
     pub output_speed_enabled: bool,
+    /// 设置页可见时是否保留托盘面板(false=维持现状之外的隐藏偏好)。
+    pub keep_tray_panel_on_settings: bool,
 
     /// Which period the panel's local-usage stats lead with: "today", "7d", or "30d".
     #[serde(default = "default_local_usage_period")]
@@ -773,9 +775,10 @@ fn default_local_usage_period() -> String {
 /// Default cookie source value for browser-authenticated providers.
 ///
 /// Browser cookie extraction reads browser profile databases and decrypts
-/// Chromium cookies via Windows DPAPI, which can trigger behavior-based AV
-/// engines. Keep that path explicit opt-in by default.
-const DEFAULT_COOKIE_SOURCE: &str = "manual";
+/// Chromium cookies via Windows DPAPI. This is the CodexBar-compatible default
+/// for web-session providers; `manual` is an explicit advanced/fallback mode.
+/// See docs/COOKIES.md for the source ladder and privacy boundary.
+const DEFAULT_COOKIE_SOURCE: &str = "auto";
 
 /// Default usage source value for any provider.
 const DEFAULT_PROVIDER_SOURCE: &str = "auto";
@@ -820,6 +823,7 @@ impl Default for Settings {
             reset_time_relative: true, // Show relative times by default
             menu_bar_display_mode: "detailed".to_string(), // Detailed mode by default
             output_speed_enabled: true,
+            keep_tray_panel_on_settings: true,
             local_usage_period: default_local_usage_period(),
             show_all_token_accounts_in_menu: false,
             provider_configs: HashMap::new(),
@@ -1147,7 +1151,7 @@ impl Settings {
         self.provider_configs.entry(id).or_default()
     }
 
-    /// Cookie source for `id`, or the default `"manual"` if unset.
+    /// Cookie source for `id`, or the default `"auto"` if unset.
     pub fn cookie_source(&self, id: ProviderId) -> &str {
         self.provider_configs
             .get(&id)

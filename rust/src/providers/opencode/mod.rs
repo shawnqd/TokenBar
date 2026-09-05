@@ -293,9 +293,8 @@ impl OpenCodeProvider {
         ];
 
         Self::first_f64(obj, &percent_keys)
-            // Strictly < 1.0: OpenCode emits integer percents (1 = 1% used).
-            // `<= 1.0` wrongly scaled a real 1% into 100%.
-            .map(|val| if val > 0.0 && val < 1.0 { val * 100.0 } else { val })
+            // usagePercent is already scaled 0–100; sub-integer values like 0.1
+            // are real sub-1% readings (e.g. Go plan), not 0–1 fractions.
             .or_else(|| Self::percent_from_used_limit(obj))
     }
 

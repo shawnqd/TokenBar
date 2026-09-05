@@ -7,6 +7,7 @@
 
 #[cfg(windows)]
 use std::ffi::c_void;
+use std::sync::atomic::{AtomicBool, AtomicIsize, Ordering};
 
 #[cfg(windows)]
 #[link(name = "dwmapi")]
@@ -75,6 +76,27 @@ unsafe extern "system" {
     fn DefSubclassProc(hwnd: isize, msg: u32, wparam: usize, lparam: isize) -> isize;
     fn MonitorFromWindow(hwnd: isize, flags: u32) -> isize;
     fn GetMonitorInfoW(hmonitor: isize, info: *mut MonitorInfo) -> i32;
+    fn SendMessageW(hwnd: isize, msg: u32, wparam: usize, lparam: isize) -> isize;
+    fn DestroyIcon(hicon: isize) -> i32;
+    fn SystemParametersInfoW(action: u32, ui_param: u32, pv: *mut c_void, win_ini: u32) -> i32;
+    fn FindWindowW(class: *const u16, title: *const u16) -> isize;
+    fn DrawAnimatedRects(
+        hwnd: isize,
+        id_ani: i32,
+        from: *const WinRect,
+        to: *const WinRect,
+    ) -> i32;
+    fn IsIconic(hwnd: isize) -> i32;
+    fn PrivateExtractIconsW(
+        file: *const u16,
+        index: i32,
+        cx: i32,
+        cy: i32,
+        icons: *mut isize,
+        icon_ids: *mut u32,
+        n_icons: u32,
+        flags: u32,
+    ) -> u32;
 }
 
 #[cfg(windows)]
@@ -96,6 +118,11 @@ unsafe extern "system" {
 
 #[cfg(windows)]
 static DARK_BRUSH: std::sync::OnceLock<isize> = std::sync::OnceLock::new();
+#[cfg(windows)]
+static SETTINGS_ROOT: AtomicIsize = AtomicIsize::new(0);
+#[cfg(windows)]
+static MINMAX_ARMED: AtomicBool = AtomicBool::new(false);
+
 
 #[cfg(windows)]
 const WM_NCCALCSIZE: u32 = 0x0083;
@@ -107,6 +134,40 @@ const WM_NCPAINT: u32 = 0x0085;
 const WM_NCACTIVATE: u32 = 0x0086;
 #[cfg(windows)]
 const WM_GETMINMAXINFO: u32 = 0x0024;
+#[cfg(windows)]
+const SPI_GETANIMATION: u32 = 0x0048;
+#[cfg(windows)]
+const IDANI_CAPTION: i32 = 3;
+#[cfg(windows)]
+const WM_SYSCOMMAND: u32 = 0x0112;
+#[cfg(windows)]
+const WM_SIZE: u32 = 0x0005;
+#[cfg(windows)]
+const SIZE_MINIMIZED: usize = 1;
+#[cfg(windows)]
+const SC_MINIMIZE: usize = 0xF020;
+#[cfg(windows)]
+const SC_RESTORE: usize = 0xF120;
+#[cfg(windows)]
+const DWMWA_TRANSITIONS_FORCEDISABLED: u32 = 3;
+#[cfg(windows)]
+const DWMWA_NCRENDERING_POLICY: u32 = 2;
+#[cfg(windows)]
+const DWMNCRP_USEWINDOWSTYLE: u32 = 0;
+#[cfg(windows)]
+const DWMNCRP_DISABLED: u32 = 1;
+#[cfg(windows)]
+const GWL_EXSTYLE: i32 = -20;
+#[cfg(windows)]
+const WS_EX_LAYERED: isize = 0x0008_0000;
+#[cfg(windows)]
+const GWL_STYLE: i32 = -16;
+#[cfg(windows)]
+const WS_CAPTION: isize = 0x00C0_0000;
+#[cfg(windows)]
+const WS_SYSMENU: isize = 0x0008_0000;
+#[cfg(windows)]
+const WS_MINIMIZEBOX: isize = 0x0002_0000;
 #[cfg(windows)]
 const BORDERLESS_SUBCLASS_ID: usize = 0xC0DE_BA12;
 
@@ -173,6 +234,10 @@ unsafe extern "system" fn borderless_subclass_proc(
 ) -> isize {
     match msg {
         WM_NCCALCSIZE => {
+            // Settings min/restore needs a real frame for DWM's zoom-to-icon.
+            if settings_minmax_armed(hwnd) {
+                return unsafe { DefSubclassProc(hwnd, msg, wparam, lparam) };
+            }
             if wparam != 0 {
                 // Returning 0 when wparam is TRUE tells Windows the
                 // client area == the window area (no non-client area).
@@ -199,12 +264,38 @@ unsafe extern "system" fn borderless_subclass_proc(
             unsafe { DefSubclassProc(hwnd, msg, wparam, lparam) }
         }
         WM_NCPAINT => {
+            if settings_minmax_armed(hwnd) {
+                return unsafe { DefSubclassProc(hwnd, msg, wparam, lparam) };
+            }
             // Suppress DWM non-client painting entirely (no Win32 caption).
             0
         }
         WM_NCACTIVATE => {
+            if settings_minmax_armed(hwnd) {
+                return unsafe { DefSubclassProc(hwnd, msg, wparam, lparam) };
+            }
             // Accept activation but skip DWM caption painting.
             1
+        }
+        WM_SYSCOMMAND => {
+            let cmd = wparam & 0xFFF0;
+            if is_settings_root(hwnd) && (cmd == SC_MINIMIZE || cmd == SC_RESTORE) {
+                arm_caption_for_dwm_minmax(hwnd);
+            }
+            unsafe { DefSubclassProc(hwnd, msg, wparam, lparam) }
+        }
+        WM_SIZE => {
+            let result = unsafe { DefSubclassProc(hwnd, msg, wparam, lparam) };
+            if is_settings_root(hwnd) && MINMAX_ARMED.load(Ordering::SeqCst) {
+                // Stay armed while iconic so a later taskbar restore still
+                // has a real caption frame. FRAMECHANGED while minimized
+                // can undo SC_MINIMIZE and leave Settings stuck on screen.
+                if should_reapply_borderless_after_size(wparam) {
+                    MINMAX_ARMED.store(false, Ordering::SeqCst);
+                    apply_borderless_chrome(hwnd, true, true);
+                }
+            }
+            result
         }
         WM_GETMINMAXINFO => {
             // MUST delegate to `DefSubclassProc` FIRST here. tao (the windowing
@@ -313,6 +404,223 @@ mod tests {
         assert_eq!(resize_hit_test(rect(), 250, 250, 8), None);
     }
 
+    #[test]
+    fn minmax_caption_style_adds_caption_and_minimize_box() {
+        let style = 0x1000_0000; // WS_VISIBLE
+        let armed = style_with_minmax_caption(style);
+        assert_ne!(armed & WS_CAPTION, 0);
+        assert_ne!(armed & WS_MINIMIZEBOX, 0);
+        assert_eq!(style_without_caption(armed) & WS_CAPTION, 0);
+    }
+
+    #[test]
+    fn animation_info_matches_winuser_layout() {
+        assert_eq!(std::mem::size_of::<AnimationInfo>(), 8);
+    }
+
+    #[test]
+    fn close_zoom_icon_rect_is_centered_on_the_taskbar() {
+        let tray = WinRect {
+            left: 0,
+            top: 1040,
+            right: 1920,
+            bottom: 1080,
+        };
+        let icon = close_zoom_icon_rect(tray, 24);
+        assert_eq!(icon.right - icon.left, 24);
+        assert_eq!(icon.bottom - icon.top, 24);
+        assert_eq!(icon.left + 12, 960);
+        assert_eq!(icon.top + 12, 1060);
+    }
+
+    #[test]
+    fn minmax_stays_armed_while_iconic() {
+        assert!(should_keep_minmax_armed_after_size(SIZE_MINIMIZED));
+        assert!(!should_keep_minmax_armed_after_size(0));
+        assert!(!should_reapply_borderless_after_size(SIZE_MINIMIZED));
+        assert!(should_reapply_borderless_after_size(0));
+    }
+
+    #[test]
+    fn layered_exstyle_is_stripped_for_dwm_then_restored() {
+        let appwindow = 0x0004_0000;
+        let layered = exstyle_without_layered(appwindow | WS_EX_LAYERED);
+        assert_eq!(layered & WS_EX_LAYERED, 0);
+        assert_eq!(layered, appwindow);
+        assert_ne!(exstyle_with_layered(layered) & WS_EX_LAYERED, 0);
+    }
+
+}
+
+#[cfg(windows)]
+#[repr(C)]
+struct AnimationInfo {
+    cb_size: u32,
+    min_animate: i32,
+}
+
+/// SPI_GETANIMATION: user-level "animate windows when minimizing and maximizing".
+#[cfg(windows)]
+pub fn window_min_animate_enabled() -> bool {
+    let mut info = AnimationInfo {
+        cb_size: std::mem::size_of::<AnimationInfo>() as u32,
+        min_animate: 0,
+    };
+    let ok = unsafe {
+        SystemParametersInfoW(
+            SPI_GETANIMATION,
+            info.cb_size,
+            &raw mut info as *mut c_void,
+            0,
+        )
+    };
+    ok == 0 || info.min_animate != 0
+}
+
+#[cfg(windows)]
+fn is_settings_root(hwnd: isize) -> bool {
+    hwnd != 0 && hwnd == SETTINGS_ROOT.load(Ordering::SeqCst)
+}
+
+#[cfg(windows)]
+fn settings_minmax_armed(hwnd: isize) -> bool {
+    is_settings_root(hwnd) && MINMAX_ARMED.load(Ordering::SeqCst)
+}
+
+/// Stay armed through `SIZE_MINIMIZED` so restore still has a caption frame.
+#[cfg(windows)]
+fn should_keep_minmax_armed_after_size(size_type: usize) -> bool {
+    size_type == SIZE_MINIMIZED
+}
+
+#[cfg(windows)]
+fn should_reapply_borderless_after_size(size_type: usize) -> bool {
+    !should_keep_minmax_armed_after_size(size_type)
+}
+
+#[cfg(windows)]
+fn exstyle_without_layered(ex: isize) -> isize {
+    ex & !WS_EX_LAYERED
+}
+
+#[cfg(windows)]
+fn exstyle_with_layered(ex: isize) -> isize {
+    ex | WS_EX_LAYERED
+}
+
+#[cfg(windows)]
+fn root_hwnd_from_window(win: &tauri::WebviewWindow) -> Option<isize> {
+    use raw_window_handle::HasWindowHandle;
+    let handle = win.window_handle().ok()?;
+    let raw_window_handle::RawWindowHandle::Win32(h) = handle.as_raw() else {
+        return None;
+    };
+    const GA_ROOT: u32 = 2;
+    let inner = h.hwnd.get();
+    let hwnd = unsafe { GetAncestor(inner, GA_ROOT) };
+    let hwnd = if hwnd != 0 { hwnd } else { inner };
+    (hwnd != 0).then_some(hwnd)
+}
+
+#[cfg(windows)]
+fn arm_caption_for_dwm_minmax(hwnd: isize) {
+    MINMAX_ARMED.store(true, Ordering::SeqCst);
+    let disable: i32 = 0;
+    let nc_policy = DWMNCRP_USEWINDOWSTYLE;
+    unsafe {
+        DwmSetWindowAttribute(
+            hwnd,
+            DWMWA_TRANSITIONS_FORCEDISABLED,
+            &raw const disable as *const c_void,
+            4,
+        );
+        DwmSetWindowAttribute(
+            hwnd,
+            DWMWA_NCRENDERING_POLICY,
+            &raw const nc_policy as *const c_void,
+            4,
+        );
+        let ex = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
+        let next_ex = exstyle_without_layered(ex);
+        if next_ex != ex {
+            SetWindowLongPtrW(hwnd, GWL_EXSTYLE, next_ex);
+        }
+        let style = GetWindowLongPtrW(hwnd, GWL_STYLE);
+        let next = style_with_minmax_caption(style);
+        if next != style {
+            SetWindowLongPtrW(hwnd, GWL_STYLE, next);
+            frame_changed(hwnd);
+        }
+    }
+}
+
+#[cfg(windows)]
+pub(crate) fn style_with_minmax_caption(style: isize) -> isize {
+    style | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX
+}
+
+#[cfg(windows)]
+pub(crate) fn style_without_caption(style: isize) -> isize {
+    style & !WS_CAPTION
+}
+
+#[cfg(windows)]
+fn frame_changed(hwnd: isize) {
+    const SWP_FRAMECHANGED: u32 = 0x0020;
+    const SWP_NOMOVE: u32 = 0x0002;
+    const SWP_NOSIZE: u32 = 0x0001;
+    const SWP_NOZORDER: u32 = 0x0004;
+    unsafe {
+        SetWindowPos(
+            hwnd,
+            0,
+            0,
+            0,
+            0,
+            0,
+            SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER,
+        );
+    }
+}
+
+#[cfg(windows)]
+fn apply_borderless_chrome(hwnd: isize, keep_resize: bool, transparent: bool) {
+    const WS_THICKFRAME: isize = 0x00040000;
+    unsafe {
+        if transparent {
+            let ex = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
+            let next_ex = exstyle_with_layered(ex);
+            if next_ex != ex {
+                SetWindowLongPtrW(hwnd, GWL_EXSTYLE, next_ex);
+            }
+            let nc_policy = DWMNCRP_DISABLED;
+            DwmSetWindowAttribute(
+                hwnd,
+                DWMWA_NCRENDERING_POLICY,
+                &raw const nc_policy as *const c_void,
+                4,
+            );
+            const DWMWA_BORDER_COLOR: u32 = 34;
+            const DWMWA_COLOR_NONE: u32 = 0xFFFF_FFFE;
+            let border_color = DWMWA_COLOR_NONE;
+            DwmSetWindowAttribute(
+                hwnd,
+                DWMWA_BORDER_COLOR,
+                &raw const border_color as *const c_void,
+                4,
+            );
+        }
+        let style = GetWindowLongPtrW(hwnd, GWL_STYLE);
+        let new_style = if keep_resize {
+            style_without_caption(style)
+        } else {
+            style_without_caption(style) & !WS_THICKFRAME
+        };
+        if new_style != style {
+            SetWindowLongPtrW(hwnd, GWL_STYLE, new_style);
+        }
+        frame_changed(hwnd);
+    }
 }
 
 #[cfg(windows)]
@@ -355,33 +663,7 @@ fn force_dark_caption_inner(win: &tauri::WebviewWindow, keep_resize: bool, trans
         tracing::info!("dwm: dark_mode={r1:#x} caption_color={r2:#x}");
 
         if transparent {
-            // The fixed transparent flyout owns its shape in the WebView. Turn
-            // off DWM non-client rendering entirely; otherwise Windows can
-            // composite a rectangular frame/shadow underneath the rounded
-            // CSS shell even after WS_THICKFRAME has been removed.
-            const DWMWA_NCRENDERING_POLICY: u32 = 2;
-            const DWMNCRP_DISABLED: u32 = 1;
-            let nc_policy = DWMNCRP_DISABLED;
-            let policy_result = DwmSetWindowAttribute(
-                hwnd,
-                DWMWA_NCRENDERING_POLICY,
-                &raw const nc_policy as *const c_void,
-                4,
-            );
-            tracing::info!("dwm: transparent nc_rendering={policy_result:#x}");
-
-            // Also remove the border color as a fallback for Windows builds
-            // that keep a one-pixel border despite disabled NC rendering.
-            const DWMWA_BORDER_COLOR: u32 = 34;
-            const DWMWA_COLOR_NONE: u32 = 0xFFFF_FFFE;
-            let border_color = DWMWA_COLOR_NONE;
-            let border_result = DwmSetWindowAttribute(
-                hwnd,
-                DWMWA_BORDER_COLOR,
-                &raw const border_color as *const c_void,
-                4,
-            );
-            tracing::info!("dwm: transparent border_color={border_result:#x}");
+            apply_borderless_chrome(hwnd, keep_resize, true);
         }
 
         if !transparent {
@@ -409,39 +691,267 @@ fn force_dark_caption_inner(win: &tauri::WebviewWindow, keep_resize: bool, trans
             }
         }
 
-        // Remove WS_CAPTION; only strip WS_THICKFRAME for non-resizable windows
-        const GWL_STYLE: i32 = -16;
-        const WS_CAPTION: isize = 0x00C00000;
-        const WS_THICKFRAME: isize = 0x00040000;
-        let style = GetWindowLongPtrW(hwnd, GWL_STYLE);
-        let new_style = if keep_resize {
-            style & !WS_CAPTION
+        if !transparent {
+            apply_borderless_chrome(hwnd, keep_resize, false);
+        }
+        if keep_resize {
+            tracing::info!("dwm: stripped WS_CAPTION (kept WS_THICKFRAME for resize)");
         } else {
-            style & !WS_CAPTION & !WS_THICKFRAME
-        };
-        if new_style != style {
-            SetWindowLongPtrW(hwnd, GWL_STYLE, new_style);
-            if keep_resize {
-                tracing::info!("dwm: stripped WS_CAPTION (kept WS_THICKFRAME for resize)");
-            } else {
-                tracing::info!("dwm: stripped WS_CAPTION/WS_THICKFRAME");
+            tracing::info!("dwm: stripped WS_CAPTION/WS_THICKFRAME");
+        }
+    }
+}
+
+/// Win11 taskbar icon pixel size at `dpi`.
+///
+/// Microsoft's app-icon table: 24px @ 100%, 30 @ 125%, 36 @ 150%, 48 @ 200%.
+/// https://learn.microsoft.com/en-us/windows/apps/design/iconography/app-icon-construction
+pub fn taskbar_icon_px(dpi: u32) -> i32 {
+    let dpi = dpi.max(96);
+    ((24 * dpi as i32) / 96).max(16)
+}
+
+/// Make Settings a real unowned app-window on the taskbar and give Explorer a
+/// DPI-exact icon from `icon.ico`.
+///
+/// The press/bounce on a taskbar button is drawn by Explorer's
+/// `Taskbar.View.dll` XAML. There is no public `ITaskbarList*` method for it
+/// (`ITaskbarList` only adds/deletes/activates tabs; `ITaskbarList3` is
+/// overlay/progress/thumbnails). An unowned `WS_EX_APPWINDOW` window is what
+/// the Shell documents as the way to get a normal button, including that
+/// animation: https://learn.microsoft.com/en-us/previous-versions/bb776822(v=vs.85)
+///
+/// Flyout/tray hosts must NOT call this — they stay `skip_taskbar`.
+#[cfg(windows)]
+pub fn attach_settings_taskbar_button(win: &tauri::WebviewWindow) {
+    use raw_window_handle::HasWindowHandle;
+
+    let Ok(handle) = win.window_handle() else {
+        return;
+    };
+    let raw_window_handle::RawWindowHandle::Win32(h) = handle.as_raw() else {
+        return;
+    };
+    const GA_ROOT: u32 = 2;
+    let inner = h.hwnd.get();
+    let hwnd = unsafe { GetAncestor(inner, GA_ROOT) };
+    let hwnd = if hwnd != 0 { hwnd } else { inner };
+    if hwnd == 0 {
+        return;
+    }
+    SETTINGS_ROOT.store(hwnd, Ordering::SeqCst);
+    let disable_transitions: i32 = 0;
+    unsafe {
+        DwmSetWindowAttribute(
+            hwnd,
+            DWMWA_TRANSITIONS_FORCEDISABLED,
+            &raw const disable_transitions as *const c_void,
+            4,
+        );
+    }
+
+    const GWL_EXSTYLE: i32 = -20;
+    const WS_EX_APPWINDOW: isize = 0x0004_0000;
+    const WS_EX_TOOLWINDOW: isize = 0x0000_0080;
+    unsafe {
+        let ex = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
+        let next = (ex | WS_EX_APPWINDOW) & !WS_EX_TOOLWINDOW;
+        if next != ex {
+            SetWindowLongPtrW(hwnd, GWL_EXSTYLE, next);
+            const SWP_FRAMECHANGED: u32 = 0x0020;
+            const SWP_NOMOVE: u32 = 0x0002;
+            const SWP_NOSIZE: u32 = 0x0001;
+            const SWP_NOZORDER: u32 = 0x0004;
+            SetWindowPos(
+                hwnd,
+                0,
+                0,
+                0,
+                0,
+                0,
+                SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER,
+            );
+        }
+    }
+
+    let dpi = unsafe { GetDpiForWindow(hwnd) }.max(96);
+    let small_px = taskbar_icon_px(dpi);
+    let big_px = ((32 * dpi as i32) / 96).max(small_px);
+    const WM_SETICON: u32 = 0x0080;
+    const ICON_SMALL: usize = 0;
+    const ICON_BIG: usize = 1;
+    if let Some(small) = extract_icon_at(small_px) {
+        unsafe {
+            let prev = SendMessageW(hwnd, WM_SETICON, ICON_SMALL, small);
+            if prev != 0 && prev != small {
+                DestroyIcon(prev);
             }
         }
+    }
+    if let Some(big) = extract_icon_at(big_px) {
+        unsafe {
+            let prev = SendMessageW(hwnd, WM_SETICON, ICON_BIG, big);
+            if prev != 0 && prev != big {
+                DestroyIcon(prev);
+            }
+        }
+    }
+    tracing::info!(small_px, big_px, dpi, "settings taskbar icon applied");
+}
 
-        // Force frame recalculation
-        const SWP_FRAMECHANGED: u32 = 0x0020;
-        const SWP_NOMOVE: u32 = 0x0002;
-        const SWP_NOSIZE: u32 = 0x0001;
-        const SWP_NOZORDER: u32 = 0x0004;
-        SetWindowPos(
-            hwnd,
-            0,
-            0,
-            0,
-            0,
-            0,
-            SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER,
-        );
+#[cfg(windows)]
+fn extract_icon_at(px: i32) -> Option<isize> {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../rust/icons/icon.ico");
+    if !path.is_file() {
+        return None;
+    }
+    let wide: Vec<u16> = path
+        .to_string_lossy()
+        .encode_utf16()
+        .chain(std::iter::once(0))
+        .collect();
+    let mut icon: isize = 0;
+    let mut id: u32 = 0;
+    let got = unsafe {
+        PrivateExtractIconsW(wide.as_ptr(), 0, px, px, &mut icon, &mut id, 1, 0)
+    };
+    if got == 1 && icon != 0 {
+        Some(icon)
+    } else {
+        None
+    }
+}
+
+/// Minimize Settings with DWM's zoom-to-icon and the Explorer taskbar bounce.
+///
+/// Close must not call this: `SC_MINIMIZE` leaves the HWND iconic so the
+/// close button cannot finish. Titlebar minus / taskbar click use this path;
+/// close stays `hide()`.
+#[cfg(windows)]
+pub fn minimize_settings_to_taskbar(win: &tauri::WebviewWindow) {
+    let Some(hwnd) = root_hwnd_from_window(win) else {
+        return;
+    };
+    SETTINGS_ROOT.store(hwnd, Ordering::SeqCst);
+    if unsafe { IsIconic(hwnd) } != 0 {
+        return;
+    }
+    arm_caption_for_dwm_minmax(hwnd);
+    unsafe {
+        SendMessageW(hwnd, WM_SYSCOMMAND, SC_MINIMIZE, 0);
+    }
+}
+
+/// Restore an iconic Settings window with the matching DWM zoom-out + bounce.
+///
+/// Do not strip chrome immediately afterwards: `WM_SIZE` reapplies borderless
+/// once the window is no longer minimized.
+#[cfg(windows)]
+pub fn restore_settings_from_taskbar(win: &tauri::WebviewWindow) {
+    let Some(hwnd) = root_hwnd_from_window(win) else {
+        return;
+    };
+    SETTINGS_ROOT.store(hwnd, Ordering::SeqCst);
+    if unsafe { IsIconic(hwnd) } == 0 {
+        return;
+    }
+    arm_caption_for_dwm_minmax(hwnd);
+    unsafe {
+        SendMessageW(hwnd, WM_SYSCOMMAND, SC_RESTORE, 0);
+    }
+}
+
+/// Caption zoom from the Settings window into a taskbar-sized square.
+///
+/// `DrawAnimatedRects(IDANI_CAPTION)` is the documented minimize/maximize
+/// caption animation. It does not leave the window iconic, so the caller can
+/// `hide()` afterwards and Settings actually closes.
+/// https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-drawanimatedrects
+#[cfg(windows)]
+pub fn play_settings_close_zoom(win: &tauri::WebviewWindow) {
+    if !window_min_animate_enabled() {
+        return;
+    }
+    use raw_window_handle::HasWindowHandle;
+    let Ok(handle) = win.window_handle() else {
+        return;
+    };
+    let raw_window_handle::RawWindowHandle::Win32(h) = handle.as_raw() else {
+        return;
+    };
+    const GA_ROOT: u32 = 2;
+    let inner = h.hwnd.get();
+    let hwnd = unsafe { GetAncestor(inner, GA_ROOT) };
+    let hwnd = if hwnd != 0 { hwnd } else { inner };
+    if hwnd == 0 {
+        return;
+    }
+    let mut from = WinRect::default();
+    if unsafe { GetWindowRect(hwnd, &mut from) } == 0 {
+        return;
+    }
+    let tray = unsafe { FindWindowW(wide("Shell_TrayWnd").as_ptr(), std::ptr::null()) };
+    let mut tray_rect = WinRect::default();
+    if tray == 0 || unsafe { GetWindowRect(tray, &mut tray_rect) } == 0 {
+        return;
+    }
+    let dpi = unsafe { GetDpiForWindow(hwnd) }.max(96);
+    let to = close_zoom_icon_rect(tray_rect, taskbar_icon_px(dpi));
+    unsafe {
+        DrawAnimatedRects(hwnd, IDANI_CAPTION, &from, &to);
+    }
+}
+
+#[cfg(windows)]
+fn wide(s: &str) -> Vec<u16> {
+    s.encode_utf16().chain(std::iter::once(0)).collect()
+}
+
+/// A 24px-at-96dpi square on the taskbar, centered in the tray window.
+/// Win11's running-app cluster sits on this bar; this is the documented
+/// caption-minimize target when the exact button rect is not public.
+#[cfg(windows)]
+fn close_zoom_icon_rect(tray: WinRect, icon_px: i32) -> WinRect {
+    let icon_px = icon_px.max(16);
+    let cx = (tray.left + tray.right) / 2;
+    let cy = (tray.top + tray.bottom) / 2;
+    let half = icon_px / 2;
+    WinRect {
+        left: cx - half,
+        top: cy - half,
+        right: cx - half + icon_px,
+        bottom: cy - half + icon_px,
+    }
+}
+
+#[cfg(all(test, windows))]
+mod taskbar_icon_px_tests {
+    use super::taskbar_icon_px;
+
+    #[test]
+    fn matches_microsoft_taskbar_table() {
+        assert_eq!(taskbar_icon_px(96), 24);
+        assert_eq!(taskbar_icon_px(120), 30);
+        assert_eq!(taskbar_icon_px(144), 36);
+        assert_eq!(taskbar_icon_px(192), 48);
+    }
+
+    #[test]
+    fn icon_ico_contains_win11_taskbar_sizes() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../../rust/icons/icon.ico");
+        let bytes = std::fs::read(&path).expect("icon.ico");
+        assert!(bytes.len() >= 6);
+        let count = u16::from_le_bytes(bytes[4..6].try_into().unwrap()) as usize;
+        let mut sizes = Vec::new();
+        for i in 0..count {
+            let off = 6 + i * 16;
+            let w = bytes[off];
+            sizes.push(if w == 0 { 256 } else { w as i32 });
+        }
+        for need in [16, 20, 24, 30, 32, 36, 40, 48, 256] {
+            assert!(sizes.contains(&need), "icon.ico missing {need}px, have {sizes:?}");
+        }
     }
 }
 
@@ -453,3 +963,15 @@ pub fn force_borderless_transparent_resizable(_win: &tauri::WebviewWindow) {}
 
 #[cfg(not(windows))]
 pub fn force_flyout_shell(_win: &tauri::WebviewWindow) {}
+
+#[cfg(not(windows))]
+pub fn attach_settings_taskbar_button(_win: &tauri::WebviewWindow) {}
+
+#[cfg(not(windows))]
+pub fn play_settings_close_zoom(_win: &tauri::WebviewWindow) {}
+
+#[cfg(not(windows))]
+pub fn minimize_settings_to_taskbar(_win: &tauri::WebviewWindow) {}
+
+#[cfg(not(windows))]
+pub fn restore_settings_from_taskbar(_win: &tauri::WebviewWindow) {}

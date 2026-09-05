@@ -1,4 +1,4 @@
-﻿//! The detached tray panel window.
+//! The detached tray panel window.
 //!
 //! This module is deliberately the only owner of the flyout window lifecycle.
 //! React owns the provider cards; this module owns native visibility,
@@ -144,6 +144,17 @@ fn close_transition_is_current(generation: u64) -> bool {
     with_controller(|controller| controller.close_is_current(generation))
 }
 
+/// The tray-v5 chrome gutter rooms the CSS contact shadow inside the HWND
+/// (tray-v5.css `.tray-panel-reveal { padding: 6px }`, frozen design
+/// `.flyout-chrome::before { inset: 6px }`). The sizes in
+/// `SurfaceMode::TrayPanel.window_properties()` and the geometry store are
+/// CARD sizes; the window bounds are the card plus this gutter on every
+/// side, so the visible card keeps its design width. Keep in lockstep with
+/// the CSS padding.
+const CHROME_GUTTER_DIP: f64 = 6.0;
+
+/// Resolve the remembered CARD size, then add the chrome gutter for the
+/// window bounds.
 fn remembered_size(props: &crate::surface::WindowProperties) -> (f64, f64) {
     let stored = crate::geometry_store::load_entry(FLYOUT_LABEL);
     let width = stored
@@ -158,26 +169,46 @@ fn remembered_size(props: &crate::surface::WindowProperties) -> (f64, f64) {
     let height = props.min_height.map_or(height, |min| height.max(min));
     let width = props.max_width.map_or(width, |max| width.min(max));
     let height = props.max_height.map_or(height, |max| height.min(max));
-    (width, height)
+    let gutter = CHROME_GUTTER_DIP * 2.0;
+    (width + gutter, height + gutter)
 }
 
 fn remember_geometry(window: &tauri::WebviewWindow) {
     if window.is_maximized().unwrap_or(false) || window.is_minimized().unwrap_or(false) {
         return;
     }
-    let (Ok(position), Ok(size)) = (window.outer_position(), window.outer_size()) else {
+    let Ok(position) = window.outer_position() else {
         return;
     };
-    let scale = window.scale_factor().unwrap_or(1.0).max(1.0);
+    // Inner size is the HWND client (card + chrome gutter). Outer size includes
+    // DWM shadow and was previously stored as if it were already logical, so a
+    // 125% DPI session persisted ~407 instead of the 320 card minimum.
+    let Ok(size) = window.inner_size() else {
+        return;
+    };
+    let scale = window.scale_factor().unwrap_or(1.0).max(0.5);
+    let (width, height) = logical_card_size_from_physical_inner(size.width, size.height, scale);
     crate::geometry_store::save_entry(
         FLYOUT_LABEL,
         crate::geometry_store::StoredGeometry {
             x: position.x,
             y: position.y,
-            width: Some((size.width as f64 / scale).round().max(1.0) as u32),
-            height: Some((size.height as f64 / scale).round().max(1.0) as u32),
+            width: Some(width),
+            height: Some(height),
         },
     );
+}
+
+fn logical_card_size_from_physical_inner(
+    physical_width: u32,
+    physical_height: u32,
+    scale: f64,
+) -> (u32, u32) {
+    let scale = scale.max(0.5);
+    let gutter = CHROME_GUTTER_DIP * 2.0;
+    let width = ((physical_width as f64 / scale) - gutter).round().max(1.0) as u32;
+    let height = ((physical_height as f64 / scale) - gutter).round().max(1.0) as u32;
+    (width, height)
 }
 
 /// A physical-pixel rectangle.  Win32 mouse-hook coordinates and Tauri's
@@ -793,9 +824,22 @@ fn open_or_focus_inner(
         .disable_drag_drop_handler()
         .visible(false);
     if let (Some(min_w), Some(min_h)) = (props.min_width, props.min_height) {
-        builder = builder.min_inner_size(min_w, min_h);
+        // Min sizes are card sizes too; the HWND min includes the gutter so
+        // the visible card can never shrink below the design minimum.
+        builder = builder.min_inner_size(
+            min_w as f64 + CHROME_GUTTER_DIP * 2.0,
+            min_h as f64 + CHROME_GUTTER_DIP * 2.0,
+        );
     }
-    if let (Some(max_w), Some(max_h)) = (props.max_width, props.max_height) {
+    if props.max_width.is_some() || props.max_height.is_some() {
+        let max_w = props
+            .max_width
+            .map(|w| w as f64 + CHROME_GUTTER_DIP * 2.0)
+            .unwrap_or(4000.0);
+        let max_h = props
+            .max_height
+            .map(|h| h as f64 + CHROME_GUTTER_DIP * 2.0)
+            .unwrap_or(4000.0);
         builder = builder.max_inner_size(max_w, max_h);
     }
     #[cfg(windows)]
@@ -1012,7 +1056,7 @@ mod tests {
             flyout_rect: ScreenRect {
                 x: 100,
                 y: 200,
-                width: 328,
+                width: 320,
                 height: 776,
             },
             tray_icon_rect: None,
@@ -1091,20 +1135,39 @@ mod tests {
     fn screen_rect_uses_half_open_bounds() {
         let rect = context().flyout_rect;
         assert!(rect.contains(100, 200));
-        assert!(rect.contains(427, 975));
-        assert!(!rect.contains(428, 200));
+        assert!(rect.contains(419, 975));
+        assert!(!rect.contains(420, 200));
         assert!(!rect.contains(100, 976));
     }
 
     #[test]
     fn tray_window_properties_keep_native_resize_contract() {
         let props = SurfaceMode::TrayPanel.window_properties();
-        assert_eq!(props.width, 328.0);
+        assert_eq!(props.width, 320.0);
         assert_eq!(props.height, 776.0);
         assert_eq!(props.min_width, Some(320.0));
         assert_eq!(props.min_height, Some(380.0));
         assert!(props.resizable);
         assert!(props.always_on_top);
         assert!(props.skip_taskbar);
+    }
+
+    #[test]
+    fn physical_inner_at_125_percent_dpi_stores_the_320_card() {
+        // 320 card + 6px gutter each side = 332 logical inner; at 125% DPI
+        // that is 415 physical. Saving outer physical minus gutter as if it
+        // were already logical is how 407 ended up in window_geometry.json.
+        assert_eq!(
+            logical_card_size_from_physical_inner(415, 985, 1.25),
+            (320, 776)
+        );
+    }
+
+    #[test]
+    fn unscaled_physical_outer_must_not_be_treated_as_the_card() {
+        assert_ne!(
+            logical_card_size_from_physical_inner(419, 964, 1.0),
+            (320, 776)
+        );
     }
 }

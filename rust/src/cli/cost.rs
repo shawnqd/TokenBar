@@ -150,6 +150,20 @@ fn print_text_output(results: &[CostResult], use_color: bool, days: u32) {
             // Sessions
             println!("  Sessions: {}", result.summary.sessions_count);
 
+            if !result.summary.history_coverage_established {
+                println!("  Warning: local history scan was incomplete; totals may be partial");
+            }
+            if !result.summary.model_pricing_completeness.is_complete() {
+                println!(
+                    "  Warning: estimated pricing for unknown models: {}",
+                    result
+                        .summary
+                        .model_pricing_completeness
+                        .unpriced_models()
+                        .join(", ")
+                );
+            }
+
             // Cost by model
             if !result.summary.by_model.is_empty() {
                 println!("  By model:");
@@ -208,6 +222,16 @@ fn print_json_output(results: &[CostResult], pretty: bool, days: u32) -> anyhow:
                         "cached": r.summary.cached_tokens
                     },
                     "sessions_count": r.summary.sessions_count,
+                    "quality": {
+                        "history_coverage_established": r.summary.history_coverage_established,
+                        "known_zero": r.summary.known_zero,
+                        "model_pricing_completeness": if r.summary.model_pricing_completeness.is_complete() {
+                            "complete"
+                        } else {
+                            "partial"
+                        },
+                        "unpriced_models": r.summary.model_pricing_completeness.unpriced_models()
+                    },
                     "by_model": r.summary.by_model,
                     "by_speed": r.summary.by_speed,
                     "by_speed_tokens": r.summary.by_speed_tokens.iter().map(|(bucket, counts)| {

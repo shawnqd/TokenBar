@@ -515,51 +515,12 @@ impl AntigravityProvider {
             snapshot = snapshot.with_named_rate_window(named);
         }
 
-        // Distinct extras: rows that do NOT represent a family pool (noisy
-        // models such as image/lite/autocomplete, or unknown-family text rows)
-        // are only kept when they are genuinely distinct — actually consumed
-        // (remaining < 99.9%) or reset-only with unknown usage. Raw model rows
-        // that merely duplicate a family representative are no longer appended.
-        let fallback_used_as_primary = if gemini_representative.is_none()
-            && claude_gpt_representative.is_none()
-        {
-            fallback_representative(&quota_configs)
-        } else {
-            None
-        };
-
-        for config in &quota_configs {
-            if is_summary_candidate(config) {
-                continue; // represented by a family pool
-            }
-            if let Some(fallback) = fallback_used_as_primary {
-                if std::ptr::eq(*config, fallback) {
-                    continue; // already surfaced as the primary slot
-                }
-            }
-            let Some(quota) = &config.quota_info else {
-                continue;
-            };
-            let known = quota.remaining_fraction.is_some();
-            let consumed = known && quota.remaining_fraction.unwrap_or(1.0) < 0.999;
-            let reset_only = !known
-                && (quota.reset_time.is_some() || quota.reset_description.is_some());
-            if !consumed && !reset_only {
-                continue;
-            }
-            let title = clean_model_label(model_label(config));
-            if title.is_empty() {
-                continue;
-            }
-            let window = if known {
-                rate_window_from_known_quota(quota)
-            } else {
-                unavailable_window(quota)
-            };
-            let named = NamedRateWindow::new(model_window_id(config), title, window)
-                .with_usage_known(known);
-            snapshot = snapshot.with_named_rate_window(named);
-        }
+        // Do not expose raw model rows as separate quota cards. Antigravity's
+        // endpoint lists every model variant covered by the same two family
+        // pools (for example Pro High/Low, image and autocomplete variants),
+        // while the official Models screen shows the pool limits only. The
+        // representatives above are the sole usable values; reset-only pool
+        // placeholders are retained so an unknown state remains visible.
 
         // Add plan info
         let plan_name = user_status
@@ -674,19 +635,13 @@ impl AntigravityProvider {
             ));
         }
 
-        // Most restricted bucket first so compact/tray (which draw the first
-        // window) show the tightest constraint; unknown windows sort last.
-        named.sort_by(|a, b| {
-            b.1.usage_known
-                .cmp(&a.1.usage_known)
-                .then_with(|| {
-                    b.1.window
-                        .used_percent
-                        .partial_cmp(&a.1.window.used_percent)
-                        .unwrap_or(std::cmp::Ordering::Equal)
-                })
-                .then_with(|| a.0.cmp(&b.0))
-        });
+        // Keep the upstream order (Gemini before Claude/GPT, five-hour before
+        // weekly) so grouped surfaces read exactly like the official Models
+        // screen: one family's 5h+weekly pair on top, the next family's pair
+        // below. The most-restricted reading for compact/native surfaces is
+        // resolved independently from these named windows
+        // (`tray_bridge::most_restricted_known_window`), so no consumer needs
+        // this list pre-sorted by tightness.
 
         // The primary slot is a placeholder that the detailed UI skips; the
         // real buckets live in `extra_rate_windows`, so no window is ever
@@ -1017,14 +972,6 @@ fn is_claude_gpt_family(label: &str) -> bool {
     )
 }
 
-/// A row that belongs to a family pool and is a selectable text model. Pool
-/// representatives are drawn from summary candidates; everything else is only
-/// eligible as a distinct extra (consumed or reset-only).
-fn is_summary_candidate(config: &ModelConfig) -> bool {
-    let label = model_label(config);
-    classify_model(label) != ModelFamily::Other && !is_noisy_config(config)
-}
-
 fn is_noisy_config(config: &ModelConfig) -> bool {
     let label = model_label(config);
     if is_noisy_summary_model(label) {
@@ -1187,15 +1134,6 @@ fn model_label(config: &ModelConfig) -> &str {
     } else {
         config.id.as_deref().unwrap_or_default()
     }
-}
-
-fn model_window_id(config: &ModelConfig) -> String {
-    let raw = config
-        .model_id
-        .as_deref()
-        .or(config.id.as_deref())
-        .unwrap_or_else(|| model_label(config));
-    format!("model-{}", slugify(raw))
 }
 
 fn slugify(raw: &str) -> String {
@@ -1559,11 +1497,9 @@ mod tests {
         // No Gemini rows: the Claude/GPT representative takes primary.
         assert!((snap.primary.used_percent - 60.0).abs() < 0.1);
         assert!(snap.secondary.is_none());
-        // Mistral Large is an unknown-family selectable text row with known
-        // usage; it is a distinct consumed extra, not a raw duplicate.
-        assert_eq!(snap.extra_rate_windows.len(), 1);
-        assert_eq!(snap.extra_rate_windows[0].title, "Mistral Large");
-        assert!((snap.extra_rate_windows[0].window.used_percent - 40.0).abs() < 0.1);
+        // Unknown-family rows are not separate Antigravity quota pools and
+        // must not turn into extra model cards.
+        assert!(snap.extra_rate_windows.is_empty());
     }
 
     #[test]
@@ -1583,17 +1519,9 @@ mod tests {
         assert!((snap.primary.used_percent - 40.0).abs() < 0.1);
         // Claude pool: Sonnet 0.8 → 20%.
         assert!((snap.secondary.unwrap().used_percent - 20.0).abs() < 0.1);
-        // Noisy rows that are actually consumed remain as distinct extras.
-        let titles: Vec<&str> = snap
-            .extra_rate_windows
-            .iter()
-            .map(|w| w.title.as_str())
-            .collect();
-        assert!(titles.contains(&"Gemini 2.5 Flash Image"));
-        assert!(titles.contains(&"Gemini 2.5 Pro Lite"));
-        assert!(titles.contains(&"Gemini autocomplete internal"));
-        // No summary-candidate raw rows duplicated.
-        assert!(!titles.contains(&"Gemini 2.5 Flash"));
+        // Noisy model variants never become separate quota cards, even when
+        // their individual rows report consumption.
+        assert!(snap.extra_rate_windows.is_empty());
     }
 
     #[test]
@@ -1675,12 +1603,8 @@ mod tests {
                 .iter()
                 .any(|w| w.title == "SomeText Model")
         );
-        // Mistral Large is still a distinct consumed extra.
-        assert!(
-            snap.extra_rate_windows
-                .iter()
-                .any(|w| w.title == "Mistral Large")
-        );
+        // Other-family rows are not separate Antigravity quota pools.
+        assert!(snap.extra_rate_windows.is_empty());
     }
 
     // ── Quota summary path ────────────────────────────────────────────
@@ -1805,9 +1729,17 @@ mod tests {
         assert!(titles.contains(&"Claude/GPT 5-hour"));
         assert!(titles.contains(&"Claude/GPT weekly"));
 
-        // Most restricted bucket first: Claude/GPT weekly (0.25 → 75% used).
-        assert_eq!(snap.extra_rate_windows[0].title, "Claude/GPT weekly");
-        assert!((snap.extra_rate_windows[0].window.used_percent - 75.0).abs() < 0.1);
+        // Official Models-screen order is preserved (family before family,
+        // five-hour before weekly within a family) — the tray reads this list
+        // as grouped pairs, not as a tightness ranking. Claude/GPT weekly
+        // (0.25 → 75% used, the most restricted bucket) stays in its group
+        // slot instead of jumping to the front.
+        assert_eq!(snap.extra_rate_windows[0].title, "Gemini 5-hour");
+        assert_eq!(snap.extra_rate_windows[1].title, "Gemini weekly");
+        assert_eq!(snap.extra_rate_windows[2].title, "Claude/GPT 5-hour");
+        assert_eq!(snap.extra_rate_windows[3].title, "Claude/GPT weekly");
+        let cg_weekly = &snap.extra_rate_windows[3];
+        assert!((cg_weekly.window.used_percent - 75.0).abs() < 0.1);
 
         // Cadence metadata is attached so the UI can name the cycle.
         let gemini_weekly = snap

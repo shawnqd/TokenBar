@@ -155,7 +155,7 @@ fn extract_percent(segment: &str) -> Option<f64> {
             .as_str()
             .parse::<f64>()
             .ok()
-            .map(|value| if value <= 1.0 { value * 100.0 } else { value })
+            // Percent fields/patterns are already scaled 0–100; do not guess fractions.
     })
 }
 

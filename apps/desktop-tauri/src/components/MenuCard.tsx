@@ -12,7 +12,7 @@ import type {
   RateWindowSnapshot,
 } from "../types/bridge";
 import { BarChart } from "./charts/BarChart";
-import { getProviderChartData } from "../lib/tauri";
+import { defaultChartLoader } from "../core/chartAccess";
 import { useLocale } from "../hooks/useLocale";
 import { useFormattedResetTime } from "../hooks/useFormattedResetTime";
 import type { ProviderSnapshot } from "../core/snapshot";
@@ -20,6 +20,7 @@ import { projectSurface } from "../core/projection";
 import {
   FORECAST_UNAVAILABLE,
   forecastMarkerPercent,
+  formatResetDisplay,
   quotaForecastDisplay,
   quotaPercentDisplay,
   type QuotaDisplayContext,
@@ -31,6 +32,7 @@ import { paceCategory } from "../surfaces/tray/paceCategory";
 import { SimpleBarChart, StackedBarChart } from "./MiniBarChart";
 import { dashboardShowsQuotaWindow } from "../lib/dashboardProviders";
 import { getProviderBalance } from "../lib/providerBalance";
+import { localizeProviderError } from "../lib/providerErrorText";
 import { providerCapabilities } from "../lib/providerCapabilities";
 import { ProviderBalanceBlock } from "./ProviderBalanceBlock";
 import { ProviderIcon } from "./providers/ProviderIcon";
@@ -163,7 +165,7 @@ interface MenuCardProps {
   chartLoader?: (
     providerId: string,
     accountEmail?: string,
-  ) => Promise<ProviderChartData>;
+  ) => Promise<ProviderChartData | null>;
   /**
    * The owning surface's quota presentation choice, from
    * `quotaDisplayContext(settings, component)`. The card never reads settings
@@ -265,43 +267,10 @@ function OutputSpeedHighlight({
 
 /**
  * The tray flyout and the startup dashboard render raw provider errors through
- * MenuCard, independently of the Provider settings detail pane. Translate the
- * stable error categories here while leaving the original diagnostic available
- * through the Copy button.
+ * MenuCard, independently of the Provider settings detail pane. Translation
+ * lives in lib/providerErrorText (shared with the tray card's quota-missing
+ * state); the original diagnostic stays available through the Copy button.
  */
-function localizeProviderError(message: string, t: (key: LocaleKey) => string): string {
-  const lower = message.toLowerCase();
-  // Say *why*, not *where*. This used to print the failed URL and nothing
-  // else, which was the least useful half of the error and — on Claude — put
-  // the account's organization id on screen. The reason now survives from Rust
-  // (see `describe_network_error`), and a timeout or a refused connection is
-  // what actually tells the user whether to retry or to check the network.
-  const network = message.match(/^network error:\s*(.+)$/is);
-  if (network) {
-    const detail = network[1].trim();
-    if (/^timeout:/i.test(detail)) return t("ProviderIssueNetworkTimeout");
-    if (/^connect:/i.test(detail)) return t("ProviderIssueNetworkConnectionFailed");
-    // Anything else: name it as a request failure and append the cause chain
-    // with the URL stripped, so the message stays diagnostic without carrying
-    // an account identifier. The unedited original is still on the Copy button.
-    const withoutUrl = detail.replace(/\s*\(https?:\/\/[^\s)]+\)/g, "").trim();
-    return withoutUrl
-      ? t("ProviderIssueNetworkRequestFailed") + "：" + withoutUrl
-      : t("ProviderIssueNetworkRequestFailed");
-  }
-  if (lower.startsWith("network error:")) {
-    return t("ProviderIssueNetworkConnectionFailed");
-  }
-  if (
-    lower.includes("oauth credentials not found") ||
-    lower.includes("sign-in was not found") ||
-    lower.includes("sign-in expired") ||
-    lower === "authentication required"
-  ) {
-    return t("ProviderIssueSignInRequired");
-  }
-  return message;
-}
 
 /** Format a reserve description from raw pace data at render time. */
 function formatReserveDescription(
@@ -790,7 +759,7 @@ function MetricRow({
       ) : null}
       {reservePercent != null && (
         <div className="menu-metric__row menu-metric__reserve">
-          <span className="menu-metric__pct">{Math.round(reservePercent)}% {t("PanelReserveSuffix")}</span>
+          <span className="menu-metric__pct">{Number(reservePercent.toFixed(1))}% {t("PanelReserveSuffix")}</span>
           {reserveDescription && (
             <span className="menu-metric__reset">{reserveDescription}</span>
           )}
@@ -884,7 +853,7 @@ export default function MenuCard({
     let cancelled = false;
     setChartData(null);
     setIsChartDataLoading(true);
-    const loader = chartLoader ?? getProviderChartData;
+    const loader = chartLoader ?? defaultChartLoader;
     // When chartLoader is injected (enrichment scheduler path), the component
     // no longer directly invokes the Tauri command; the loader is the single
     // enrichment entry point. While loading, the card shows the skeleton rather
@@ -1225,6 +1194,23 @@ export default function MenuCard({
                   {t("PanelResetCreditsRemaining")} {resetCreditsAvailable} {t("PanelResetCreditsUnit")}
                 </strong>
               </section>
+              {(resetCreditsWindow?.inventoryExpiresAt?.length ?? 0) > 0 ? (
+                <ul className="menu-card__reset-credits-expiries">
+                  {resetCreditsWindow?.inventoryExpiresAt?.map((iso, index) => {
+                    const display = formatResetDisplay({
+                      resetsAt: iso,
+                      resetDescription: null,
+                      relative: false,
+                      t,
+                    });
+                    return (
+                      <li key={`${iso}-${index}`}>
+                        {index + 1}. {display.text}
+                      </li>
+                    );
+                  })}
+                </ul>
+              ) : null}
             </>
           )}
         </section>
@@ -1472,12 +1458,31 @@ export default function MenuCard({
           )}
 
           {!provider.error && hasResetCredits && (
-            <section className="menu-card__reset-credits" aria-label={t("PanelResetCreditsTitle")}>
-              <span>{t("PanelResetCreditsTitle")}</span>
-              <strong>
-                {t("PanelResetCreditsRemaining")} {resetCreditsAvailable} {t("PanelResetCreditsUnit")}
-              </strong>
-            </section>
+            <>
+              <section className="menu-card__reset-credits" aria-label={t("PanelResetCreditsTitle")}>
+                <span>{t("PanelResetCreditsTitle")}</span>
+                <strong>
+                  {t("PanelResetCreditsRemaining")} {resetCreditsAvailable} {t("PanelResetCreditsUnit")}
+                </strong>
+              </section>
+              {(resetCreditsWindow?.inventoryExpiresAt?.length ?? 0) > 0 ? (
+                <ul className="menu-card__reset-credits-expiries">
+                  {resetCreditsWindow?.inventoryExpiresAt?.map((iso, index) => {
+                    const display = formatResetDisplay({
+                      resetsAt: iso,
+                      resetDescription: null,
+                      relative: false,
+                      t,
+                    });
+                    return (
+                      <li key={`${iso}-${index}`}>
+                        {index + 1}. {display.text}
+                      </li>
+                    );
+                  })}
+                </ul>
+              ) : null}
+            </>
           )}
 
           {!provider.error && outputSpeed && (

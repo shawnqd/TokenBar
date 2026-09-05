@@ -2,21 +2,30 @@
    never leaks into the real tray flyout or other surfaces. */
 
 .settings-v5 .s5-stage-frame--tray {
-  width: 340px;
+  width: 332px;
   height: 520px;
   overflow: visible;
 }
 
 /* Full flyout chrome in the settings preview: 6 DIP gutter + 1px stroke +
-   drop shadow (same recipe as the live .tray-panel-reveal). */
+   drop shadow (same recipe as the live .tray-panel-reveal, which copies
+   shell/popup_chrome.rs: blur 3 / offset-y 3 / 0.32 dark / 0.15 light). */
 .settings-v5 .s5-tray-flyout {
-  width: 340px;
+  width: 332px;
   height: 520px;
   transform-origin: top left;
+  box-sizing: border-box;
+  padding: 6px;
 }
 
 .settings-v5 .s5-tray-flyout .tray-panel {
   min-height: 0;
+  border-radius: 12px;
+  box-shadow: 0 3px 3px rgba(0, 0, 0, 0.32);
+}
+
+[data-theme="light"] .settings-v5 .s5-tray-flyout .tray-panel {
+  box-shadow: 0 3px 3px rgba(0, 0, 0, 0.15);
 }
 
 .settings-v5 .s5-tray-flyout .flyout-body {
@@ -24,18 +33,18 @@
 }
 
 /* Real TrayCard stack (TRAY_PANEL_SPECIFICATION 7.3): one card per archetype
-   (Claude / DeepSeek / Cursor), each 328 DIP wide; the frame scrolls when the
+   (Claude / DeepSeek / Cursor), each 320 DIP wide; the frame scrolls when the
    density pushes the stack taller than the stage. Card styling itself comes
    from tray-v5.css imported by TrayCard — this only frames and stacks. */
 .settings-v5 .s5-tray-stack {
   display: flex;
   flex-direction: column;
   gap: 8px;
-  width: 328px;
+  width: 320px;
 }
 
 .settings-v5 .s5-tray-card {
-  width: 328px;
+  width: 320px;
   border: 1px solid var(--flyout-hairline);
   border-radius: 12px;
   padding: 12px 14px;

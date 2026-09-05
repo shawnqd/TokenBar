@@ -28,7 +28,7 @@ export default function PaceBadge({ pace, showDelta = true }: PaceBadgeProps) {
       {showDelta && (
         <span className="tray-pace-badge__delta">
           {deltaSign}
-          {pace.deltaPercent.toFixed(0)}%
+          {Number(pace.deltaPercent.toFixed(1))}%
         </span>
       )}
     </span>

@@ -2,9 +2,8 @@
 //!
 //! Scans local JSONL log files to aggregate token usage and calculate costs.
 //!
-//! Note: this path always full-walks session files. The disk-cache /
-//! [`crate::core::CostScanOptions`] debounce API in `jsonl_scanner` is not
-//! wired here yet (upstream #2089); app-level TTL still owns refresh pacing.
+//! Codex file parsing goes through the incremental per-file cache
+//! ([`crate::scan_cache`]): unchanged session files are never re-read.
 
 use chrono::{DateTime, Duration, Local, NaiveDate, Utc};
 use serde::Deserialize;
@@ -18,12 +17,85 @@ use std::time::Instant;
 #[cfg(test)]
 use crate::codex_costs::scan_codex_file_cost;
 use crate::codex_costs::{
-    add_codex_records_to_summary, codex_period_start, codex_scan_dates,
-    scan_codex_file_cost_for_range,
+    apply_codex_turns_to_summary, codex_period_start, codex_turn_cost_at_date,
 };
 use crate::codex_sessions::{codex_sessions_dir_candidates, default_wsl_roots};
 use crate::core::{CostUsageDayRange, CostUsagePricing, JsonlScanner};
+use crate::scan_cache::{self, CachedTurn, CodexFileCache};
 use crate::settings::Settings;
+
+/// Per-file turn stream (thread key + creation + ordered turns), served from
+/// the incremental cache when the file is unchanged. Aggregated buckets cannot
+/// be used here: fork-lineage deduplication aligns per-turn sequences.
+pub(crate) fn codex_file_turns(path: &Path) -> Option<CodexFileCache> {
+    let (mtime, len) = scan_cache::stamp(path)?;
+    if let Some(cached) = scan_cache::lookup(path, mtime, len) {
+        return Some(cached);
+    }
+
+    // Whole-file range: the baseline for cumulative-total deltas must reach
+    // back to the first line, or resumed-session attribution drifts.
+    let wide = CostUsageDayRange::new(
+        NaiveDate::from_ymd_opt(2000, 1, 1)?,
+        NaiveDate::from_ymd_opt(2100, 1, 1)?,
+    );
+    let parse_result = JsonlScanner::parse_codex_file(path, &wide, 0, None, None).ok()?;
+
+    let turns: Vec<CachedTurn> = parse_result
+        .records
+        .into_iter()
+        .map(|record| {
+            let input = record.input;
+            let cached = record.cached.min(input);
+            CachedTurn {
+                day: record.day_key,
+                model: record.model,
+                input,
+                cached,
+                output: record.output,
+            }
+        })
+        .collect();
+    let entry = CodexFileCache {
+        mtime,
+        len,
+        thread: parse_result.thread,
+        created: parse_result.created,
+        turns,
+    };
+    scan_cache::store(entry.clone(), path);
+    Some(entry)
+}
+
+/// Greedy first-appearance merge of one thread's fork views, in creation
+/// order. Every fork file re-emits the thread's whole ancestor history
+/// (re-stamped at the fork instant) before its own turns, so aligning each
+/// file's sequence against the already-accounted reference — and counting
+/// only the turns past the aligned prefix — bills every real turn exactly
+/// once. Model identity is part of the match; equal token triples from a
+/// different model are not silently treated as replay.
+pub(crate) fn dedup_thread_turns(mut files: Vec<CodexFileCache>) -> Vec<CachedTurn> {
+    files.sort_by(|a, b| a.created.cmp(&b.created));
+    let mut reference: Vec<CachedTurn> = Vec::new();
+    let mut unique: Vec<CachedTurn> = Vec::new();
+    for file in files {
+        let mut aligned = 0usize;
+        for turn in &file.turns {
+            let seen = aligned < reference.len()
+                && reference[aligned].model == turn.model
+                && reference[aligned].input == turn.input
+                && reference[aligned].cached == turn.cached
+                && reference[aligned].output == turn.output;
+            if seen {
+                aligned += 1;
+                continue;
+            }
+            unique.push(turn.clone());
+            reference.push(turn.clone());
+        }
+    }
+    unique
+}
 
 /// Cost summary from scanning local logs
 #[derive(Debug, Clone, Default)]
@@ -48,10 +120,54 @@ pub struct CostSummary {
     pub by_speed_tokens: HashMap<String, ModelTokenCounts>,
     /// Model IDs that were priced with fallback rates because no canonical rate is available.
     pub unknown_models: HashSet<String>,
+    /// Whether every model in the summary resolved through a canonical rate.
+    /// A partial result remains useful as a breakdown, but its dollar total is
+    /// explicitly an estimate rather than a complete billing reconstruction.
+    pub model_pricing_completeness: ModelPricingCompleteness,
+    /// Whether the requested local history window was fully inspected.
+    pub history_coverage_established: bool,
+    /// A completed scan with no contributing rows is a known zero. A cancelled
+    /// or deadline-truncated scan must never manufacture zero.
+    pub known_zero: bool,
     /// Period start date
     pub period_start: Option<NaiveDate>,
     /// Period end date
     pub period_end: Option<NaiveDate>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub enum ModelPricingCompleteness {
+    #[default]
+    Complete,
+    Partial { unpriced_models: Vec<String> },
+}
+
+impl ModelPricingCompleteness {
+    pub fn is_complete(&self) -> bool {
+        matches!(self, Self::Complete)
+    }
+
+    pub fn unpriced_models(&self) -> &[String] {
+        match self {
+            Self::Complete => &[],
+            Self::Partial { unpriced_models } => unpriced_models,
+        }
+    }
+
+    pub(crate) fn mark_partial(&mut self, model: &str) {
+        match self {
+            Self::Complete => {
+                *self = Self::Partial {
+                    unpriced_models: vec![model.to_string()],
+                };
+            }
+            Self::Partial { unpriced_models } => {
+                if !unpriced_models.iter().any(|item| item == model) {
+                    unpriced_models.push(model.to_string());
+                }
+            }
+        }
+    }
 }
 /// Per-model token counts
 #[derive(Debug, Clone, Default)]
@@ -75,6 +191,12 @@ impl CostSummary {
 
 fn is_cancelled(cancel: Option<&AtomicBool>) -> bool {
     cancel.is_some_and(|flag| flag.load(Ordering::Relaxed))
+}
+
+fn codex_path_key(path: &Path) -> String {
+    path.to_string_lossy()
+        .replace('/', "\\")
+        .to_ascii_lowercase()
 }
 
 /// Fallback Claude model used when a scanned model isn't in the canonical
@@ -315,16 +437,183 @@ impl CostScanner {
         summary.period_start = Some(start_date);
         summary.period_end = Some(today);
 
+        let (turns, coverage_established) =
+            self.collect_unique_codex_turns_with_status(cancel, None);
+        let (total_cost, turn_count) =
+            apply_codex_turns_to_summary(&mut summary, &turns, &range);
+        summary.total_cost_usd += total_cost;
+        // One session == one deduplicated turn of real consumption.
+        summary.sessions_count = turn_count;
+        summary.history_coverage_established = coverage_established;
+        summary.known_zero = coverage_established && turn_count == 0;
+
+        // Turns collected during this walk are flushed with the cache file so
+        // the next scan (any caller) re-reads only files changed since.
+        scan_cache::persist();
+        summary
+    }
+
+    /// Collect the thread-deduplicated Codex turn stream. See
+    /// [`dedup_thread_turns`] for the lineage-deduplication semantics.
+    pub(crate) fn collect_unique_codex_turns(
+        &self,
+        cancel: Option<&AtomicBool>,
+        deadline: Option<Instant>,
+    ) -> Vec<CachedTurn> {
+        self.collect_unique_codex_turns_with_status(cancel, deadline).0
+    }
+
+    pub(crate) fn collect_unique_codex_turns_with_status(
+        &self,
+        cancel: Option<&AtomicBool>,
+        deadline: Option<Instant>,
+    ) -> (Vec<CachedTurn>, bool) {
+        let stopped = || {
+            is_cancelled(cancel) || deadline.is_some_and(|limit| Instant::now() >= limit)
+        };
+        let mut candidates: Vec<(PathBuf, bool)> = Vec::new();
+        let mut source_available = false;
+        let today = Local::now().date_naive();
+        let mtime_cutoff = codex_period_start(today, self.days) - Duration::days(1);
         for sessions_dir in self.get_codex_sessions_dirs() {
-            if is_cancelled(cancel) {
+            if stopped() {
                 break;
             }
-            if sessions_dir.exists() {
-                self.scan_codex_sessions_dir(&sessions_dir, &range, &mut summary, cancel);
+            if !sessions_dir.exists() {
+                continue;
+            }
+            source_available = true;
+            self.for_each_codex_file(
+                &sessions_dir,
+                mtime_cutoff,
+                cancel,
+                deadline,
+                &mut |path, recent| candidates.push((path.to_path_buf(), recent)),
+            );
+        }
+
+        // A recent fork may replay an ancestor whose file mtime is old. Read
+        // only the metadata prefix for recent files first, then include old
+        // files sharing one of those lineage keys. This preserves the fast
+        // path for unrelated history without allowing the mtime filter to
+        // defeat replay deduplication.
+        let mut recent_threads = HashSet::new();
+        let mut identities: HashMap<String, Option<String>> = HashMap::new();
+        for (path, recent) in &candidates {
+            if !*recent {
+                continue;
+            }
+            let thread = JsonlScanner::read_codex_session_identity(path)
+                .ok()
+                .and_then(|(thread, _)| thread)
+                .filter(|thread| !thread.trim().is_empty());
+            if let Some(thread) = &thread {
+                recent_threads.insert(thread.clone());
+            }
+            identities.insert(codex_path_key(path), thread);
+        }
+
+        let mut selected_paths = Vec::new();
+        let mut selected_keys = HashSet::new();
+        for (path, recent) in candidates {
+            if stopped() {
+                break;
+            }
+            let key = codex_path_key(&path);
+            let thread = identities
+                .get(&key)
+                .cloned()
+                .flatten()
+                .or_else(|| {
+                    JsonlScanner::read_codex_session_identity(&path)
+                        .ok()
+                        .and_then(|(thread, _)| thread)
+                        .filter(|thread| !thread.trim().is_empty())
+                });
+            let is_lineage_ancestor = thread
+                .as_ref()
+                .is_some_and(|thread| recent_threads.contains(thread));
+            if (recent || is_lineage_ancestor) && selected_keys.insert(key) {
+                selected_paths.push(path);
             }
         }
 
-        summary
+        let mut files: Vec<CodexFileCache> = Vec::new();
+        for path in selected_paths {
+            if stopped() {
+                break;
+            }
+            if let Some(mut entry) = codex_file_turns(&path) {
+                // A missing/legacy identity must never place unrelated files
+                // in one shared empty dedup group. The path is a stable local
+                // fallback key for this scan and its persisted cache entry.
+                if entry
+                    .thread
+                    .as_deref()
+                    .is_none_or(|thread| thread.trim().is_empty())
+                {
+                    entry.thread = Some(format!("file:{key}", key = codex_path_key(&path)));
+                }
+                files.push(entry);
+            }
+        }
+
+        let mut per_thread: std::collections::HashMap<String, Vec<CodexFileCache>> =
+            std::collections::HashMap::new();
+        for file in files {
+            let key = file.thread.clone().unwrap_or_else(|| "file:unknown".to_string());
+            per_thread.entry(key).or_default().push(file);
+        }
+        let mut unique: Vec<CachedTurn> = Vec::new();
+        for (_, thread_files) in &mut per_thread {
+            unique.extend(dedup_thread_turns(std::mem::take(thread_files)));
+        }
+        // An empty result is only a confirmed zero when at least one source
+        // root was present and the walk reached its end. Missing roots are a
+        // configuration/installation state, not evidence of no usage.
+        (unique, source_available && !stopped())
+    }
+
+    /// Walk one sessions root and report every jsonl file with whether its
+    /// modification date is recent enough for the requested window. The
+    /// caller uses the cheap metadata pass to discover old fork ancestors.
+    fn for_each_codex_file(
+        &self,
+        sessions_dir: &Path,
+        mtime_cutoff: NaiveDate,
+        cancel: Option<&AtomicBool>,
+        deadline: Option<Instant>,
+        on_file: &mut dyn FnMut(&Path, bool),
+    ) {
+        let Ok(entries) = fs::read_dir(sessions_dir) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            if is_cancelled(cancel) || deadline.is_some_and(|limit| Instant::now() >= limit) {
+                break;
+            }
+            let path = entry.path();
+            let Ok(file_type) = entry.file_type() else {
+                continue;
+            };
+            if file_type.is_dir() {
+                self.for_each_codex_file(&path, mtime_cutoff, cancel, deadline, on_file);
+            } else if path.extension().is_some_and(|e| e == "jsonl") {
+                // Skip files untouched since before the window — their last
+                // write predates the earliest record we'd keep.
+                let recent = entry
+                    .metadata()
+                    .and_then(|meta| meta.modified())
+                    .map(|modified| {
+                        DateTime::<Utc>::from(modified)
+                            .with_timezone(&Local)
+                            .date_naive()
+                            >= mtime_cutoff
+                    })
+                    .unwrap_or(true);
+                on_file(&path, recent);
+            }
+        }
     }
 
     /// Scan Claude local logs
@@ -361,6 +650,8 @@ impl CostScanner {
         };
         self.walk_claude_files(&projects_dir, &cutoff, cancel, &mut handle_file);
 
+        summary.history_coverage_established = !is_cancelled(cancel);
+        summary.known_zero = summary.history_coverage_established && summary.sessions_count == 0;
         summary
     }
 
@@ -402,6 +693,8 @@ impl CostScanner {
         };
         self.walk_grok_files(&sessions_dir, &cutoff, cancel, &mut handle_file);
 
+        summary.history_coverage_established = !is_cancelled(cancel);
+        summary.known_zero = summary.history_coverage_established && summary.sessions_count == 0;
         summary
     }
 
@@ -475,67 +768,6 @@ impl CostScanner {
         )
     }
 
-    fn scan_codex_sessions_dir(
-        &self,
-        sessions_dir: &Path,
-        _range: &CostUsageDayRange,
-        summary: &mut CostSummary,
-        cancel: Option<&AtomicBool>,
-    ) {
-        // Codex appends to *resumed* sessions, so a file created weeks ago (and
-        // filed under its original start-date folder, e.g. sessions/2026/05/21/)
-        // can still hold token records from today. Iterating only the folders
-        // whose date falls inside the window would miss all of those. Instead
-        // walk every session file and parse any modified recently enough to
-        // possibly contain in-range records; `parse_codex_file` then filters the
-        // individual records back to the exact day range by their timestamp.
-        let today = Local::now().date_naive();
-        let start_date = codex_period_start(today, self.days);
-        // One extra day of slack absorbs UTC-vs-local and clock skew; a file
-        // untouched since before this can't hold a record inside the window.
-        let mtime_cutoff = start_date - Duration::days(1);
-        self.walk_codex_files(sessions_dir, mtime_cutoff, summary, cancel);
-    }
-
-    fn walk_codex_files(
-        &self,
-        dir: &Path,
-        mtime_cutoff: NaiveDate,
-        summary: &mut CostSummary,
-        cancel: Option<&AtomicBool>,
-    ) {
-        let Ok(entries) = fs::read_dir(dir) else {
-            return;
-        };
-        for entry in entries.flatten() {
-            if is_cancelled(cancel) {
-                break;
-            }
-            let path = entry.path();
-            let Ok(file_type) = entry.file_type() else {
-                continue;
-            };
-            if file_type.is_dir() {
-                self.walk_codex_files(&path, mtime_cutoff, summary, cancel);
-            } else if path.extension().is_some_and(|e| e == "jsonl") {
-                // Skip files untouched since before the window — their last
-                // write predates the earliest record we'd keep.
-                let recent = entry
-                    .metadata()
-                    .and_then(|meta| meta.modified())
-                    .map(|modified| {
-                        DateTime::<Utc>::from(modified)
-                            .with_timezone(&Local)
-                            .date_naive()
-                            >= mtime_cutoff
-                    })
-                    .unwrap_or(true);
-                if recent {
-                    self.parse_codex_file(&path, summary, cancel);
-                }
-            }
-        }
-    }
 
     fn get_claude_projects_dir(&self) -> PathBuf {
         if let Ok(claude_config) = std::env::var("CLAUDE_CONFIG_DIR") {
@@ -554,32 +786,6 @@ impl CostScanner {
 
         // Fallback to ~/.config/claude/projects
         home.join(".config").join("claude").join("projects")
-    }
-
-    fn parse_codex_file(
-        &self,
-        path: &Path,
-        summary: &mut CostSummary,
-        cancel: Option<&AtomicBool>,
-    ) {
-        if is_cancelled(cancel) {
-            return;
-        }
-        let today = Local::now().date_naive();
-        let start_date = codex_period_start(today, self.days);
-        let range = CostUsageDayRange::new(start_date, today);
-        let parse_result = match JsonlScanner::parse_codex_file(path, &range, 0, None, None) {
-            Ok(result) => result,
-            Err(_) => return,
-        };
-
-        let (session_cost, has_tokens) =
-            add_codex_records_to_summary(summary, &parse_result.records, &range);
-
-        if has_tokens {
-            summary.total_cost_usd += session_cost;
-            summary.sessions_count += 1;
-        }
     }
 
     fn walk_claude_files<F>(
@@ -872,6 +1078,9 @@ pub fn get_daily_cost_history_with_budget(
     cancel: Option<&AtomicBool>,
     deadline: Option<Instant>,
 ) -> (Vec<(String, f64)>, bool) {
+    if days == 0 {
+        return (Vec::new(), false);
+    }
     let stopped = || is_cancelled(cancel) || deadline.is_some_and(|limit| Instant::now() >= limit);
     let scanner = CostScanner::new(days);
     let today = Local::now().date_naive();
@@ -886,46 +1095,30 @@ pub fn get_daily_cost_history_with_budget(
 
     match provider {
         "codex" => {
-            // Scan Codex logs by day across Windows and WSL session roots.
-            let sessions_dirs = scanner.get_codex_sessions_dirs();
-            for days_ago in 0..days {
-                if stopped() {
-                    break;
+            // One lineage-deduplicated pass over the turn stream, then bucket
+            // by each turn's own day — the fork/replay duplication that made
+            // per-day re-walks both slow and inflated is removed at the
+            // source (see collect_unique_codex_turns).
+            let window = CostUsageDayRange::new(today - Duration::days((days - 1).into()), today);
+            let turns = scanner.collect_unique_codex_turns(cancel, deadline);
+            for turn in &turns {
+                if !CostUsageDayRange::is_in_range(
+                    &turn.day,
+                    &window.since_key,
+                    &window.until_key,
+                ) {
+                    continue;
                 }
-                let date = today - Duration::days(days_ago as i64);
-                let date_str = date.format("%Y-%m-%d").to_string();
-                let range = CostUsageDayRange::new(date, date);
-                let mut day_cost = 0.0;
-
-                for sessions_dir in sessions_dirs.iter().filter(|dir| dir.exists()) {
-                    if stopped() {
-                        break;
-                    }
-                    for scan_date in codex_scan_dates(&range) {
-                        if stopped() {
-                            break;
-                        }
-                        let year = scan_date.format("%Y").to_string();
-                        let month = scan_date.format("%m").to_string();
-                        let day = scan_date.format("%d").to_string();
-                        let day_dir = sessions_dir.join(&year).join(&month).join(&day);
-                        if !day_dir.exists() {
-                            continue;
-                        }
-                        if let Ok(entries) = fs::read_dir(&day_dir) {
-                            for entry in entries.flatten() {
-                                if stopped() {
-                                    break;
-                                }
-                                let path = entry.path();
-                                if path.extension().is_some_and(|e| e == "jsonl") {
-                                    day_cost += scan_codex_file_cost_for_range(&path, &range);
-                                }
-                            }
-                        }
-                    }
+                if let Some(cost) = codex_turn_cost_at_date(
+                    &turn.model,
+                    turn.input,
+                    turn.cached,
+                    turn.output,
+                    CostUsageDayRange::parse_day_key(&turn.day),
+                )
+                {
+                    *daily_costs.entry(turn.day.clone()).or_insert(0.0) += cost;
                 }
-                daily_costs.insert(date_str, day_cost);
             }
         }
         "claude" => {
@@ -946,6 +1139,12 @@ pub fn get_daily_cost_history_with_budget(
         _ => {}
     }
 
+    // Codex file buckets parsed during the day walk are flushed with the
+    // cache so subsequent history/summary scans skip unchanged files.
+    if provider == "codex" {
+        scan_cache::persist();
+    }
+
     // Convert to sorted vector
     let mut result: Vec<(String, f64)> = daily_costs.into_iter().collect();
     result.sort_by(|a, b| a.0.cmp(&b.0));
@@ -956,6 +1155,121 @@ pub fn get_daily_cost_history_with_budget(
 mod tests {
     use super::*;
     use std::io::Write;
+
+    #[test]
+    fn dedup_thread_turns_counts_fork_replay_once() {
+        // Codex Desktop 分叉:新 rollout 文件重放整段祖先历史(day 被改写为
+        // 分叉时刻)再追加自己的新 turn。去重后每个真实 turn 恰好一次。
+        let root = CodexFileCache {
+            mtime: 1,
+            len: 1,
+            thread: Some("root".to_string()),
+            created: Some("2026-08-12T00:00:00Z".to_string()),
+            turns: vec![
+                CachedTurn { day: "2026-08-12".to_string(), model: "gpt-5.6-luna".to_string(), input: 100, cached: 50, output: 10 },
+                CachedTurn { day: "2026-08-20".to_string(), model: "gpt-5.6-luna".to_string(), input: 200, cached: 80, output: 20 },
+            ],
+        };
+        let fork = CodexFileCache {
+            mtime: 2,
+            len: 2,
+            thread: Some("root".to_string()),
+            created: Some("2026-08-29T00:00:00Z".to_string()),
+            turns: vec![
+                // 重放:值与 root 相同,day 已改写
+                CachedTurn { day: "2026-08-29".to_string(), model: "gpt-5.6-luna".to_string(), input: 100, cached: 50, output: 10 },
+                CachedTurn { day: "2026-08-29".to_string(), model: "gpt-5.6-luna".to_string(), input: 200, cached: 80, output: 20 },
+                // 分叉后的真实新消费
+                CachedTurn { day: "2026-08-29".to_string(), model: "gpt-5.6-luna".to_string(), input: 30, cached: 0, output: 3 },
+            ],
+        };
+
+        let unique = dedup_thread_turns(vec![fork, root]);
+        assert_eq!(unique.len(), 3, "replayed history must be counted once");
+        // root 的原始 day 保留(先创建先记账)
+        assert_eq!(unique[0].day, "2026-08-12");
+        assert_eq!(unique[1].day, "2026-08-20");
+        // 分叉后的新 turn 保留自己的 day
+        assert_eq!(unique[2].day, "2026-08-29");
+        assert_eq!(unique[2].input, 30);
+    }
+
+    #[test]
+    fn dedup_does_not_merge_equal_tokens_from_a_different_model() {
+        let first = CodexFileCache {
+            mtime: 1,
+            len: 1,
+            thread: Some("root".to_string()),
+            created: Some("2026-08-12T00:00:00Z".to_string()),
+            turns: vec![CachedTurn {
+                day: "2026-08-12".to_string(),
+                model: "gpt-5.6-sol".to_string(),
+                input: 100,
+                cached: 50,
+                output: 10,
+            }],
+        };
+        let second = CodexFileCache {
+            mtime: 2,
+            len: 2,
+            thread: Some("root".to_string()),
+            created: Some("2026-08-13T00:00:00Z".to_string()),
+            turns: vec![CachedTurn {
+                day: "2026-08-13".to_string(),
+                model: "gpt-5.6-luna".to_string(),
+                input: 100,
+                cached: 50,
+                output: 10,
+            }],
+        };
+
+        let unique = dedup_thread_turns(vec![first, second]);
+        assert_eq!(unique.len(), 2);
+    }
+
+    #[test]
+    fn daily_history_zero_days_is_empty_and_not_claimed_complete() {
+        let (history, complete) = get_daily_cost_history_with_budget("codex", 0, None, None);
+        assert!(history.is_empty());
+        assert!(!complete);
+    }
+
+    #[test]
+    fn codex_turns_apply_parses_and_prices_one_file() {
+        let today = Local::now().date_naive();
+        let ts = chrono::Utc::now()
+            .format("%Y-%m-%dT%H:%M:%S%.3fZ")
+            .to_string();
+        let mut file = tempfile::NamedTempFile::new().expect("temp file");
+        writeln!(
+            file,
+            r#"{{"timestamp":"{ts}","type":"event_msg","payload":{{"type":"token_count","info":{{"model":"gpt-5","total_token_usage":{{"input_tokens":125,"cached_input_tokens":30,"output_tokens":15}}}}}}}}"#
+        )
+        .unwrap();
+
+        let entry = codex_file_turns(file.path()).expect("turns");
+        assert_eq!(entry.turns.len(), 1);
+
+        let range = CostUsageDayRange::new(codex_period_start(today, 30), today);
+        let mut summary = CostSummary::default();
+        let (cost, turn_count) =
+            apply_codex_turns_to_summary(&mut summary, &entry.turns, &range);
+
+        assert_eq!(turn_count, 1);
+        assert_eq!(summary.sessions_count, 0, "sessions belongs to scan_codex, not apply");
+        assert_eq!(summary.input_tokens, 125);
+        assert_eq!(summary.cached_tokens, 30);
+        assert_eq!(summary.output_tokens, 15);
+        assert_eq!(
+            summary
+                .by_model_tokens
+                .get("gpt-5")
+                .map(ModelTokenCounts::total),
+            Some(140)
+        );
+        assert!(cost > 0.0);
+        assert!(scan_codex_file_cost(file.path()) > 0.0);
+    }
 
     #[test]
     fn test_unknown_model_falls_back_to_sonnet() {
@@ -1086,9 +1400,14 @@ mod tests {
         .unwrap();
         drop(file);
 
-        let scanner = CostScanner::new(30);
+        let entry = codex_file_turns(&path).expect("turns");
+        let today = Local::now().date_naive();
+        let range = CostUsageDayRange::new(codex_period_start(today, 30), today);
         let mut summary = CostSummary::default();
-        scanner.parse_codex_file(&path, &mut summary, None);
+        let (total_cost, turn_count) =
+            apply_codex_turns_to_summary(&mut summary, &entry.turns, &range);
+        summary.total_cost_usd += total_cost;
+        summary.sessions_count = turn_count;
 
         assert_eq!(summary.sessions_count, 1);
         assert_eq!(summary.input_tokens, 125);

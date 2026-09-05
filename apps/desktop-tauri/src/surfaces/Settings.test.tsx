@@ -8,6 +8,10 @@ const settingsMocks = vi.hoisted(() => ({
   settings: {} as SettingsSnapshot,
 }));
 
+const tauriWindowMocks = vi.hoisted(() => ({
+  minimizeSettingsWindow: vi.fn(),
+}));
+
 vi.mock("../hooks/useLocale", () => ({
   useLocale: () => ({ t: (key: string) => key }),
 }));
@@ -39,6 +43,7 @@ vi.mock("@tauri-apps/api/core", () => ({
 
 vi.mock("../lib/tauri", () => ({
   closeSettingsWindow: vi.fn(),
+  minimizeSettingsWindow: tauriWindowMocks.minimizeSettingsWindow,
   setSurfaceMode: vi.fn(),
   playNotificationSound: vi.fn(),
   registerGlobalShortcut: vi.fn(),
@@ -80,6 +85,7 @@ vi.mock("../lib/tauri", () => ({
   }),
   resetSettings: vi.fn(),
   getProviderRegionOptions: vi.fn().mockResolvedValue([]),
+  getProviderRegion: vi.fn().mockResolvedValue(null),
   setProviderRegion: vi.fn(),
   invokeSurfaceAction: vi.fn(async () => "ok"),
 }));
@@ -163,6 +169,7 @@ describe("Settings V5 shell", () => {
   beforeEach(() => {
     settingsMocks.settings = snapshot;
     settingsMocks.update.mockReset();
+    tauriWindowMocks.minimizeSettingsWindow.mockReset();
   });
 
   it("renders ten nav items in the locked order and never says Dashboard", () => {
@@ -227,6 +234,12 @@ describe("Settings V5 shell", () => {
   it("accepts the new tab ids directly", () => {
     render(<Settings state={state} initialTab="privacy" />);
     expect(screen.getByText("HidePersonalInfo")).toBeInTheDocument();
+  });
+
+  it("minimizes through the native settings command instead of Tauri ShowWindow", () => {
+    render(<Settings state={state} />);
+    fireEvent.click(screen.getByRole("button", { name: "WindowMinimize" }));
+    expect(tauriWindowMocks.minimizeSettingsWindow).toHaveBeenCalledTimes(1);
   });
 
   it("switches pages from the left nav without a horizontal slide attribute", () => {

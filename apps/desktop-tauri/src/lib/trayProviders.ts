@@ -1,4 +1,4 @@
-﻿/**
+/**
  * Tray provider slot helpers — read-only now.
  *
  * The tray flyout no longer sources provider data here: usage comes from the
@@ -179,6 +179,7 @@ export function coreSnapshotToBridge(
       title: window.label,
       window: toBridgeRateWindow(window),
       usageKnown: window.usageKnown || undefined,
+      inventoryExpiresAt: window.inventoryExpiresAt,
     }));
 
   return {

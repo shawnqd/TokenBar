@@ -127,6 +127,10 @@ pub struct NamedRateWindowSnapshot {
     /// informational in that case; surfaces must show it as unavailable rather
     /// than a real 100%-remaining bar.
     pub usage_known: bool,
+    /// Soonest-first RFC3339 expiry times for inventory extras. Empty for
+    /// ordinary quota windows. Never includes credit ids.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub inventory_expires_at: Vec<String>,
 }
 
 /// Pace prediction snapshot for tray/bridge display.
@@ -286,6 +290,11 @@ impl ProviderUsageSnapshot {
                         Some(extra.title.as_str()),
                     ),
                     usage_known: extra.usage_known,
+                    inventory_expires_at: extra
+                        .inventory_expires_at
+                        .iter()
+                        .map(|dt| dt.to_rfc3339())
+                        .collect(),
                 })
                 .collect(),
             cost: result.cost.as_ref().map(|c| CostSnapshotBridge {
@@ -327,7 +336,11 @@ impl ProviderUsageSnapshot {
                 resets_at: None,
                 reset_description: None,
                 is_exhausted: false,
-                is_informational: false,
+                // A failed fetch has no quota window. Keep the structural
+                // primary slot for bridge compatibility, but mark it as
+                // informational so every surface renders the error instead
+                // of treating the 0/100 placeholder as a real quota.
+                is_informational: true,
                 reserve_percent: None,
                 reserve_description: None,
                 reserve_will_last_to_reset: false,
@@ -355,6 +368,16 @@ impl ProviderUsageSnapshot {
     }
 }
 
+pub(crate) fn format_quota_percent(percent: f64) -> String {
+    let clamped = percent.clamp(0.0, 100.0);
+    let rounded_1 = (clamped * 10.0).round() / 10.0;
+    if (rounded_1 - rounded_1.round()).abs() < 1e-6 {
+        format!("{:.0}%", rounded_1)
+    } else {
+        format!("{:.1}%", rounded_1)
+    }
+}
+
 /// Build a compact tray status label from a raw snapshot using the current language.
 /// Localization is done at render time so cached snapshots stay language-neutral.
 pub(crate) fn compact_tray_status_label(
@@ -362,7 +385,7 @@ pub(crate) fn compact_tray_status_label(
     lang: codexbar::settings::Language,
     relative: bool,
 ) -> String {
-    let pct = format!("{:.0}%", window.used_percent);
+    let pct = format_quota_percent(window.used_percent);
     if let Some(reset) = compact_reset_description(window, lang, relative) {
         format!("{pct} • {reset}")
     } else {

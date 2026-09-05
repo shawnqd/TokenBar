@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { getCurrentWindow } from "@tauri-apps/api/window";
 import type {
   BootstrapState,
   SettingsTabId,
@@ -12,6 +11,7 @@ import { useDispatchAction } from "../core/useCoreBridge";
 import { requireActionResult } from "../core/actionDispatcher";
 import type { UsageStore } from "../core/usageStore";
 import type { ActionDispatcher } from "../core/actionDispatcher";
+import { minimizeSettingsWindow } from "../lib/tauri";
 import SettingsNav from "./settings/SettingsNav";
 import SettingsPageHead from "./settings/SettingsPageHead";
 import SaveToast, { type SaveToastState } from "./settings/SaveToast";
@@ -196,7 +196,7 @@ export default function Settings({
         <div className="settings-titlebar__controls">
           <button
             className="settings-titlebar__control settings-titlebar__control--minimize"
-            onClick={() => void getCurrentWindow().minimize()}
+            onClick={() => void minimizeSettingsWindow()}
             aria-label={t("WindowMinimize")}
             title={t("WindowMinimize")}
           />

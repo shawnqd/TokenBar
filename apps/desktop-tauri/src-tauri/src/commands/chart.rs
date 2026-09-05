@@ -97,14 +97,17 @@ pub async fn get_provider_chart_data(
     let fallback_provider_id = provider_id.clone();
     let cancel = register_chart_scan(&provider_id);
     tauri::async_runtime::spawn_blocking(move || {
-        let data = build_provider_chart_data_with_cancel(
+        let (data, scan_stopped) = build_provider_chart_data_with_cancel(
             provider_id,
             account_email.clone(),
             Some(cancel.clone()),
         );
-        if !cancel.load(Ordering::Relaxed) {
-            cache_provider_chart_data(&data, account_email.as_deref());
-        }
+        cache_provider_chart_data_if_complete(
+            &data,
+            account_email.as_deref(),
+            scan_stopped,
+            cancel.load(Ordering::Relaxed),
+        );
         data
     })
     .await
@@ -119,8 +122,9 @@ pub async fn get_provider_chart_data(
 pub(crate) fn prewarm_provider_chart_data() {
     tauri::async_runtime::spawn_blocking(move || {
         for provider_id in ["codex", "claude"] {
-            let data = build_provider_chart_data_with_cancel(provider_id.to_string(), None, None);
-            cache_provider_chart_data(&data, None);
+            let (data, scan_stopped) =
+                build_provider_chart_data_with_cancel(provider_id.to_string(), None, None);
+            cache_provider_chart_data_if_complete(&data, None, scan_stopped, false);
         }
     });
 }
@@ -183,7 +187,7 @@ fn build_provider_chart_data_with_cancel(
     provider_id: String,
     account_email: Option<String>,
     cancel: Option<Arc<AtomicBool>>,
-) -> ProviderChartData {
+) -> (ProviderChartData, bool) {
     // Keep one year available so the UI's 7 day / 30 day / quarter / year
     // switch changes the actual data window instead of only relabelling it.
     let deadline = cancel
@@ -196,15 +200,15 @@ fn build_provider_chart_data_with_cancel(
         .map(|(date, value)| DailyCostPoint { date, value })
         .collect();
 
-    if cost_scan_stopped {
-        // A bounded read is preferable to freezing the Settings/Tray detail
-        // surface. Keep the result honest: do not present a partial history as
-        // complete, and hold local-usage retry for the short degraded TTL.
-        record_local_usage_fetch_failure(&provider_id, CostFetchFailure::TimedOut);
-    }
-
     let (credits_history, usage_breakdown) =
         load_openai_dashboard_chart_data(&provider_id, account_email.as_deref());
+    // A bounded read is preferable to freezing the Settings/Tray detail
+    // surface. Keep the result honest: do not present a partial history as
+    // complete. A timeout only says that this chart request stopped early; it
+    // is not evidence that the provider has no local usage. In particular, do
+    // not write a fresh `None` into the shared local-usage cache here: the
+    // dedicated summary command and the background enrichment pass must still
+    // be able to complete the authoritative scan and publish the real value.
     let local_usage = if cost_scan_stopped || cancel
         .as_deref()
         .is_some_and(|flag| flag.load(Ordering::Relaxed))
@@ -214,13 +218,16 @@ fn build_provider_chart_data_with_cancel(
         load_local_usage_summary_cached(&provider_id, cancel.as_deref())
     };
 
-    ProviderChartData {
-        provider_id,
-        cost_history,
-        credits_history,
-        usage_breakdown,
-        local_usage,
-    }
+    (
+        ProviderChartData {
+            provider_id,
+            cost_history,
+            credits_history,
+            usage_breakdown,
+            local_usage,
+        },
+        cost_scan_stopped,
+    )
 }
 
 impl ProviderChartData {
@@ -305,6 +312,22 @@ fn cache_provider_chart_data(data: &ProviderChartData, account_email: Option<&st
     if account_email.is_none() {
         persist_provider_chart_data(data);
     }
+}
+
+fn cache_provider_chart_data_if_complete(
+    data: &ProviderChartData,
+    account_email: Option<&str>,
+    scan_stopped: bool,
+    cancelled: bool,
+) {
+    // A deadline-truncated chart is a useful best-effort response for the
+    // current caller, but it must not replace a previously valid bundle in
+    // either the process cache or the persisted snapshot. Otherwise the next
+    // five-minute read would treat a timeout's zero-filled history as truth.
+    if scan_stopped || cancelled {
+        return;
+    }
+    cache_provider_chart_data(data, account_email);
 }
 
 fn cache_provider_chart_data_in_memory(data: &ProviderChartData, account_email: Option<&str>) {
@@ -462,8 +485,10 @@ pub(crate) enum CostFetchFailure {
     /// The scan failed outright (no readable logs, worker error). The next
     /// read may retry immediately.
     Failed,
-    /// The scan exceeded its budget. Hold the degraded state for the TTL so
-    /// the panel does not keep kicking off expensive rescans.
+    /// An explicit background caller may use this to hold a degraded state for
+    /// the TTL. Interactive chart timeouts must not record this marker in the
+    /// shared local-usage cache because a bounded chart read is not evidence of
+    /// missing usage.
     TimedOut,
 }
 
@@ -710,15 +735,16 @@ fn load_openai_dashboard_chart_data(
 #[cfg(test)]
 mod tests {
     use super::{
-        CostFetchFailure, ProviderChartData, ProviderLocalUsageSummary,
+        CostFetchFailure, DailyCostPoint, ProviderChartData, ProviderLocalUsageSummary,
         apply_local_usage_scan, cache_provider_chart_data, cached_provider_chart_data,
+        cache_provider_chart_data_if_complete,
         cached_provider_local_usage_summary, clear_provider_local_usage_cache,
         cost_fetch_failure_allows_early_retry, load_local_usage_summary,
         local_usage_cache, localized_estimate_note, record_local_usage_fetch_failure,
         refresh_provider_local_usage_cache, token_cost_cache_is_fresh,
     };
     use codexbar::settings::Language;
-    use std::sync::{Mutex, OnceLock};
+    use std::sync::{Arc, Mutex, OnceLock, atomic::AtomicBool};
     use std::time::{Duration, Instant};
 
     // These tests intentionally exercise process-wide caches. Serialize the
@@ -813,6 +839,63 @@ mod tests {
         assert!(!cost_fetch_failure_allows_early_retry(
             CostFetchFailure::TimedOut
         ));
+    }
+
+    #[test]
+    fn timed_out_chart_read_does_not_poison_successful_local_usage() {
+        let _test_guard = test_guard();
+        clear_provider_local_usage_cache();
+        let summary = ProviderLocalUsageSummary {
+            today_cost: Some(0.1),
+            today_tokens: Some(10),
+            seven_day_cost: Some(0.7),
+            seven_day_tokens: Some(70),
+            thirty_day_cost: Some(2.0),
+            thirty_day_tokens: Some(200),
+            today_top_model: Some("gpt-5".to_string()),
+            seven_day_top_model: Some("gpt-5".to_string()),
+            thirty_day_top_model: Some("gpt-5".to_string()),
+            estimate_note: "estimated".to_string(),
+        };
+        apply_local_usage_scan("codex".to_string(), Some(summary));
+
+        // An already-cancelled interactive chart is the deterministic stand-in
+        // for the three-second budget expiring. It may return no local usage in
+        // this bundle, but it must leave the authoritative cache untouched.
+        let cancel = Arc::new(AtomicBool::new(true));
+        let (chart, scan_stopped) = super::build_provider_chart_data_with_cancel(
+            "codex".to_string(),
+            None,
+            Some(cancel),
+        );
+        assert!(chart.local_usage.is_none());
+        assert!(scan_stopped);
+        assert_eq!(
+            cached_provider_local_usage_summary("codex")
+                .expect("successful summary survives chart timeout")
+                .thirty_day_tokens,
+            Some(200)
+        );
+    }
+
+    #[test]
+    fn timed_out_chart_bundle_does_not_replace_persisted_chart_cache() {
+        let _test_guard = test_guard();
+        let provider_id = "chart-timeout-cache-test";
+        let mut complete = ProviderChartData::empty(provider_id.to_string());
+        complete.cost_history.push(DailyCostPoint {
+            date: "2026-09-01".to_string(),
+            value: 3.5,
+        });
+        cache_provider_chart_data(&complete, None);
+
+        let partial = ProviderChartData::empty(provider_id.to_string());
+        cache_provider_chart_data_if_complete(&partial, None, true, false);
+
+        let cached = cached_provider_chart_data(provider_id, None)
+            .expect("complete chart remains cached after timeout");
+        assert_eq!(cached.cost_history.len(), 1);
+        assert_eq!(cached.cost_history[0].value, 3.5);
     }
 
     #[test]

@@ -48,6 +48,10 @@ pub struct NamedRateWindow {
     /// quota; the inner `RateWindow` is informational in that case.
     #[serde(default = "default_usage_known")]
     pub usage_known: bool,
+    /// Per-item expiry instants for inventory extras (Codex reset credits).
+    /// Sorted soonest-first. Never includes credit ids.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub inventory_expires_at: Vec<DateTime<Utc>>,
 }
 
 fn default_usage_known() -> bool {
@@ -61,12 +65,23 @@ impl NamedRateWindow {
             title: title.into(),
             window,
             usage_known: true,
+            inventory_expires_at: Vec::new(),
         }
     }
 
     /// Mark this window as carrying unknown usage (reset-only / disabled).
     pub fn with_usage_known(mut self, usage_known: bool) -> Self {
         self.usage_known = usage_known;
+        self
+    }
+
+    /// Attach soonest-first inventory expiry times (no identifiers).
+    pub fn with_inventory_expires_at(mut self, mut expires_at: Vec<DateTime<Utc>>) -> Self {
+        expires_at.sort();
+        if let Some(soonest) = expires_at.first().copied() {
+            self.window.resets_at = Some(soonest);
+        }
+        self.inventory_expires_at = expires_at;
         self
     }
 }

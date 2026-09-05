@@ -5,27 +5,19 @@ use chrono::Local;
 use chrono::{Duration, NaiveDate};
 use std::path::Path;
 
-use crate::core::{CodexUsageRecord, CostUsageDayRange, CostUsagePricing, JsonlScanner};
+#[cfg(test)]
+use crate::core::CodexUsageRecord;
+use crate::core::{CostUsageDayRange, CostUsagePricing};
 use crate::cost_scanner::{CostSummary, ModelTokenCounts};
+use crate::scan_cache::CachedTurn;
 
 pub(crate) fn codex_period_start(today: NaiveDate, days: u32) -> NaiveDate {
     today - Duration::days(days.saturating_sub(1) as i64)
 }
-pub(crate) fn codex_scan_dates(range: &CostUsageDayRange) -> Vec<NaiveDate> {
-    let Some(mut date) = CostUsageDayRange::parse_day_key(&range.scan_since_key) else {
-        return Vec::new();
-    };
-    let Some(until) = CostUsageDayRange::parse_day_key(&range.scan_until_key) else {
-        return Vec::new();
-    };
-    let mut dates = Vec::new();
-    while date <= until {
-        dates.push(date);
-        date += Duration::days(1);
-    }
-    dates
-}
-
+/// Record-stream aggregation — the test oracle for the cached turn replay
+/// (`apply_codex_turns_to_summary`): both must produce identical summaries
+/// for the same records.
+#[cfg(test)]
 pub(crate) fn add_codex_records_to_summary(
     summary: &mut CostSummary,
     records: &[CodexUsageRecord],
@@ -38,7 +30,9 @@ pub(crate) fn add_codex_records_to_summary(
         CostUsageDayRange::is_in_range(&record.day_key, &range.since_key, &range.until_key)
     }) {
         let tokens = CodexTokenCounts::from_values(record.input, record.cached, record.output);
-        if let Some(cost) = add_codex_tokens_to_summary(summary, &record.model, tokens) {
+        let pricing_day = CostUsageDayRange::parse_day_key(&record.day_key);
+        if let Some(cost) = add_codex_tokens_to_summary(summary, &record.model, tokens, pricing_day)
+        {
             total_cost += cost;
             has_tokens = true;
         }
@@ -47,20 +41,97 @@ pub(crate) fn add_codex_records_to_summary(
     (total_cost, has_tokens)
 }
 
-pub(crate) fn scan_codex_file_cost_for_range(path: &Path, range: &CostUsageDayRange) -> f64 {
-    let parse_result = match JsonlScanner::parse_codex_file(path, range, 0, None, None) {
-        Ok(result) => result,
-        Err(_) => return 0.0,
-    };
-
-    codex_records_cost(&parse_result.records, range)
-}
-
 #[cfg(test)]
 pub(crate) fn scan_codex_file_cost(path: &Path) -> f64 {
     let today = Local::now().date_naive();
     let range = CostUsageDayRange::new(codex_period_start(today, 30), today);
     scan_codex_file_cost_for_range(path, &range)
+}
+
+pub(crate) fn scan_codex_file_cost_for_range(path: &Path, range: &CostUsageDayRange) -> f64 {
+    let Some(entry) = crate::cost_scanner::codex_file_turns(path) else {
+        return 0.0;
+    };
+
+    codex_turns_cost(&entry.turns, range)
+}
+
+/// Replay lineage-deduplicated turns into a `CostSummary`, exactly like the
+/// record oracle: the day range filters here, pricing/speed/unknown-model
+/// handling all live in `add_codex_tokens_to_summary`.
+pub(crate) fn apply_codex_turns_to_summary(
+    summary: &mut CostSummary,
+    turns: &[CachedTurn],
+    range: &CostUsageDayRange,
+) -> (f64, u32) {
+    let mut total_cost = 0.0;
+    let mut turn_count = 0u32;
+
+    for turn in turns.iter().filter(|turn| {
+        CostUsageDayRange::is_in_range(&turn.day, &range.since_key, &range.until_key)
+    }) {
+        let tokens = CodexTokenCounts::from_bucket(turn.input, turn.cached, turn.output);
+        let pricing_day = CostUsageDayRange::parse_day_key(&turn.day);
+        if let Some(cost) = add_codex_tokens_to_summary(summary, &turn.model, tokens, pricing_day)
+        {
+            total_cost += cost;
+            turn_count += 1;
+        }
+    }
+
+    (total_cost, turn_count)
+}
+
+pub(crate) fn codex_turn_cost_at_date(
+    model: &str,
+    input: u64,
+    cached: u64,
+    output: u64,
+    pricing_day: Option<NaiveDate>,
+) -> Option<f64> {
+    if CostUsagePricing::is_codex_unattributed_model(model)
+        || !CostUsagePricing::counts_toward_codex_subscription(model)
+    {
+        return None;
+    }
+    let tokens = CodexTokenCounts::from_bucket(input, cached, output);
+    if tokens.is_empty() {
+        return None;
+    }
+    Some(codex_cost_usd_for_day(
+        model,
+        tokens.input,
+        tokens.cached,
+        tokens.output,
+        pricing_day,
+    ))
+}
+
+pub(crate) fn codex_turns_cost(turns: &[CachedTurn], range: &CostUsageDayRange) -> f64 {
+    let mut total_cost = 0.0;
+
+    for turn in turns.iter().filter(|turn| {
+        CostUsageDayRange::is_in_range(&turn.day, &range.since_key, &range.until_key)
+    }) {
+        if CostUsagePricing::is_codex_unattributed_model(&turn.model)
+            || !CostUsagePricing::counts_toward_codex_subscription(&turn.model)
+        {
+            continue;
+        }
+        let tokens = CodexTokenCounts::from_bucket(turn.input, turn.cached, turn.output);
+        if !tokens.is_empty() {
+            let cost = codex_cost_usd_for_day(
+                &turn.model,
+                tokens.input,
+                tokens.cached,
+                tokens.output,
+                CostUsageDayRange::parse_day_key(&turn.day),
+            );
+            total_cost += cost;
+        }
+    }
+
+    total_cost
 }
 
 #[derive(Clone, Copy)]
@@ -71,12 +142,21 @@ struct CodexTokenCounts {
 }
 
 impl CodexTokenCounts {
-    fn from_values(input: i32, cached: i32, output: i32) -> Self {
-        let input = input.max(0) as u64;
+    /// Bucket/turn 版本:sums 已是逐条 clamp 后的 u64。
+    fn from_bucket(input: u64, cached: u64, output: u64) -> Self {
         Self {
             input,
-            cached: (cached.max(0) as u64).min(input),
-            output: output.max(0) as u64,
+            cached: cached.min(input),
+            output,
+        }
+    }
+
+    #[cfg(test)]
+    fn from_values(input: u64, cached: u64, output: u64) -> Self {
+        Self {
+            input,
+            cached: cached.min(input),
+            output,
         }
     }
 
@@ -95,8 +175,16 @@ fn add_codex_tokens_to_summary(
     summary: &mut CostSummary,
     model: &str,
     tokens: CodexTokenCounts,
+    pricing_day: Option<NaiveDate>,
 ) -> Option<f64> {
     if tokens.is_empty() {
+        return None;
+    }
+
+    // Provider-qualified rows belong to their own subscription.  Keeping them
+    // in the native Codex total was the confirmed source of the 8%+ inflation
+    // seen in current local logs.
+    if !CostUsagePricing::counts_toward_codex_subscription(model) {
         return None;
     }
 
@@ -120,12 +208,37 @@ fn add_codex_tokens_to_summary(
         return Some(0.0);
     }
 
-    let uses_fallback_pricing =
-        CostUsagePricing::codex_cost_usd(&model_key, tokens.input, tokens.cached, tokens.output)
-            .is_none();
-    let cost = codex_cost_usd(&model_key, tokens.input, tokens.cached, tokens.output);
+    let uses_fallback_pricing = pricing_day
+        .and_then(|day| {
+            CostUsagePricing::codex_cost_usd_at_date(
+                &model_key,
+                tokens.input,
+                tokens.cached,
+                tokens.output,
+                day,
+            )
+        })
+        .or_else(|| {
+            CostUsagePricing::codex_cost_usd(
+                &model_key,
+                tokens.input,
+                tokens.cached,
+                tokens.output,
+            )
+        })
+        .is_none();
+    let cost = codex_cost_usd_for_day(
+        &model_key,
+        tokens.input,
+        tokens.cached,
+        tokens.output,
+        pricing_day,
+    );
     if uses_fallback_pricing {
         summary.unknown_models.insert(model_key.clone());
+        summary
+            .model_pricing_completeness
+            .mark_partial(&model_key);
     }
 
     summary.input_tokens += tokens.input;
@@ -152,24 +265,6 @@ fn add_codex_tokens_to_summary(
     Some(cost)
 }
 
-fn codex_records_cost(records: &[CodexUsageRecord], range: &CostUsageDayRange) -> f64 {
-    let mut total_cost = 0.0;
-
-    for record in records.iter().filter(|record| {
-        CostUsageDayRange::is_in_range(&record.day_key, &range.since_key, &range.until_key)
-    }) {
-        if CostUsagePricing::is_codex_unattributed_model(&record.model) {
-            continue;
-        }
-        let tokens = CodexTokenCounts::from_values(record.input, record.cached, record.output);
-        if !tokens.is_empty() {
-            total_cost += codex_cost_usd(&record.model, tokens.input, tokens.cached, tokens.output);
-        }
-    }
-
-    total_cost
-}
-
 fn codex_speed_bucket(model: &str) -> &'static str {
     let normalized = model.to_ascii_lowercase();
     if normalized.contains("fast")
@@ -184,10 +279,26 @@ fn codex_speed_bucket(model: &str) -> &'static str {
 }
 
 fn codex_cost_usd(model: &str, input: u64, cached: u64, output: u64) -> f64 {
+    codex_cost_usd_for_day(model, input, cached, output, None)
+}
+
+fn codex_cost_usd_for_day(
+    model: &str,
+    input: u64,
+    cached: u64,
+    output: u64,
+    pricing_day: Option<NaiveDate>,
+) -> f64 {
     if CostUsagePricing::is_codex_unattributed_model(model) {
         return 0.0;
     }
-    if let Some(cost) = CostUsagePricing::codex_cost_usd(model, input, cached, output) {
+    if !CostUsagePricing::counts_toward_codex_subscription(model) {
+        return 0.0;
+    }
+    if let Some(cost) = pricing_day
+        .and_then(|day| CostUsagePricing::codex_cost_usd_at_date(model, input, cached, output, day))
+        .or_else(|| CostUsagePricing::codex_cost_usd(model, input, cached, output))
+    {
         return cost;
     }
 
@@ -209,6 +320,7 @@ fn codex_cost_usd(model: &str, input: u64, cached: u64, output: u64) -> f64 {
 
     input_cost + cached_cost + output_cost
 }
+
 
 #[cfg(test)]
 mod tests {
@@ -314,6 +426,45 @@ mod tests {
         assert!(has_tokens);
         assert!(cost > 0.0);
         assert!(summary.unknown_models.contains("gpt-mystery"));
+    }
+
+    #[test]
+    fn routed_models_do_not_enter_native_codex_summary_or_cost() {
+        let target = NaiveDate::from_ymd_opt(2026, 8, 19).unwrap();
+        let range = CostUsageDayRange::new(target, target);
+        let records = vec![
+            CodexUsageRecord {
+                day_key: "2026-08-19".to_string(),
+                model: "gpt-5.6-sol".to_string(),
+                input: 100,
+                cached: 0,
+                output: 5,
+            },
+            CodexUsageRecord {
+                day_key: "2026-08-19".to_string(),
+                model: "deepseek/deepseek-chat".to_string(),
+                input: 1_000_000,
+                cached: 0,
+                output: 1_000_000,
+            },
+            CodexUsageRecord {
+                day_key: "2026-08-19".to_string(),
+                model: "codex-auto-review".to_string(),
+                input: 1_000_000,
+                cached: 0,
+                output: 1_000_000,
+            },
+        ];
+        let mut summary = CostSummary::default();
+
+        let (cost, has_tokens) = add_codex_records_to_summary(&mut summary, &records, &range);
+
+        assert!(has_tokens);
+        assert_eq!(summary.input_tokens, 100);
+        assert_eq!(summary.output_tokens, 5);
+        assert!(!summary.by_model.contains_key("deepseek/deepseek-chat"));
+        assert!(!summary.by_model.contains_key("codex-auto-review"));
+        assert!(cost < 0.01, "routed cost leaked into native Codex: {cost}");
     }
 
     #[test]

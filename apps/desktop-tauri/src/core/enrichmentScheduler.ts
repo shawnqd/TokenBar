@@ -207,3 +207,25 @@ export function createEnrichmentScheduler(
     destroy,
   };
 }
+
+/**
+ * Construction entry for the app-level projection runtime.
+ *
+ * The runtime composition (store/coordinator/scheduler) must stay in core so
+ * no surface or shell module ever contains a second runtime factory — this
+ * wrapper lives beside the scheduler definition for exactly that reason. The
+ * runner is a read-side fetch of Rust-owned derived caches (chart data,
+ * output speed) committed into the WebView's local read model; it never
+ * creates a second authoritative cache or a process writer.
+ */
+export function buildProjectionEnrichmentScheduler(deps: {
+  capabilities: () => Record<string, ProviderCapability>;
+  ttlMs?: Partial<Record<EnrichmentKind, number>>;
+  runner: (kind: EnrichmentKind, key: UsageStoreKey) => Promise<void>;
+}): EnrichmentScheduler {
+  return createEnrichmentScheduler({
+    capabilities: deps.capabilities,
+    ttlMs: deps.ttlMs ?? {},
+    runner: deps.runner,
+  });
+}

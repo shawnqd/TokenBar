@@ -1,4 +1,5 @@
-import { useMemo } from "react";
+import { useMemo, useState, cloneElement, type ReactElement, type MouseEvent as ReactMouseEvent } from "react";
+import { createPortal } from "react-dom";
 import type { CSSProperties } from "react";
 import type {
   Language,
@@ -11,18 +12,33 @@ import type {
   ProviderUsageSnapshot,
   RateWindowSnapshot,
 } from "../../types/bridge";
-import { fromBridge, projectSurface, type ProjectedWindow, type ProviderSnapshot } from "../../core";
+import {
+  fromBridge,
+  isRealQuotaWindow,
+  projectSurface,
+  type DisplayState,
+  type ProjectedWindow,
+  type ProviderSnapshot,
+} from "../../core";
 import { useLocale } from "../../hooks/useLocale";
 import { useResetDisplay } from "../../hooks/useFormattedResetTime";
 
 import {
   forecastMarkerPercent,
+  formatResetDisplay,
   quotaForecastDisplay,
   quotaPercentDisplay,
   type QuotaDisplayContext,
 } from "../../lib/quotaDisplay";
+import { isResetCreditsExtra, parseResetCreditsCount } from "../../lib/quotaWindows";
 import { formatRelativeUpdated } from "../../lib/relativeTime";
-import { getProviderBalance } from "../../lib/providerBalance";
+import {
+  getProviderBalance,
+  balanceFromCost,
+  type BalanceView,
+  type BalanceWindow,
+} from "../../lib/providerBalance";
+import { localizeProviderError } from "../../lib/providerErrorText";
 import { coreSnapshotToBridge } from "../../lib/trayProviders";
 import { ProviderIcon } from "../../components/providers/ProviderIcon";
 import {
@@ -30,6 +46,64 @@ import {
 } from "../../components/ProviderQuotaBlock";
 import type { LocaleKey } from "../../i18n/keys";
 import "./tray-v5.css";
+
+/* ── Hover tip ─────────────────────────────────────────────────────────────
+   A portal-rendered, fixed-position tip. The pure-CSS ::after variant was
+   clipped by the panel's overflow:hidden chrome (flyout-body is a scroll
+   container), so the tip must render outside that subtree: portal to <body>,
+   anchored at the trigger's rect (clamped to the right edge), pointer-inert. */
+function Tip({
+  text,
+  children,
+  onlyOnOverflow = false,
+}: {
+  text: string;
+  children: ReactElement;
+  onlyOnOverflow?: boolean;
+}) {
+  const [anchor, setAnchor] = useState<{ left: number; top: number; isTop: boolean } | null>(null);
+  return (
+    <>
+      {cloneElement(children, {
+        onMouseEnter: (event: ReactMouseEvent<HTMLElement>) => {
+          const el = event.currentTarget;
+          if (onlyOnOverflow) {
+            const isOverflowing =
+              el.scrollWidth > el.clientWidth ||
+              Array.from(el.querySelectorAll<HTMLElement>("*")).some(
+                (child) => child.scrollWidth > child.clientWidth,
+              );
+            if (!isOverflowing) {
+              setAnchor(null);
+              return;
+            }
+          }
+          const rect = el.getBoundingClientRect();
+          const isTop = rect.top >= 70;
+          const top = isTop ? rect.top : rect.bottom + 6;
+          const maxLeft = Math.max(8, window.innerWidth - 280);
+          const left = Math.max(8, Math.min(rect.left, maxLeft));
+          setAnchor({ left, top, isTop });
+        },
+        onMouseLeave: () => setAnchor(null),
+      })}
+      {anchor != null &&
+        createPortal(
+          <div
+            className="tray-tip"
+            style={{
+              left: anchor.left,
+              top: anchor.top,
+              transform: anchor.isTop ? "translateY(calc(-100% - 6px))" : "none",
+            }}
+          >
+            {text}
+          </div>,
+          document.body,
+        )}
+    </>
+  );
+}
 
 /* ── Public contract (imported by the Settings tray-panel preview) ─────── */
 
@@ -100,6 +174,10 @@ function isLegacyHiddenWindow(
   window: ProviderSnapshot["windows"][number],
 ): boolean {
   if (window.id === "zen-balance" || window.id === "reset-credits") return true;
+  // Date-only renewal markers have a reset instant and no measurable quota.
+  // An unused one-time grant (ZCode 体验套餐: 0% used, no cycle length, ends_at
+  // set, remaining in the description) is a real quota and must stay visible.
+  if (isRealQuotaWindow(window)) return false;
   if (
     window.windowMinutes == null &&
     window.usedPercent === 0 &&
@@ -108,6 +186,47 @@ function isLegacyHiddenWindow(
     return true;
   }
   return false;
+}
+
+interface InventoryLineInfo {
+  count: number | null;
+  earliestExpiry: string | null;
+  expiries: string[];
+}
+
+function extractInventoryInfo(
+  bridge: ProviderUsageSnapshot,
+  core: ProviderSnapshot,
+): InventoryLineInfo | null {
+  const bridgeExtra = bridge.extraRateWindows?.find((extra) => isResetCreditsExtra(extra));
+  const coreWindow = core.windows?.find(
+    (w) => w.id === "reset-credits" || w.id.includes("reset-credit") || parseResetCreditsCount(w.resetDescription) != null,
+  );
+
+  if (!bridgeExtra && !coreWindow) return null;
+
+  const expiries: string[] =
+    (bridgeExtra?.inventoryExpiresAt && bridgeExtra.inventoryExpiresAt.length > 0)
+      ? bridgeExtra.inventoryExpiresAt
+      : (coreWindow?.inventoryExpiresAt ?? []);
+
+  const desc =
+    bridgeExtra?.window?.resetDescription ??
+    coreWindow?.resetDescription ??
+    null;
+
+  const count =
+    parseResetCreditsCount(desc) ??
+    (expiries.length > 0 ? expiries.length : null);
+
+  const earliestExpiry =
+    expiries[0] ??
+    bridgeExtra?.window?.resetsAt ??
+    coreWindow?.resetsAt ??
+    null;
+
+  if (count == null && earliestExpiry == null) return null;
+  return { count, earliestExpiry, expiries };
 }
 
 function toRateWindow(window: ProjectedWindow): RateWindowSnapshot {
@@ -134,6 +253,23 @@ interface CardWindowView {
 /** The projection keeps raw labels; the card re-applies the same localized
  *  label rules the legacy gatherWindows used so English slot names never leak
  *  into the UI and identical words render for the same cycle kinds. */
+/** Titles that are literally just a cycle word collapse to the localized
+ *  cycle label. Anything carrying model/window identity ("Gemini 5-hour",
+ *  "Claude/GPT weekly", "Opus only", "Codex Spark Weekly") survives verbatim —
+ *  collapsing those is what hid Antigravity's model groups from the tray. */
+const CYCLE_ONLY_LABEL =
+  /^(weekly|monthly|daily|hourly|session|session \(5h\)|rolling|tertiary|5h|5-hour)$/i;
+
+function windowDisplayLabel(
+  raw: string | undefined,
+  snap: RateWindowSnapshot,
+  t: (key: LocaleKey) => string,
+): string {
+  const trimmed = raw?.trim();
+  if (trimmed && !CYCLE_ONLY_LABEL.test(trimmed)) return trimmed;
+  return quotaWindowLabel(raw, snap, t);
+}
+
 function legacyWindowLabel(
   window: ProjectedWindow,
   bridge: ProviderUsageSnapshot,
@@ -141,10 +277,10 @@ function legacyWindowLabel(
 ): string {
   const snap = toRateWindow(window);
   if (window.id === "primary") {
-    return quotaWindowLabel(bridge.primaryLabel, snap, t);
+    return windowDisplayLabel(bridge.primaryLabel, snap, t);
   }
   if (window.id === "secondary") {
-    return quotaWindowLabel(bridge.secondaryLabel, snap, t);
+    return windowDisplayLabel(bridge.secondaryLabel, snap, t);
   }
   if (window.id === "modelSpecific") {
     return t("DetailWindowModelSpecific");
@@ -152,8 +288,8 @@ function legacyWindowLabel(
   if (window.id === "tertiary") {
     return quotaWindowLabel("monthly", snap, t);
   }
-  const extra = bridge.extraRateWindows.find((row) => row.id === window.id);
-  return quotaWindowLabel(extra?.title ?? window.label, snap, t);
+  const extra = bridge.extraRateWindows?.find((row) => row.id === window.id);
+  return windowDisplayLabel(extra?.title ?? window.label, snap, t);
 }
 
 /* ── Formatting helpers (reuse MenuCard's approach) ───────────────────── */
@@ -223,14 +359,57 @@ function formatApiEquivalentValue(amount: number): string {
   return `${formatCurrency(amount, "USD")} · ¥${cnyEstimate.toFixed(2)}`;
 }
 
-/** Short cycle label used inside quota tiles over the full translated word:
- *  周额度 → 周, 月额度 → 月, 5 小时额度 → 5h. Exact matches only — we must not
- *  truncate an unrelated label that happens to share a first character. */
-function shortTileLabel(raw: string): string {
+/** Universal template-driven cycle label shortener:
+ *  - Standalone: 周额度 → 周, 月度配额 → 月, 5小时额度 → 5h, 日额度 → 日.
+ *  - Compound: [Model/Prefix] [Cycle] (e.g. "Claude/GPT weekly" → "Claude 周",
+ *    "Gemini 5-hour" → "Gemini 5h", "GPT weekly" → "GPT 周", "Codex Spark Weekly" → "Codex Spark 周").
+ *  Works across all providers and model families without individual hardcoded branches. */
+function shortTileLabel(raw: string, language?: Language): string {
   const trimmed = raw.trim();
-  if (trimmed === "5h" || trimmed === "5 小时额度" || trimmed === "5h 额度") return "5h";
-  if (trimmed === "周额度") return "周";
-  if (trimmed === "月额度") return "月";
+  const isZh =
+    language === "chinese" ||
+    language === "chinesetraditional" ||
+    (typeof language === "string" && language.startsWith("zh"));
+
+  // 1. Standalone cycle terms: Chinese terms stay Chinese; English terms translate if zh
+  if (/^(?:5h|5-hour|5\s*小时(?:额度)?|5h\s*额度|session)$/i.test(trimmed)) return "5h";
+  if (/^(?:周|周额度|周度(?:额度|配额|阶梯)?)$/.test(trimmed)) return "周";
+  if (/^(?:weekly(?:\s+quota)?|week)$/i.test(trimmed)) return isZh ? "周" : "wk";
+  if (/^(?:月|月额度|月度(?:额度|配额|总池)?)$/.test(trimmed)) return "月";
+  if (/^(?:monthly(?:\s+quota)?|month)$/i.test(trimmed)) return isZh ? "月" : "mo";
+  if (/^(?:日|日额度|日度(?:额度|配额)?|今日额度)$/.test(trimmed)) return "日";
+  if (/^(?:daily(?:\s+quota)?|day)$/i.test(trimmed)) return isZh ? "日" : "day";
+  if (/^(?:年|年额度|年度(?:额度|配额)?)$/.test(trimmed)) return "年";
+  if (/^(?:yearly(?:\s+quota)?|year|annual)$/i.test(trimmed)) return isZh ? "年" : "yr";
+
+  // 2. Compound: Prefix + Cycle, e.g. "Claude 5-hour", "Gemini weekly", "GPT weekly", "Codex Spark Weekly"
+  const compoundMatch = trimmed.match(
+    /^(.+?)[\s_-]+(5-hour|5h|session|weekly|week|周度?|monthly|month|月度?|daily|day|日度?)(?:[\s_-]*(?:额度|配额|阶梯|总池|quota|limit))?$/i,
+  );
+  if (compoundMatch) {
+    let prefix = compoundMatch[1].trim();
+    if (/^claude(?:\/gpt)?$/i.test(prefix)) prefix = "Claude";
+    else if (/^gemini$/i.test(prefix)) prefix = "Gemini";
+    else if (/^gpt$/i.test(prefix)) prefix = "GPT";
+
+    const cycle = compoundMatch[2].toLowerCase();
+    if (cycle === "5-hour" || cycle === "5h" || cycle === "session") {
+      return `${prefix} 5h`;
+    }
+    if (cycle.startsWith("周")) return `${prefix} 周`;
+    if (cycle === "weekly" || cycle === "week") {
+      return isZh ? `${prefix} 周` : `${prefix} wk`;
+    }
+    if (cycle.startsWith("月")) return `${prefix} 月`;
+    if (cycle === "monthly" || cycle === "month") {
+      return isZh ? `${prefix} 月` : `${prefix} mo`;
+    }
+    if (cycle.startsWith("日")) return `${prefix} 日`;
+    if (cycle === "daily" || cycle === "day") {
+      return isZh ? `${prefix} 日` : `${prefix} day`;
+    }
+  }
+
   return trimmed;
 }
 
@@ -390,7 +569,9 @@ function HeroRow({
   return (
     <div className="quota-row">
       <div className="quota-row__head">
-        <span className="quota-row__label">{title}</span>
+        <Tip text={title} onlyOnOverflow>
+          <span className="quota-row__label">{title}</span>
+        </Tip>
         {reset.text && (
           <span className="quota-row__reset" data-reset-state={reset.kind}>
             {reset.text.includes("重置") ? reset.text : `重置：${reset.text}`}
@@ -414,11 +595,12 @@ function HeroRow({
           style={{ width: `${percent.fillPercent}%` } as CSSProperties}
         />
         {marker != null && (
-          <div
-            className={`progress-notch progress-notch--${tone}`}
-            style={{ left: `${marker}%` } as CSSProperties}
-            title={t("PanelExpected")}
-          />
+          <Tip text={t("PanelExpected")}>
+            <div
+              className={`progress-notch progress-notch--${tone}`}
+              style={{ left: `${marker}%` } as CSSProperties}
+            />
+          </Tip>
         )}
       </div>
     </div>
@@ -449,20 +631,32 @@ function QuotaTile({
   const notchTone = forecast.available ? paceToneOf(forecast) : null;
   const notch =
     notchTone !== null && notchTone !== "onpace" ? forecastMarkerPercent(forecast, display) : null;
+  // 悬浮浮窗:完整标签 + 重置时间(头部行会截断两者,浮窗给全量)。
+  const headResetText =
+    compactResetText(snap.resetsAt, language) ??
+    (reset.kind !== "unknown" ? reset.text : "");
+  const headTip =
+    headResetText && !headResetText.includes("重置")
+      ? `${label} · 重置 ${headResetText}`
+      : headResetText
+        ? `${label} · ${headResetText}`
+        : label;
   // Full-width tiles (the secondary cycle): label + reset share the head line
   // (weight tells them apart), bar below — density-preview.html full row.
   if (fullWidth) {
     return (
       <div className="quota-tile quota-tile--full">
-        <div className="quota-tile__head">
-          <span className="quota-tile__title">
-            <span className="quota-tile__label" title={label}>{shortTileLabel(label)}</span>
-            <span className="quota-tile__reset" data-reset-state={reset.kind}>
-              {compactResetText(snap.resetsAt, language) ?? (reset.kind !== "unknown" ? reset.text : "")}
+        <Tip text={headTip}>
+          <div className="quota-tile__head">
+            <span className="quota-tile__title">
+              <span className="quota-tile__label">{shortTileLabel(label, language)}</span>
+              <span className="quota-tile__reset" data-reset-state={reset.kind}>
+                {compactResetText(snap.resetsAt, language) ?? (reset.kind !== "unknown" ? reset.text : "")}
+              </span>
             </span>
-          </span>
-          <strong className="quota-tile__val">{percent.rounded}%</strong>
-        </div>
+            <strong className="quota-tile__val">{percent.rounded}%</strong>
+          </div>
+        </Tip>
         <div className="progress-bar progress-bar--tile">
           <div
             className="progress-fill"
@@ -470,11 +664,12 @@ function QuotaTile({
             style={{ width: `${percent.fillPercent}%` } as CSSProperties}
           />
           {notch != null && notchTone && (
-            <div
-              className={`progress-notch progress-notch--${notchTone}`}
-              style={{ left: `${notch}%` } as CSSProperties}
-              title={t("PanelExpected")}
-            />
+            <Tip text={t("PanelExpected")}>
+              <div
+                className={`progress-notch progress-notch--${notchTone}`}
+                style={{ left: `${notch}%` } as CSSProperties}
+              />
+            </Tip>
           )}
         </div>
       </div>
@@ -483,15 +678,17 @@ function QuotaTile({
   // Half-width extras: label + pct on the head line, reset below the bar.
   return (
     <div className="quota-tile">
-      <div className="quota-tile__head">
-        <span className="quota-tile__title">
-          <span className="quota-tile__label" title={label}>{shortTileLabel(label)}</span>
-          <span className="quota-tile__reset" data-reset-state={reset.kind}>
-            {compactResetText(snap.resetsAt, language) ?? (reset.kind !== "unknown" ? reset.text : "")}
+      <Tip text={headTip}>
+        <div className="quota-tile__head">
+          <span className="quota-tile__title">
+            <span className="quota-tile__label">{shortTileLabel(label, language)}</span>
+            <span className="quota-tile__reset" data-reset-state={reset.kind}>
+              {compactResetText(snap.resetsAt, language) ?? (reset.kind !== "unknown" ? reset.text : "")}
+            </span>
           </span>
-        </span>
-        <strong className="quota-tile__val">{percent.rounded}%</strong>
-      </div>
+          <strong className="quota-tile__val">{percent.rounded}%</strong>
+        </div>
+      </Tip>
       <div className="progress-bar progress-bar--tile">
         <div
           className="progress-fill"
@@ -499,11 +696,12 @@ function QuotaTile({
           style={{ width: `${percent.fillPercent}%` } as CSSProperties}
         />
         {notch != null && notchTone && (
-          <div
-            className={`progress-notch progress-notch--${notchTone}`}
-            style={{ left: `${notch}%` } as CSSProperties}
-            title={t("PanelExpected")}
-          />
+          <Tip text={t("PanelExpected")}>
+            <div
+              className={`progress-notch progress-notch--${notchTone}`}
+              style={{ left: `${notch}%` } as CSSProperties}
+            />
+          </Tip>
         )}
       </div>
     </div>
@@ -512,42 +710,128 @@ function QuotaTile({
 
 /* ── Balance / status blocks (never fabricate) ────────────────────────── */
 
-function BalanceBlock({ provider, isCompact }: { provider: ProviderUsageSnapshot; isCompact?: boolean }) {
-  const { balance } = getProviderBalance(provider);
+type BalanceStatus = {
+  label: string;
+  tone: "reserve" | "deficit" | "neutral";
+};
+
+function resolveBalanceStatus(
+  balance: BalanceView,
+  displayState: DisplayState,
+  t: (key: LocaleKey) => string,
+): BalanceStatus | null {
+  if (
+    balance.unavailable ||
+    displayState === "error" ||
+    displayState === "authRequired" ||
+    displayState === "notConfigured"
+  ) {
+    return { label: t("StatusUnableToGetUsage"), tone: "deficit" };
+  }
+  if (displayState === "stale") return { label: t("TrayStatusStale"), tone: "neutral" };
+  if (displayState === "loading" || displayState === "refreshing") {
+    return { label: t("TrayLoading"), tone: "neutral" };
+  }
+  if (displayState === "unsupported" || displayState === "unknown") {
+    return { label: t("TrayStatusError"), tone: "neutral" };
+  }
+  return null;
+}
+
+function BalanceBlock({
+  balance,
+  status,
+  isCompact,
+}: {
+  balance: BalanceView | null;
+  status: BalanceStatus | null;
+  isCompact?: boolean;
+}) {
   if (!balance) return null;
+  const badge = status ?? { label: "", tone: "neutral" as const };
+  const titleClean = balance.title.replace(/^💳\s*/, "");
+  const fullText = balance.breakdown
+    ? `${titleClean}: ${balance.amount} (${balance.breakdown})`
+    : `${titleClean}: ${balance.amount}`;
   if (isCompact) {
     return (
-      <div className="balance-compact-row" data-balance-kind={balance.kind}>
-        <div className="balance-compact-row__left">
-          <span className="balance-compact-row__label">{balance.title}:</span>
-          <span
-            className="balance-compact-row__amount"
-            data-unavailable={balance.unavailable ? "true" : undefined}
-          >
-            {balance.amount}
-          </span>
-          {balance.breakdown ? <span className="balance-compact-row__sub">{balance.breakdown}</span> : null}
-        </div>
-        <span className="soft-badge soft-badge--reserve">正常</span>
+      <div
+        className="balance-compact-row balance-block"
+        data-balance-kind={balance.kind}
+        data-balance-state={badge.tone}
+      >
+        <Tip text={fullText} onlyOnOverflow>
+          <div className="balance-compact-row__left balance-block__head">
+            <svg
+              width="12"
+              height="12"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              style={{ flexShrink: 0, marginRight: 4, opacity: 0.7 }}
+            >
+              <rect x="2" y="5" width="20" height="14" rx="2" />
+              <line x1="2" y1="10" x2="22" y2="10" />
+            </svg>
+            <span className="balance-compact-row__label balance-block__label">{titleClean}:</span>
+            <span
+              className="balance-compact-row__amount balance-block__amount font-mono"
+              data-unavailable={balance.unavailable ? "true" : undefined}
+            >
+              {balance.amount}
+            </span>
+            {balance.breakdown ? (
+              <span className="balance-compact-row__sub balance-block__gift font-mono">({balance.breakdown})</span>
+            ) : null}
+          </div>
+        </Tip>
+        {badge.label && <span className={`soft-badge soft-badge--${badge.tone}`}>{badge.label}</span>}
       </div>
     );
   }
   return (
-    <div className="balance-block" data-balance-kind={balance.kind}>
-      <div className="balance-block__head">
-        <span>{balance.title}</span>
-      </div>
-      <div className="balance-block__body">
-        <span
-          className="balance-block__amount"
-          data-unavailable={balance.unavailable ? "true" : undefined}
-        >
-          {balance.amount}
-        </span>
-        {balance.breakdown && (
-          <span className="balance-block__sub soft-badge soft-badge--neutral">{balance.breakdown}</span>
-        )}
-      </div>
+    <div
+      className="balance-single-line balance-block"
+      data-balance-kind={balance.kind}
+      data-balance-state={badge.tone}
+    >
+      <Tip text={fullText} onlyOnOverflow>
+        <div className="balance-single-line__left balance-block__head">
+          <svg
+            width="12"
+            height="12"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            className="balance-single-line__icon"
+            style={{ flexShrink: 0, opacity: 0.7 }}
+          >
+            <rect x="2" y="5" width="20" height="14" rx="2" />
+            <line x1="2" y1="10" x2="22" y2="10" />
+          </svg>
+          <span className="balance-single-line__label balance-block__label">
+            {titleClean}
+          </span>
+          <span
+            className="balance-single-line__amount balance-block__amount font-mono"
+            data-unavailable={balance.unavailable ? "true" : undefined}
+          >
+            {balance.amount}
+          </span>
+          {balance.breakdown ? (
+            <span className="balance-single-line__sub balance-block__gift font-mono">
+              ({balance.breakdown})
+            </span>
+          ) : null}
+        </div>
+      </Tip>
+      {badge.label && <span className={`soft-badge soft-badge--${badge.tone}`}>{badge.label}</span>}
     </div>
   );
 }
@@ -570,14 +854,22 @@ function StatusBlock({ headline }: { headline: string }) {
 function condensedChipText(
   windows: CardWindowView[],
   display: QuotaDisplayContext,
+  language?: Language,
 ): string | null {
   if (windows.length === 0) return null;
+  const isZh =
+    language === "chinese" ||
+    language === "chinesetraditional" ||
+    (typeof language === "string" && language.startsWith("zh")) ||
+    windows.some((w) => /[\u4e00-\u9fa5]/.test(w.label));
   const parts = windows.map((w) => {
-    const name = w.snap.kind === "weekly" ? "周"
-      : w.snap.kind === "monthly" ? "月"
-      : w.snap.kind === "daily" ? "日"
-      : w.snap.kind === "session" ? "5h"
-      : w.label.trim();
+    let name = shortTileLabel(w.label, language);
+    if (!name || name === w.label) {
+      if (w.snap.kind === "weekly") name = isZh ? "周" : "wk";
+      else if (w.snap.kind === "monthly") name = isZh ? "月" : "mo";
+      else if (w.snap.kind === "daily") name = isZh ? "日" : "day";
+      else if (w.snap.kind === "session") name = "5h";
+    }
     return `${name}${quotaPercentDisplay(w.snap, display).rounded}%`;
   });
   return parts.join("·");
@@ -589,36 +881,56 @@ function MinimalCard({
   pace,
   display,
   hasStatus,
+  statusHeadline,
   outputSpeedText,
   balanceText,
+  balanceStatus,
   hero,
   condensedChip,
   showProviderIcon,
   hasOutputSpeed,
+  quotaMissing,
 }: {
   providerId: string;
   displayName: string;
   pace: PaceSnapshot | null;
   display: QuotaDisplayContext;
   hasStatus: boolean;
+  statusHeadline?: string | null;
   outputSpeedText: string | null;
   balanceText: string | null;
+  balanceStatus: BalanceStatus | null;
   hero: CardWindowView | null;
   condensedChip: string | null;
   showProviderIcon: boolean;
   hasOutputSpeed: boolean;
+  quotaMissing: string | null;
 }) {
-  const { t } = useLocale();
+  const { t, language } = useLocale();
+  const isZh =
+    language === "chinese" ||
+    language === "chinesetraditional" ||
+    (typeof language === "string" && language.startsWith("zh"));
   const name = displayName.split(" ")[0];
-  // Sublabel: the hero window's short cycle name, or "余额-ish" when the only
-  // reading is a balance amount we can show as the metric.
+
   const heroIsReal = hero != null && !hero.snap.isInformational;
-  const metric = heroIsReal
-    ? `${quotaPercentDisplay(hero!.snap, display).rounded}%`
-    : balanceText
-      ? balanceText
-      : null;
-  const subLabel = heroIsReal ? hero!.label : balanceText ? displayName.split(" ")[0] : "";
+  let metric: string | null = null;
+  let subLabel = "";
+
+  if (heroIsReal) {
+    metric = `${quotaPercentDisplay(hero!.snap, display).rounded}%`;
+    const short = shortTileLabel(hero!.label, language);
+    subLabel = `· ${short}`;
+  } else if (balanceText) {
+    metric = balanceText;
+    subLabel = isZh ? "· 余额" : "· Balance";
+  } else if (hasStatus) {
+    subLabel = isZh ? "· 状态" : "· Status";
+    metric = statusHeadline
+      ? `● ${statusHeadline.split(/[·\s(]/)[0]}`
+      : (isZh ? "● 就绪" : "● Ready");
+  }
+
   const hasBar = heroIsReal;
 
   // Pace badge from the hero forecast.
@@ -637,9 +949,17 @@ function MinimalCard({
       else paceBadge = `${delta.toFixed(1)}% ${paceTone === "reserve" ? t("QuotaPaceInReserve") : t("QuotaPaceInDeficit")}`;
     }
   } else {
-    // No quota window: surface the balance breakdown or a bare healthy dot.
-    const breakdown = hasStatus ? "●" : null;
+    // No quota window: surface the balance state instead of a hard-coded
+    // "normal" badge. A balance can be stale/unavailable and must say so.
+    const breakdown = balanceText && balanceStatus
+      ? `● ${balanceStatus.label}`
+      : hasStatus
+        ? "●"
+        : null;
     paceBadge = breakdown ?? null;
+    if (balanceStatus?.tone === "deficit") paceTone = "deficit";
+    else if (balanceStatus?.tone === "neutral") paceTone = "onpace";
+    else if (balanceStatus) paceTone = "reserve";
   }
 
   return (
@@ -678,8 +998,16 @@ function MinimalCard({
       )}
       <div className="minimal-streamlined__row2">
         <span className="minimal-streamlined__badges">
-          {paceBadge ? <span className={`soft-badge soft-badge--${paceTone}`}>{paceBadge}</span> : null}
-          {condensedChip ? <span className="soft-badge soft-badge--neutral">{condensedChip}</span> : null}
+          {!hero && quotaMissing ? (
+            <span className="soft-badge soft-badge--neutral minimal-streamlined__quota-missing">
+              {quotaMissing}
+            </span>
+          ) : (
+            <>
+              {paceBadge ? <span className={`soft-badge soft-badge--${paceTone}`}>{paceBadge}</span> : null}
+              {condensedChip ? <span className="soft-badge soft-badge--neutral">{condensedChip}</span> : null}
+            </>
+          )}
         </span>
         {hasOutputSpeed && outputSpeedText && (
           <span className="minimal-streamlined__speed">{outputSpeedText}</span>
@@ -730,7 +1058,28 @@ export default function TrayCard({
   const hasOutputSpeed = caps.supportsOutputSpeed;
   const hasLocalUsage = caps.supportsCharts || caps.supportsLocalCost;
 
-  const balanceInfo = useMemo(() => getProviderBalance(bridge), [bridge]);
+  const balanceInfo = useMemo(() => {
+    const fromBridgeInfo = getProviderBalance(bridge);
+    if (fromBridgeInfo.balance) return fromBridgeInfo;
+    if (core.cost) {
+      const balance = balanceFromCost(core.cost);
+      if (balance) {
+        return {
+          balance,
+          excludeWindows: new Set<BalanceWindow>(),
+          suppressPlanBadge: false,
+        };
+      }
+    }
+    return fromBridgeInfo;
+  }, [bridge, core.cost]);
+  const balanceStatus = useMemo(
+    () =>
+      balanceInfo.balance
+        ? resolveBalanceStatus(balanceInfo.balance, projection.displayState, t)
+        : null,
+    [balanceInfo.balance, projection.displayState, t],
+  );
   const views = useMemo<CardWindowView[]>(
     () =>
       projection.layers.quota.map((window) => ({
@@ -758,10 +1107,98 @@ export default function TrayCard({
 
   const localUsage = core.error ? null : chartData?.localUsage ?? null;
   const usageLead = localUsage ? resolveLocalUsageLead(localUsagePeriod, localUsage) : null;
+  const hasLocalUsageTokens = Boolean(
+    hasLocalUsage && usageLead && usageLead.tokens != null && usageLead.tokens > 0,
+  );
+
+  // G8 honesty: when the quota read failed and no window survived (no hero),
+  // the card says so instead of silently rendering a header-only shell. The
+  // reason text is the shared provider-error localization; unknown text falls
+  // through verbatim so a new backend category is never hidden.
+  const quotaUnavailableText =
+    !hero && core.error != null && core.error.trim() !== ""
+      ? localizeProviderError(core.error, t)
+      : null;
 
   const speedValid =
     outputSpeed != null && outputSpeed.tokensPerSecond != null && outputSpeed.tokensPerSecond > 0;
   const outputSpeedText = speedValid ? `${outputSpeed!.tokensPerSecond!.toFixed(1)} t/s` : null;
+  const speedFallbackText =
+    outputSpeed?.status === "generating" ? t("OutputSpeedGenerating") : "--";
+
+  const inventoryInfo = useMemo(
+    () => extractInventoryInfo(bridge, core),
+    [bridge, core],
+  );
+
+  const isZh =
+    language === "chinese" ||
+    language === "chinesetraditional" ||
+    (typeof language === "string" && language.startsWith("zh"));
+
+  const inventoryExpireText = useMemo(() => {
+    if (!inventoryInfo?.earliestExpiry) return null;
+    const formatted = formatResetDisplay({
+      resetsAt: inventoryInfo.earliestExpiry,
+      resetDescription: null,
+      relative: false,
+      t,
+      locale: localeCodeFor(language),
+    }).text;
+    return isZh ? `${formatted} 到期` : `Expires ${formatted}`;
+  }, [inventoryInfo?.earliestExpiry, t, language, isZh]);
+
+  const inventoryTipText = useMemo(() => {
+    if (!inventoryInfo) return null;
+    const count =
+      inventoryInfo.count ??
+      (inventoryInfo.expiries.length > 0 ? inventoryInfo.expiries.length : null);
+    const expiries = inventoryInfo.expiries;
+    const lines: string[] = [];
+
+    if (count != null) {
+      lines.push(
+        isZh
+          ? `${t("PanelResetCreditsTitle")} (${t("PanelResetCreditsRemaining")} ${count} ${t("PanelResetCreditsUnit")})`
+          : `${t("PanelResetCreditsTitle")} (${count} ${t("PanelResetCreditsRemaining")})`,
+      );
+    } else {
+      lines.push(t("PanelResetCreditsTitle"));
+    }
+
+    const totalRows = Math.max(count ?? 0, expiries.length);
+    if (totalRows > 0) {
+      for (let i = 0; i < totalRows; i++) {
+        const iso = expiries[i] ?? (i === 0 ? inventoryInfo.earliestExpiry : null);
+        const prefix = isZh ? `第 ${i + 1} 次` : `Credit ${i + 1}`;
+        if (iso) {
+          const formatted = formatResetDisplay({
+            resetsAt: iso,
+            resetDescription: null,
+            relative: false,
+            t,
+            locale: localeCodeFor(language),
+          }).text;
+          const timeText = isZh ? `${formatted} 到期` : `Expires ${formatted}`;
+          lines.push(`${prefix} · ${timeText}`);
+        } else {
+          lines.push(`${prefix} · ${isZh ? "未提供到期时间" : "No expiry provided"}`);
+        }
+      }
+    } else if (inventoryInfo.earliestExpiry) {
+      const formatted = formatResetDisplay({
+        resetsAt: inventoryInfo.earliestExpiry,
+        resetDescription: null,
+        relative: false,
+        t,
+        locale: localeCodeFor(language),
+      }).text;
+      const timeText = isZh ? `${formatted} 到期` : `Expires ${formatted}`;
+      lines.push(timeText);
+    }
+
+    return lines.join("\n");
+  }, [inventoryInfo, isZh, t, language]);
 
   const balanceText = balanceInfo.balance ? balanceInfo.balance.amount : null;
   const statusHeadline =
@@ -774,10 +1211,23 @@ export default function TrayCard({
   const canStatus = detail && caps.supportsStatusPage;
   const hasContext = canDashboard || canStatus;
 
-  const condensedChip = condensedChipText(
+  const resetChip =
+    inventoryInfo?.count != null
+      ? (isZh
+          ? `${inventoryInfo.count}次重置${inventoryExpireText ? `·${inventoryExpireText.replace(/ 到期$/, "")}` : ""}`
+          : `${inventoryInfo.count} credits${inventoryExpireText ? `·${inventoryExpireText.replace(/^Expires /, "")}` : ""}`)
+      : null;
+
+  const tileChip = condensedChipText(
     [secondary, ...extraTiles].filter((w): w is CardWindowView => w != null),
     display,
+    language,
   );
+  const balanceChip =
+    hero && balanceText
+      ? (isZh ? `余额 ${balanceText}` : `Bal ${balanceText}`)
+      : null;
+  const condensedChip = [tileChip, balanceChip, resetChip].filter(Boolean).join("·") || null;
 
   // Minimal tier: no card-header / card-zone split — a two-row streamlined
   // card (spec 5.4).
@@ -790,12 +1240,15 @@ export default function TrayCard({
           pace={core.pace}
           display={display}
           hasStatus={hasStatus}
+          statusHeadline={statusHeadline}
           outputSpeedText={outputSpeedText}
           balanceText={balanceText}
+          balanceStatus={balanceStatus}
           hero={hero}
           condensedChip={condensedChip}
           showProviderIcon={showProviderIcon}
           hasOutputSpeed={hasOutputSpeed}
+          quotaMissing={quotaUnavailableText}
         />
         {hasContext && (
           <div className={`context-actions${canDashboard && canStatus ? "" : " context-actions--single"}`}>
@@ -815,12 +1268,47 @@ export default function TrayCard({
     );
   }
 
+  const isRefreshing = core.displayState === "refreshing";
+  const hasError = core.error != null && core.error.trim() !== "";
+
   const updatedRaw = core.updatedAt == null ||
     Number.isNaN(Date.parse(core.updatedAt))
     ? core.updatedAt ?? ""
     : formatRelativeUpdated(Date.parse(core.updatedAt), t);
   const updatedText =
     densityMode === "compact" ? updatedRaw.replace(/更新$/, "") : updatedRaw;
+
+  let updatedContent: React.ReactNode = updatedText;
+  let updatedClass = "card-header__updated";
+  let updatedTitle: string | undefined = undefined;
+
+  if (isRefreshing) {
+    updatedClass += " is-refreshing";
+    updatedContent = (
+      <>
+        <svg className="spin" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" style={{ display: "inline-block", verticalAlign: "-1px", marginRight: 3 }}>
+          <path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/>
+          <path d="M21 3v5h-5"/>
+          <path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/>
+          <path d="M3 21v-5h5"/>
+        </svg>
+        {t("SummaryRefreshing")}
+      </>
+    );
+  } else if (hasError) {
+    updatedClass += " is-error";
+    updatedTitle = `${t("StatusUnableToGetUsage")}：${localizeProviderError(core.error!, t)}`;
+    updatedContent = (
+      <>
+        <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" style={{ display: "inline-block", verticalAlign: "-1px", marginRight: 3 }}>
+          <circle cx="12" cy="12" r="10"/>
+          <line x1="12" y1="8" x2="12" y2="12"/>
+          <line x1="12" y1="16" x2="12.01" y2="16"/>
+        </svg>
+        {t("TrayStatusError")}
+      </>
+    );
+  }
 
   const isCompact = densityMode === "compact";
   const zoneTone = isCompact ? " card-zone--compact" : "";
@@ -845,24 +1333,156 @@ export default function TrayCard({
             {showProviderIcon && (
               <ProviderIcon providerId={core.providerId} size={20} className="card-header__icon" />
             )}
-            <span className="card-header__name">{core.displayName}</span>
-            <span className="card-header__updated">{updatedText}</span>
+            <Tip text={core.displayName} onlyOnOverflow>
+              <span className="card-header__name">{core.displayName}</span>
+            </Tip>
+            <span className={updatedClass} title={updatedTitle}>{updatedContent}</span>
           </div>
       </div>
 
       <div className={`card-zone${zoneTone}`}>
-        {hero && (
-          <div className={`modular-section quota-stage${sectionClass()}`}>
-            <HeroRow
-              title={hero.label}
-              snap={hero.snap}
-              display={display}
-              pace={core.pace}
-              windowKind={hero.snap.kind}
-            />
-            {secondary && (
-              <QuotaTile label={secondary.label} snap={secondary.snap} display={display} pace={core.pace} fullWidth />
+        {(hero || balanceInfo.balance || inventoryInfo || hasStatus) && (
+          <div className="dual-pill-container quota-stage">
+            <div className="dual-pill-top">
+              {hero && (
+                <>
+                  <HeroRow
+                    title={hero.label}
+                    snap={hero.snap}
+                    display={display}
+                    pace={core.pace}
+                    windowKind={hero.snap.kind}
+                  />
+                  {secondary && (
+                    <QuotaTile label={secondary.label} snap={secondary.snap} display={display} pace={core.pace} fullWidth />
+                  )}
+                  {inventoryInfo && (
+                    inventoryTipText ? (
+                      <Tip text={inventoryTipText}>
+                        <div className="quota-inventory-line">
+                          <div className="quota-inventory-line__left">
+                            <span className="quota-inventory-line__icon">
+                              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                                <path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/>
+                                <path d="M21 3v5h-5"/>
+                                <path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/>
+                                <path d="M3 21v-5h5"/>
+                              </svg>
+                            </span>
+                            <span>{t("PanelResetCreditsTitle").replace(/次数$/, "")}</span>
+                            {inventoryInfo.count != null && (
+                              <strong className="quota-inventory-line__badge">
+                                {t("PanelResetCreditsRemaining")} {inventoryInfo.count} {t("PanelResetCreditsUnit")}
+                              </strong>
+                            )}
+                          </div>
+                          {inventoryExpireText && (
+                            <span className="quota-inventory-line__expire">{inventoryExpireText}</span>
+                          )}
+                        </div>
+                      </Tip>
+                    ) : (
+                      <div className="quota-inventory-line">
+                        <div className="quota-inventory-line__left">
+                          <span className="quota-inventory-line__icon">
+                            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                              <path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/>
+                              <path d="M21 3v5h-5"/>
+                              <path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/>
+                              <path d="M3 21v-5h5"/>
+                            </svg>
+                          </span>
+                          <span>{t("PanelResetCreditsTitle").replace(/次数$/, "")}</span>
+                          {inventoryInfo.count != null && (
+                            <strong className="quota-inventory-line__badge">
+                              {t("PanelResetCreditsRemaining")} {inventoryInfo.count} {t("PanelResetCreditsUnit")}
+                            </strong>
+                          )}
+                        </div>
+                        {inventoryExpireText && (
+                          <span className="quota-inventory-line__expire">{inventoryExpireText}</span>
+                        )}
+                      </div>
+                    )
+                  )}
+                </>
+              )}
+              {!hero && balanceInfo.balance && (
+                <BalanceBlock
+                  balance={balanceInfo.balance}
+                  status={balanceStatus}
+                  isCompact={isCompact}
+                />
+              )}
+              {!hero && !balanceInfo.balance && hasStatus && (
+                <StatusBlock headline={statusHeadline!} />
+              )}
+              {!hero && !balanceInfo.balance && !hasStatus && inventoryInfo && (
+                inventoryTipText ? (
+                  <Tip text={inventoryTipText}>
+                    <div className="quota-inventory-line">
+                      <div className="quota-inventory-line__left">
+                        <span className="quota-inventory-line__icon">
+                          <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                            <path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/>
+                            <path d="M21 3v5h-5"/>
+                            <path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/>
+                            <path d="M3 21v-5h5"/>
+                          </svg>
+                        </span>
+                        <span>{t("PanelResetCreditsTitle").replace(/次数$/, "")}</span>
+                        {inventoryInfo.count != null && (
+                          <strong className="quota-inventory-line__badge">
+                            {t("PanelResetCreditsRemaining")} {inventoryInfo.count} {t("PanelResetCreditsUnit")}
+                          </strong>
+                        )}
+                      </div>
+                      {inventoryExpireText && (
+                        <span className="quota-inventory-line__expire">{inventoryExpireText}</span>
+                      )}
+                    </div>
+                  </Tip>
+                ) : (
+                  <div className="quota-inventory-line">
+                    <div className="quota-inventory-line__left">
+                      <span className="quota-inventory-line__icon">
+                        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                          <path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/>
+                          <path d="M21 3v5h-5"/>
+                          <path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/>
+                          <path d="M3 21v-5h5"/>
+                        </svg>
+                      </span>
+                      <span>{t("PanelResetCreditsTitle").replace(/次数$/, "")}</span>
+                      {inventoryInfo.count != null && (
+                        <strong className="quota-inventory-line__badge">
+                          {t("PanelResetCreditsRemaining")} {inventoryInfo.count} {t("PanelResetCreditsUnit")}
+                        </strong>
+                      )}
+                    </div>
+                    {inventoryExpireText && (
+                      <span className="quota-inventory-line__expire">{inventoryExpireText}</span>
+                    )}
+                  </div>
+                )
+              )}
+            </div>
+            {hero && balanceInfo.balance && (
+              <div className="dual-pill-bottom">
+                <BalanceBlock
+                  balance={balanceInfo.balance}
+                  status={balanceStatus}
+                  isCompact={isCompact}
+                />
+              </div>
             )}
+          </div>
+        )}
+
+        {!hero && quotaUnavailableText && (
+          <div className={`modular-section${sectionClass()} tray-card__quota-missing`}>
+            <div className="tray-card__quota-missing-title">{t("StatusUnableToGetUsage")}</div>
+            <div className="tray-card__quota-missing-reason">{quotaUnavailableText}</div>
           </div>
         )}
 
@@ -883,68 +1503,68 @@ export default function TrayCard({
           </div>
         )}
 
-        {balanceInfo.balance && (
-          <div className={`modular-section${sectionClass()}`}>
-            <BalanceBlock provider={bridge} isCompact={isCompact} />
-          </div>
-        )}
-
-        {!hero && !balanceInfo.balance && hasStatus && (
-          <div className={`modular-section${sectionClass()}`}>
-            <StatusBlock headline={statusHeadline} />
-          </div>
-        )}
 
         {/* Unified insight footer: speed / near usage / API-value subline.
             Detailed = HTML meta-well (filled, two centered halves + note);
             compact = dual chips. Only renders when the provider actually has
             one of these capabilities — no empty slot for providers we cannot
             measure. */}
-        {hasOutputSpeed || hasLocalUsage ? (
+        {hasOutputSpeed || hasLocalUsageTokens ? (
         <div className={`modular-section${isCompact ? sectionClass() : ""}`}>
           {!isCompact ? (
             <div className="meta-well">
-              {hasOutputSpeed || hasLocalUsage ? (
+              {hasOutputSpeed || hasLocalUsageTokens ? (
               <div className="meta-well__line">
                 {hasOutputSpeed && (
                   <div className="meta-well__item">
                     <span className="meta-well__label">{t("TaskbarWidgetPreviewSpeed")}</span>
-                    <span className="meta-well__value" data-slot="speed">{outputSpeedText ?? ""}</span>
+                    <span className="meta-well__value" data-slot="speed">{outputSpeedText ?? speedFallbackText}</span>
                   </div>
                 )}
-                {hasOutputSpeed && hasLocalUsage && (
+                {hasOutputSpeed && hasLocalUsageTokens && (
                   <span className="meta-well__rule" aria-hidden="true" />
                 )}
-                {hasLocalUsage && (
-                  <div className="meta-well__item">
-                    <span className="meta-well__label">{t(usageLead ? usageLead.labelKey : "PanelSevenDayUsage").replace(/使用$/, "")}</span>
-                    <span className="meta-well__value" data-slot="usage">
-                      {usageLead && usageLead.tokens != null && usageLead.tokens > 0
-                        ? formatApproxTokens(usageLead.tokens, language)
-                        : ""}
-                    </span>
-                  </div>
+                {hasLocalUsageTokens && (
+                  <Tip
+                    text={`${t(usageLead ? usageLead.labelKey : "PanelSevenDayUsage").replace(/使用$/, "")}: ${formatApproxTokens(usageLead!.tokens!, language)} (${formatTokenCount(usageLead!.tokens!)})`}
+                    onlyOnOverflow
+                  >
+                    <div className="meta-well__item">
+                      <span className="meta-well__label">{t(usageLead ? usageLead.labelKey : "PanelSevenDayUsage").replace(/使用$/, "")}</span>
+                      <span className="meta-well__value" data-slot="usage">
+                        {formatApproxTokens(usageLead!.tokens!, language)}
+                      </span>
+                    </div>
+                  </Tip>
                 )}
               </div>
               ) : null}
-              {hasLocalUsage && usageLead && usageLead.cost != null && (
-                <div className="meta-well__note">
-                  {t("PanelApiEquivalentValue")} ≈ {formatApiEquivalentValue(usageLead.cost)}
-                  {usageLead.topModel ? ` · ${usageLead.topModel}` : ""}
-                </div>
+              {hasLocalUsageTokens && usageLead && usageLead.cost != null && (
+                <Tip
+                  text={`${t("PanelApiEquivalentValue")} ≈ ${formatApiEquivalentValue(usageLead.cost)}${usageLead.topModel ? ` · ${usageLead.topModel}` : ""}`}
+                  onlyOnOverflow
+                >
+                  <div className="meta-well__note">
+                    {t("PanelApiEquivalentValue")} ≈ {formatApiEquivalentValue(usageLead.cost)}
+                    {usageLead.topModel ? ` · ${usageLead.topModel}` : ""}
+                  </div>
+                </Tip>
               )}
             </div>
           ) : (
             <div className="compact-chips-row">
               {hasOutputSpeed && (
-                <span className="compact-chip">{t("TaskbarWidgetPreviewSpeed")} <strong>{outputSpeedText ?? ""}</strong></span>
+                <span className="compact-chip">{t("TaskbarWidgetPreviewSpeed")} <strong>{outputSpeedText ?? speedFallbackText}</strong></span>
               )}
-              {hasLocalUsage && (
-                <span className="compact-chip">{t(usageLead ? usageLead.labelKey : "PanelSevenDayUsage").replace(/使用$/, "")} <strong>
-                  {usageLead && usageLead.tokens != null && usageLead.tokens > 0
-                    ? formatCompactTokens(usageLead.tokens, language) ?? formatTokenCount(usageLead.tokens)
-                    : ""}
-                </strong></span>
+              {hasLocalUsageTokens && (
+                <Tip
+                  text={`${t(usageLead ? usageLead.labelKey : "PanelSevenDayUsage").replace(/使用$/, "")}: ${formatCompactTokens(usageLead!.tokens!, language) ?? formatTokenCount(usageLead!.tokens!)}${usageLead && usageLead.cost != null ? ` · ${t("PanelApiEquivalentValue")} ≈ ${formatApiEquivalentValue(usageLead.cost)}` : ""}`}
+                  onlyOnOverflow
+                >
+                  <span className="compact-chip">{t(usageLead ? usageLead.labelKey : "PanelSevenDayUsage").replace(/使用$/, "")} <strong>
+                    {formatCompactTokens(usageLead!.tokens!, language) ?? formatTokenCount(usageLead!.tokens!)}
+                  </strong></span>
+                </Tip>
               )}
             </div>
           )}

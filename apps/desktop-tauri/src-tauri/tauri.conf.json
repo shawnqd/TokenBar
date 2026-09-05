@@ -18,10 +18,10 @@
       {
         "label": "main",
         "title": "CodexBar Desktop",
-        "width": 496,
-        "height": 800,
+        "width": 320,
+        "height": 776,
         "minWidth": 320,
-        "minHeight": 240,
+        "minHeight": 380,
         "resizable": false,
         "decorations": false,
         "transparent": true,

@@ -79,7 +79,7 @@ interface Props {
   chartLoader?: (
     providerId: string,
     accountEmail?: string,
-  ) => Promise<ProviderChartData>;
+  ) => Promise<ProviderChartData | null>;
   cookieDomain?: string | null;
   /**
    * The detail pane is a data preview, so per TASK-018 item B it follows the
@@ -130,6 +130,9 @@ export function ProviderDetailPane({
   // never as a reason to error the whole pane. See `getProviderAuthCapabilities`.
   const [authCapabilities, setAuthCapabilities] =
     useState<ProviderAuthCapabilitiesBridge | null>(null);
+  const [authCapabilitiesState, setAuthCapabilitiesState] = useState<
+    "loading" | "ready" | "error"
+  >("loading");
   const [credentialRevision, setCredentialRevision] = useState(0);
   const [tokenProviderIds, setTokenProviderIds] = useState<Set<string>>(
     () => new Set(),
@@ -190,9 +193,15 @@ export function ProviderDetailPane({
     // registered) must never surface as a pane-wide error.
     try {
       const capabilities = await getProviderAuthCapabilities(id);
-      if (!signal?.stale) setAuthCapabilities(capabilities);
+      if (!signal?.stale) {
+        setAuthCapabilities(capabilities);
+        setAuthCapabilitiesState("ready");
+      }
     } catch {
-      if (!signal?.stale) setAuthCapabilities(null);
+      if (!signal?.stale) {
+        setAuthCapabilities(null);
+        setAuthCapabilitiesState("error");
+      }
     }
   }, []);
 
@@ -203,6 +212,7 @@ export function ProviderDetailPane({
       setRegionOptions([]);
       setCredentialStatus(null);
       setAuthCapabilities(null);
+      setAuthCapabilitiesState("loading");
       setError(null);
       setLoading(false);
       return;
@@ -214,6 +224,7 @@ export function ProviderDetailPane({
     setRegionOptions([]);
     setCredentialStatus(null);
     setAuthCapabilities(null);
+    setAuthCapabilitiesState("loading");
     setError(null);
     const signal = { stale: false };
     void load(providerId, signal);
@@ -485,6 +496,7 @@ export function ProviderDetailPane({
           dashboardUrl={detail.dashboardUrl}
           cookieDomain={cookieDomain}
           capabilities={authCapabilities}
+          capabilitiesState={authCapabilitiesState}
           credentialRevision={credentialRevision}
           credentialStatus={credentialStatus}
           busy={busy}
@@ -496,6 +508,8 @@ export function ProviderDetailPane({
           t={t}
         />
       )}
+
+      {detail?.id === "claude" && <ClaudeCreds t={t} />}
 
       {detail && hasTokenAccounts && (
         <section className="provider-detail-section">
@@ -555,7 +569,6 @@ function hasBespokeCredentials(providerId: string): boolean {
     case "vertexai":
     case "jetbrains":
     case "kiro":
-    case "claude":
     case "openaiapi":
     case "litellm":
     case "devin":
@@ -574,6 +587,7 @@ function AuthWorkspace({
   dashboardUrl,
   cookieDomain,
   capabilities,
+  capabilitiesState,
   credentialRevision,
   credentialStatus,
   busy,
@@ -588,6 +602,7 @@ function AuthWorkspace({
   dashboardUrl: string | null;
   cookieDomain: string | null;
   capabilities: ProviderAuthCapabilitiesBridge | null;
+  capabilitiesState: "loading" | "ready" | "error";
   credentialRevision: number;
   credentialStatus: CredentialStorageStatus | null;
   busy: boolean;
@@ -642,12 +657,12 @@ function AuthWorkspace({
       t={t}
     />
   ) : null;
-  const apiKeyNode = (
+  const apiKeyNode = showApiKey ? (
     <ApiKeySection
       key={`api-${providerId}-${credentialRevision}`}
       providerId={providerId}
     />
-  );
+  ) : null;
 
   // One method at a time. A provider is authenticated *one* way — cookies or a
   // browser sign-in or a CLI or an API key — so these are mutually exclusive
@@ -682,7 +697,20 @@ function AuthWorkspace({
           </p>
         ) : null}
       </div>
-      {userMethods.length > 1 && (
+      {capabilities === null ? (
+        <ProviderStatusLine
+          tone={capabilitiesState === "error" ? "error" : "loading"}
+        >
+          {capabilitiesState === "error"
+            ? "暂时无法读取认证能力，未显示可能失效的登录入口。"
+            : "正在读取真实认证能力…"}
+        </ProviderStatusLine>
+      ) : userMethods.length === 0 ? (
+        <ProviderStatusLine tone="neutral">
+          此服务商当前没有可用的登录、网页会话或 API 密钥入口。
+        </ProviderStatusLine>
+      ) : null}
+      {capabilities !== null && userMethods.length > 1 && (
         <SegmentedControl
           value={method}
           options={userMethods.map((kind) => ({
@@ -692,7 +720,8 @@ function AuthWorkspace({
           onChange={(value) => setChosen(value as UserAuthKind)}
         />
       )}
-      <div className="provider-detail-auth-primary">
+      {capabilities !== null && userMethods.length > 0 && (
+        <div className="provider-detail-auth-primary">
         {mappedBespoke === method
           ? bespokeNode
           : method === "cookie"
@@ -700,8 +729,9 @@ function AuthWorkspace({
             : method === "signIn"
               ? signInNode
               : apiKeyNode}
-      </div>
-      {showCookieSource && method === "cookie" && (
+        </div>
+      )}
+      {capabilities !== null && userMethods.length > 0 && showCookieSource && method === "cookie" && (
         <details className="provider-detail-auth-advanced">
           <summary>{t("TabAdvanced")}</summary>
           <CookieSourceSection
@@ -975,8 +1005,6 @@ function CredentialsDispatcher({
       return <JetBrainsCreds t={t} />;
     case "kiro":
       return <KiroCreds t={t} />;
-    case "claude":
-      return <ClaudeCreds t={t} />;
     case "openaiapi":
       return <OpenAiExtras providerId={providerId} t={t} />;
     case "litellm":

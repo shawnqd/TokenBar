@@ -192,6 +192,19 @@ function commitEnrichment(
   result: { ok: boolean; chartData?: ProviderChartData | null; outputSpeed?: ProviderOutputSpeed | null },
 ): void {
   assertTestRuntime("commitEnrichment");
+  commitRuntimeEnrichment(kind, key, result);
+}
+
+/**
+ * Production commit path for the app-runtime enrichment runner. Only the
+ * runtime wiring (appRuntime) may call this — surfaces stay read-only
+ * consumers of the committed entries.
+ */
+function commitRuntimeEnrichment(
+  kind: EnrichmentKind,
+  key: UsageStoreKey,
+  result: { ok: boolean; chartData?: ProviderChartData | null; outputSpeed?: ProviderOutputSpeed | null },
+): void {
   const id = `${kind}::${usageStoreKey(key)}`;
   enrichByKey.set(id, {
     kind,
@@ -234,6 +247,17 @@ function speedCapableKeys(): UsageStoreKey[] {
     .map((record) => record.key);
 }
 
+/** Provider keys whose record declares chart or local-cost capability. */
+function chartCapableKeys(): UsageStoreKey[] {
+  return listRecords()
+    .filter(
+      (record) =>
+        record.snapshot?.capabilities.supportsCharts === true ||
+        record.snapshot?.capabilities.supportsLocalCost === true,
+    )
+    .map((record) => record.key);
+}
+
 /** Push a snapshot directly into the store (tests / cache seeding). */
 function seed(snapshot: ProviderSnapshot): UsageRecord {
   assertTestRuntime("seed");
@@ -262,12 +286,15 @@ export const trayCoreStore = {
   getEnrichmentRunner,
   triggerEnrichment,
   commitEnrichment,
+  commitRuntimeEnrichment,
   getChartData,
   latestOutputSpeedFor,
   speedCapableKeys,
+  chartCapableKeys,
   seed,
   resetForTest,
 };
+
 
 /* ── React selectors / commands ─────────────────────────────────────── */
 

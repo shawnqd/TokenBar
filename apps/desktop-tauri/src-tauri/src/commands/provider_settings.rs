@@ -136,6 +136,10 @@ pub(crate) fn provider_region_lookup(settings: &Settings, provider_id: &str) -> 
             ))
             .settings_value()
             .to_string()
+        } else if id == codexbar::core::ProviderId::Zai {
+            codexbar::providers::ZaiRegion::from_settings_value(Some(settings.api_region(id)))
+                .settings_value()
+                .to_string()
         } else {
             settings.api_region(id).to_string()
         }
@@ -149,7 +153,18 @@ pub(crate) fn provider_region_set(
 ) -> Result<(), String> {
     let id = region_provider(provider_id)
         .ok_or_else(|| format!("Provider '{provider_id}' does not have a region picker"))?;
-    settings.set_api_region(id, region);
+    let stored = if id == codexbar::core::ProviderId::Zai {
+        codexbar::providers::ZaiRegion::from_settings_value(Some(&region))
+            .settings_value()
+            .to_string()
+    } else if id == codexbar::core::ProviderId::MiniMax {
+        codexbar::providers::MiniMaxProvider::region_from_settings(Some(&region))
+            .settings_value()
+            .to_string()
+    } else {
+        region
+    };
+    settings.set_api_region(id, stored);
     Ok(())
 }
 
@@ -467,16 +482,13 @@ pub fn region_options_for(provider_id: &str) -> Vec<RegionOption> {
                 label: region.display_name().to_string(),
             })
             .collect(),
-        "zai" => vec![
-            RegionOption {
-                value: "global".to_string(),
-                label: "Global".to_string(),
-            },
-            RegionOption {
-                value: "china".to_string(),
-                label: "China Mainland (BigModel)".to_string(),
-            },
-        ],
+        "zai" => codexbar::providers::ZaiRegion::ALL
+            .iter()
+            .map(|region| RegionOption {
+                value: region.settings_value().to_string(),
+                label: region.display_name().to_string(),
+            })
+            .collect(),
         "minimax" => vec![
             RegionOption {
                 value: "global".to_string(),
@@ -533,6 +545,20 @@ pub struct ProviderAuthCapabilities {
     /// `ProviderId::cookie_domain()` is `Some` — browser cookie import is
     /// offered for this provider.
     pub has_cookie_domain: bool,
+    /// Stable identifier for a login command that the Tauri shell can really
+    /// execute. CLI support alone may only mean that an existing local session
+    /// can be probed, so it must not create a fake "打开登录" button.
+    pub login_flow: Option<&'static str>,
+}
+
+pub(crate) fn provider_login_flow(id: ProviderId) -> Option<&'static str> {
+    match id {
+        ProviderId::Codex => Some("codex_cli"),
+        ProviderId::Claude => Some("claude_cli"),
+        ProviderId::Gemini => Some("gemini_cli"),
+        ProviderId::Copilot => Some("copilot_device"),
+        _ => None,
+    }
 }
 
 #[tauri::command]
@@ -550,6 +576,7 @@ pub fn get_provider_auth_capabilities(
         supports_web: provider.supports_web(),
         supports_api_key,
         has_cookie_domain: id.cookie_domain().is_some(),
+        login_flow: provider_login_flow(id),
     })
 }
 
@@ -564,6 +591,7 @@ mod auth_capability_tests {
         assert!(caps.supports_cli);
         assert!(!caps.supports_web);
         assert!(caps.has_cookie_domain);
+        assert_eq!(caps.login_flow, Some("codex_cli"));
     }
 
     #[test]
@@ -574,6 +602,7 @@ mod auth_capability_tests {
         assert!(!caps.supports_cli);
         assert!(caps.supports_web);
         assert!(caps.has_cookie_domain);
+        assert_eq!(caps.login_flow, None);
     }
 
     #[test]

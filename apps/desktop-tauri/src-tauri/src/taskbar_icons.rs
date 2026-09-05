@@ -65,9 +65,9 @@ use windows::Win32::Graphics::Direct2D::Common::{
     D2D_SIZE_U, D2D_RECT_F,
 };
 use windows::Win32::Graphics::Direct2D::{
-    D2D1_BITMAP_INTERPOLATION_MODE_LINEAR, D2D1_BITMAP_PROPERTIES,
-    D2D1_QUADRATIC_BEZIER_SEGMENT, D2D1_ROUNDED_RECT, ID2D1Bitmap, ID2D1DCRenderTarget,
-    ID2D1Factory, ID2D1GeometrySink, ID2D1PathGeometry,
+    D2D1_BITMAP_INTERPOLATION_MODE_LINEAR, D2D1_BITMAP_INTERPOLATION_MODE_NEAREST_NEIGHBOR,
+    D2D1_BITMAP_PROPERTIES, D2D1_QUADRATIC_BEZIER_SEGMENT, D2D1_ROUNDED_RECT, ID2D1Bitmap,
+    ID2D1DCRenderTarget, ID2D1Factory, ID2D1GeometrySink, ID2D1PathGeometry,
 };
 use windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_B8G8R8A8_UNORM;
 
@@ -97,6 +97,18 @@ impl IconStyle {
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct IconSlot { pub left: f32, pub top: f32, pub size_px: f32 }
+
+/// Snap the slot onto whole device pixels so `DrawBitmap` is 1:1.
+///
+/// A 14 DIP icon at 125% DPI is 17.5 px. Rasterising at 18 and stretching
+/// back to 17.5 with linear filtering is what made the strip logos look soft.
+pub fn snap_slot(slot: IconSlot) -> IconSlot {
+    IconSlot {
+        left: slot.left.round(),
+        top: slot.top.round(),
+        size_px: slot.size_px.round().max(1.0),
+    }
+}
 
 
 pub fn is_grok(provider_id: &str) -> bool { provider_id.eq_ignore_ascii_case("grok") }
@@ -751,6 +763,7 @@ pub fn draw_icon(
     style: IconStyle,
     slot: IconSlot,
 ) -> bool {
+    let slot = snap_slot(slot);
     let Some(rendered) = rendered_logo(provider_id, style, slot.size_px) else { return false; };
     // Create the bitmap before painting anything: if the target rejects the
     // buffer we return false and the caller paints the glyph fallback (with
@@ -790,7 +803,14 @@ pub fn draw_icon(
         left: slot.left, top: slot.top,
         right: slot.left + slot_size, bottom: slot.top + slot_size,
     };
-    unsafe { target.DrawBitmap(&bitmap, Some(&dest), 1.0, D2D1_BITMAP_INTERPOLATION_MODE_LINEAR, None) };
+    // 1:1 device-pixel blit. Linear filtering of an already-snapped bitmap
+    // reintroduces the blur this snap exists to avoid.
+    let filter = if rendered.size_px as f32 == slot_size {
+        D2D1_BITMAP_INTERPOLATION_MODE_NEAREST_NEIGHBOR
+    } else {
+        D2D1_BITMAP_INTERPOLATION_MODE_LINEAR
+    };
+    unsafe { target.DrawBitmap(&bitmap, Some(&dest), 1.0, filter, None) };
     true
 }
 
@@ -804,6 +824,16 @@ mod tests {
             Seg::Move(_) => "M", Seg::Line(_) => "L", Seg::Cubic { .. } => "C",
             Seg::Quad { .. } => "Q", Seg::Arc(_) => "A", Seg::Close => "Z",
         }).collect()
+    }
+
+    #[test]
+    fn snap_slot_rounds_to_whole_device_pixels() {
+        let snapped = snap_slot(IconSlot { left: 10.4, top: 3.6, size_px: 17.5 });
+        assert_eq!(snapped.left, 10.0);
+        assert_eq!(snapped.top, 4.0);
+        assert_eq!(snapped.size_px, 18.0);
+        let already = snap_slot(IconSlot { left: 8.0, top: 2.0, size_px: 14.0 });
+        assert_eq!(already, IconSlot { left: 8.0, top: 2.0, size_px: 14.0 });
     }
 
     #[test]

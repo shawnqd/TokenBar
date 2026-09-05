@@ -5,6 +5,7 @@ import {
   userFacingAuthMethods,
   type UserAuthKind,
 } from "../providers/authEntries";
+import type { ProviderAuthCapabilitiesBridge } from "../../../types/bridge";
 
 export type AuthMethod = UserAuthKind;
 export type QuotaKind =
@@ -78,15 +79,13 @@ const COOKIE_DOMAIN: Record<string, string> = {
   sakana: "console.sakana.ai",
 };
 
-const SIGN_IN = new Set([
-  "codex",
-  "gemini",
-  "antigravity",
-  "jetbrains",
-  "kiro",
-]);
+// Preview-only fallback. Runtime pages replace this with the Rust capability
+// report; a dashboard URL alone is never treated as a login action.
+const LOGIN_FLOW = new Set(["codex", "gemini", "copilot"]);
 
-const BESPOKE = new Set(["claude", "gemini", "jetbrains", "kiro"]);
+// Claude's bespoke control is only a keychain preference, not its login
+// mechanism; keep the real browser/CLI choices visible for it.
+const BESPOKE = new Set(["gemini", "jetbrains", "kiro"]);
 const TOKEN_ACCOUNTS = new Set(["claude", "cursor"]);
 const BUY = new Set(["deepseek"]);
 const HISTORY = new Set(["codex"]);
@@ -100,16 +99,34 @@ const REGION: Record<string, string> = {
 // real API keys / cookies / login state from the backend instead of pretending
 // a provider is already configured.
 
-function methodsFor(id: string): AuthMethod[] {
+function methodsFor(
+  id: string,
+  runtimeCapabilities?: ProviderAuthCapabilitiesBridge | null,
+  runtime = false,
+): AuthMethod[] {
+  if (runtime) {
+    if (!runtimeCapabilities) return [];
+    const decision = resolveAuthEntries({
+      providerId: id,
+      cookieDomain: COOKIE_DOMAIN[id] ?? null,
+      dashboardUrl: null,
+      capabilities: runtimeCapabilities,
+      isBespoke: BESPOKE.has(id),
+    });
+    return userFacingAuthMethods(decision.methods, id);
+  }
   const cookieDomain = COOKIE_DOMAIN[id] ?? null;
   const decision = resolveAuthEntries({
     providerId: id,
     cookieDomain,
-    dashboardUrl: SIGN_IN.has(id) ? "https://example.invalid" : null,
+    dashboardUrl: null,
     capabilities: {
-      supportsOAuth: SIGN_IN.has(id),
-      supportsCli: SIGN_IN.has(id),
+      supportsOAuth: LOGIN_FLOW.has(id),
+      supportsCli: LOGIN_FLOW.has(id),
       supportsApiKey: true,
+      // HTML 原型只覆盖有网页会话的 provider;无能力者由真实桥接能力驱动。
+      supportsWeb: true,
+      loginFlow: LOGIN_FLOW.has(id) ? `${id}_login` : null,
     },
     isBespoke: BESPOKE.has(id),
   });
@@ -120,8 +137,10 @@ function buildProvider(
   id: string,
   name: string,
   enabled: boolean,
+  runtimeCapabilities?: ProviderAuthCapabilitiesBridge | null,
+  runtime = false,
 ): FixtureProvider {
-  const methods = methodsFor(id);
+  const methods = methodsFor(id, runtimeCapabilities, runtime);
   const icon = getProviderIcon(id);
   return {
     id,
@@ -135,7 +154,7 @@ function buildProvider(
     plan: null,
     methods,
     primary: methods[0] ?? "apiKey",
-    hasDash: Boolean(COOKIE_DOMAIN[id] || SIGN_IN.has(id)),
+    hasDash: Boolean(COOKIE_DOMAIN[id] || LOGIN_FLOW.has(id)),
     hasStatus: id === "azureopenai" || id === "gemini" || id === "claude",
     hasBuy: BUY.has(id),
     hasToken: TOKEN_ACCOUNTS.has(id),
@@ -154,13 +173,23 @@ export function buildProviderCatalog(
   catalog?: Array<{ id: string; displayName: string }>,
   enabledIds: string[] = [],
   orderIds: string[] = [],
+  runtimeCapabilitiesById?: Record<string, ProviderAuthCapabilitiesBridge | null>,
 ): FixtureProvider[] {
   const source =
     catalog && catalog.length > 0
       ? catalog.map((row) => [row.id, row.displayName] as const)
       : TEST_PROVIDER_CATALOG;
   const byId = new Map(
-    source.map(([id, name]) => [id, buildProvider(id, name, enabledIds.includes(id))]),
+    source.map(([id, name]) => [
+      id,
+      buildProvider(
+        id,
+        name,
+        enabledIds.includes(id),
+        runtimeCapabilitiesById?.[id],
+        runtimeCapabilitiesById !== undefined,
+      ),
+    ]),
   );
   const seen = new Set<string>();
   const ordered: FixtureProvider[] = [];

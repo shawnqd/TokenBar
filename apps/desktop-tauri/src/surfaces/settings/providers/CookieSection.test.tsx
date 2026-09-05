@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { LocaleProvider } from "../../../i18n/LocaleProvider";
 import { buildBundle } from "../../../test/localeHarness";
@@ -12,9 +12,6 @@ const tauriMocks = vi.hoisted(() => ({
   getManualCookies: vi.fn(),
   setManualCookie: vi.fn(),
   removeManualCookie: vi.fn(),
-  openProviderLogin: vi.fn(),
-  captureProviderLogin: vi.fn(),
-  closeProviderLogin: vi.fn(),
   invokeSurfaceAction: vi.fn(),
 }));
 
@@ -25,16 +22,6 @@ vi.mock("../../../lib/tauri", async (importOriginal) => ({
   ...tauriMocks,
 }));
 vi.mock("@tauri-apps/api/event", () => eventMocks);
-
-function savedCookie(providerId = "cursor") {
-  return { providerId, provider: "Cursor", savedAt: "2026-08-02 10:00" };
-}
-
-async function click(element: HTMLElement) {
-  await act(async () => {
-    fireEvent.click(element);
-  });
-}
 
 function renderSection(providerId = "cursor") {
   return render(
@@ -64,99 +51,23 @@ describe("CookieSection", () => {
     );
   });
 
-  /**
-   * The reason this component gained a login path at all: pasting a Cookie
-   * header by hand was the only way to read a web-only quota once Chrome's
-   * App-Bound Encryption blocked automatic browser extraction.
-   */
-  it("offers signing in as well as pasting a cookie", async () => {
+  it("keeps automatic browser cookies as the primary path", async () => {
     renderSection();
 
-    expect(await screen.findByText("ProviderLoginOpen")).toBeInTheDocument();
+    expect(await screen.findByText("BrowserCookieImportHint")).toBeInTheDocument();
+    expect(screen.queryByText("ProviderLoginOpen")).not.toBeInTheDocument();
+    expect(screen.queryByText("ProviderLoginCapture")).not.toBeInTheDocument();
     expect(screen.getByText("BrowserCookieSave")).toBeInTheDocument();
   });
 
-  /**
-   * Capture is a button, not a poll. Only the user knows when the provider's
-   * own flow — SSO, a second factor, an org picker — has finished, so the
-   * import controls stay hidden until a window is actually open.
-   */
-  it("does not offer to import a session before a window is open", async () => {
+  it("places manual cookie entry behind the advanced disclosure", async () => {
     renderSection();
 
-    await screen.findByText("ProviderLoginOpen");
-    expect(screen.queryByText("ProviderLoginCapture")).not.toBeInTheDocument();
-  });
-
-  it("stores the session the login window captured", async () => {
-    tauriMocks.invokeSurfaceAction.mockImplementation(async (action: { type: string }) => {
-      if (action.type === "captureProviderLogin") {
-        tauriMocks.getManualCookies.mockResolvedValue([savedCookie()]);
-      }
-      return "ok";
-    });
-
-    renderSection();
-
-    await click(await screen.findByText("ProviderLoginOpen"));
-    await click(await screen.findByText("ProviderLoginCapture"));
-
-    await waitFor(() =>
-      expect(tauriMocks.invokeSurfaceAction).toHaveBeenCalledWith({
-        type: "captureProviderLogin",
-        target: { kind: "provider", providerId: "cursor" },
-      }),
-    );
-    expect(await screen.findByText("BrowserCookieSavedBadge")).toBeInTheDocument();
-    expect(screen.queryByText("ProviderLoginCapture")).not.toBeInTheDocument();
-  });
-
-  /**
-   * Capturing too early is the expected mistake, and the window holds the
-   * half-finished sign-in. Closing it on failure would throw that away and
-   * force the user to start over.
-   */
-  it("keeps the window open when capture finds no session yet", async () => {
-    tauriMocks.invokeSurfaceAction.mockImplementation(async (action: { type: string }) => {
-      if (action.type === "captureProviderLogin") {
-        throw new Error("No Cursor session found yet.");
-      }
-      return "ok";
-    });
-
-    renderSection();
-
-    await click(await screen.findByText("ProviderLoginOpen"));
-    await click(await screen.findByText("ProviderLoginCapture"));
-
-    expect(
-      await screen.findByText("No Cursor session found yet."),
-    ).toBeInTheDocument();
-    expect(screen.getByText("ProviderLoginCapture")).toBeInTheDocument();
-  });
-
-  /**
-   * A window left open while the user clicks through to another provider would
-   * be signed in to the wrong account by the time capture runs.
-   */
-  it("closes any login window when the selected provider changes", async () => {
-    const { rerender } = renderSection();
-    await screen.findByText("ProviderLoginOpen");
-    // Mounting also clears any stale window, so only calls made *after* this
-    // point prove the provider switch itself did the closing.
-    tauriMocks.invokeSurfaceAction.mockClear();
-
-    rerender(
-      <LocaleProvider>
-        <CookieSection providerId="claude" cookieDomain="claude.ai" />
-      </LocaleProvider>,
-    );
-
-    await waitFor(() =>
-      expect(tauriMocks.invokeSurfaceAction).toHaveBeenCalledWith({
-        type: "closeProviderLogin",
-        target: { kind: "summary" },
-      }),
-    );
+    expect(await screen.findByText("TabAdvanced")).toBeInTheDocument();
+    const details = screen.getByText("TabAdvanced").closest("details");
+    expect(details).not.toBeNull();
+    expect(details?.open).toBe(false);
+    fireEvent.click(screen.getByText("TabAdvanced"));
+    expect(details?.open).toBe(true);
   });
 });

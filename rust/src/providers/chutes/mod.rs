@@ -140,7 +140,8 @@ fn percent_from_object(map: &serde_json::Map<String, Value>) -> Option<f64> {
         "percentUsed",
     ] {
         if let Some(v) = map.get(key).and_then(Value::as_f64) {
-            return Some(if v <= 1.0 { v * 100.0 } else { v });
+            // Percent fields are already scaled 0–100; do not guess fractions.
+            return Some(v);
         }
     }
     let used = ["used", "usage", "current_usage", "currentUsage"]

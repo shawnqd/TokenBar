@@ -273,7 +273,7 @@ function providerSidebarMetricFromCore(
   if (!snap) return undefined;
   const proj = projectSurface(snap, { showAsUsed });
   if (proj.primary) {
-    if (proj.primary.fillPercent != null) return `${Math.round(proj.primary.fillPercent)}%`;
+    if (proj.primary.fillPercent != null) return `${Number(proj.primary.fillPercent.toFixed(1))}%`;
   }
   if (proj.balance) return proj.balance.amountText;
   return undefined;

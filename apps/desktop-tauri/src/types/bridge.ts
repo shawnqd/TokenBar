@@ -616,6 +616,8 @@ export interface ProviderUsageSnapshot {
      * 100%-remaining bar.
      */
     usageKnown?: boolean;
+    /** Soonest-first RFC3339 expiry times for Codex reset credits. */
+    inventoryExpiresAt?: string[];
   }>;
   cost: CostSnapshotBridge | null;
   planName: string | null;
@@ -943,6 +945,8 @@ export interface ProviderDetail {
     /** False when the provider published the window without a known remaining
      *  fraction; render as unavailable, never as a 100%-remaining bar. */
     usageKnown?: boolean;
+    /** Soonest-first RFC3339 expiry times for Codex reset credits. */
+    inventoryExpiresAt?: string[];
   }>;
 
   cost: CostSnapshotBridge | null;
@@ -953,6 +957,8 @@ export interface ProviderDetail {
   dashboardUrl: string | null;
   statusPageUrl: string | null;
   buyCreditsUrl: string | null;
+  /** Stable id for a real login runner; dashboardUrl is not sufficient. */
+  loginFlow?: string | null;
 
   hasSnapshot: boolean;
 
@@ -988,6 +994,8 @@ export interface ProviderAuthCapabilitiesBridge {
   supportsWeb: boolean;
   supportsApiKey: boolean;
   hasCookieDomain: boolean;
+  /** A real executable login flow; absent when the provider only supports probing. */
+  loginFlow?: string | null;
 }
 
 // ── Phase 6d — credential detection ──────────────────────────────────

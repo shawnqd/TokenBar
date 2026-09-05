@@ -123,7 +123,7 @@ pub use vertexai::VertexAIProvider;
 pub use warp::WarpProvider;
 pub use wayfinder::WayfinderProvider;
 pub use windsurf::WindsurfProvider;
-pub use zai::ZaiProvider;
+pub use zai::{ZaiProvider, ZaiRegion};
 pub use zed::ZedProvider;
 
 pub(crate) fn browser_cookie_header(

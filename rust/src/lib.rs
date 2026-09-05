@@ -13,6 +13,7 @@ pub mod logging;
 pub mod login;
 pub mod notifications;
 pub mod providers;
+pub mod scan_cache;
 pub mod secure_file;
 pub mod settings;
 pub mod shortcuts;

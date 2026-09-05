@@ -172,6 +172,11 @@ export function closeSettingsWindow(): Promise<void> {
   return invoke<void>("close_settings_window");
 }
 
+/** Titlebar minus: native minimize (DWM zoom + taskbar icon bounce). */
+export function minimizeSettingsWindow(): Promise<void> {
+  return invoke<void>("minimize_settings_window");
+}
+
 export function getCurrentSurfaceMode(): Promise<SurfaceMode> {
   return invoke<SurfaceMode>("get_current_surface_mode");
 }
@@ -439,6 +444,10 @@ export function getProviderCookieSourceOptions(
 
 export function getProviderRegionOptions(providerId: string): Promise<RegionOption[]> {
   return invoke<RegionOption[]>("get_provider_region_options", { providerId });
+}
+
+export function getProviderRegion(providerId: string): Promise<string | null> {
+  return invoke<string | null>("get_provider_region", { providerId });
 }
 
 /**

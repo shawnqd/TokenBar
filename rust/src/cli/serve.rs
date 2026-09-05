@@ -136,6 +136,16 @@ async fn cost_response(provider: Option<&str>) -> String {
                     "cached": summary.cached_tokens
                 },
                 "sessions_count": summary.sessions_count,
+                "quality": {
+                    "history_coverage_established": summary.history_coverage_established,
+                    "known_zero": summary.known_zero,
+                    "model_pricing_completeness": if summary.model_pricing_completeness.is_complete() {
+                        "complete"
+                    } else {
+                        "partial"
+                    },
+                    "unpriced_models": summary.model_pricing_completeness.unpriced_models()
+                },
                 "by_model": summary.by_model,
             }));
         } else {

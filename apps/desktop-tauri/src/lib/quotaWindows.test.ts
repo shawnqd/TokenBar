@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { windowByKind } from "./quotaWindows";
+import {
+  isResetCreditsExtra,
+  parseResetCreditsCount,
+  windowByKind,
+} from "./quotaWindows";
 import type {
   ProviderUsageSnapshot,
   QuotaCycleKind,
@@ -207,6 +211,18 @@ describe("windowByKind", () => {
       // The reset-credit row is not a cycle and must not answer to any.
       expect(windowByKind(withResetCredits, "session")).toBeNull();
       expect(windowByKind(withResetCredits, "monthly")).toBeNull();
+    });
+
+    it("parses reset-credit remaining counts from the carrier description", () => {
+      expect(parseResetCreditsCount("2 reset credits available")).toBe(2);
+      expect(parseResetCreditsCount("1 reset credit available")).toBe(1);
+      expect(parseResetCreditsCount("weekly 12%")).toBeNull();
+      expect(
+        isResetCreditsExtra({
+          id: "reset-credits",
+          window: rateWindow(null, { resetDescription: "2 reset credits available" }),
+        }),
+      ).toBe(true);
     });
 
     /**

@@ -50,9 +50,12 @@ describe("projectSurface", () => {
     const projection = projectSurface(FIXTURE_SNAPSHOTS.antigravityInformational);
     expect(projection.primary?.id).toBe("gemini-session");
     expect(projection.primary?.fillPercent).toBe(22);
-    expect(projection.secondary?.id).toBe("claude-session");
+    // Family-major order: the Gemini 5h+weekly pair stays together and the
+    // Claude pair follows — the tray reads these as grouped pairs like the
+    // official Antigravity Models screen, not as a global cycle sort.
+    expect(projection.secondary?.id).toBe("gemini-weekly");
     expect(projection.extras.map((window) => window.id)).toEqual([
-      "gemini-weekly",
+      "claude-session",
       "claude-weekly",
     ]);
     const all = [
@@ -173,5 +176,66 @@ describe("projectSurface", () => {
       expect(cell).toHaveProperty("state");
       expect(cell.value.includes(" ")).toBe(false);
     }
+  });
+
+  it("keeps Gemini pair on top and Claude/GPT pair in extras with live titles containing slashes", () => {
+    const liveModel = {
+      providerId: "antigravity",
+      displayName: "Antigravity",
+      primary: {
+        kind: "unknown" as const,
+        usedPercent: 0,
+        isInformational: true,
+      },
+      extraRateWindows: [
+        {
+          id: "antigravity-quota-summary-gemini-5-hour",
+          title: "Gemini 5-hour",
+          usageKnown: true,
+          window: {
+            kind: "session" as const,
+            windowMinutes: 300,
+            usedPercent: 23.6,
+          },
+        },
+        {
+          id: "antigravity-quota-summary-gemini-weekly",
+          title: "Gemini weekly",
+          usageKnown: true,
+          window: {
+            kind: "weekly" as const,
+            windowMinutes: 10080,
+            usedPercent: 20.6,
+          },
+        },
+        {
+          id: "antigravity-quota-summary-claude-gpt-5-hour",
+          title: "Claude/GPT 5-hour",
+          usageKnown: true,
+          window: {
+            kind: "session" as const,
+            windowMinutes: 300,
+            usedPercent: 0,
+          },
+        },
+        {
+          id: "antigravity-quota-summary-claude-gpt-weekly",
+          title: "Claude/GPT weekly",
+          usageKnown: true,
+          window: {
+            kind: "weekly" as const,
+            windowMinutes: 10080,
+            usedPercent: 33.5,
+          },
+        },
+      ],
+    };
+    const projection = projectSurface(fromBridge(liveModel as any));
+    expect(projection.primary?.label).toBe("Gemini 5-hour");
+    expect(projection.secondary?.label).toBe("Gemini weekly");
+    expect(projection.extras.map((w) => w.label)).toEqual([
+      "Claude/GPT 5-hour",
+      "Claude/GPT weekly",
+    ]);
   });
 });

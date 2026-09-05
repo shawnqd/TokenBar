@@ -82,9 +82,10 @@ impl ResolvedEntry {
 /// Balance providers have no structured field for this: each stuffs a
 /// human-readable string into a rate window's `reset_description`, which is
 /// semantically meant for reset text — DeepSeek uses `primary`, MiMo uses
-/// `secondary`. Rather than hardcode that per-provider map (which drifts every
-/// time a provider is added), every window is scanned and the first one whose
-/// description is shaped like money wins.
+/// `secondary`, and z.ai/BigModel CN uses an informational extra row. Rather
+/// than hardcode that per-provider map (which drifts every time a provider is
+/// added), every bridge window is scanned and the first one whose description
+/// is shaped like money wins.
 ///
 /// Only the leading amount is kept. The full text is
 /// `"¥38.88 (Paid: ¥38.88 / Granted: ¥0.00)"`; a strip cell has room for the
@@ -98,13 +99,21 @@ pub fn balance_amount(snapshot: &ProviderUsageSnapshot) -> Option<String> {
     let windows = [
         Some(&snapshot.primary),
         snapshot.secondary.as_ref(),
+        snapshot.model_specific.as_ref(),
         snapshot.tertiary.as_ref(),
     ];
-    windows
+    let slot_amount = windows
         .into_iter()
         .flatten()
         .filter_map(|w| w.reset_description.as_deref())
-        .find_map(parse_balance_amount)
+        .find_map(parse_balance_amount);
+    slot_amount.or_else(|| {
+        snapshot
+            .extra_rate_windows
+            .iter()
+            .filter_map(|named| named.window.reset_description.as_deref())
+            .find_map(parse_balance_amount)
+    })
 }
 
 fn parse_balance_amount(raw: &str) -> Option<String> {
@@ -119,7 +128,7 @@ fn parse_balance_amount(raw: &str) -> Option<String> {
     }
 
     // The amount is the leading token, before the "(Paid: …)" breakdown, an
-    // em-dash aside, or a trailing " balance".
+    // em-dash aside, or a trailing " balance"/" available" transport suffix.
     let mut head = text;
     for cut in ['(', '（'] {
         if let Some(index) = head.find(cut) {
@@ -129,8 +138,12 @@ fn parse_balance_amount(raw: &str) -> Option<String> {
     if let Some(index) = head.find(" — ") {
         head = &head[..index];
     }
-    if let Some(index) = head.to_ascii_lowercase().find(" balance") {
-        head = &head[..index];
+    let lower_head = head.to_ascii_lowercase();
+    for suffix in [" available balance", " balance", " available"] {
+        if let Some(index) = lower_head.find(suffix) {
+            head = &head[..index];
+            break;
+        }
     }
     let head = head.trim().trim_start_matches("CNY").trim();
 
@@ -235,6 +248,7 @@ fn primary_window(snapshot: &ProviderUsageSnapshot) -> Option<&RateWindowSnapsho
 fn real_windows(snapshot: &ProviderUsageSnapshot) -> Vec<&RateWindowSnapshot> {
     let mut all: Vec<&RateWindowSnapshot> = vec![&snapshot.primary];
     all.extend(snapshot.secondary.as_ref());
+    all.extend(snapshot.model_specific.as_ref());
     all.extend(snapshot.tertiary.as_ref());
     all.extend(snapshot.extra_rate_windows.iter().map(|extra| &extra.window));
     all.retain(|window| !window.is_informational);
@@ -636,6 +650,10 @@ mod tests {
             parse_balance_amount("12.50 CNY balance (Paid: 8.25 CNY / Granted: 4.25 CNY)").as_deref(),
             Some("12.50 CNY")
         );
+        assert_eq!(
+            parse_balance_amount("¥12.50 available").as_deref(),
+            Some("¥12.50")
+        );
         // Full-width yen normalises to the same symbol the rest of the UI uses.
         assert_eq!(parse_balance_amount("\u{ffe5}5.00 balance").as_deref(), Some("\u{a5}5.00"));
 
@@ -647,6 +665,34 @@ mod tests {
         // A bare count with no currency is far likelier to be tokens than money.
         assert_eq!(parse_balance_amount("120000"), None);
         assert_eq!(parse_balance_amount(""), None);
+    }
+
+    #[test]
+    fn balance_entry_reads_an_informational_extra_window() {
+        let mut snap = snapshot("zai", "GLM (BigModel CN)");
+        snap.primary = window(0.0, None);
+        snap.primary.is_informational = true;
+        snap.secondary = None;
+        snap.model_specific = None;
+        snap.tertiary = None;
+        let mut extra = window(0.0, None);
+        extra.reset_description = Some("¥12.50 available".into());
+        extra.is_informational = true;
+        snap.extra_rate_windows = vec![crate::commands::NamedRateWindowSnapshot {
+            id: "zai-account-balance".into(),
+            title: "Account balance".into(),
+            window: extra,
+            usage_known: false,
+            inventory_expires_at: Vec::new(),
+        }];
+
+        assert_eq!(balance_amount(&snap).as_deref(), Some("¥12.50"));
+        assert_eq!(available_windows(&snap, false), vec!["balance"]);
+
+        let out = resolve_one(snap, "balance");
+        assert_eq!(out.amount.as_deref(), Some("¥12.50"));
+        assert_eq!(out.percent, None);
+        assert_eq!(out.unavailable, None);
     }
 
     /// What the composer's dropdown is built from. A provider that publishes
@@ -671,6 +717,18 @@ mod tests {
         // NOT "primary": its 0% window is a balance carrier, and printing that 0%
         // would be a fabricated measurement.
         assert_eq!(available_windows(&deepseek, false), vec!["balance"]);
+    }
+
+    #[test]
+    fn model_specific_windows_join_the_shared_availability_and_resolver() {
+        let mut snap = snapshot("cursor", "Cursor");
+        snap.secondary = None;
+        snap.model_specific = Some(window(30.0, Some(10080)));
+
+        assert_eq!(available_windows(&snap, false), vec!["session", "weekly"]);
+        let out = resolve_one(snap, "weekly");
+        assert_eq!(out.percent, Some(30.0));
+        assert_eq!(out.unavailable, None);
     }
 
     /// The menu and the strip must never disagree: every kind offered has to

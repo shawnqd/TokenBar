@@ -631,9 +631,12 @@ pub fn get_cookies_for_domain(domain: &str) -> Result<Vec<Cookie>, CookieError> 
         return Err(CookieError::BrowserNotInstalled);
     }
 
-    // Track whether any browser raised an App-Bound Encryption error so we can
-    // surface that specific, actionable message if no other browser succeeds.
+    // Preserve the first concrete extraction error so callers can distinguish
+    // an unreadable/locked database or decryption failure from a normal
+    // "there is no matching session" result. ABE remains the most actionable
+    // aggregate failure and wins when every usable browser is blocked by it.
     let mut abe_error_seen = false;
+    let mut last_error: Option<CookieError> = None;
 
     // Try each browser until we find cookies
     for browser in browsers {
@@ -665,6 +668,9 @@ pub fn get_cookies_for_domain(domain: &str) -> Result<Vec<Cookie>, CookieError> 
                     browser.browser_type.display_name(),
                     e
                 );
+                if !matches!(e, CookieError::NotFound(_)) && last_error.is_none() {
+                    last_error = Some(e);
+                }
             }
         }
     }
@@ -673,6 +679,10 @@ pub fn get_cookies_for_domain(domain: &str) -> Result<Vec<Cookie>, CookieError> 
     // so the UI can show an actionable message instead of a generic "not found".
     if abe_error_seen {
         return Err(CookieError::AppBoundEncryption);
+    }
+
+    if let Some(error) = last_error {
+        return Err(error);
     }
 
     Err(CookieError::NotFound(domain.to_string()))

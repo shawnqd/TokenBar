@@ -627,7 +627,10 @@ pub fn update_tray_icon_and_tooltip(
                         (Some(speed), None) if window_kind == "speed" => {
                             (format!("{speed:.1} t/s"), "ready")
                         },
-                        (Some(percent), None) => (format!("{percent:.0}%"), "ready"),
+                        (Some(percent), None) => (
+                            crate::commands::format_quota_percent(percent),
+                            "ready",
+                        ),
                         (_, Some(reason)) => {
                             // The reason replaces the number outright — an entry
                             // that cannot be measured must never print a fabricated

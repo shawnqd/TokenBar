@@ -1,16 +1,10 @@
 import { TASKBAR_PROVIDER_AUTO } from "../../../types/bridge";
 import type { TaskbarEntry, TaskbarWindowKind } from "../../../types/bridge";
+import {
+  CONFIGURABLE_TASKBAR_WINDOWS,
+  TASKBAR_WINDOW_LABELS_ZH,
+} from "../taskbarWindowOptions";
 import { V5Select } from "./v5Controls";
-
-const WINDOWS: { value: TaskbarWindowKind; label: string }[] = [
-  { value: "session", label: "会话" },
-  { value: "weekly", label: "周" },
-  { value: "daily", label: "日" },
-  { value: "monthly", label: "月" },
-  { value: "balance", label: "余额" },
-  { value: "speed", label: "速度" },
-  { value: "primary", label: "主窗口" },
-];
 
 export interface EntryProviderChoice {
   id: string;
@@ -28,6 +22,8 @@ export function V5EntryList({
   hiddenFrom,
   addLabel,
   disabled,
+  windowOptionsFor,
+  windowLabelFor,
 }: {
   entries: TaskbarEntry[];
   providers: EntryProviderChoice[];
@@ -39,6 +35,10 @@ export function V5EntryList({
   hiddenFrom?: number;
   addLabel: string;
   disabled?: boolean;
+  /** Provider-aware window list shared with the native taskbar resolver. */
+  windowOptionsFor?: (entry: TaskbarEntry) => TaskbarWindowKind[];
+  /** Optional localized labels; V5's current copy defaults to Chinese. */
+  windowLabelFor?: (kind: TaskbarWindowKind) => string;
 }) {
   const replace = (index: number, patch: Partial<TaskbarEntry>) => {
     const next = [...entries];
@@ -67,6 +67,15 @@ export function V5EntryList({
       ) : (
         entries.map((entry, index) => {
           const hidden = hiddenFrom !== undefined && index >= hiddenFrom;
+          const windowKinds = windowOptionsFor
+            ? windowOptionsFor(entry)
+            : CONFIGURABLE_TASKBAR_WINDOWS;
+          // `primary` is an old persisted fallback and is intentionally not a
+          // menu item. While the live map catches up, show the first real
+          // choice instead of leaking the internal literal into the trigger.
+          const selectedWindow = windowKinds.includes(entry.window)
+            ? entry.window
+            : windowKinds[0] ?? "";
           return (
             <div
               key={`${entry.providerId}-${entry.window}-${index}`}
@@ -86,11 +95,14 @@ export function V5EntryList({
                 onChange={(value) => replace(index, { providerId: value })}
               />
               <V5Select
-                value={entry.window}
+                value={selectedWindow}
                 disabled={disabled}
-                options={WINDOWS.map((window) => ({
-                  value: window.value,
-                  label: window.label,
+                options={windowKinds.map((kind) => ({
+                  value: kind,
+                  label:
+                    windowLabelFor?.(kind) ??
+                    TASKBAR_WINDOW_LABELS_ZH[kind as keyof typeof TASKBAR_WINDOW_LABELS_ZH] ??
+                    kind,
                 }))}
                 onChange={(value) =>
                   replace(index, {

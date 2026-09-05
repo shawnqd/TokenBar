@@ -1,4 +1,5 @@
 use super::*;
+use codexbar::login::{LoginOutcome, LoginResult};
 
 #[tauri::command]
 pub fn get_app_info() -> AppInfoBridge {
@@ -215,6 +216,14 @@ fn dashboard_url_for_provider(provider_id: &str) -> Option<String> {
             )),
         );
     }
+    if provider_id == ProviderId::Zai.cli_name() {
+        let settings = Settings::load();
+        return Some(
+            codexbar::providers::ZaiProvider::dashboard_url_for_region(Some(
+                settings.api_region(ProviderId::Zai),
+            )),
+        );
+    }
 
     if let Some(url) = codexbar::settings::get_api_key_providers()
         .into_iter()
@@ -257,22 +266,67 @@ pub async fn trigger_provider_login(
     provider_id: String,
 ) -> Result<(), String> {
     let id = parse_provider_arg(&provider_id)?;
-    let provider_id = id.cli_name().to_string();
 
     if id == ProviderId::Copilot {
         return run_copilot_device_login(&app).await;
     }
 
-    // TODO(6b): replace fallthrough once LoginPhase events land. The login
-    // runners live in `codexbar::login` but are async-oriented and tightly
-    // coupled to the egui UI's phase callbacks. For the Tauri shell we
-    // currently surface the dashboard URL.
-    if let Some(url) = dashboard_url_for_provider(&provider_id) {
-        return open_url_in_browser(&url);
+    run_cli_login_for_provider(&app, id).await
+}
+
+const PROVIDER_LOGIN_TIMEOUT_SECS: u64 = 300;
+
+async fn run_cli_login_for_provider(
+    app: &tauri::AppHandle,
+    id: ProviderId,
+) -> Result<(), String> {
+    let result = match id {
+        ProviderId::Codex => {
+            let app = app.clone();
+            codexbar::login::run_codex_login(PROVIDER_LOGIN_TIMEOUT_SECS, move |phase| {
+                let _ = phase;
+                events::emit_login_phase_changed(&app);
+            })
+            .await
+        }
+        ProviderId::Claude => {
+            let app = app.clone();
+            codexbar::login::run_claude_login(PROVIDER_LOGIN_TIMEOUT_SECS, move |phase| {
+                let _ = phase;
+                events::emit_login_phase_changed(&app);
+            })
+            .await
+        }
+        ProviderId::Gemini => {
+            let app = app.clone();
+            codexbar::login::run_gemini_login(PROVIDER_LOGIN_TIMEOUT_SECS, move |phase| {
+                let _ = phase;
+                events::emit_login_phase_changed(&app);
+            })
+            .await
+        }
+        _ => {
+            return Err(format!(
+                "{id} 没有可启动的 CLI/OAuth 登录流程，请使用该服务商支持的凭据方式"
+            ));
+        }
+    };
+
+    login_result_to_command_result(id, result)
+}
+
+fn login_result_to_command_result(id: ProviderId, result: LoginResult) -> Result<(), String> {
+    match result.outcome {
+        LoginOutcome::Success => Ok(()),
+        LoginOutcome::MissingBinary => Err(format!(
+            "未找到 {id} 的本机登录命令，请先安装对应 CLI 或在终端完成登录"
+        )),
+        LoginOutcome::TimedOut => Err(format!("{id} 登录等待超时，请重试")),
+        LoginOutcome::Failed { status } => {
+            Err(format!("{id} 登录命令失败（退出码 {status}）"))
+        }
+        LoginOutcome::LaunchFailed(_) => Err(format!("无法启动 {id} 登录命令，请检查本机 CLI")),
     }
-    Err(format!(
-        "Login flow for '{provider_id}' is not yet wired through the Tauri shell"
-    ))
 }
 
 async fn run_copilot_device_login(app: &tauri::AppHandle) -> Result<(), String> {

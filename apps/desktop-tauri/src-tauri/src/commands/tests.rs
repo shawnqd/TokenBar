@@ -312,6 +312,29 @@ fn fetch_context_without_a_cookie_lets_the_provider_choose_its_source() {
 }
 
 #[test]
+fn fetch_context_codex_never_promotes_browser_cookie_to_web_mode() {
+    let settings = Settings::default();
+    let mut cookies = ManualCookies::default();
+    cookies.set("codex", "session=should-not-be-used-as-web");
+    let api_keys = ApiKeys::default();
+    let token_accounts = HashMap::new();
+
+    let ctx = super::build_fetch_context(
+        ProviderId::Codex,
+        &settings,
+        &cookies,
+        &api_keys,
+        &token_accounts,
+    );
+
+    // Codex's real path is its local OAuth/CLI credential. A chatgpt.com
+    // cookie domain exists for supplementary data, but Codex does not expose
+    // the shared web usage provider and must never be forced into SourceMode::Web.
+    assert_ne!(ctx.source_mode, SourceMode::Web);
+    assert!(ctx.manual_cookie_header.is_none());
+}
+
+#[test]
 fn fetch_context_claude_uses_its_full_ladder_without_manual_cookie() {
     let settings = Settings::default();
     let cookies = ManualCookies::default();
@@ -355,7 +378,8 @@ fn fetch_context_claude_explicit_cli_source_still_uses_cli() {
 
 #[test]
 fn fetch_context_manual_cookie_uses_web_without_browser_import() {
-    let settings = Settings::default();
+    let mut settings = Settings::default();
+    settings.set_cookie_source(ProviderId::Cursor, "manual");
     let mut cookies = ManualCookies::default();
     cookies.set("cursor", "session=abc123");
     let api_keys = ApiKeys::default();
@@ -1013,6 +1037,21 @@ fn region_options_for_regional_provider() {
     let opts = super::region_options_for("alibaba");
     let values: Vec<_> = opts.iter().map(|o| o.value.as_str()).collect();
     assert_eq!(values, vec!["singapore", "us", "germany", "hongkong", "cn"]);
+}
+
+#[test]
+fn zai_region_options_match_upstream_ids() {
+    let opts = super::region_options_for("zai");
+    let values: Vec<_> = opts.iter().map(|o| o.value.as_str()).collect();
+    let labels: Vec<_> = opts.iter().map(|o| o.label.as_str()).collect();
+    assert_eq!(values, vec!["global", "bigmodel-cn"]);
+    assert_eq!(
+        labels,
+        vec![
+            "Global (api.z.ai)",
+            "BigModel CN (open.bigmodel.cn)"
+        ]
+    );
 }
 
 #[test]

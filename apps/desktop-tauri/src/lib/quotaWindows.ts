@@ -85,6 +85,20 @@ function looksLikeBalance(window: RateWindowSnapshot): boolean {
  * "0% used" quota, without needing the provider list.
  */
 function looksLikeResetCreditCarrier(window: RateWindowSnapshot): boolean {
-  const text = window.resetDescription?.trim();
-  return Boolean(text && /^\d+\s+reset credits? available$/i.test(text));
+  return parseResetCreditsCount(window.resetDescription) != null;
+}
+
+const RESET_CREDITS_COUNT = /^(\d+)\s+reset credits? available$/i;
+
+export function isResetCreditsExtra(extra: {
+  id?: string;
+  window?: RateWindowSnapshot;
+}): boolean {
+  if (extra.id === "reset-credits") return true;
+  return extra.window ? looksLikeResetCreditCarrier(extra.window) : false;
+}
+
+export function parseResetCreditsCount(text: string | null | undefined): number | null {
+  const match = text?.trim().match(RESET_CREDITS_COUNT);
+  return match ? Number(match[1]) : null;
 }

@@ -114,3 +114,73 @@ describe("DeepSeek balance presentation", () => {
     });
   });
 });
+
+describe("z.ai / GLM BigModel CN balance presentation", () => {
+  it("recognizes the upstream available-wallet extra row", () => {
+    const snapshot = mimoApiSnapshot("");
+    snapshot.providerId = "zai";
+    snapshot.displayName = "GLM (BigModel CN)";
+    snapshot.extraRateWindows = [
+      {
+        id: "zai-account-balance",
+        title: "Account balance",
+        usageKnown: true,
+        window: {
+          ...snapshot.primary,
+          isInformational: true,
+          resetDescription: "¥12.50 available",
+        },
+      },
+    ];
+
+    expect(getProviderBalance(snapshot).balance).toMatchObject({
+      kind: "balance",
+      title: "余额",
+      amount: "¥12.50",
+      unavailable: false,
+    });
+  });
+
+  it("shows granted package funds from the recharge/grant breakdown", () => {
+    const snapshot = mimoApiSnapshot("");
+    snapshot.providerId = "zai";
+    snapshot.extraRateWindows = [
+      {
+        id: "zai-account-balance",
+        title: "Account balance",
+        usageKnown: true,
+        window: {
+          ...snapshot.primary,
+          isInformational: true,
+          resetDescription: "¥40.00 (Paid: ¥100.00 / Granted: ¥20.00)",
+        },
+      },
+    ];
+
+    expect(getProviderBalance(snapshot).balance).toMatchObject({
+      kind: "balance",
+      amount: "¥40.00",
+      breakdown: "含赠送 ¥20.00",
+    });
+  });
+
+  it("accepts the cost lifted by the unified core snapshot", () => {
+    const snapshot = mimoApiSnapshot("");
+    snapshot.providerId = "zai";
+    snapshot.cost = {
+      used: 12.5,
+      limit: null,
+      remaining: 12.5,
+      currencyCode: "CNY",
+      period: "",
+      resetsAt: null,
+      formattedUsed: "¥12.50",
+      formattedLimit: null,
+    };
+
+    expect(getProviderBalance(snapshot).balance).toMatchObject({
+      kind: "balance",
+      amount: "¥12.50",
+    });
+  });
+});

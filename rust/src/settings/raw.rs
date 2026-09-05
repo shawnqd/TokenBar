@@ -63,6 +63,8 @@ pub(super) struct RawSettings {
     menu_bar_display_mode: String,
     #[serde(default = "default_true")]
     output_speed_enabled: bool,
+    #[serde(default = "default_true")]
+    keep_tray_panel_on_settings: bool,
     #[serde(default = "default_local_usage_period")]
     local_usage_period: String,
     show_all_token_accounts_in_menu: bool,
@@ -307,6 +309,7 @@ impl Default for RawSettings {
             reset_time_relative: s.reset_time_relative,
             menu_bar_display_mode: s.menu_bar_display_mode,
             output_speed_enabled: s.output_speed_enabled,
+            keep_tray_panel_on_settings: true,
             local_usage_period: s.local_usage_period,
             show_all_token_accounts_in_menu: s.show_all_token_accounts_in_menu,
             provider_configs: s.provider_configs,
@@ -620,6 +623,7 @@ impl From<RawSettings> for Settings {
             reset_time_relative: raw.reset_time_relative,
             menu_bar_display_mode: raw.menu_bar_display_mode,
             output_speed_enabled: raw.output_speed_enabled,
+            keep_tray_panel_on_settings: raw.keep_tray_panel_on_settings,
             local_usage_period: raw.local_usage_period,
             show_all_token_accounts_in_menu: raw.show_all_token_accounts_in_menu,
             provider_configs,

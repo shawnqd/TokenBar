@@ -169,6 +169,7 @@ fn main() {
             commands::open_settings_window,
             commands::open_flyout_window,
             commands::close_settings_window,
+            commands::minimize_settings_window,
             commands::get_current_surface_mode,
             commands::get_current_surface_state,
             commands::surface_action,

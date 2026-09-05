@@ -406,7 +406,7 @@ unsafe fn draw_strip_cells_with(
         let top = cell.rect.top as f32;
         let bottom = cell.rect.bottom as f32;
         let avail = (right - left).max(0.0);
-        let slot_px = icon_size_px.max(1.0);
+        let slot_px = icon_size_px.max(1.0).round();
         let tag_w = unsafe { run_width(&renderer.dwrite, cell.tag, style.weight, style.size_px) };
         // Match value_style.weight so the layout width agrees with
         // the text run actually drawn; a hard-coded 600 made the value
@@ -420,7 +420,11 @@ unsafe fn draw_strip_cells_with(
         };
 
         let ctop = top + (bottom - top - slot_px).max(0.0) * 0.5;
-        let slot = crate::taskbar_icons::IconSlot { left: start_x, top: ctop, size_px: slot_px };
+        let slot = crate::taskbar_icons::snap_slot(crate::taskbar_icons::IconSlot {
+            left: start_x,
+            top: ctop,
+            size_px: slot_px,
+        });
         let mut cursor = start_x;
         let mut drew_svg = false;
         if let Some(provider) = cell.icon_provider {

@@ -1,4 +1,8 @@
-import type { ProviderDetail, ProviderUsageSnapshot } from "../types/bridge";
+import type {
+  CostSnapshotBridge,
+  ProviderDetail,
+  ProviderUsageSnapshot,
+} from "../types/bridge";
 
 /**
  * Normalized "prepaid balance / status" view for balance-type providers.
@@ -20,6 +24,9 @@ import type { ProviderDetail, ProviderUsageSnapshot } from "../types/bridge";
  *                 balance is still in `secondary`.
  *   • MiMo API  — first validates its API key, then reads the associated MiMo
  *                 console session for its pay-as-you-go balance when available.
+ *   • z.ai / GLM (BigModel CN) — publishes the available wallet amount as an
+ *                 informational extra row, e.g. "¥12.50 available". The
+ *                 suffix is an upstream transport detail, not UI copy.
  *
  * This helper is the single place that understands those encodings, so the card
  * can render one consistent block. When the backend later splits these into
@@ -147,6 +154,39 @@ export function getProviderBalance(
     };
   }
 
+  if (provider.providerId === "zai" || provider.providerId === "z.ai") {
+    // BigModel CN carries the wallet in an informational extra row. The core
+    // bridge may also have lifted that row into `cost`; accept both shapes so
+    // legacy/settings callers and the unified tray snapshot render identically.
+    const raw = provider.extraRateWindows.find(
+      (window) => window.id === "zai-account-balance",
+    )?.window.resetDescription;
+    const balance = parseBalanceText(raw ?? null) ?? balanceFromCost(provider.cost);
+    const excludeWindows = new Set<BalanceWindow>();
+    if (provider.primary.isInformational || provider.primary.resetDescription === "无生效套餐") {
+      excludeWindows.add("primary");
+    }
+    return {
+      balance,
+      excludeWindows,
+      suppressPlanBadge: false,
+    };
+  }
+
+  // Generic fallback: any provider that provides structured cost data (e.g.
+  // Cursor, Sub2API, Devin, Bedrock, CrossModel, CommandCode, or prepaid)
+  // maps directly into the shared balance view without one-off provider branches.
+  if (provider.cost) {
+    const balance = balanceFromCost(provider.cost);
+    if (balance) {
+      return {
+        balance,
+        excludeWindows: new Set<BalanceWindow>(),
+        suppressPlanBadge: false,
+      };
+    }
+  }
+
   return NONE;
 }
 
@@ -194,6 +234,35 @@ export function getProviderDetailBalance(
     };
   }
 
+  if (provider.id === "zai" || provider.id === "z.ai") {
+    const raw = provider.extraRateWindows.find(
+      (window) => window.id === "zai-account-balance",
+    )?.window.resetDescription;
+    const balance = parseBalanceText(raw ?? null) ?? balanceFromCost(provider.cost);
+    const noPlan = provider.session?.resetDescription === "无生效套餐";
+    const excludeWindows = new Set<ProviderDetailBalanceWindow>();
+    if (noPlan) excludeWindows.add("session");
+    return {
+      balance,
+      excludeWindows,
+      suppressPlan: false,
+      balanceOnly: noPlan && !!balance,
+    };
+  }
+
+  // Generic fallback: structured cost data maps to detail balance.
+  if (provider.cost) {
+    const balance = balanceFromCost(provider.cost);
+    if (balance) {
+      return {
+        balance,
+        excludeWindows: new Set(),
+        suppressPlan: false,
+        balanceOnly: false,
+      };
+    }
+  }
+
   return {
     balance: null,
     excludeWindows: new Set(),
@@ -218,6 +287,11 @@ export function parseBalanceText(raw: string | null): BalanceView | null {
     /^CNY\s*[¥￥]?\s*\d[\d,]*(?:\.\d+)?\s*(?:balance\b|\(\s*Paid\s*:)/i.test(text) ||
     /^(?:[¥￥$]\s*)?\d[\d,]*(?:\.\d+)?\s*(?:[A-Za-z]{3}|[¥￥$])?\s+balance\b/i.test(text) ||
     /^余额\s*[:：]/.test(text) ||
+    // z.ai/BigModel CN reports the wallet as "¥12.50 available". Keep the
+    // currency requirement here so reset-credit text such as "2 reset
+    // credits available" cannot be mistaken for money.
+    /^(?:[¥￥$]\s*)\d[\d,]*(?:\.\d+)?\s+available\b/i.test(text) ||
+    /^(?:\d[\d,]*(?:\.\d+)?)\s*(?:CNY|USD|EUR|GBP)\s+available\b/i.test(text) ||
     // DeepSeek returns its prepaid amount as "¥38.81 (Paid: … / Granted: …)"
     // rather than "38.81 CNY balance". Treat that explicit monetary breakdown
     // as a balance too, otherwise its synthetic 0% rate window leaks into UI.
@@ -237,8 +311,14 @@ export function parseBalanceText(raw: string | null): BalanceView | null {
     };
   }
 
-  // Amount = leading token before the first "(", "（", " — ", or " balance".
-  const head = text.split(/\s*[（(]|\s+—\s+|\s+balance\b/i)[0]?.trim();
+  // Amount = leading token before the first "(", "（", " — ", or balance
+  // suffix. The available suffix is an upstream transport detail and should
+  // never be repeated next to the amount in the card.
+  const head = text
+    .split(
+      /\s*[（(]|\s+—\s+|\s+(?:balance|available(?:\s+balance)?)\b/i,
+    )[0]
+    ?.trim();
   const amount = normalizeBalanceCurrency(head && head.length > 0 ? head : text);
 
   // Breakdown from the "(Paid: X / Granted: Y)" tail — surface the gifted part.
@@ -267,4 +347,19 @@ function normalizeBalanceCurrency(value: string): string {
   const cnyPrefix = normalized.match(/^CNY\s*¥?(-?\d[\d,]*(?:\.\d+)?)$/i);
   if (cnyPrefix) return `¥${cnyPrefix[1]}`;
   return normalized;
+}
+
+/** Convert a structured bridge cost into the same view used by ad-hoc rows. */
+export function balanceFromCost(cost: CostSnapshotBridge | null): BalanceView | null {
+  if (!cost) return null;
+  const amount = cost.formattedUsed?.trim();
+  if (!amount) return null;
+  return {
+    kind: "balance",
+    title: BALANCE_TITLE,
+    amount,
+    breakdown: cost.formattedLimit ? `上限 ${cost.formattedLimit}` : null,
+    unavailable: false,
+    raw: amount,
+  };
 }

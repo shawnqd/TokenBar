@@ -18,6 +18,7 @@ import {
   type WindowDisplayKind,
   type WindowRole,
 } from "./snapshot";
+import { OUTPUT_SPEED_PROVIDER_IDS } from "../lib/outputSpeed";
 
 type BridgeWindowSlot = {
   id: string;
@@ -26,6 +27,7 @@ type BridgeWindowSlot = {
   usageKnown?: boolean;
   role: WindowRole;
   order: number;
+  inventoryExpiresAt?: string[];
 };
 
 export function fromBridge(
@@ -63,7 +65,9 @@ export function fromBridge(
     hasExtraWindows,
     supportsCharts: backend?.localUsage ?? false,
     supportsLocalCost: backend?.localUsage ?? false,
-    supportsOutputSpeed: backend?.outputSpeed ?? false,
+    supportsOutputSpeed:
+      backend?.outputSpeed ??
+      (OUTPUT_SPEED_PROVIDER_IDS as readonly string[]).includes(model.providerId),
     supportsProviderDashboard: backend?.providerDashboard ?? false,
     supportsStatusPage: backend?.statusPage ?? false,
     supportsLogin: backend?.login ?? false,
@@ -162,6 +166,7 @@ function collectWindows(model: ProviderDisplayModel): RateWindowSnapshot[] {
       usageKnown: extra.usageKnown,
       role: "additional",
       order: 4 + index,
+      inventoryExpiresAt: extra.inventoryExpiresAt,
     });
   });
   return slots.map(adaptWindow);
@@ -201,6 +206,7 @@ function adaptWindow(slot: BridgeWindowSlot): RateWindowSnapshot {
     reserveDescription: window.reserveDescription,
     reserveWillLastToReset: window.reserveWillLastToReset,
     reserveEtaSeconds: window.reserveEtaSeconds,
+    inventoryExpiresAt: slot.inventoryExpiresAt,
   };
 }
 
@@ -275,7 +281,8 @@ function inferCurrencyCode(text: string): string {
 
 function applySharedTitleGroups(windows: RateWindowSnapshot[]): void {
   const prefixOf = (label: string): string | null => {
-    const match = label.trim().match(/^([A-Za-z][A-Za-z0-9+._-]*)\s+/);
+    const trimmed = label.trim();
+    const match = trimmed.match(/^([A-Za-z0-9+._\/-]+(?:\s*[/&]\s*[A-Za-z0-9+._\/-]+)*)[\s_-]+/);
     return match?.[1] ?? null;
   };
   const counts = new Map<string, number>();

@@ -12,6 +12,7 @@ import {
 } from "../../../lib/quotaDisplay";
 import {
   getProviderRegionOptions,
+  getProviderRegion,
   getApiKeys,
   getGeminiCliSignedIn,
   getManualCookies,
@@ -522,11 +523,15 @@ export default function ProvidersPage({
     }
     let cancelled = false;
     setRegionError(null);
-    void getProviderRegionOptions(selectedProvider.id)
-      .then((options) => {
+    void Promise.all([
+      getProviderRegionOptions(selectedProvider.id),
+      getProviderRegion(selectedProvider.id),
+    ])
+      .then(([options, persisted]) => {
         if (cancelled) return;
         setRegionOptions(options);
-        setRegionValue(selectedProvider.region ?? options[0]?.value ?? "");
+        const saved = persisted?.trim() || selectedProvider.region || options[0]?.value || "";
+        setRegionValue(saved);
       })
       .catch((error) => {
         if (cancelled) return;
@@ -581,7 +586,7 @@ export default function ProvidersPage({
     const showAsUsed = settings.dashboardShowAsUsed !== false;
     const proj = projectSurface(snap, { showAsUsed });
     if (proj.primary && proj.primary.fillPercent != null) {
-      metric = `${Math.round(proj.primary.fillPercent)}%`;
+      metric = `${Number(proj.primary.fillPercent.toFixed(1))}%`;
     } else if (proj.balance) {
       metric = proj.balance.amountText;
     }

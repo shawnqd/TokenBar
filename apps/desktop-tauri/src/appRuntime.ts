@@ -18,7 +18,7 @@ import {
 } from "./core/projectionRuntime";
 import {
   buildProjectionEnrichmentScheduler,
-} from "./core/projectionRuntime";
+} from "./core/enrichmentScheduler";
 import type { RefreshCoordinator } from "./core/refreshCoordinator";
 import type { EnrichmentScheduler } from "./core/enrichmentScheduler";
 import {
@@ -31,14 +31,23 @@ import {
   setCoreBridgeDispatcher,
 } from "./core/useCoreBridge";
 import { buildProjectionStore, type ProjectionStore } from "./core/projectionRuntime";
-import { attachTrayCoreRuntime } from "./surfaces/tray/trayCoreStore";
+import {
+  attachTrayCoreRuntime,
+  trayCoreStore,
+} from "./surfaces/tray/trayCoreStore";
 import { attachFloatBarStore } from "./floatbar/floatBarStore";
 import type { ProviderSnapshot } from "./core/snapshot";
 import type {
   ProviderUsageSnapshot,
   VersionedProviderProjection,
 } from "./types/bridge";
-import { invokeSurfaceAction, getProviderProjection } from "./lib/tauri";
+import {
+  invokeSurfaceAction,
+  getProviderProjection,
+  getOutputSpeedSnapshot,
+} from "./lib/tauri";
+import { defaultChartLoader } from "./core/chartAccess";
+import { outputSpeedProviderId } from "./lib/outputSpeed";
 import {
   activateSurface,
   activeSurfaces as listActiveSurfaces,
@@ -99,7 +108,50 @@ async function fetchForKey(
 
 export function buildAppRuntime(): AppRuntime {
   const store = buildProjectionStore();
-  const scheduler = buildProjectionEnrichmentScheduler();
+  const scheduler = buildProjectionEnrichmentScheduler({
+    // Capability gates read the live projection records, so enrichment follows
+    // exactly what the backend declares parseable per provider.
+    capabilities: () => {
+      const caps: Record<string, ProviderSnapshot["capabilities"]> = {};
+      for (const record of Object.values(store.getSnapshot().records)) {
+        if (record.snapshot) caps[record.snapshot.providerId] = record.snapshot.capabilities;
+      }
+      return caps;
+    },
+    ttlMs: {
+      // Completed bundles are cheap (chartAccess caches 5min); a short
+      // scheduler TTL exists so an incomplete first pass (cold local-log scan)
+      // is retried within a minute instead of after the chart cache TTL.
+      chart: 60_000,
+      outputSpeed: 15_000,
+    },
+    // Read-side runner: fetches Rust-owned derived caches (output speed,
+    // chart/local usage) and commits them into this WebView's local read
+    // model. It never refreshes usage and never creates a second cache.
+    runner: async (kind, key) => {
+      if (kind === "outputSpeed") {
+        const speedId = outputSpeedProviderId(key.providerId);
+        if (!speedId) return;
+        const snapshot = await getOutputSpeedSnapshot();
+        const speed = snapshot?.[speedId] ?? null;
+        trayCoreStore.commitRuntimeEnrichment("outputSpeed", key, {
+          ok: speed != null,
+          outputSpeed: speed,
+        });
+        return;
+      }
+      if (kind === "chart") {
+        const accountEmail =
+          key.accountKey === "default" ? undefined : key.accountKey;
+        const chartData = await defaultChartLoader(key.providerId, accountEmail);
+        trayCoreStore.commitRuntimeEnrichment("chart", key, {
+          ok: chartData != null,
+          chartData,
+        });
+      }
+      // Other enrichment kinds have no tray read-model consumer yet.
+    },
+  });
 
   const dispatcher = createActionDispatcher(
     {},

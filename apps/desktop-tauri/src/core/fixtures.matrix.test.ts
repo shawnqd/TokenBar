@@ -24,6 +24,7 @@ const MATRIX: ReadonlyArray<readonly [name: string, bridge: ProviderDisplayModel
   ["arkMultiWindow", FIXTURE_BRIDGES.arkMultiWindow],
   ["deepseekBalance", FIXTURE_BRIDGES.deepseekBalance],
   ["mimoBalance", FIXTURE_BRIDGES.mimoBalance],
+  ["zaiChinaBalance", FIXTURE_BRIDGES.zaiChinaBalance],
   ["sub2apiFourShapes", FIXTURE_BRIDGES.sub2apiFourShapes],
   ["copilotMultiWindow", FIXTURE_BRIDGES.copilotMultiWindow],
   ["antigravityMultiFamily", FIXTURE_BRIDGES.antigravityMultiFamily],
@@ -181,6 +182,22 @@ describe("CORE-01 shape coverage", () => {
     const projection = projectSurface(snapshot);
     expect(projection.layers.quota).toEqual([]);
     expect(projection.layers.balance?.amountText).toBe("¥12.50");
+  });
+
+  it("zaiChinaBalance: available wallet row becomes the shared balance layer", () => {
+    const snapshot = snapshotOf(FIXTURE_BRIDGES.zaiChinaBalance);
+    expect(snapshot.cost?.formattedUsed).toBe("¥12.50");
+    expect(snapshot.capabilities.hasBalance).toBe(true);
+    expect(snapshot.capabilities.hasQuota).toBe(false);
+    expect(snapshot.windows.some((window) => window.id === "zai-account-balance")).toBe(true);
+    expect(snapshot.windows.filter(isRealQuotaWindow)).toEqual([]);
+    const projection = projectSurface(snapshot);
+    expect(projection.archetype).toBe("balance");
+    expect(projection.layers.balance?.amountText).toBe("¥12.50");
+    expect(projection.taskbarCells[0]).toMatchObject({
+      window: "balance",
+      value: "¥12.50",
+    });
   });
 
   it("sub2apiFourShapes: cycles + wallet balance + unknown stream", () => {

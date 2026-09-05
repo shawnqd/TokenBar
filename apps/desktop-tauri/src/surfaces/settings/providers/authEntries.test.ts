@@ -6,8 +6,8 @@ import {
   userFacingAuthMethods,
 } from "./authEntries";
 
-const OAUTH_ONLY = { supportsOAuth: true, supportsCli: true, supportsApiKey: false };
-const API_ONLY = { supportsOAuth: false, supportsCli: false, supportsApiKey: true };
+const OAUTH_ONLY = { supportsOAuth: true, supportsCli: true, supportsApiKey: false, supportsWeb: true, loginFlow: "codex_cli" };
+const API_ONLY = { supportsOAuth: false, supportsCli: false, supportsApiKey: true, supportsWeb: true, loginFlow: null };
 
 describe("resolveAuthEntries", () => {
   /**
@@ -63,16 +63,16 @@ describe("resolveAuthEntries", () => {
       providerId: "somecli",
       cookieDomain: null,
       dashboardUrl: null,
-      capabilities: OAUTH_ONLY,
+      capabilities: { ...OAUTH_ONLY, loginFlow: null },
       isBespoke: false,
     });
     expect(decision.availability.signIn).toBe(false);
     expect(decision.primary).toBe("apiKey");
   });
 
-  it("shows the API key entry while capabilities are still loading", () => {
-    // `null` is "the command has not answered yet", not "no API key". Hiding
-    // the entry on null would blank the zone during every page load.
+  it("does not invent an auth entry while capabilities are still loading", () => {
+    // `null` means the capability command has not answered yet. The page must
+    // wait instead of claiming that every provider has an API key.
     const decision = resolveAuthEntries({
       providerId: "openrouter",
       cookieDomain: null,
@@ -80,8 +80,9 @@ describe("resolveAuthEntries", () => {
       capabilities: null,
       isBespoke: false,
     });
-    expect(decision.showApiKey).toBe(true);
+    expect(decision.showApiKey).toBe(false);
     expect(decision.primary).toBe("apiKey");
+    expect(decision.methods).toEqual([]);
   });
 
   it("hides the API key entry when the provider has none", () => {
@@ -134,24 +135,22 @@ describe("resolveAuthEntries methods list", () => {
       providerId: "cursor",
       cookieDomain: "cursor.com",
       dashboardUrl: "https://cursor.com",
-      capabilities: { supportsOAuth: true, supportsCli: false, supportsApiKey: true },
+      capabilities: { supportsOAuth: true, supportsCli: false, supportsApiKey: true, supportsWeb: true, loginFlow: "codex_cli" },
       isBespoke: false,
     });
     expect(methods[0]).toBe(primary);
     expect(methods).toEqual(["cookie", "signIn", "apiKey"]);
   });
 
-  it("never returns an empty list", () => {
-    // `resolvePrimaryAuth` falls back to `apiKey` even where the provider has
-    // none, so without a guard the zone would render nothing at all.
+  it("returns no login method when the provider exposes none", () => {
     const { methods } = resolveAuthEntries({
       providerId: "mystery",
       cookieDomain: null,
       dashboardUrl: null,
-      capabilities: { supportsOAuth: false, supportsCli: false, supportsApiKey: false },
+      capabilities: { supportsOAuth: false, supportsCli: false, supportsApiKey: false, supportsWeb: true, loginFlow: null },
       isBespoke: false,
     });
-    expect(methods).toEqual(["apiKey"]);
+    expect(methods).toEqual([]);
   });
 
   it("never offers bespoke as a fourth user-visible method", () => {

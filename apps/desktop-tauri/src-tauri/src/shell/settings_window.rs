@@ -114,14 +114,16 @@ fn remember_geometry(window: &tauri::WebviewWindow) {
 fn normalize_window_chrome(window: &tauri::WebviewWindow) {
     let _ = window.set_decorations(false);
     super::dwm::force_borderless_transparent_resizable(window);
+    super::dwm::attach_settings_taskbar_button(window);
 }
 
 /// Whether the detached Settings window is visibly open. The tray flyout uses
 /// this to stay on screen as a live settings preview while focus moves between
 /// these two companion surfaces.
 pub fn is_visible(app: &tauri::AppHandle) -> bool {
-    app.get_webview_window(SETTINGS_LABEL)
-        .is_some_and(|window| window.is_visible().unwrap_or(false))
+    app.get_webview_window(SETTINGS_LABEL).is_some_and(|window| {
+        window.is_visible().unwrap_or(false) && !window.is_minimized().unwrap_or(false)
+    })
 }
 
 fn build_hidden(app: &tauri::AppHandle, tab: &str) -> Result<(), String> {
@@ -168,12 +170,15 @@ fn build_hidden(app: &tauri::AppHandle, tab: &str) -> Result<(), String> {
     // frontend frame owns the radius, hairline and shadow.
     normalize_window_chrome(&win);
 
-    // Restore a previously chosen position; otherwise center against the
-    // primary monitor. Tauri's `.center()` is unreliable for dynamically-built
-    // windows on Windows, so both paths use explicit native coordinates.
-    if let Some(stored) = crate::geometry_store::load_entry(SETTINGS_LABEL) {
-        let _ = win.set_position(PhysicalPosition::new(stored.x, stored.y));
-    } else if let Ok(Some(monitor)) = win.primary_monitor() {
+    // The Settings window is a utility dialog: it always opens centered on
+    // the primary monitor. Its SIZE is still remembered (and clamped to the
+    // monitor), but its position is not — a stale geometry entry must not pin
+    // the window off-center or off-screen forever. Within one app session a
+    // window the user moved keeps its spot: `build_hidden` early-returns when
+    // the window already exists, so only a fresh creation centers.
+    // Tauri's `.center()` is unreliable for dynamically-built windows on
+    // Windows, so this uses explicit native coordinates.
+    if let Ok(Some(monitor)) = win.primary_monitor() {
         let pos = monitor.position();
         let size = monitor.size();
         let scale = win.scale_factor().unwrap_or(1.0);
@@ -220,7 +225,18 @@ pub fn open_or_focus(app: &tauri::AppHandle, tab: &str) -> Result<(), String> {
         // Clicking the tray while Settings is already up is a focus request, and
         // replaying a fade over a window the user is reading is noise, not
         // polish — so the visibility is sampled BEFORE `show()` makes it true.
-        let was_hidden = !window.is_visible().unwrap_or(false);
+        let minimized = window.is_minimized().unwrap_or(false);
+        let was_hidden =
+            minimized || !window.is_visible().unwrap_or(false);
+        if minimized {
+            // Native SC_RESTORE: zoom out of the taskbar button and bounce
+            // the icon. Do not FRAMECHANGED / strip chrome here — that aborts
+            // DWM's restore animation. WM_SIZE reapplies borderless after.
+            super::dwm::restore_settings_from_taskbar(&window);
+            window.show().map_err(|e| e.to_string())?;
+            window.set_focus().map_err(|e| e.to_string())?;
+            return Ok(());
+        }
         apply_design_size_if_stale(&window);
         let _ = window.set_min_size(Some(tauri::LogicalSize::new(
             SETTINGS_MIN_WIDTH,
@@ -255,10 +271,13 @@ pub fn open_or_focus(app: &tauri::AppHandle, tab: &str) -> Result<(), String> {
 pub fn dismiss(app: &tauri::AppHandle, window: &tauri::WebviewWindow) -> Result<(), String> {
     if window.label() == SETTINGS_LABEL {
         remember_geometry(window);
+        // Zoom the caption toward the taskbar, then hide. Minimize was
+        // leaving Settings iconic so the close button could not finish.
+        super::dwm::play_settings_close_zoom(window);
+        if window.is_minimized().unwrap_or(false) {
+            let _ = window.unminimize();
+        }
         window.hide().map_err(|e| e.to_string())?;
-        // The webview stays fully painted while hidden. This is intentional:
-        // native hide/show is the only visibility state, so an event race or
-        // HMR remount cannot reveal a blank frame.
         return Ok(());
     }
 

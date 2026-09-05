@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { render, waitFor } from "@testing-library/react";
-import { fromBridge } from "../../core";
+import { fromBridge, zaiChinaBalanceBridge } from "../../core";
 
 const tauriMocks = vi.hoisted(() => ({
   getLocaleStrings: vi.fn(),
@@ -195,5 +195,53 @@ describe("TrayCard OpenCode Go projection (core read model)", () => {
     // Data comes from the injected enrichment result, not a tauri chart call.
     expect(container.querySelector('[data-slot="usage"]')?.textContent).toBe("≈ 48K");
     expect(container.textContent).toContain("opencode-2");
+  });
+});
+
+describe("TrayCard GLM BigModel CN balance projection", () => {
+  beforeEach(() => {
+    tauriMocks.getLocaleStrings.mockResolvedValue(buildBundle({
+      AllSystemsOperational: "All systems operational",
+      TrayStatusStale: "Stale",
+      StatusUnableToGetUsage: "Unable to get usage",
+      TrayLoading: "Loading",
+    }));
+  });
+
+  it("renders the reference balance block in detailed, compact, and minimal density", async () => {
+    for (const densityMode of ["detailed", "compact", "minimal"] as const) {
+      const { container } = renderCard(zaiChinaBalanceBridge, { densityMode });
+      await waitFor(() => {
+        if (!container.querySelector(".tray-card")) throw new Error("card not rendered");
+      });
+
+      expect(container.textContent).toContain("¥12.50");
+      if (densityMode === "detailed") {
+        expect(container.querySelector(".balance-block")).not.toBeNull();
+        expect(container.querySelector(".balance-block__head")?.textContent).toContain("余额");
+        expect(container.querySelector(".balance-block__amount")?.textContent).toBe("¥12.50");
+        expect(container.querySelector(".balance-block .soft-badge")).not.toBeNull();
+      } else if (densityMode === "compact") {
+        expect(container.querySelector(".balance-compact-row")).not.toBeNull();
+        expect(container.querySelector(".balance-compact-row__amount")?.textContent).toBe("¥12.50");
+        expect(container.querySelector(".balance-compact-row .soft-badge")).not.toBeNull();
+      } else {
+        expect(container.querySelector(".minimal-streamlined__metric")?.textContent).toBe("¥12.50");
+        expect(container.querySelector(".minimal-streamlined .soft-badge")).not.toBeNull();
+        expect(container.querySelector(".progress-bar")).toBeNull();
+      }
+    }
+  });
+
+  it("renders the balance after the core lifts the extra row into cost", async () => {
+    const coreSnapshot = fromBridge(
+      zaiChinaBalanceBridge,
+      Date.parse("2026-08-16T12:05:00.000Z"),
+    );
+    const { container } = renderCard(coreSnapshot, { densityMode: "detailed" });
+    await waitFor(() => {
+      if (!container.querySelector(".tray-card")) throw new Error("card not rendered");
+    });
+    expect(container.querySelector(".balance-block__amount")?.textContent).toBe("¥12.50");
   });
 });

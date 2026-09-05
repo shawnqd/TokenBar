@@ -425,7 +425,7 @@
 }
 
 .settings-v5 .s5-stage-frame--tray {
-  width: 340px;
+  width: 332px;
   height: 520px;
   overflow: visible;
 }
@@ -446,7 +446,7 @@
 }
 
 .settings-v5 .s5-tray-card {
-  width: 328px;
+  width: 320px;
   border: 1px solid var(--flyout-hairline);
   border-radius: 12px;
   padding: 12px 14px;
@@ -533,6 +533,25 @@
 
 [data-theme="dark"] .settings-v5 .s5-pill {
   background: rgba(56, 193, 114, 0.14);
+}
+
+.settings-v5 .s5-reset-inv {
+  margin-top: 10px;
+}
+
+.settings-v5 .s5-reset-inv-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 12px;
+  margin-top: 5px;
+  font-size: 11px;
+  color: var(--flyout-sub);
+  font-variant-numeric: tabular-nums;
+}
+
+.settings-v5 .s5-reset-inv-row time {
+  color: var(--flyout-muted, var(--flyout-sub));
 }
 
 .settings-v5 .s5-insight {
@@ -882,7 +901,7 @@
 .settings-v5 .s5-pd-links {
   display: flex;
   flex-wrap: wrap;
-  gap: 8px;
+  gap: 6px;
   justify-content: flex-end;
   align-items: center;
   flex: 1 1 auto;
@@ -893,26 +912,35 @@
   display: inline-flex;
   flex: 0 0 auto;
   align-items: center;
-  gap: 6px;
-  height: 32px;
-  padding: 0 12px;
+  gap: 4px;
+  height: 26px;
+  padding: 0 9px;
   font: inherit;
-  font-size: 13px;
-  font-weight: 500;
-  line-height: 32px;
+  font-size: 12px;
+  font-weight: 400;
+  line-height: 26px;
   border-radius: 8px;
   cursor: pointer;
   border: 1px solid var(--flyout-hairline);
   background: transparent;
-  color: var(--flyout-text);
+  color: var(--flyout-sub);
   white-space: nowrap;
   word-break: keep-all;
   writing-mode: horizontal-tb;
 }
 
+.settings-v5 .s5-pd-act:hover {
+  background: color-mix(in srgb, var(--flyout-text) 6%, transparent);
+  color: var(--flyout-text);
+}
+
+.settings-v5 .s5-pd-act:active {
+  transform: scale(0.97);
+}
+
 .settings-v5 .s5-pd-act svg {
-  width: 16px;
-  height: 16px;
+  width: 13px;
+  height: 13px;
   flex-shrink: 0;
 }
 
@@ -926,6 +954,7 @@
 }
 
 @keyframes s5-spin {
+  from { transform: rotate(0deg); }
   to { transform: rotate(360deg); }
 }
 
@@ -1199,7 +1228,8 @@
   }
 }
 
-/* 服务商拖排序（sortablejs）：拖动中抬起，落点幽灵半透明、不挡点击 */
+/* 服务商拖排序（sortablejs）：按下无抓取光标（用户要求仅拖动时出现），
+   真正拖动（跟手克隆）才抬起+grabbing，落点幽灵半透明、不挡点击 */
 .settings-v5 .s5-prow--dragging {
   z-index: 40;
   opacity: 0.85;
@@ -1208,4 +1238,28 @@
 }
 .settings-v5 .s5-prow--ghost {
   opacity: 0.35;
+}
+
+/* fallbackOnBody 时跟手克隆挂在 body 上，脱离 .settings-v5 祖先：
+   onStart 给克隆根补 settings-v5 类后，子元素命中原后代选择器，
+   克隆根自身的行样式由这里的复合选择器补齐（对齐 .s5-prow 基础布局）。
+   transition 必须为 none —— sortablejs 逐次 mousemove 用 transform 矩阵
+   移动克隆，任何过渡都会让浮层拖尾（远距离拖动"跟不上手"的直接来源）。 */
+.settings-v5.s5-prow--dragging {
+  display: grid;
+  grid-template-columns: 36px minmax(0, 1fr) 44px auto;
+  gap: 8px;
+  align-items: center;
+  padding: 8px;
+  border-radius: 10px;
+  width: 100%;
+  background: var(--panel-bg, #232326);
+  color: var(--text-primary, #f2f2f2);
+  text-align: left;
+  cursor: grabbing;
+  user-select: none;
+  z-index: 40;
+  opacity: 0.95;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.25);
+  transition: none;
 }

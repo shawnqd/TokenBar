@@ -347,7 +347,7 @@ function DetachedSettingsReadyContent({
           closingRef.current = false;
           setWindowMotion("idle");
         });
-    }, 140);
+    }, 240);
   }, []);
 
   useEffect(() => {

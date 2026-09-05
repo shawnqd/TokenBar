@@ -11,6 +11,7 @@ import {
 } from "../../../../components/ProviderQuotaBlock";
 import { getProviderDetailBalance } from "../../../../lib/providerBalance";
 import type { QuotaDisplayContext } from "../../../../lib/quotaDisplay";
+import { isResetCreditsExtra } from "../../../../lib/quotaWindows";
 
 interface Props {
   provider: ProviderDetail;
@@ -71,6 +72,7 @@ export function UsageSection({ provider, display, t }: Props) {
     });
   }
   for (const extra of provider.extraRateWindows ?? []) {
+    if (isResetCreditsExtra(extra)) continue;
     if (!isMeaningfulQuotaWindow(extra.window)) continue;
     bars.push({
       key: extra.id,

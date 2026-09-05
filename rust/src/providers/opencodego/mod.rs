@@ -457,17 +457,13 @@ impl OpenCodeGoProvider {
 
     /// Normalize a scraped percent into 0..=100 **used**.
     ///
-    /// OpenCode's console emits integer percents via `Math.floor` (1 = one
-    /// percent used). Treating `<= 1.0` as a 0..1 fraction turned a real **1%**
-    /// used window into **100%** used → dashboard "remaining" showed 0% + 已用尽.
-    /// Only values **strictly below 1.0** are treated as fractions (e.g. 0.13 → 13%).
+    /// OpenCode's console emits `usagePercent` as a percentage that is already
+    /// scaled 0–100 (e.g. `0.1` = 0.1% used, `1` = 1%, `42.5` = 42.5%).
+    /// The Go plan uses sub-integer precision (quotas precise to 0.1%), so a
+    /// heuristic that treated `< 1.0` as a 0–1 fraction would wrongly scale
+    /// `0.1` into `10%` and `0.5` into `50%`. Just clamp.
     fn normalize_percent(raw: f64) -> f64 {
-        let p = if raw > 0.0 && raw < 1.0 {
-            raw * 100.0
-        } else {
-            raw
-        };
-        p.clamp(0.0, 100.0)
+        raw.clamp(0.0, 100.0)
     }
 
     /// Number for `blockName ... key: value` inside one object-ish span.
@@ -720,8 +716,8 @@ mod tests {
         let snap = OpenCodeGoProvider::parse_usage_text(text).unwrap();
         assert!((snap.primary.used_percent - 42.5).abs() < 0.001);
         let secondary = snap.secondary.expect("weekly");
-        // 0.13 normalized as fraction → 13%
-        assert!((secondary.used_percent - 13.0).abs() < 0.001);
+        // 0.13 is already a percentage (Go plan sub-integer precision), not a fraction.
+        assert!((secondary.used_percent - 0.13).abs() < 0.001);
         let tertiary = snap.tertiary.expect("monthly");
         assert!((tertiary.used_percent - 7.0).abs() < 0.001);
     }
@@ -742,9 +738,9 @@ mod tests {
         // 100% remaining → 0% used
         let weekly = snap.secondary.expect("weekly");
         assert!(weekly.used_percent.abs() < 0.001);
-        // remaining_percent: 0.5 is a fraction → 50% remaining → 50% used
+        // remaining_percent: 0.5 is already a percentage → 0.5% remaining → 99.5% used
         let monthly = snap.tertiary.expect("monthly");
-        assert!((monthly.used_percent - 50.0).abs() < 0.001);
+        assert!((monthly.used_percent - 99.5).abs() < 0.001);
     }
 
     #[test]

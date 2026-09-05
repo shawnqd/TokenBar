@@ -146,7 +146,9 @@ fn fetch_result_from_quota(value: &Value, org: &str) -> ProviderFetchResult {
 fn percent(value: &Value, keys: &[&str]) -> Option<f64> {
     for key in keys {
         if let Some(v) = value.get(*key).and_then(Value::as_f64) {
-            return Some(if v < 1.0 { v * 100.0 } else { v });
+            // Percent values are already 0–100 scaled; sub-integer values
+            // (e.g. 0.1% or 0.25%) must not be amplified to 10% or 25%.
+            return Some(v.clamp(0.0, 100.0));
         }
     }
     let used = ["used", "usage", "used_count", "usedCount", "consumed"]
@@ -156,7 +158,7 @@ fn percent(value: &Value, keys: &[&str]) -> Option<f64> {
         .iter()
         .find_map(|k| value.get(*k).and_then(Value::as_f64));
     match (used, limit) {
-        (Some(used), Some(limit)) if limit > 0.0 => Some(used / limit * 100.0),
+        (Some(used), Some(limit)) if limit > 0.0 => Some((used / limit * 100.0).clamp(0.0, 100.0)),
         _ => None,
     }
 }
@@ -185,10 +187,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn parses_fraction_percent() {
+    fn parses_fractional_sub_integer_percent() {
         let snapshot =
             snapshot_from_quota(&serde_json::json!({"daily_percentage":0.25}), "org/demo");
-        assert_eq!(snapshot.primary.used_percent, 25.0);
+        assert_eq!(snapshot.primary.used_percent, 0.25);
     }
 
     #[test]

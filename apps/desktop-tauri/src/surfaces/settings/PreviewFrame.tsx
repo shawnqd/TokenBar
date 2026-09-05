@@ -4,7 +4,7 @@ import "./settingsSurfaces.css";
 export type PreviewFrameKind = "tray" | "float" | "taskbar";
 
 const FRAME_SIZE: Record<PreviewFrameKind, { width: number; height: number }> = {
-  tray: { width: 328, height: 256 },
+  tray: { width: 320, height: 256 },
   float: { width: 280, height: 156 },
   taskbar: { width: 248, height: 52 },
 };

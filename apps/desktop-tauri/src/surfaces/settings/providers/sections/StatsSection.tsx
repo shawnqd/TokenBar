@@ -2,7 +2,8 @@ import { useEffect, useMemo, useState } from "react";
 import { BarChart } from "../../../../components/charts/BarChart";
 import { LocalUsageBlock } from "../../../../components/MenuCard";
 import { useLocale } from "../../../../hooks/useLocale";
-import { getProviderChartData, getSettingsSnapshot } from "../../../../lib/tauri";
+import { getSettingsSnapshot } from "../../../../lib/tauri";
+import { defaultChartLoader } from "../../../../core/chartAccess";
 import { providerCapabilities } from "../../../../lib/providerCapabilities";
 import type {
   CostSnapshotBridge,
@@ -32,7 +33,7 @@ interface Props {
   chartLoader?: (
     providerId: string,
     accountEmail?: string,
-  ) => Promise<ProviderChartData>;
+  ) => Promise<ProviderChartData | null>;
   /** Optional core snapshot for capability single-source (snapshot.capabilities). */
   coreSnapshot?: ProviderSnapshot | null;
 }
@@ -100,7 +101,7 @@ export function StatsSection({
     let cancelled = false;
     setData(null);
     setIsLoading(true);
-    const loader = chartLoader ?? getProviderChartData;
+    const loader = chartLoader ?? defaultChartLoader;
     loader(providerId, accountEmail ?? undefined)
       .then((d) => {
         if (!cancelled) setData(d);

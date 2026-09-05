@@ -63,6 +63,7 @@ vi.mock("../../../lib/tauri", () => ({
   setApiKey: tauriMocks.setApiKey,
   removeApiKey: tauriMocks.removeApiKey,
   getProviderRegionOptions: vi.fn().mockResolvedValue([]),
+  getProviderRegion: vi.fn().mockResolvedValue(null),
   setProviderRegion: vi.fn(),
   getSafeDiagnostics: vi.fn().mockResolvedValue({
     appVersion: "0.0.0-test",
@@ -149,6 +150,7 @@ describe("V5 settings pages from HTML", () => {
     statusPageUrl: "https://status.claude.com/",
     buyCreditsUrl: "https://claude.ai/upgrade",
     lastError: null,
+    loginFlow: "claude_cli",
   });
   tauriMocks.getProviderChartData.mockResolvedValue(null);
   clearChartCache();
@@ -251,7 +253,11 @@ describe("V5 settings pages from HTML", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "刷新" }));
     await waitFor(() => {
-      expect(tauriMocks.invokeSurfaceAction).toHaveBeenCalledWith({ type: "refresh" });
+      expect(tauriMocks.invokeSurfaceAction).toHaveBeenCalledWith({
+        type: "refresh",
+        target: { kind: "provider", providerId: "claude" },
+        force: true,
+      });
     });
     fireEvent.click(screen.getByRole("button", { name: "用量页" }));
     await waitFor(() => {
@@ -265,6 +271,14 @@ describe("V5 settings pages from HTML", () => {
       expect(tauriMocks.invokeSurfaceAction).toHaveBeenCalledWith({
         type: "openExternalStatus",
         target: { kind: "provider", providerId: "claude" },
+      });
+    });
+    fireEvent.click(screen.getByRole("button", { name: "买额度" }));
+    await waitFor(() => {
+      expect(tauriMocks.invokeSurfaceAction).toHaveBeenCalledWith({
+        type: "openExternalUrl",
+        target: { kind: "app" },
+        url: "https://claude.ai/upgrade",
       });
     });
     expect(document.querySelector(".s5-pd-act")?.textContent).toMatch(/刷新/);

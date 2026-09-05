@@ -197,7 +197,7 @@ export function quotaPercentDisplay(
   return {
     semantics: ctx.showAsUsed ? "used" : "remaining",
     percent,
-    rounded: Math.round(percent),
+    rounded: Number(percent.toFixed(1)),
     fillPercent: percent,
     level: quotaLevel(usedPercent, ctx, rate.isExhausted),
     isExhausted: rate.isExhausted,

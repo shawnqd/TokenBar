@@ -388,7 +388,8 @@ fn string_from_keys(map: &serde_json::Map<String, Value>, keys: &[&str]) -> Opti
 }
 
 fn normalized_percent(value: f64) -> f64 {
-    if value <= 1.0 { value * 100.0 } else { value }
+    // Percent fields are already scaled 0–100; do not guess fractions.
+    value
 }
 
 fn parse_datetime(raw: String) -> Option<DateTime<Utc>> {

@@ -1,10 +1,11 @@
-import { useEffect, useMemo } from "react";
+import { useCallback, useEffect, useMemo } from "react";
 import { useLocale } from "../../../hooks/useLocale";
 import type {
   FloatBarOrientation,
   FloatBarResetWindow,
   FloatBarStyle,
   TaskbarEntry,
+  TaskbarWindowKind,
 } from "../../../types/bridge";
 import {
   floatBarIdsFromEntries,
@@ -16,6 +17,11 @@ import { SurfacePreviewFrame } from "./HtmlSurfacePreviews";
 import { V5EntryList } from "./V5EntryList";
 import { V5Field, V5Section, V5Seg, V5Toggle } from "./v5Controls";
 import { catalogChoices } from "./htmlFixture";
+import {
+  taskbarWindowLabelFor,
+  taskbarWindowOptionsFor,
+  useTaskbarWindowAvailability,
+} from "../taskbarWindowOptions";
 
 const RESET_CHIPS: { value: FloatBarResetWindow; label: string }[] = [
   { value: "primary", label: "主窗口" },
@@ -35,7 +41,7 @@ export default function FloatBarPage({
   set,
   saving,
 }: SettingsPageProps) {
-  const { t } = useLocale();
+  const { t, language } = useLocale();
   const enabled = settings.floatBarEnabled;
   const off = !enabled;
   // Runtime consumes floatBarEntries; legacy ids only via resolver
@@ -48,6 +54,18 @@ export default function FloatBarPage({
   const providers = useMemo(
     () => catalogChoices(settings.enabledProviders),
     [settings.enabledProviders],
+  );
+  const windowAvailability = useTaskbarWindowAvailability(enabled);
+  const windowOptionsFor = useCallback(
+    (entry: TaskbarEntry): TaskbarWindowKind[] =>
+      taskbarWindowOptionsFor(entry, windowAvailability, {
+        preserveSelection: false,
+      }),
+    [windowAvailability],
+  );
+  const windowLabelFor = useCallback(
+    (kind: TaskbarWindowKind) => taskbarWindowLabelFor(kind, t, language),
+    [language, t],
   );
 
   const commitEntries = (next: TaskbarEntry[]) => {
@@ -250,6 +268,8 @@ export default function FloatBarPage({
             minEntries={1}
             addLabel="添加条目"
             disabled={saving || off}
+            windowOptionsFor={windowOptionsFor}
+            windowLabelFor={windowLabelFor}
           />
           <V5Field label="额度数字" off={off}>
             <V5Seg

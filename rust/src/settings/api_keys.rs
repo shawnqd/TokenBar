@@ -177,9 +177,11 @@ pub fn get_api_key_providers() -> Vec<ProviderConfigInfo> {
             id: ProviderId::Zai,
             name: "z.ai",
             requires_api_key: true,
-            api_key_env_var: Some("Z_AI_API_KEY or ZAI_API_TOKEN"),
+            api_key_env_var: Some(
+                "Z_AI_API_KEY / ZAI_API_TOKEN / BIGMODEL_API_KEY / ZHIPU_API_KEY / ZHIPUAI_API_KEY / GLM_API_KEY",
+            ),
             api_key_help: Some(
-                "Get your API token from z.ai Dashboard. BigModel team usage can set Z_AI_BIGMODEL_ORGANIZATION + Z_AI_BIGMODEL_PROJECT, or provider workspace_id as organization|project.",
+                "Get your API token from z.ai or BigModel. Select API region Global (api.z.ai) or BigModel CN (open.bigmodel.cn) for GLM 国行; the provider also reads the BigModel environment aliases and coding-relay credential files automatically.",
             ),
             config_file_path: None,
             dashboard_url: Some("https://z.ai/manage-apikey/coding-plan/personal/my-plan"),

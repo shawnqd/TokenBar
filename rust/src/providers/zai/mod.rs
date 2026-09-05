@@ -3,13 +3,22 @@
 //! Fetches usage data from z.ai's quota API
 //! Uses API token stored in Windows Credential Manager
 
+mod balance;
 pub mod mcp_details;
+pub mod region;
+pub mod settings;
+mod zcode_plan;
 
 // Re-exports for MCP details menu
-#[allow(unused_imports)]
+#[allow(
+    unused_imports,
+    reason = "imports needed for future ZAI provider wiring"
+)]
 pub use mcp_details::{
     McpDetailsMenu, ZaiLimitEntry, ZaiLimitType, ZaiLimitUnit, ZaiUsageDetail, ZaiUsageSnapshot,
 };
+pub use region::ZaiRegion;
+pub use settings::ZaiSettingsError;
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
@@ -21,13 +30,8 @@ use crate::core::{
     RateWindow, SourceMode, UsageSnapshot,
 };
 
-/// z.ai API endpoint for quota/usage
-const ZAI_API_URL: &str = "https://api.z.ai/api/monitor/usage/quota/limit";
-const ZAI_BIGMODEL_CN_API_URL: &str = "https://open.bigmodel.cn/api/monitor/usage/quota/limit";
-const ZAI_QUOTA_URL_ENV: &str = "Z_AI_QUOTA_URL";
-const ZAI_API_HOST_ENV: &str = "Z_AI_API_HOST";
-const ZAI_API_KEY_ENV: &str = "Z_AI_API_KEY";
-const ZAI_LEGACY_API_KEY_ENV: &str = "ZAI_API_TOKEN";
+use settings::ZaiSettingsReader;
+
 const ZAI_USAGE_SCOPE_ENV: &str = "Z_AI_USAGE_SCOPE";
 const ZAI_BIGMODEL_ORG_ENV: &str = "Z_AI_BIGMODEL_ORGANIZATION";
 const ZAI_BIGMODEL_PROJECT_ENV: &str = "Z_AI_BIGMODEL_PROJECT";
@@ -40,7 +44,7 @@ const ZAI_CREDENTIAL_TARGET: &str = "codexbar-zai";
 struct ZaiQuotaResponse {
     #[serde(default)]
     code: Option<i32>,
-    #[serde(default)]
+    #[serde(default, alias = "msg")]
     message: Option<String>,
     #[serde(default)]
     data: Option<ZaiQuotaData>,
@@ -55,6 +59,15 @@ struct ZaiQuotaData {
     limits: Vec<ZaiLimit>,
     #[serde(rename = "planName")]
     plan_name: Option<String>,
+    /// Upstream plan-name fallbacks (`level` added in 0.48.0).
+    #[serde(default)]
+    plan: Option<String>,
+    #[serde(default)]
+    plan_type: Option<String>,
+    #[serde(default, rename = "packageName")]
+    package_name: Option<String>,
+    #[serde(default)]
+    level: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -85,6 +98,11 @@ struct ZaiLimit {
     /// Reset time as Unix epoch milliseconds (current response)
     #[serde(rename = "nextResetTime")]
     next_reset_time: Option<i64>,
+    /// Optional API label for promotional / gift packages.
+    #[serde(default)]
+    name: Option<String>,
+    #[serde(default, alias = "title", alias = "label")]
+    display_name: Option<String>,
 }
 
 /// z.ai provider
@@ -116,68 +134,91 @@ impl ZaiProvider {
         }
     }
 
-    /// Get API token from ctx, Windows Credential Manager, or env
-    fn get_api_token(api_key: Option<&str>) -> Result<String, ProviderError> {
+    /// Usage dashboard for the persisted region (upstream `resolveDashboardURL`).
+    pub fn dashboard_url_for_region(value: Option<&str>) -> String {
+        ZaiRegion::from_settings_value(value)
+            .dashboard_url()
+            .to_string()
+    }
+
+    /// Effective API region (upstream 0.48.0): an explicit settings value
+    /// wins; otherwise the region is inferred from canonical endpoint
+    /// overrides (`inferredRegion`).
+    fn effective_region(ctx: &FetchContext, env: &settings::EnvMap) -> ZaiRegion {
+        match ctx
+            .api_region
+            .as_deref()
+            .map(str::trim)
+            .filter(|raw| !raw.is_empty())
+        {
+            Some(raw) => ZaiRegion::from_settings_value(Some(raw)),
+            None => ZaiSettingsReader::inferred_region(env),
+        }
+    }
+
+    /// Get API token from ctx, Windows Credential Manager, or region-bound env.
+    fn get_api_token(
+        api_key: Option<&str>,
+        region: ZaiRegion,
+        env: &settings::EnvMap,
+    ) -> Result<String, ProviderError> {
         // Check ctx.api_key first (from settings)
         if let Some(key) = api_key
-            && let Some(cleaned) = clean_string(key)
+            && let Some(cleaned) = settings::cleaned(key)
         {
             return Ok(cleaned);
         }
 
         // Try Windows Credential Manager
-        match keyring::Entry::new(ZAI_CREDENTIAL_TARGET, "api_token") {
-            Ok(entry) => match entry.get_password() {
-                Ok(token) => Ok(token),
-                Err(_) => Self::api_token_from_env(),
-            },
-            Err(_) => Self::api_token_from_env(),
+        if let Ok(entry) = keyring::Entry::new(ZAI_CREDENTIAL_TARGET, "api_token")
+            && let Ok(token) = entry.get_password()
+        {
+            return Ok(token);
         }
-    }
 
-    fn api_token_from_env() -> Result<String, ProviderError> {
-        [ZAI_API_KEY_ENV, ZAI_LEGACY_API_KEY_ENV]
-            .iter()
-            .find_map(|key| std::env::var(key).ok().and_then(|value| clean_string(&value)))
-            .ok_or_else(|| {
-                ProviderError::NotInstalled(
-                    "z.ai API token not found. Set in Preferences → Providers, Z_AI_API_KEY, or ZAI_API_TOKEN."
-                        .to_string(),
-                )
+        let home = dirs::home_dir().unwrap_or_default();
+        ZaiSettingsReader::api_token(env, &home, region).ok_or_else(|| {
+            ProviderError::NotInstalled(match region {
+                ZaiRegion::BigModelCn => "z.ai (BigModel CN) API token not found. Set in Preferences → Providers, Z_AI_API_KEY, BIGMODEL_API_KEY, ZHIPU_API_KEY, ZHIPUAI_API_KEY, or GLM_API_KEY.".to_string(),
+                ZaiRegion::Global => "z.ai API token not found. Set in Preferences → Providers or Z_AI_API_KEY.".to_string(),
             })
+        })
     }
 
-    fn quota_url(ctx: &FetchContext) -> Result<Url, ProviderError> {
-        if let Ok(raw) = std::env::var(ZAI_QUOTA_URL_ENV)
-            && let Some(value) = clean_string(&raw)
-        {
-            return parse_https_url(&value);
-        }
-        if let Ok(raw) = std::env::var(ZAI_API_HOST_ENV)
-            && let Some(value) = clean_string(&raw)
-        {
-            return quota_url_from_host(&value);
-        }
+    /// Validate endpoint overrides against the region *before* any bearer
+    /// request (upstream #2621/#2623: canonical cross-region overrides are
+    /// rejected pre-auth; custom relay hosts stay legal).
+    fn validate_endpoint_overrides(
+        env: &settings::EnvMap,
+        region: ZaiRegion,
+    ) -> Result<(), ProviderError> {
+        ZaiSettingsReader::validate_endpoint_overrides(env, region)
+            .map_err(|err| ProviderError::Other(err.to_string()))
+    }
 
-        let base = match ctx
-            .api_region
-            .as_deref()
-            .map(|region| region.trim().to_ascii_lowercase())
-            .as_deref()
-        {
-            Some("cn") | Some("bigmodel") | Some("bigmodel-cn") | Some("bigmodel_cn") => {
-                ZAI_BIGMODEL_CN_API_URL
-            }
-            _ => ZAI_API_URL,
-        };
-        Url::parse(base).map_err(|e| ProviderError::Other(e.to_string()))
+    /// Quota URL: `Z_AI_QUOTA_URL` full override → `Z_AI_API_HOST` host
+    /// override → the selected region's canonical endpoint.
+    fn quota_url(env: &settings::EnvMap, region: ZaiRegion) -> Result<Url, ProviderError> {
+        let provider_err = |err: ZaiSettingsError| ProviderError::Other(err.to_string());
+        let env_get = |key: &str| env.get(key).and_then(|raw| settings::cleaned(raw));
+        if env_get(settings::ZAI_QUOTA_URL_ENV).is_some() {
+            let url = ZaiSettingsReader::quota_url_override(env)
+                .map_err(provider_err)?
+                .expect("override present");
+            return Ok(url);
+        }
+        if let Some(url) = ZaiSettingsReader::quota_url_from_api_host(env).map_err(provider_err)? {
+            return Ok(url);
+        }
+        Ok(region.quota_limit_url())
     }
 
     fn request_url(
-        ctx: &FetchContext,
+        env: &settings::EnvMap,
+        region: ZaiRegion,
         team_context: Option<&ZaiTeamContext>,
     ) -> Result<Url, ProviderError> {
-        let mut url = Self::quota_url(ctx)?;
+        let mut url = Self::quota_url(env, region)?;
         if team_context.is_some() {
             url.query_pairs_mut().append_pair("type", "2");
         }
@@ -187,7 +228,7 @@ impl ZaiProvider {
     fn team_context(ctx: &FetchContext) -> Result<Option<ZaiTeamContext>, ProviderError> {
         let explicit_scope = std::env::var(ZAI_USAGE_SCOPE_ENV)
             .ok()
-            .and_then(|value| clean_string(&value))
+            .and_then(|value| settings::cleaned(&value))
             .is_some_and(|value| value.eq_ignore_ascii_case("team"));
         let context = ctx
             .workspace_id
@@ -206,7 +247,12 @@ impl ZaiProvider {
 
     /// Fetch usage from z.ai API
     async fn fetch_usage_api(&self, ctx: &FetchContext) -> Result<UsageSnapshot, ProviderError> {
-        let api_token = Self::get_api_token(ctx.api_key.as_deref())?;
+        let env = settings::process_env();
+        let region = Self::effective_region(ctx, &env);
+        // Canonical cross-region overrides are rejected before any bearer
+        // token is sent (upstream #2621/#2623).
+        Self::validate_endpoint_overrides(&env, region)?;
+        let api_token = Self::get_api_token(ctx.api_key.as_deref(), region, &env)?;
 
         let client = crate::core::credentialed_http_client_builder()
             .timeout(std::time::Duration::from_secs(30))
@@ -214,10 +260,11 @@ impl ZaiProvider {
             .map_err(|e| ProviderError::Other(e.to_string()))?;
 
         let team_context = Self::team_context(ctx)?;
-        let request_url = Self::request_url(ctx, team_context.as_ref())?;
+        let request_url = Self::request_url(&env, region, team_context.as_ref())?;
+        let authorization = authorization_header(&api_token);
         let mut request = client
             .get(request_url)
-            .header("Authorization", authorization_header(&api_token))
+            .header("Authorization", authorization.as_str())
             .header("Accept", "application/json");
         if let Some(team) = &team_context {
             request = request
@@ -252,7 +299,49 @@ impl ZaiProvider {
         let quota: ZaiQuotaResponse =
             serde_json::from_slice(&resp_bytes).map_err(|e| ProviderError::Parse(e.to_string()))?;
 
-        self.parse_quota_response(&quota)
+        let cn_balance = match ZaiSettingsReader::balance_url(&env, region) {
+            Ok(Some(url)) => {
+                balance::fetch_cn_account_balance(&client, &authorization, &url).await
+            }
+            Ok(None) => None,
+            Err(err) => return Err(ProviderError::Other(err.to_string())),
+        };
+        let zcode_windows = zcode_plan::fetch_start_plan_windows(&client, &env).await;
+
+        match self.parse_quota_response(&quota) {
+            Ok(mut usage) => {
+                if let Some(balance) = cn_balance {
+                    usage = usage.with_extra_rate_window(
+                        "zai-account-balance",
+                        "Account balance",
+                        RateWindow::informational(balance.format_row()),
+                    );
+                }
+                Ok(zcode_plan::merge_start_plan(usage, zcode_windows))
+            }
+            Err(err) => {
+                let is_no_plan = quota.message.as_deref().is_some_and(|msg| {
+                    msg.contains("不存在coding plan")
+                        || msg.contains("不存在 coding plan")
+                        || msg.to_lowercase().contains("no coding plan")
+                });
+                if (is_no_plan || quota.code == Some(500))
+                    && (cn_balance.is_some() || !zcode_windows.is_empty())
+                {
+                    let mut usage = UsageSnapshot::new(RateWindow::informational("无生效套餐"))
+                        .with_login_method("智谱 GLM");
+                    if let Some(balance) = cn_balance {
+                        usage = usage.with_extra_rate_window(
+                            "zai-account-balance",
+                            "Account balance",
+                            RateWindow::informational(balance.format_row()),
+                        );
+                    }
+                    return Ok(zcode_plan::merge_start_plan(usage, zcode_windows));
+                }
+                Err(err)
+            }
+        }
     }
 
     fn parse_quota_response(
@@ -276,38 +365,63 @@ impl ZaiProvider {
         } else {
             &quota.limits
         };
+        // Upstream 0.48.0 plan-name fallbacks: planName, plan, plan_type,
+        // packageName, level — first non-empty trimmed wins.
         let plan_name = quota
             .data
             .as_ref()
-            .and_then(|d| d.plan_name.as_deref())
+            .and_then(|data| {
+                [
+                    data.plan_name.as_deref(),
+                    data.plan.as_deref(),
+                    data.plan_type.as_deref(),
+                    data.package_name.as_deref(),
+                    data.level.as_deref(),
+                ]
+                .into_iter()
+                .filter_map(|raw| raw.map(str::trim))
+                .find(|raw| !raw.is_empty())
+            })
             .unwrap_or("z.ai");
 
-        // Collect TOKENS_LIMIT entries (upstream uses "TOKENS_LIMIT", legacy uses "tokens")
-        let mut token_limits: Vec<&ZaiLimit> = limits
-            .iter()
-            .filter(|l| {
-                matches!(
-                    l.limit_type.as_deref(),
-                    Some("TOKENS_LIMIT") | Some("tokens")
-                )
-            })
-            .collect();
+        // Collect token/credit limit entries (upstream 0.49.0 #2724: credit
+        // Coding Plans report `CREDIT_LIMIT` rows with the same shape as
+        // `TOKENS_LIMIT`; upstream uses "TOKENS_LIMIT", legacy uses "tokens").
+        let is_tokens = |l: &&ZaiLimit| {
+            matches!(
+                l.limit_type.as_deref(),
+                Some("TOKENS_LIMIT") | Some("CREDIT_LIMIT") | Some("tokens")
+            )
+        };
+        let is_time =
+            |l: &&ZaiLimit| matches!(l.limit_type.as_deref(), Some("TIME_LIMIT") | Some("mcp"));
+        let mut token_limits: Vec<&ZaiLimit> = limits.iter().filter(is_tokens).collect();
+        // Upstream ordering: ascending window minutes, unknown windows last.
+        token_limits.sort_by_key(|l| Self::window_minutes(l).unwrap_or(u32::MAX));
+        let time_limit = limits.iter().find(is_time);
 
-        // Find TIME_LIMIT entry (or legacy "mcp")
-        let time_limit = limits
-            .iter()
-            .find(|l| matches!(l.limit_type.as_deref(), Some("TIME_LIMIT") | Some("mcp")));
-
-        // Sort token limits by window_minutes: shortest first
-        token_limits.sort_by_key(|l| Self::window_minutes(l));
-
-        // Compute used percent for a limit entry
+        // Compute used percent for a limit entry (upstream 0.49.0 `parseLimit`):
+        // when the response carries a positive `usage` total, the absolute
+        // used signal (`usage - remaining`, or `currentValue`) wins over the
+        // API's own `percentage`; otherwise `percentage` is trusted, and
+        // legacy `limit`/`used` responses fall back to the old math.
         fn compute_percent(l: &ZaiLimit) -> f64 {
+            if let Some(usage) = l.usage.filter(|&usage| usage > 0.0) {
+                let used = if let Some(remaining) = l.remaining {
+                    let from_remaining = usage - remaining;
+                    let baseline = l.current_value.unwrap_or(from_remaining);
+                    from_remaining.max(baseline)
+                } else {
+                    l.current_value.unwrap_or(0.0)
+                };
+                let clamped = used.clamp(0.0, usage);
+                return (clamped / usage * 100.0).clamp(0.0, 100.0);
+            }
             if let Some(percentage) = l.percentage {
                 return percentage.clamp(0.0, 100.0);
             }
 
-            let limit = l.limit.or(l.usage).unwrap_or(0.0);
+            let limit = l.limit.unwrap_or(0.0);
             if limit <= 0.0 {
                 return if l.used.unwrap_or(0.0) > 0.0 || l.current_value.unwrap_or(0.0) > 0.0 {
                     100.0
@@ -326,7 +440,11 @@ impl ZaiProvider {
             ((used / limit) * 100.0).clamp(0.0, 100.0)
         }
 
-        fn make_window(l: &ZaiLimit, window_mins: Option<u32>) -> RateWindow {
+        // Upstream 0.48.0 `rateWindow`/`resetDescription`: only token-type
+        // windows keep duration minutes; TIME_LIMIT (MCP) carries the "MCP"
+        // label and no window duration; 5-hour token windows are labeled
+        // "5-hour"; otherwise the explicit window label is used.
+        fn make_window(l: &ZaiLimit) -> RateWindow {
             let resets_at = l
                 .next_reset_time
                 .and_then(DateTime::<Utc>::from_timestamp_millis)
@@ -336,51 +454,77 @@ impl ZaiProvider {
                         .and_then(|value| DateTime::parse_from_rfc3339(value).ok())
                         .map(|timestamp| timestamp.with_timezone(&Utc))
                 });
-            RateWindow::with_details(compute_percent(l), window_mins, resets_at, None)
+            let is_tokens = matches!(
+                l.limit_type.as_deref(),
+                Some("TOKENS_LIMIT") | Some("CREDIT_LIMIT") | Some("tokens")
+            );
+            let window_mins = if is_tokens {
+                ZaiProvider::window_minutes(l)
+            } else {
+                None
+            };
+            RateWindow::with_details(
+                compute_percent(l),
+                window_mins,
+                resets_at,
+                rate_window_reset_description(l, window_mins),
+            )
         }
 
-        // Build windows based on upstream layout:
-        // If 2+ TOKENS_LIMIT: shortest → session (5-hour), longest → weekly (primary)
-        // TIME_LIMIT → secondary
-        let (primary, secondary, tertiary) = match token_limits.len() {
-            0 => {
-                // No token limits; use time_limit as primary if available
-                let p = time_limit
-                    .map(|l| make_window(l, Self::window_minutes(l)))
-                    .unwrap_or_else(|| RateWindow::new(0.0));
-                (p, None, None)
-            }
-            1 => {
-                let p = make_window(token_limits[0], Self::window_minutes(token_limits[0]));
-                let s = time_limit.map(|l| make_window(l, Self::window_minutes(l)));
-                (p, s, None)
-            }
-            _ => {
-                // 2+ token limits: longest → primary (weekly), shortest → tertiary (5-hour)
-                let weekly = token_limits.last().unwrap();
-                let session = token_limits.first().unwrap();
-                let p = make_window(weekly, Self::window_minutes(weekly));
-                let s = time_limit.map(|l| make_window(l, Self::window_minutes(l)));
-                let t = Some(make_window(session, Self::window_minutes(session)));
-                (p, s, t)
-            }
+        // Upstream 0.48.0 bucket split: with 2+ token limits, the shortest
+        // window → session (5-hour GLM Coding Plan window) and the longest →
+        // weekly token quota; with one token limit it stands alone; with none
+        // the MCP (time) limit is the primary.
+        let (token_limit, session_token_limit) = match token_limits.as_slice() {
+            [] => (None, None),
+            [single] => (Some(*single), None),
+            _ => (token_limits.last().copied(), token_limits.first().copied()),
+        };
+        let primary_limit = session_token_limit.or(token_limit).or(time_limit);
+        let secondary_limit = if session_token_limit.is_some() {
+            token_limit
+        } else {
+            None
         };
 
+        let extra_token_limits: &[&ZaiLimit] = if token_limits.len() >= 3 {
+            &token_limits[1..token_limits.len() - 1]
+        } else {
+            &[]
+        };
+
+        let primary = primary_limit
+            .map(make_window)
+            .unwrap_or_else(|| RateWindow::new(0.0));
         let mut usage = UsageSnapshot::new(primary).with_login_method(plan_name);
-        if let Some(sec) = secondary {
-            usage = usage.with_secondary(sec);
+        if let Some(secondary) = secondary_limit {
+            usage = usage.with_secondary(make_window(secondary));
         }
-        if let Some(ter) = tertiary {
-            usage = usage.with_model_specific(ter);
+        // MCP usage is a separate named window whenever a coding-limit
+        // primary exists; with no token limits it already owns the primary.
+        if (token_limit.is_some() || session_token_limit.is_some())
+            && let Some(mcp) = time_limit
+        {
+            usage = usage.with_extra_rate_window("zai-mcp", "MCP", make_window(mcp));
+        }
+        // Promotional / daily gift packages sit between the 5-hour and weekly
+        // windows. Dropping them hid remaining amounts such as a 3亿 gift.
+        for (index, extra) in extra_token_limits.iter().enumerate() {
+            usage = usage.with_extra_rate_window(
+                format!("zai-extra-{index}"),
+                extra_token_title(extra),
+                make_window(extra),
+            );
         }
 
         Ok(usage)
     }
 
-    /// Compute window_minutes from a limit's unit + number fields
+    /// Compute window_minutes from a limit's unit + number fields.
+    /// Returns `None` when number ≤ 0 or unit is unknown (upstream windowMinutes).
     fn window_minutes(l: &ZaiLimit) -> Option<u32> {
+        let number = l.number.filter(|&n| n > 0)? as u32;
         let unit = l.unit?;
-        let number = l.number.unwrap_or(1) as u32;
         let minutes_per_unit = match unit {
             1 => 1440,  // days
             3 => 60,    // hours
@@ -392,53 +536,104 @@ impl ZaiProvider {
     }
 }
 
+/// Upstream 0.48.0 `resetDescription`: MCP (TIME_LIMIT) → "MCP"; 5-hour
+/// token window → "5-hour"; else the explicit window label, if any.
+fn rate_window_reset_description(l: &ZaiLimit, window_mins: Option<u32>) -> Option<String> {
+    let base = if matches!(l.limit_type.as_deref(), Some("TIME_LIMIT") | Some("mcp")) {
+        Some("MCP".to_string())
+    } else if matches!(
+        l.limit_type.as_deref(),
+        Some("TOKENS_LIMIT") | Some("CREDIT_LIMIT") | Some("tokens")
+    ) && window_mins == Some(300)
+    {
+        Some("5-hour".to_string())
+    } else {
+        window_label(l)
+    };
+    match (base, quota_remaining_label(l)) {
+        (Some(base), Some(remaining)) => Some(format!("{base} · {remaining}")),
+        (None, remaining) => remaining,
+        (base, None) => base,
+    }
+}
+
+fn extra_token_title(l: &ZaiLimit) -> String {
+    for raw in [l.name.as_deref(), l.display_name.as_deref()] {
+        if let Some(text) = raw.map(str::trim).filter(|value| !value.is_empty()) {
+            return text.to_string();
+        }
+    }
+    window_label(l).unwrap_or_else(|| "额外额度".to_string())
+}
+
+fn quota_remaining_label(l: &ZaiLimit) -> Option<String> {
+    if matches!(l.limit_type.as_deref(), Some("TIME_LIMIT") | Some("mcp")) {
+        return None;
+    }
+    let remaining = l.remaining.filter(|value| value.is_finite() && *value >= 0.0)?;
+    Some(format!("剩余 {}", format_quota_amount(remaining)))
+}
+
+fn format_quota_amount(value: f64) -> String {
+    if value >= 100_000_000.0 {
+        format!("{:.2}亿", value / 100_000_000.0)
+    } else if value >= 10_000.0 {
+        format!("{:.1}万", value / 10_000.0)
+    } else {
+        format!("{value:.0}")
+    }
+}
+
+fn window_label(l: &ZaiLimit) -> Option<String> {
+    let number = l.number.filter(|&n| n > 0)?;
+    let unit = l.unit?;
+    let unit_label = match unit {
+        1 => {
+            if number == 1 {
+                "day"
+            } else {
+                "days"
+            }
+        }
+        3 => {
+            if number == 1 {
+                "hour"
+            } else {
+                "hours"
+            }
+        }
+        5 => {
+            if number == 1 {
+                "minute"
+            } else {
+                "minutes"
+            }
+        }
+        6 => {
+            if number == 1 {
+                "week"
+            } else {
+                "weeks"
+            }
+        }
+        _ => return None,
+    };
+    Some(format!("{number} {unit_label} window"))
+}
+
 impl ZaiTeamContext {
     fn from_env() -> Option<Self> {
         let organization_id = std::env::var(ZAI_BIGMODEL_ORG_ENV)
             .ok()
-            .and_then(|value| clean_string(&value))?;
+            .and_then(|value| settings::cleaned(&value))?;
         let project_id = std::env::var(ZAI_BIGMODEL_PROJECT_ENV)
             .ok()
-            .and_then(|value| clean_string(&value))?;
+            .and_then(|value| settings::cleaned(&value))?;
         Some(Self {
             organization_id,
             project_id,
         })
     }
-}
-
-fn clean_string(raw: &str) -> Option<String> {
-    let mut value = raw.trim();
-    if value.len() >= 2
-        && ((value.starts_with('"') && value.ends_with('"'))
-            || (value.starts_with('\'') && value.ends_with('\'')))
-    {
-        value = &value[1..value.len() - 1];
-    }
-    let value = value.trim();
-    (!value.is_empty()).then(|| value.to_string())
-}
-
-fn parse_https_url(raw: &str) -> Result<Url, ProviderError> {
-    let value = if raw.starts_with("http://") || raw.starts_with("https://") {
-        raw.to_string()
-    } else {
-        format!("https://{raw}")
-    };
-    let url = Url::parse(&value).map_err(|e| ProviderError::Other(e.to_string()))?;
-    if url.scheme() != "https" {
-        return Err(ProviderError::Other(
-            "z.ai endpoint overrides must use HTTPS.".to_string(),
-        ));
-    }
-    Ok(url)
-}
-
-fn quota_url_from_host(raw: &str) -> Result<Url, ProviderError> {
-    let mut url = parse_https_url(raw)?;
-    url.set_path("api/monitor/usage/quota/limit");
-    url.set_query(None);
-    Ok(url)
 }
 
 fn parse_team_context_pair(raw: &str) -> Option<ZaiTeamContext> {
@@ -447,8 +642,8 @@ fn parse_team_context_pair(raw: &str) -> Option<ZaiTeamContext> {
         .or_else(|| raw.split_once(','))
         .or_else(|| raw.split_once(';'))?;
     Some(ZaiTeamContext {
-        organization_id: clean_string(organization_id)?,
-        project_id: clean_string(project_id)?,
+        organization_id: settings::cleaned(organization_id)?,
+        project_id: settings::cleaned(project_id)?,
     })
 }
 
@@ -509,16 +704,25 @@ impl Provider for ZaiProvider {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use settings::EnvMap;
+    use std::collections::HashMap;
+
+    fn env_map(pairs: &[(&str, &str)]) -> EnvMap {
+        pairs
+            .iter()
+            .map(|(key, value)| (key.to_string(), value.to_string()))
+            .collect::<HashMap<_, _>>()
+    }
 
     #[test]
     fn request_url_adds_team_type_query_for_team_context() {
-        let ctx = FetchContext::default();
+        let env = env_map(&[]);
         let team = ZaiTeamContext {
             organization_id: "org".to_string(),
             project_id: "project".to_string(),
         };
 
-        let url = ZaiProvider::request_url(&ctx, Some(&team)).expect("url");
+        let url = ZaiProvider::request_url(&env, ZaiRegion::Global, Some(&team)).expect("url");
 
         assert_eq!(
             url.as_str(),
@@ -532,12 +736,43 @@ mod tests {
             api_region: Some("bigmodel-cn".to_string()),
             ..FetchContext::default()
         };
+        let env = env_map(&[]);
+        let region = ZaiProvider::effective_region(&ctx, &env);
+        assert_eq!(region, ZaiRegion::BigModelCn);
 
-        let url = ZaiProvider::quota_url(&ctx).expect("url");
+        let url = ZaiProvider::quota_url(&env, region).expect("url");
 
         assert_eq!(
             url.as_str(),
             "https://open.bigmodel.cn/api/monitor/usage/quota/limit"
+        );
+    }
+
+    #[test]
+    fn global_region_defaults_to_api_z_ai() {
+        let env = env_map(&[]);
+
+        let url = ZaiProvider::quota_url(&env, ZaiRegion::Global).expect("url");
+
+        assert_eq!(
+            url.as_str(),
+            "https://api.z.ai/api/monitor/usage/quota/limit"
+        );
+    }
+
+    #[test]
+    fn dashboard_url_follows_selected_region() {
+        assert_eq!(
+            ZaiProvider::dashboard_url_for_region(None),
+            "https://z.ai/manage-apikey/coding-plan/personal/my-plan"
+        );
+        assert_eq!(
+            ZaiProvider::dashboard_url_for_region(Some("cn")),
+            "https://bigmodel.cn/coding-plan/personal/usage"
+        );
+        assert_eq!(
+            ZaiProvider::dashboard_url_for_region(Some("bigmodel-cn")),
+            "https://bigmodel.cn/coding-plan/personal/usage"
         );
     }
 
@@ -601,6 +836,312 @@ mod tests {
     }
 
     #[test]
+    fn credit_limit_plan_drives_primary_and_weekly_windows() {
+        // Upstream 0.49.0 #2724/#2712: credit-based Coding Plans report
+        // CREDIT_LIMIT rows shaped like TOKENS_LIMIT. Without this, usage
+        // sticks at 0% used / 100% remaining.
+        let provider = ZaiProvider::new();
+        let quota: ZaiQuotaResponse = serde_json::from_value(serde_json::json!({
+            "code": 200,
+            "data": {
+                "planName": "GLM Coding Lite",
+                "limits": [
+                    {
+                        "type": "CREDIT_LIMIT",
+                        "unit": 3,
+                        "number": 5,
+                        "usage": 500,
+                        "currentValue": 475,
+                        "remaining": 25,
+                        "percentage": 95,
+                        "nextResetTime": 1770648402389_i64
+                    },
+                    {
+                        "type": "CREDIT_LIMIT",
+                        "unit": 6,
+                        "number": 1,
+                        "usage": 3000,
+                        "currentValue": 1200,
+                        "remaining": 1800,
+                        "percentage": 40
+                    }
+                ]
+            }
+        }))
+        .unwrap();
+
+        let usage = provider.parse_quota_response(&quota).unwrap();
+
+        // Shortest window (5h credits) is the primary; longest (weekly) secondary.
+        assert!((usage.primary.used_percent - 95.0).abs() < f64::EPSILON);
+        assert_eq!(usage.primary.window_minutes, Some(300));
+        assert_eq!(
+            usage.primary.reset_description.as_deref(),
+            Some("5-hour · 剩余 25")
+        );
+        assert!(usage.primary.resets_at.is_some());
+        let secondary = usage.secondary.expect("weekly credit window");
+        assert_eq!(
+            secondary.reset_description.as_deref(),
+            Some("1 week window · 剩余 1800")
+        );
+        assert!((secondary.used_percent - 40.0).abs() < f64::EPSILON);
+        assert_eq!(secondary.window_minutes, Some(10080));
+    }
+
+    #[test]
+    fn usage_signal_overrides_stale_percentage() {
+        // Upstream 0.49.0 `parseLimit`: a positive `usage` total makes the
+        // absolute used signal authoritative; the API's `percentage` is only
+        // trusted without it.
+        let provider = ZaiProvider::new();
+        let quota: ZaiQuotaResponse = serde_json::from_value(serde_json::json!({
+            "code": 200,
+            "data": {
+                "limits": [{
+                    "type": "CREDIT_LIMIT",
+                    "unit": 3,
+                    "number": 5,
+                    "usage": 500,
+                    "currentValue": 25,
+                    "remaining": 475,
+                    "percentage": 95
+                }]
+            }
+        }))
+        .unwrap();
+
+        let usage = provider.parse_quota_response(&quota).unwrap();
+
+        assert!((usage.primary.used_percent - 5.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn time_limit_primary_carries_mcp_label_without_duration() {
+        // Upstream 0.48.0: TIME_LIMIT (MCP) windows no longer keep explicit
+        // duration minutes and label as "MCP", not the old monthly sentinel.
+        let provider = ZaiProvider::new();
+        let quota: ZaiQuotaResponse = serde_json::from_value(serde_json::json!({
+            "code": 200,
+            "data": {
+                "limits": [{
+                    "type": "TIME_LIMIT",
+                    "unit": 3,
+                    "number": 5,
+                    "usage": 100,
+                    "currentValue": 20,
+                    "remaining": 80,
+                    "percentage": 25,
+                    "nextResetTime": 123000_i64
+                }]
+            }
+        }))
+        .unwrap();
+        let usage = provider.parse_quota_response(&quota).unwrap();
+        assert_eq!(usage.primary.window_minutes, None);
+        assert_eq!(usage.primary.reset_description.as_deref(), Some("MCP"));
+        assert!(usage.primary.resets_at.is_some());
+    }
+
+    #[test]
+    fn bare_time_limit_primary_has_no_window_duration() {
+        let provider = ZaiProvider::new();
+        let quota: ZaiQuotaResponse = serde_json::from_value(serde_json::json!({
+            "code": 200,
+            "data": {
+                "limits": [{
+                    "type": "TIME_LIMIT",
+                    "unit": 1,
+                    "number": 0,
+                    "usage": 100,
+                    "currentValue": 20,
+                    "remaining": 80,
+                    "percentage": 25,
+                    "nextResetTime": 123000_i64
+                }]
+            }
+        }))
+        .unwrap();
+        let usage = provider.parse_quota_response(&quota).unwrap();
+        assert_eq!(usage.primary.window_minutes, None);
+        assert_eq!(usage.primary.reset_description.as_deref(), Some("MCP"));
+    }
+
+    #[test]
+    fn mcp_limit_renders_separate_named_window() {
+        // Upstream 0.48.0 GLM Coding Plan layout: coding-limit primary +
+        // MCP as a named extra window; MCP 1-minute marker no longer maps
+        // to a monthly sentinel secondary.
+        let provider = ZaiProvider::new();
+        let quota: ZaiQuotaResponse = serde_json::from_value(serde_json::json!({
+            "code": 200,
+            "data": {
+                "limits": [
+                    {
+                        "type": "TOKENS_LIMIT",
+                        "unit": 6,
+                        "number": 1,
+                        "percentage": 34
+                    },
+                    {
+                        "type": "TIME_LIMIT",
+                        "unit": 5,
+                        "number": 1,
+                        "percentage": 10
+                    }
+                ]
+            }
+        }))
+        .unwrap();
+        let usage = provider.parse_quota_response(&quota).unwrap();
+
+        assert_eq!(usage.primary.window_minutes, Some(10080));
+        assert_eq!(
+            usage.primary.reset_description.as_deref(),
+            Some("1 week window")
+        );
+        assert!(usage.secondary.is_none());
+        let mcp = usage
+            .extra_rate_windows
+            .iter()
+            .find(|window| window.id == "zai-mcp")
+            .expect("MCP extra window");
+        assert_eq!(mcp.title, "MCP");
+        assert_eq!(mcp.window.window_minutes, None);
+        assert_eq!(mcp.window.reset_description.as_deref(), Some("MCP"));
+        assert_eq!(mcp.window.used_percent, 10.0);
+    }
+
+    #[test]
+    fn session_five_hour_window_becomes_primary_over_weekly() {
+        // Upstream 0.48.0 GLM Coding Plan: 2+ TOKENS_LIMIT entries →
+        // shortest (5-hour) window primary, longest (weekly) secondary.
+        let provider = ZaiProvider::new();
+        let quota: ZaiQuotaResponse = serde_json::from_value(serde_json::json!({
+            "code": 200,
+            "data": {
+                "limits": [
+                    {
+                        "type": "TOKENS_LIMIT",
+                        "unit": 3,
+                        "number": 5,
+                        "percentage": 55,
+                        "nextResetTime": 1770648402389_i64
+                    },
+                    {
+                        "type": "TOKENS_LIMIT",
+                        "unit": 6,
+                        "number": 1,
+                        "percentage": 34
+                    }
+                ]
+            }
+        }))
+        .unwrap();
+        let usage = provider.parse_quota_response(&quota).unwrap();
+
+        assert_eq!(usage.primary.used_percent, 55.0);
+        assert_eq!(usage.primary.window_minutes, Some(300));
+        assert_eq!(usage.primary.reset_description.as_deref(), Some("5-hour"));
+        assert!(usage.primary.resets_at.is_some());
+        let secondary = usage.secondary.expect("weekly secondary");
+        assert_eq!(secondary.used_percent, 34.0);
+        assert_eq!(secondary.window_minutes, Some(10080));
+        assert!(usage.model_specific.is_none());
+    }
+
+    #[test]
+    fn daily_gift_package_is_kept_as_extra_window_with_remaining() {
+        let provider = ZaiProvider::new();
+        let quota: ZaiQuotaResponse = serde_json::from_value(serde_json::json!({
+            "code": 200,
+            "data": {
+                "planName": "GLM Coding Pro",
+                "limits": [
+                    {
+                        "type": "CREDIT_LIMIT",
+                        "unit": 3,
+                        "number": 5,
+                        "usage": 12000,
+                        "remaining": 8000,
+                        "percentage": 33
+                    },
+                    {
+                        "type": "CREDIT_LIMIT",
+                        "name": "赠送套餐",
+                        "unit": 1,
+                        "number": 1,
+                        "usage": 300_000_000.0,
+                        "remaining": 300_000_000.0,
+                        "percentage": 0
+                    },
+                    {
+                        "type": "CREDIT_LIMIT",
+                        "unit": 6,
+                        "number": 1,
+                        "usage": 60000,
+                        "remaining": 40000,
+                        "percentage": 33
+                    }
+                ]
+            }
+        }))
+        .unwrap();
+
+        let usage = provider.parse_quota_response(&quota).unwrap();
+        assert_eq!(usage.primary.window_minutes, Some(300));
+        assert_eq!(usage.secondary.expect("weekly").window_minutes, Some(10080));
+        let gift = usage
+            .extra_rate_windows
+            .iter()
+            .find(|window| window.id == "zai-extra-0")
+            .expect("gift extra window");
+        assert_eq!(gift.title, "赠送套餐");
+        assert_eq!(
+            gift.window.reset_description.as_deref(),
+            Some("1 day window · 剩余 3.00亿")
+        );
+        assert!((gift.window.used_percent - 0.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn plan_name_falls_back_to_level_key() {
+        let provider = ZaiProvider::new();
+        let quota: ZaiQuotaResponse = serde_json::from_value(serde_json::json!({
+            "code": 200,
+            "data": {
+                "level": "GLM Coding Plan",
+                "limits": []
+            }
+        }))
+        .unwrap();
+        let usage = provider.parse_quota_response(&quota).unwrap();
+        assert_eq!(usage.login_method.as_deref(), Some("GLM Coding Plan"));
+
+        for key in ["plan", "plan_type", "packageName"] {
+            let quota: ZaiQuotaResponse = serde_json::from_value(serde_json::json!({
+                "code": 200,
+                "data": { key: "Coding Plan", "limits": [] }
+            }))
+            .unwrap();
+            let usage = provider.parse_quota_response(&quota).unwrap();
+            assert_eq!(usage.login_method.as_deref(), Some("Coding Plan"), "{key}");
+        }
+    }
+
+    #[test]
+    fn empty_plan_fields_fall_back_to_default() {
+        let provider = ZaiProvider::new();
+        let quota: ZaiQuotaResponse = serde_json::from_value(serde_json::json!({
+            "code": 200,
+            "data": { "planName": "  ", "level": "", "limits": [] }
+        }))
+        .unwrap();
+        let usage = provider.parse_quota_response(&quota).unwrap();
+        assert_eq!(usage.login_method.as_deref(), Some("z.ai"));
+    }
+
+    #[test]
     fn preserves_api_code_error_message() {
         let provider = ZaiProvider::new();
         let quota: ZaiQuotaResponse = serde_json::from_value(serde_json::json!({
@@ -613,4 +1154,24 @@ mod tests {
 
         assert!(error.to_string().contains("invalid token"));
     }
+
+    #[test]
+    fn preserves_api_code_error_message_with_msg_alias() {
+        let provider = ZaiProvider::new();
+        let quota: ZaiQuotaResponse = serde_json::from_value(serde_json::json!({
+            "code": 500,
+            "msg": "当前用户不存在coding plan",
+            "success": false
+        }))
+        .unwrap();
+
+        assert_eq!(quota.message.as_deref(), Some("当前用户不存在coding plan"));
+        let error = provider.parse_quota_response(&quota).unwrap_err();
+        assert!(error.to_string().contains("当前用户不存在coding plan"));
+    }
 }
+
+
+
+
+
