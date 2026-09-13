@@ -40,6 +40,55 @@ export function localizeProviderError(
   ) {
     return t("ProviderIssueSignInRequired");
   }
+  // Standalone timeout (ProviderError::Timeout) — same advice as a network
+  // timeout: usually transient, refresh to retry.
+  if (lower.trim() === "timeout") {
+    return t("ProviderIssueNetworkTimeout");
+  }
+  // Parse failures — serde/JSON chains are noise in a hover tip; the category
+  // tells the user the provider answered with something unusable.
+  if (/^(parse error:|failed to parse)/i.test(message.trim())) {
+    return t("ProviderIssueParseFailed");
+  }
+  if (lower.startsWith("no cookies available")) {
+    return t("ProviderIssueNoCookies");
+  }
+  const notInstalled = message.match(/^provider not installed:\s*(.+)$/is);
+  if (notInstalled) {
+    const detail = notInstalled[1].trim();
+    return detail
+      ? `${t("ProviderIssueNotInstalled")}：${detail}`
+      : t("ProviderIssueNotInstalled");
+  }
+  if (/not supported for this provider/i.test(message)) {
+    return t("ProviderIssueUnsupportedSourceModePrefix");
+  }
+  // Every provider formats non-2xx replies as "…returned status 500",
+  // "HTTP 401", "status code 403" or "API error 429: …". The status code is
+  // the one part that maps to an actionable reason, so classify on it.
+  const status = message.match(
+    /\b(?:https?|status code|returned status|returned|api error)\s*:?\s*(\d{3})\b/i,
+  );
+  if (status) {
+    const code = Number(status[1]);
+    if (code === 401 || code === 403) return t("ProviderIssueSignInRequired");
+    if (code === 429) return t("ProviderIssueCategoryRateLimit");
+    if (code >= 500) return t("ProviderIssueCategoryUpstream");
+    return t("ProviderIssueNetworkRequestFailed");
+  }
+  if (/rate[ -]?limit|too many requests/i.test(message)) {
+    return t("ProviderIssueCategoryRateLimit");
+  }
+  if (
+    /unauthorized|forbidden|invalid[ _-]?api[ _-]?key|invalid[_ ]?token|token expired|invalid_grant/i.test(
+      message,
+    )
+  ) {
+    return t("ProviderIssueSignInRequired");
+  }
+  if (/^api request failed/i.test(message.trim())) {
+    return t("ProviderIssueNetworkRequestFailed");
+  }
   if (
     lower.includes("no usage data") ||
     lower.includes("no quota data") ||

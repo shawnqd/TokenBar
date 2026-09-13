@@ -175,10 +175,7 @@ fn parse_balance_amount(raw: &str) -> Option<String> {
 /// Deliberately shares `window_by_kind` and [`balance_amount`] with
 /// [`resolve_entries`]: if availability were computed independently the menu and
 /// the strip could disagree, which is a worse failure than the one it fixes.
-pub fn available_windows(
-    snapshot: &ProviderUsageSnapshot,
-    has_speed: bool,
-) -> Vec<&'static str> {
+pub fn available_windows(snapshot: &ProviderUsageSnapshot, has_speed: bool) -> Vec<&'static str> {
     let mut out = Vec::new();
     // `primary` is the escape hatch, not a synonym. It is offered only when the
     // provider's main window could not be identified as a named cycle —
@@ -250,9 +247,78 @@ fn real_windows(snapshot: &ProviderUsageSnapshot) -> Vec<&RateWindowSnapshot> {
     all.extend(snapshot.secondary.as_ref());
     all.extend(snapshot.model_specific.as_ref());
     all.extend(snapshot.tertiary.as_ref());
-    all.extend(snapshot.extra_rate_windows.iter().map(|extra| &extra.window));
+    all.extend(
+        snapshot
+            .extra_rate_windows
+            .iter()
+            .map(|extra| &extra.window),
+    );
     all.retain(|window| !window.is_informational);
     all
+}
+
+/// Short tag for a grant that is a real quota but not a dated cycle.
+///
+/// Official Coding Plan windows already have 5h/周/日/月. The ZCode Start Plan
+/// (体验套餐) does not, so the strip would otherwise print a bare percent.
+/// Other unnamed grants stay unlabelled rather than inventing a cycle word.
+fn unnamed_quota_tag(snapshot: &ProviderUsageSnapshot, window: &RateWindowSnapshot) -> String {
+    let title = extra_title_for(snapshot, window)
+        .or(snapshot.primary_label.as_deref())
+        .unwrap_or("");
+    if is_trial_quota_title(title) {
+        "体".to_string()
+    } else {
+        String::new()
+    }
+}
+
+fn extra_title_for<'a>(
+    snapshot: &'a ProviderUsageSnapshot,
+    window: &RateWindowSnapshot,
+) -> Option<&'a str> {
+    snapshot.extra_rate_windows.iter().find_map(|extra| {
+        if std::ptr::eq(&extra.window, window) {
+            Some(extra.title.as_str())
+        } else {
+            None
+        }
+    })
+}
+
+fn is_trial_quota_title(title: &str) -> bool {
+    let lower = title.to_ascii_lowercase();
+    title.contains("体验")
+        || title.contains("體驗")
+        || lower.contains("start-plan")
+        || lower.contains("start plan")
+}
+
+/// Spec §5.7: a session tag states the real cycle length — a 4-hour window
+/// reads "4h", never a hard-coded "5h". Mirrors the frontend
+/// `formatWindowMinutes` ladder so the strip and the settings preview spell a
+/// cycle the same way. Named cycles keep their localized tags.
+fn session_cycle_tag(window: &RateWindowSnapshot) -> Option<String> {
+    let minutes = window.window_minutes?;
+    if minutes == 0 {
+        return None;
+    }
+    if minutes < 60 {
+        return Some(format!("{minutes}m"));
+    }
+    if minutes % 60 == 0 && minutes < 24 * 60 {
+        return Some(format!("{}h", minutes / 60));
+    }
+    if minutes == 24 * 60 {
+        return Some("日".to_string());
+    }
+    if minutes == 7 * 24 * 60 {
+        return Some("周".to_string());
+    }
+    if minutes % (24 * 60) == 0 {
+        return Some(format!("{}d", minutes / (24 * 60)));
+    }
+    Some(format!("{}h", (minutes as f64 / 60.0).round() as i64))
 }
 
 /// Resolve every configured entry, in order.
@@ -369,29 +435,42 @@ pub fn resolve_entries(
                 Some(window) if entry.window == "primary" => ResolvedEntry {
                     provider_id: snapshot.provider_id.clone(),
                     provider_label: snapshot.display_name.clone(),
-                    window: window.kind.map(window_label).unwrap_or_default(),
+                    window: match window.kind {
+                        Some("session") => {
+                            session_cycle_tag(window).unwrap_or_else(|| window_label("session"))
+                        }
+                        Some(kind) => window_label(kind),
+                        None => unnamed_quota_tag(snapshot, window),
+                    },
                     window_kind: "primary".to_string(),
                     amount: None,
-                    percent: Some(if settings.taskbar_show_as_used {
+                    percent: Some(if settings.effective_taskbar_show_as_used() {
                         window.used_percent
                     } else {
                         (100.0 - window.used_percent).clamp(0.0, 100.0)
                     }),
                     unavailable: None,
                 },
-                Some(window) => ResolvedEntry {
-                    provider_id: snapshot.provider_id.clone(),
-                    provider_label: snapshot.display_name.clone(),
-                    window: label,
-                    window_kind: entry.window.clone(),
-                    amount: None,
-                    percent: Some(if settings.taskbar_show_as_used {
-                        window.used_percent
+                Some(window) => {
+                    let tag = if entry.window == "session" {
+                        session_cycle_tag(window).unwrap_or_else(|| label.clone())
                     } else {
-                        (100.0 - window.used_percent).clamp(0.0, 100.0)
-                    }),
-                    unavailable: None,
-                },
+                        label.clone()
+                    };
+                    ResolvedEntry {
+                        provider_id: snapshot.provider_id.clone(),
+                        provider_label: snapshot.display_name.clone(),
+                        window: tag,
+                        window_kind: entry.window.clone(),
+                        amount: None,
+                        percent: Some(if settings.effective_taskbar_show_as_used() {
+                            window.used_percent
+                        } else {
+                            (100.0 - window.used_percent).clamp(0.0, 100.0)
+                        }),
+                        unavailable: None,
+                    }
+                }
                 None => ResolvedEntry::unavailable(
                     snapshot.provider_id.clone(),
                     snapshot.display_name.clone(),
@@ -409,6 +488,35 @@ mod tests {
     use super::*;
     use codexbar::settings::TaskbarEntry;
 
+    #[test]
+    fn session_tag_states_the_real_cycle_length() {
+        // Spec §5.7: the tag spells the window's actual length — a 4-hour
+        // session stays "4h" and never collapses into a hard-coded "5h".
+        assert_eq!(
+            session_cycle_tag(&window(10.0, Some(240))),
+            Some("4h".to_string())
+        );
+        assert_eq!(
+            session_cycle_tag(&window(10.0, Some(300))),
+            Some("5h".to_string())
+        );
+        // Off-hour lengths round to hours, mirroring formatWindowMinutes.
+        assert_eq!(
+            session_cycle_tag(&window(10.0, Some(90))),
+            Some("2h".to_string())
+        );
+        assert_eq!(
+            session_cycle_tag(&window(10.0, Some(30))),
+            Some("30m".to_string())
+        );
+        assert_eq!(
+            session_cycle_tag(&window(10.0, Some(1440))),
+            Some("日".to_string())
+        );
+        assert_eq!(session_cycle_tag(&window(10.0, None)), None);
+        assert_eq!(session_cycle_tag(&window(10.0, Some(0))), None);
+    }
+
     fn window(used: f64, minutes: Option<u32>) -> RateWindowSnapshot {
         labelled_window(used, minutes, None)
     }
@@ -417,11 +525,7 @@ mod tests {
     /// declared length and the provider's own name for the slot. Tests classify
     /// through the same function the bridge uses rather than asserting a `kind`
     /// by hand, so a fixture can never claim a cycle the real code would not.
-    fn labelled_window(
-        used: f64,
-        minutes: Option<u32>,
-        label: Option<&str>,
-    ) -> RateWindowSnapshot {
+    fn labelled_window(used: f64, minutes: Option<u32>, label: Option<&str>) -> RateWindowSnapshot {
         RateWindowSnapshot {
             used_percent: used,
             remaining_percent: 100.0 - used,
@@ -510,8 +614,16 @@ mod tests {
         let settings = settings_with(vec![("claude", "session"), ("claude", "weekly")]);
         let out = resolve_entries(&settings, &snaps, None, &label, &no_speed);
 
-        assert_eq!(out[0].percent, Some(10.0), "session came from the 300m window");
-        assert_eq!(out[1].percent, Some(40.0), "weekly came from the 10080m window");
+        assert_eq!(
+            out[0].percent,
+            Some(10.0),
+            "session came from the 300m window"
+        );
+        assert_eq!(
+            out[1].percent,
+            Some(40.0),
+            "weekly came from the 10080m window"
+        );
     }
 
     /// The whole point of the reason codes: a provider that does not publish the
@@ -523,7 +635,10 @@ mod tests {
         let out = resolve_entries(&settings, &snaps, None, &label, &no_speed);
 
         assert_eq!(out[0].percent, None);
-        assert_eq!(out[0].unavailable, Some(EntryUnavailable::WindowUnsupported));
+        assert_eq!(
+            out[0].unavailable,
+            Some(EntryUnavailable::WindowUnsupported)
+        );
     }
 
     #[test]
@@ -560,7 +675,8 @@ mod tests {
         let settings = settings_with(vec![("codex", "weekly"), ("codex", "session")]);
         let out = resolve_entries(&settings, &snaps, None, &label, &no_speed);
         assert_eq!(out[0].window, "weekly");
-        assert_eq!(out[1].window, "session");
+        // Session tags state the real length (spec §5.7), not the kind word.
+        assert_eq!(out[1].window, "5h");
     }
 
     /// The taskbar's own used/remaining choice drives the number, exactly like
@@ -569,7 +685,7 @@ mod tests {
     fn honors_the_taskbar_used_versus_remaining_setting() {
         let snaps = vec![snapshot("codex", "Codex")];
         let mut settings = settings_with(vec![("codex", "session")]);
-        settings.taskbar_show_as_used = false;
+        settings.taskbar_quota_display = codexbar::settings::QuotaDisplayPreference::Remaining;
         let out = resolve_entries(&settings, &snaps, None, &label, &no_speed);
         assert_eq!(out[0].percent, Some(90.0));
     }
@@ -580,7 +696,10 @@ mod tests {
         let snaps = vec![snapshot("deepseek", "DeepSeek")];
         let settings = settings_with(vec![("deepseek", "balance")]);
         let out = resolve_entries(&settings, &snaps, None, &label, &no_speed);
-        assert_eq!(out[0].unavailable, Some(EntryUnavailable::WindowUnsupported));
+        assert_eq!(
+            out[0].unavailable,
+            Some(EntryUnavailable::WindowUnsupported)
+        );
     }
 
     #[test]
@@ -604,7 +723,10 @@ mod tests {
 
     #[test]
     fn a_balance_entry_prints_the_amount_instead_of_reporting_unsupported() {
-        let snap = balance_snapshot("deepseek", "\u{a5}38.88 (Paid: \u{a5}38.88 / Granted: \u{a5}0.00)");
+        let snap = balance_snapshot(
+            "deepseek",
+            "\u{a5}38.88 (Paid: \u{a5}38.88 / Granted: \u{a5}0.00)",
+        );
         let mut settings = Settings::default();
         settings.taskbar_widget_entries = vec![codexbar::settings::TaskbarEntry {
             provider_id: "deepseek".into(),
@@ -636,18 +758,23 @@ mod tests {
 
         let out = resolve_entries(&settings, &[snap], None, &label, &no_speed);
         assert_eq!(out[0].amount, None);
-        assert_eq!(out[0].unavailable, Some(EntryUnavailable::WindowUnsupported));
+        assert_eq!(
+            out[0].unavailable,
+            Some(EntryUnavailable::WindowUnsupported)
+        );
     }
 
     #[test]
     fn balance_parsing_rejects_everything_that_is_not_money() {
         // Real encodings, from `lib/providerBalance.ts`.
         assert_eq!(
-            parse_balance_amount("\u{a5}38.88 (Paid: \u{a5}38.88 / Granted: \u{a5}0.00)").as_deref(),
+            parse_balance_amount("\u{a5}38.88 (Paid: \u{a5}38.88 / Granted: \u{a5}0.00)")
+                .as_deref(),
             Some("\u{a5}38.88")
         );
         assert_eq!(
-            parse_balance_amount("12.50 CNY balance (Paid: 8.25 CNY / Granted: 4.25 CNY)").as_deref(),
+            parse_balance_amount("12.50 CNY balance (Paid: 8.25 CNY / Granted: 4.25 CNY)")
+                .as_deref(),
             Some("12.50 CNY")
         );
         assert_eq!(
@@ -655,11 +782,17 @@ mod tests {
             Some("¥12.50")
         );
         // Full-width yen normalises to the same symbol the rest of the UI uses.
-        assert_eq!(parse_balance_amount("\u{ffe5}5.00 balance").as_deref(), Some("\u{a5}5.00"));
+        assert_eq!(
+            parse_balance_amount("\u{ffe5}5.00 balance").as_deref(),
+            Some("\u{a5}5.00")
+        );
 
         // "Unavailable" is a state, not an amount \u{2014} printing a number here would
         // be inventing one.
-        assert_eq!(parse_balance_amount("Balance unavailable for API calls"), None);
+        assert_eq!(
+            parse_balance_amount("Balance unavailable for API calls"),
+            None
+        );
         // Reset prose that happens to share the field.
         assert_eq!(parse_balance_amount("Resets on the 1st"), None);
         // A bare count with no currency is far likelier to be tokens than money.
@@ -713,7 +846,10 @@ mod tests {
         assert_eq!(available_windows(&codex, false), vec!["session", "weekly"]);
 
         // A balance account offers its balance and nothing else.
-        let deepseek = balance_snapshot("deepseek", "\u{a5}38.88 (Paid: \u{a5}38.88 / Granted: \u{a5}0.00)");
+        let deepseek = balance_snapshot(
+            "deepseek",
+            "\u{a5}38.88 (Paid: \u{a5}38.88 / Granted: \u{a5}0.00)",
+        );
         // NOT "primary": its 0% window is a balance carrier, and printing that 0%
         // would be a fabricated measurement.
         assert_eq!(available_windows(&deepseek, false), vec!["balance"]);
@@ -743,18 +879,22 @@ mod tests {
     fn every_offered_window_actually_resolves() {
         let providers = [
             snapshot("codex", "Codex"),
-            balance_snapshot("deepseek", "\u{a5}38.88 (Paid: \u{a5}38.88 / Granted: \u{a5}0.00)"),
+            balance_snapshot(
+                "deepseek",
+                "\u{a5}38.88 (Paid: \u{a5}38.88 / Granted: \u{a5}0.00)",
+            ),
         ];
         for snap in &providers {
-            for kind in ["primary", "session", "daily", "weekly", "monthly", "balance"] {
+            for kind in [
+                "primary", "session", "daily", "weekly", "monthly", "balance",
+            ] {
                 let offered = available_windows(snap, false).contains(&kind);
                 let mut settings = Settings::default();
                 settings.taskbar_widget_entries = vec![codexbar::settings::TaskbarEntry {
                     provider_id: snap.provider_id.clone(),
                     window: kind.to_string(),
                 }];
-                settings.enabled_providers =
-                    [snap.provider_id.clone()].into_iter().collect();
+                settings.enabled_providers = [snap.provider_id.clone()].into_iter().collect();
                 let out = resolve_entries(
                     &settings,
                     std::slice::from_ref(snap),
@@ -865,13 +1005,57 @@ mod tests {
         assert_eq!(available_windows(&fortnightly, false), vec!["primary"]);
     }
 
+    /// GLM 体验套餐 is a real one-time grant with no 5h/周 length. Native
+    /// availability already offers `primary`; the strip must tag it `体` so
+    /// the composer choice is not an unlabelled percent next to 余额.
+    #[test]
+    fn zai_start_plan_extra_is_offered_as_primary_and_tagged_trial() {
+        let mut snap = snapshot("zai", "GLM");
+        snap.primary = window(0.0, None);
+        snap.primary.is_informational = true;
+        snap.secondary = None;
+        snap.model_specific = None;
+        snap.tertiary = None;
+        let extra = labelled_window(0.0, None, Some("体验套餐 · GLM-5.3-Flash"));
+        let mut wallet = window(0.0, None);
+        wallet.reset_description = Some("¥12.50 available".into());
+        wallet.is_informational = true;
+        snap.extra_rate_windows = vec![
+            crate::commands::NamedRateWindowSnapshot {
+                id: "zai-zcode-0".into(),
+                title: "体验套餐 · GLM-5.3-Flash".into(),
+                window: extra,
+                usage_known: true,
+                inventory_expires_at: Vec::new(),
+            },
+            crate::commands::NamedRateWindowSnapshot {
+                id: "zai-account-balance".into(),
+                title: "Account balance".into(),
+                window: wallet,
+                usage_known: false,
+                inventory_expires_at: Vec::new(),
+            },
+        ];
+
+        assert_eq!(available_windows(&snap, false), vec!["primary", "balance"]);
+        assert!(!available_windows(&snapshot("codex", "Codex"), false).contains(&"primary"));
+
+        let out = resolve_one(snap, "primary");
+        assert_eq!(out.unavailable, None);
+        assert_eq!(out.window_kind, "primary");
+        assert_eq!(out.window, "体");
+        assert_eq!(out.percent, Some(0.0));
+    }
+
     /// Withholding `primary` from the menu must not break an entry that already
     /// stored it. Rewriting a user's saved configuration behind their back was
     /// rejected, so the old value has to keep working.
     #[test]
     fn a_stored_primary_entry_still_resolves_and_names_itself() {
         let cases: [(Option<u32>, Option<&str>, &str); 5] = [
-            (Some(300), None, "session"),
+            // A 5-hour session names itself after its real length (spec §5.7),
+            // even though the test's window_label closure is the kind word.
+            (Some(300), None, "5h"),
             (Some(24 * 60), None, "daily"),
             (Some(7 * 24 * 60), None, "weekly"),
             // Length absent, slot name answers instead.
@@ -912,13 +1096,18 @@ mod tests {
         // fabricated amount).
         assert_eq!(out[1].window_kind, "balance");
         assert_eq!(out[1].amount, None);
-        assert_eq!(out[1].unavailable, Some(EntryUnavailable::WindowUnsupported));
+        assert_eq!(
+            out[1].unavailable,
+            Some(EntryUnavailable::WindowUnsupported)
+        );
 
         // A disabled provider maps to the notConfigured-style unavailable.
         let mut disabled = settings_with(vec![("grok", "session")]);
         let out2 = resolve_entries(&disabled, &[], None, &label, &no_speed);
         assert_eq!(out2[0].window_kind, "session");
-        assert_eq!(out2[0].unavailable, Some(EntryUnavailable::ProviderDisabled));
+        assert_eq!(
+            out2[0].unavailable,
+            Some(EntryUnavailable::ProviderDisabled)
+        );
     }
-
 }

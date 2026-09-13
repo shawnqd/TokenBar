@@ -1,4 +1,5 @@
 import { useMemo } from "react";
+import { useLayoutEffect, useRef, useState } from "react";
 import FloatBar from "../../../floatbar/FloatBar";
 import { TASKBAR_PROVIDER_AUTO } from "../../../types/bridge";
 import type { SettingsSnapshot } from "../../../types/bridge";
@@ -67,8 +68,35 @@ interface Props {
 }
 
 export default function FloatBarPreview({ settings }: Props) {
+  // 缩放适配：横条宽度随胶囊数增长，超出预览列时整条等比缩小，保证一眼看全。
+  const fitOuterRef = useRef<HTMLDivElement | null>(null);
+  const fitInnerRef = useRef<HTMLDivElement | null>(null);
+  const [fit, setFit] = useState({ scale: 1, boxH: 0 });
   // Ensure store sync is started for preview as well (shares same singleton)
   ensureFloatBarStoreSync();
+  useLayoutEffect(() => {
+    const inner = fitInnerRef.current;
+    const outer = fitOuterRef.current;
+    if (!inner || !outer || typeof ResizeObserver === "undefined") return;
+    const measure = () => {
+      const natW = inner.offsetWidth;
+      const natH = inner.offsetHeight;
+      const availW = outer.clientWidth;
+      if (natW <= 0) return;
+      const scale =
+        natW > availW ? Math.max(0.5, Math.round((availW / natW) * 100) / 100) : 1;
+      setFit((cur) =>
+        cur.scale === scale && cur.boxH === Math.round(natH * scale)
+          ? cur
+          : { scale, boxH: Math.round(natH * scale) },
+      );
+    };
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(inner);
+    ro.observe(outer);
+    return () => ro.disconnect();
+  }, []);
   const coreSnapshots = useFloatBarSnapshots();
   // Build a bridge list for previewProviderList helper: prefer core snapshots converted to bridge,
   // fallback to catalog fixtures when store empty.
@@ -119,9 +147,30 @@ export default function FloatBarPreview({ settings }: Props) {
   );
 
   return (
-    <FloatBar
-      state={state}
-      preview={{ settings: previewSettings, providers: previewProviders }}
-    />
+    <div
+      ref={fitOuterRef}
+      style={{
+        width: "100%",
+        height: fit.boxH || undefined,
+        display: "flex",
+        alignItems: "center",
+      }}
+    >
+      <div
+        ref={fitInnerRef}
+        style={{
+          // max-content：测量的是胶囊条的自然宽度（会被等比缩小），
+          // 而不是容器宽度——否则永远不会触发缩放。
+          width: "max-content",
+          transform: fit.scale < 1 ? `scale(${fit.scale})` : undefined,
+          transformOrigin: "left center",
+        }}
+      >
+        <FloatBar
+          state={state}
+          preview={{ settings: previewSettings, providers: previewProviders }}
+        />
+      </div>
+    </div>
   );
 }

@@ -49,6 +49,7 @@ function detail(id: "deepseek" | "mimo"): ProviderDetail {
     hasSnapshot: true,
     cookieSource: null,
     region: null,
+    usageSource: "auto",
   };
 }
 

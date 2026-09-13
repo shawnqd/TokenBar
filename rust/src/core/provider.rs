@@ -347,6 +347,13 @@ impl ProviderId {
         }
     }
 
+    /// Deprecated providers stay fetchable for existing configs but the
+    /// settings catalog hides them unless the user already enabled them.
+    /// Mirrors upstream Win-CodexBar `ProviderId::is_deprecated`.
+    pub fn is_deprecated(&self) -> bool {
+        matches!(self, ProviderId::KimiK2 | ProviderId::CrossModel)
+    }
+
     /// Parse from CLI name string
     pub fn from_cli_name(name: &str) -> Option<Self> {
         match name.to_lowercase().as_str() {
@@ -806,6 +813,17 @@ mod tests {
         assert!(all.contains(&ProviderId::Sakana));
         assert!(all.contains(&ProviderId::Sub2Api));
         assert!(all.contains(&ProviderId::Wayfinder));
+    }
+
+    #[test]
+    fn deprecated_flags_match_upstream_catalog() {
+        // Upstream hides KimiK2 and CrossModel from settings unless already
+        // enabled; everything else stays listed.
+        assert!(ProviderId::KimiK2.is_deprecated());
+        assert!(ProviderId::CrossModel.is_deprecated());
+        assert!(!ProviderId::Kimi.is_deprecated());
+        assert!(!ProviderId::Claude.is_deprecated());
+        assert!(!ProviderId::Codex.is_deprecated());
     }
 
     #[test]

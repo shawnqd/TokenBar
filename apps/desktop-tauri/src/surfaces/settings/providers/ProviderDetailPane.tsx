@@ -674,10 +674,10 @@ function AuthWorkspace({
   const userPrimary: UserAuthKind =
     primary === "bespoke" ? mapBespokeToUserKind(providerId) : primary;
   const userLabel: Record<UserAuthKind, string> = {
-    // TODO(lane-s-i18n): 打开登录 / 网页会话 / 密钥
-    signIn: "打开登录",
-    cookie: "网页会话",
-    apiKey: "密钥",
+    // TODO(lane-s-i18n): CLI / OAuth 登录 / 会话 Cookie / API 密钥
+    signIn: "CLI / OAuth 登录",
+    cookie: "会话 Cookie",
+    apiKey: "API 密钥",
   };
 
   const [chosen, setChosen] = useState<UserAuthKind>(userPrimary);
@@ -707,7 +707,7 @@ function AuthWorkspace({
         </ProviderStatusLine>
       ) : userMethods.length === 0 ? (
         <ProviderStatusLine tone="neutral">
-          此服务商当前没有可用的登录、网页会话或 API 密钥入口。
+          此服务商当前没有可用的认证方式或 API 密钥入口。
         </ProviderStatusLine>
       ) : null}
       {capabilities !== null && userMethods.length > 1 && (

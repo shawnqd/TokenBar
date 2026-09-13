@@ -10,8 +10,8 @@ pub(crate) mod dwm;
 pub mod flyout_window;
 #[cfg(windows)]
 pub(crate) mod frost;
-pub mod popup_chrome;
 mod geometry;
+pub mod popup_chrome;
 mod position;
 pub mod settings_window;
 mod transition;

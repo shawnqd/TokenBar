@@ -6,9 +6,7 @@
 //! reads to the right cached bundle.
 
 use codexbar::core::OpenAIDashboardCacheStore;
-use codexbar::cost_scanner::{
-    CostScanner, CostSummary, get_daily_cost_history_with_budget,
-};
+use codexbar::cost_scanner::{CostScanner, CostSummary, get_daily_cost_history_with_budget};
 use codexbar::locale::{self, LocaleKey};
 use codexbar::settings::Settings;
 use serde::{Deserialize, Serialize};
@@ -121,7 +119,7 @@ pub async fn get_provider_chart_data(
 /// so opening the tray normally hits a warm cache instead of beginning a scan.
 pub(crate) fn prewarm_provider_chart_data() {
     tauri::async_runtime::spawn_blocking(move || {
-        for provider_id in ["codex", "claude"] {
+        for provider_id in ["codex", "claude", "grok"] {
             let (data, scan_stopped) =
                 build_provider_chart_data_with_cancel(provider_id.to_string(), None, None);
             cache_provider_chart_data_if_complete(&data, None, scan_stopped, false);
@@ -209,9 +207,10 @@ fn build_provider_chart_data_with_cancel(
     // not write a fresh `None` into the shared local-usage cache here: the
     // dedicated summary command and the background enrichment pass must still
     // be able to complete the authoritative scan and publish the real value.
-    let local_usage = if cost_scan_stopped || cancel
-        .as_deref()
-        .is_some_and(|flag| flag.load(Ordering::Relaxed))
+    let local_usage = if cost_scan_stopped
+        || cancel
+            .as_deref()
+            .is_some_and(|flag| flag.load(Ordering::Relaxed))
     {
         None
     } else {
@@ -477,7 +476,6 @@ pub fn clear_provider_local_usage_cache_command() {
     clear_provider_local_usage_cache();
 }
 
-
 /// Why a local-usage enrichment pass could not produce data.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[allow(dead_code)]
@@ -736,12 +734,12 @@ fn load_openai_dashboard_chart_data(
 mod tests {
     use super::{
         CostFetchFailure, DailyCostPoint, ProviderChartData, ProviderLocalUsageSummary,
-        apply_local_usage_scan, cache_provider_chart_data, cached_provider_chart_data,
-        cache_provider_chart_data_if_complete,
-        cached_provider_local_usage_summary, clear_provider_local_usage_cache,
-        cost_fetch_failure_allows_early_retry, load_local_usage_summary,
-        local_usage_cache, localized_estimate_note, record_local_usage_fetch_failure,
-        refresh_provider_local_usage_cache, token_cost_cache_is_fresh,
+        apply_local_usage_scan, cache_provider_chart_data, cache_provider_chart_data_if_complete,
+        cached_provider_chart_data, cached_provider_local_usage_summary,
+        clear_provider_local_usage_cache, cost_fetch_failure_allows_early_retry,
+        load_local_usage_summary, local_usage_cache, localized_estimate_note,
+        record_local_usage_fetch_failure, refresh_provider_local_usage_cache,
+        token_cost_cache_is_fresh,
     };
     use codexbar::settings::Language;
     use std::sync::{Arc, Mutex, OnceLock, atomic::AtomicBool};
@@ -863,11 +861,8 @@ mod tests {
         // for the three-second budget expiring. It may return no local usage in
         // this bundle, but it must leave the authoritative cache untouched.
         let cancel = Arc::new(AtomicBool::new(true));
-        let (chart, scan_stopped) = super::build_provider_chart_data_with_cancel(
-            "codex".to_string(),
-            None,
-            Some(cancel),
-        );
+        let (chart, scan_stopped) =
+            super::build_provider_chart_data_with_cancel("codex".to_string(), None, Some(cancel));
         assert!(chart.local_usage.is_none());
         assert!(scan_stopped);
         assert_eq!(

@@ -574,6 +574,7 @@ pub fn update_tray_icon_and_tooltip(
             get_text(
                 lang,
                 match kind {
+                    "primary" => LocaleKey::TaskbarWindowPrimary,
                     "weekly" => LocaleKey::TaskbarWindowWeekly,
                     "daily" => LocaleKey::TaskbarWindowDaily,
                     "monthly" => LocaleKey::TaskbarWindowMonthly,
@@ -609,13 +610,12 @@ pub fn update_tray_icon_and_tooltip(
                 // artwork and nothing to identify a provider with, so it falls
                 // back to a bare glyph.
                 let mark = crate::provider_mark::provider_mark(&entry.provider_id);
-                let icon_provider_id = if entry.provider_id
-                    == codexbar::settings::TASKBAR_PROVIDER_AUTO
-                {
-                    None
-                } else {
-                    Some(entry.provider_id.clone())
-                };
+                let icon_provider_id =
+                    if entry.provider_id == codexbar::settings::TASKBAR_PROVIDER_AUTO {
+                        None
+                    } else {
+                        Some(entry.provider_id.clone())
+                    };
                 let window_kind = entry.window_kind.clone();
                 let tag = entry.window.trim().to_string();
                 let (value, state) = if let Some(ref amount) = entry.amount {
@@ -626,20 +626,23 @@ pub fn update_tray_icon_and_tooltip(
                         // Speed is a rate, not a percentage, so it keeps its unit.
                         (Some(speed), None) if window_kind == "speed" => {
                             (format!("{speed:.1} t/s"), "ready")
-                        },
-                        (Some(percent), None) => (
-                            crate::commands::format_quota_percent(percent),
-                            "ready",
-                        ),
+                        }
+                        (Some(percent), None) => {
+                            (crate::commands::format_quota_percent(percent), "ready")
+                        }
                         (_, Some(reason)) => {
                             // The reason replaces the number outright — an entry
                             // that cannot be measured must never print a fabricated
                             // percentage.
                             let key = match reason {
-                                EntryUnavailable::ProviderDisabled => LocaleKey::TaskbarEntryProviderDisabled,
+                                EntryUnavailable::ProviderDisabled => {
+                                    LocaleKey::TaskbarEntryProviderDisabled
+                                }
                                 EntryUnavailable::NoData => LocaleKey::TaskbarEntryNoData,
                                 EntryUnavailable::ProviderError => LocaleKey::TaskbarEntryError,
-                                EntryUnavailable::WindowUnsupported => LocaleKey::TaskbarEntryUnsupported,
+                                EntryUnavailable::WindowUnsupported => {
+                                    LocaleKey::TaskbarEntryUnsupported
+                                }
                             };
                             let state = match reason {
                                 EntryUnavailable::ProviderDisabled => "notConfigured",
@@ -648,7 +651,7 @@ pub fn update_tray_icon_and_tooltip(
                                 EntryUnavailable::WindowUnsupported => "unsupported",
                             };
                             (get_text(lang, key), state)
-                        },
+                        }
                         _ => (entry.provider_label.clone(), "ready"),
                     }
                 };
@@ -687,7 +690,7 @@ fn status_labels_for_settings(
     if settings.tray_icon_mode == TrayIconMode::PerProvider {
         return healthy
             .into_iter()
-            .map(|s| provider_status_label(s, lang, settings.taskbar_reset_time_relative))
+            .map(|s| provider_status_label(s, lang, settings.effective_taskbar_reset_time_relative()))
             .collect::<Vec<_>>();
     }
 
@@ -698,7 +701,7 @@ fn status_labels_for_settings(
         return vec![];
     };
 
-    let (_, label) = provider_status_label(selected, lang, settings.taskbar_reset_time_relative);
+    let (_, label) = provider_status_label(selected, lang, settings.effective_taskbar_reset_time_relative());
     vec![("status_summary".to_string(), label)]
 }
 
@@ -758,7 +761,12 @@ fn most_restricted_known_window(
         .chain(snapshot.secondary.iter())
         .chain(snapshot.model_specific.iter())
         .chain(snapshot.tertiary.iter())
-        .chain(snapshot.extra_rate_windows.iter().map(|extra| &extra.window))
+        .chain(
+            snapshot
+                .extra_rate_windows
+                .iter()
+                .map(|extra| &extra.window),
+        )
     {
         if window.is_informational {
             continue;
@@ -815,8 +823,9 @@ fn selected_tray_percents(
 
     // The notification-area icon and the taskbar status strip are one component
     // in the settings model (both live on the Taskbar page), so both follow
-    // `taskbar_show_as_used` rather than the retired global `show_as_used`.
-    let show_as_used = settings.taskbar_show_as_used;
+    // Resolve the taskbar/tray component mode so both surfaces follow the
+    // General-page default when configured as `follow`.
+    let show_as_used = settings.effective_taskbar_show_as_used();
     let secondary = snapshot
         .secondary
         .as_ref()
@@ -890,9 +899,7 @@ fn automatic_metric_percent(
         ]),
         // The summary probe leaves the primary slot as a skipped placeholder;
         // the automatic metric reads the most restricted known named bucket.
-        Some(ProviderId::Antigravity) => {
-            Some(most_restricted_known_window(snapshot).used_percent)
-        }
+        Some(ProviderId::Antigravity) => Some(most_restricted_known_window(snapshot).used_percent),
         _ => Some(snapshot.primary.used_percent),
     }
 }
@@ -963,10 +970,7 @@ pub(crate) fn build_tooltip(
             };
             if let Some(ref err) = s.error {
                 let short = truncate_tooltip_text(err, 28);
-                lines.push(format!(
-                    "{}: {} ({})",
-                    s.display_name, error_label, short
-                ));
+                lines.push(format!("{}: {} ({})", s.display_name, error_label, short));
                 continue;
             }
             let window = match entry.window.as_str() {
@@ -1251,6 +1255,9 @@ mod tests {
             &monitors,
         );
 
-        assert!(anchor.is_none(), "without a click monitor the anchor must be skipped");
+        assert!(
+            anchor.is_none(),
+            "without a click monitor the anchor must be skipped"
+        );
     }
 }

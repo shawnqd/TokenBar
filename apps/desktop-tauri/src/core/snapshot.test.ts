@@ -1,9 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
-  FIXTURE_SNAPSHOTS,
   quotaFillPercent,
   sourceHealthFromDisplayState,
 } from "./index";
+import {
+  FIXTURE_SNAPSHOTS,
+} from "./fixtures";
 
 describe("quotaFillPercent", () => {
   it("never turns unknown usage into 1.0 or 100%", () => {

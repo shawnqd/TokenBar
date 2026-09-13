@@ -33,34 +33,6 @@ export default function NotificationsPage({
             label={t("ShowNotifications")}
           />
         </V5Field>
-        <V5Field label={t("SoundEnabled")} help={t("SoundEnabledHelper")} off={notifyOff}>
-          <div className="s5-actions">
-            <V5Toggle
-              on={settings.soundEnabled}
-              disabled={saving || notifyOff}
-              onChange={(v) => set({ soundEnabled: v })}
-              label={t("SoundEnabled")}
-            />
-            <button
-              type="button"
-              className="s5-ghost"
-              disabled={saving || notifyOff || !settings.soundEnabled || playing}
-              onClick={testSound}
-            >
-              测试声音
-            </button>
-          </div>
-        </V5Field>
-        <V5Field label="音量" help="0 到 100，每格 5" off={notifyOff}>
-          <V5Num
-            value={settings.soundVolume}
-            min={0}
-            max={100}
-            step={5}
-            disabled={saving || notifyOff}
-            onChange={(v) => set({ soundVolume: v })}
-          />
-        </V5Field>
       </V5Section>
 
       <V5Section title="用量阈值">
@@ -88,6 +60,37 @@ export default function NotificationsPage({
             unit="%"
             disabled={saving || notifyOff}
             onChange={(v) => set({ criticalUsageThreshold: v })}
+          />
+        </V5Field>
+      </V5Section>
+
+      <V5Section title="声音">
+        <V5Field label={t("SoundEnabled")} help={t("SoundEnabledHelper")} off={notifyOff}>
+          <div className="s5-actions">
+            <V5Toggle
+              on={settings.soundEnabled}
+              disabled={saving || notifyOff}
+              onChange={(v) => set({ soundEnabled: v })}
+              label={t("SoundEnabled")}
+            />
+            <button
+              type="button"
+              className="s5-ghost"
+              disabled={saving || notifyOff || !settings.soundEnabled || playing}
+              onClick={testSound}
+            >
+              测试声音
+            </button>
+          </div>
+        </V5Field>
+        <V5Field label="音量" help="0 到 100，每格 5" off={notifyOff}>
+          <V5Num
+            value={settings.soundVolume}
+            min={0}
+            max={100}
+            step={5}
+            disabled={saving || notifyOff}
+            onChange={(v) => set({ soundVolume: v })}
           />
         </V5Field>
       </V5Section>

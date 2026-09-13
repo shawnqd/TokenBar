@@ -58,11 +58,10 @@
 use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
 
-use windows_numerics::Vector2; // via the windows-numerics crate (transitive of `windows`)
 use windows::Win32::Graphics::Direct2D::Common::{
-    D2D1_ALPHA_MODE_PREMULTIPLIED, D2D1_BEZIER_SEGMENT, D2D1_COLOR_F, D2D1_FIGURE_BEGIN_FILLED,
-    D2D1_FIGURE_END_CLOSED, D2D1_FILL_MODE_ALTERNATE, D2D1_FILL_MODE_WINDING, D2D1_PIXEL_FORMAT,
-    D2D_SIZE_U, D2D_RECT_F,
+    D2D_RECT_F, D2D_SIZE_U, D2D1_ALPHA_MODE_PREMULTIPLIED, D2D1_BEZIER_SEGMENT, D2D1_COLOR_F,
+    D2D1_FIGURE_BEGIN_FILLED, D2D1_FIGURE_END_CLOSED, D2D1_FILL_MODE_ALTERNATE,
+    D2D1_FILL_MODE_WINDING, D2D1_PIXEL_FORMAT,
 };
 use windows::Win32::Graphics::Direct2D::{
     D2D1_BITMAP_INTERPOLATION_MODE_LINEAR, D2D1_BITMAP_INTERPOLATION_MODE_NEAREST_NEIGHBOR,
@@ -70,6 +69,7 @@ use windows::Win32::Graphics::Direct2D::{
     ID2D1DCRenderTarget, ID2D1Factory, ID2D1GeometrySink, ID2D1PathGeometry,
 };
 use windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_B8G8R8A8_UNORM;
+use windows_numerics::Vector2; // via the windows-numerics crate (transitive of `windows`)
 
 // `provider_id -> svg source`, scanned at build time into OUT_DIR.
 include!(concat!(env!("OUT_DIR"), "/provider_icon_table.rs"));
@@ -83,20 +83,35 @@ const SVG_ALIASES: &[(&str, &str)] = &[
 ];
 
 const WIDE_WORDMARK_IDS: &[&str] = &["deepseek", "kimi", "minimax", "mistral"];
+// 2026-08-22 user feedback: strip icons read too small at the spec's optical
+// insets, so these sit deliberately ABOVE the spec's ≈82%/72%. Grok keeps its
+// full-bleed badge asset. Not a drift to reconcile — a recorded exception.
 const PATH_TYPE_INSET: f32 = 0.9;
 const WIDE_WORDMARK_INSET: f32 = 0.8;
 const GROK_INSET: f32 = 1.0;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum IconStyle { Pure, Badge, Solid }
+pub enum IconStyle {
+    Pure,
+    Badge,
+    Solid,
+}
 impl IconStyle {
     pub fn parse(value: &str) -> Self {
-        match value { "badge" => Self::Badge, "solid" => Self::Solid, _ => Self::Pure }
+        match value {
+            "badge" => Self::Badge,
+            "solid" => Self::Solid,
+            _ => Self::Pure,
+        }
     }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub struct IconSlot { pub left: f32, pub top: f32, pub size_px: f32 }
+pub struct IconSlot {
+    pub left: f32,
+    pub top: f32,
+    pub size_px: f32,
+}
 
 /// Snap the slot onto whole device pixels so `DrawBitmap` is 1:1.
 ///
@@ -110,15 +125,22 @@ pub fn snap_slot(slot: IconSlot) -> IconSlot {
     }
 }
 
-
-pub fn is_grok(provider_id: &str) -> bool { provider_id.eq_ignore_ascii_case("grok") }
+pub fn is_grok(provider_id: &str) -> bool {
+    provider_id.eq_ignore_ascii_case("grok")
+}
 
 pub fn brand_color(provider_id: &str) -> u32 {
-    crate::provider_mark::provider_mark(provider_id).map(|m| m.color_rgb).unwrap_or(0x5d87ff)
+    crate::provider_mark::provider_mark(provider_id)
+        .map(|m| m.color_rgb)
+        .unwrap_or(0x5d87ff)
 }
 
 pub fn provider_svg_source(provider_id: &str) -> Option<&'static str> {
-    let key = SVG_ALIASES.iter().find(|(id, _)| *id == provider_id).map(|(_, t)| *t).unwrap_or(provider_id);
+    let key = SVG_ALIASES
+        .iter()
+        .find(|(id, _)| *id == provider_id)
+        .map(|(_, t)| *t)
+        .unwrap_or(provider_id);
     if let Some((_, src)) = PROVIDER_ICON_TABLE.iter().find(|(id, _)| *id == key) {
         return Some(*src);
     }
@@ -129,18 +151,32 @@ pub fn provider_svg_source(provider_id: &str) -> Option<&'static str> {
 }
 
 fn inset_fraction(provider_id: &str) -> f32 {
-    if is_grok(provider_id) { GROK_INSET }
-    else if WIDE_WORDMARK_IDS.iter().any(|id| *id == provider_id) { WIDE_WORDMARK_INSET }
-    else { PATH_TYPE_INSET }
+    if is_grok(provider_id) {
+        GROK_INSET
+    } else if WIDE_WORDMARK_IDS.iter().any(|id| *id == provider_id) {
+        WIDE_WORDMARK_INSET
+    } else {
+        PATH_TYPE_INSET
+    }
 }
 
 // ── Pure parse model (no Direct2D) ─────────────────────────────────
 
 #[derive(Debug, Clone, Copy, PartialEq)]
-struct P2 { x: f32, y: f32 }
+struct P2 {
+    x: f32,
+    y: f32,
+}
 
 #[derive(Debug, Clone, Copy)]
-struct ArcInfo { end: P2, rx: f32, ry: f32, phi_deg: f32, large: bool, sweep: bool }
+struct ArcInfo {
+    end: P2,
+    rx: f32,
+    ry: f32,
+    phi_deg: f32,
+    large: bool,
+    sweep: bool,
+}
 
 #[derive(Debug, Clone, Copy)]
 enum Seg {
@@ -153,17 +189,31 @@ enum Seg {
 }
 
 #[derive(Debug, Clone)]
-struct PaintItem { fill: Option<u32>, even_odd: bool, segs: Vec<Seg> }
+struct PaintItem {
+    fill: Option<u32>,
+    even_odd: bool,
+    segs: Vec<Seg>,
+}
 #[derive(Debug, Clone)]
-struct ParsedSvg { origin: P2, size: P2, items: Vec<PaintItem> }
+struct ParsedSvg {
+    origin: P2,
+    size: P2,
+    items: Vec<PaintItem>,
+}
 
 // ── Tokeniser ───────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Copy, PartialEq)]
-enum Tok { Cmd(char), Num(f32) }
+enum Tok {
+    Cmd(char),
+    Num(f32),
+}
 
 fn is_cmd_char(c: char) -> bool {
-    matches!(c.to_ascii_lowercase(), 'm' | 'l' | 'h' | 'v' | 'c' | 's' | 'q' | 't' | 'a' | 'z')
+    matches!(
+        c.to_ascii_lowercase(),
+        'm' | 'l' | 'h' | 'v' | 'c' | 's' | 'q' | 't' | 'a' | 'z'
+    )
 }
 
 fn tokenise(path: &str) -> Vec<Tok> {
@@ -175,36 +225,73 @@ fn tokenise(path: &str) -> Vec<Tok> {
         if c == '+' || c == '-' || c == '.' || c.is_ascii_digit() {
             let mut s = String::new();
             let mut j = i;
-            if a[j] == '+' || a[j] == '-' { s.push(a[j]); j += 1; }
-            while j < a.len() && (a[j].is_ascii_digit() || a[j] == '.') { s.push(a[j]); j += 1; }
+            if a[j] == '+' || a[j] == '-' {
+                s.push(a[j]);
+                j += 1;
+            }
+            while j < a.len() && (a[j].is_ascii_digit() || a[j] == '.') {
+                s.push(a[j]);
+                j += 1;
+            }
             if j < a.len() && (a[j] == 'e' || a[j] == 'E') {
                 let mut k = j + 1;
                 let mut esign = String::new();
-                if k < a.len() && (a[k] == '+' || a[k] == '-') { esign.push(a[k]); k += 1; }
+                if k < a.len() && (a[k] == '+' || a[k] == '-') {
+                    esign.push(a[k]);
+                    k += 1;
+                }
                 if k < a.len() && a[k].is_ascii_digit() {
-                    s.push('e'); s.push_str(&esign);
-                    while k < a.len() && a[k].is_ascii_digit() { s.push(a[k]); k += 1; }
+                    s.push('e');
+                    s.push_str(&esign);
+                    while k < a.len() && a[k].is_ascii_digit() {
+                        s.push(a[k]);
+                        k += 1;
+                    }
                     j = k;
                 }
             }
-            if let Ok(v) = s.parse::<f32>() { out.push(Tok::Num(v)); }
+            if let Ok(v) = s.parse::<f32>() {
+                out.push(Tok::Num(v));
+            }
             i = j;
-        } else if is_cmd_char(c) { out.push(Tok::Cmd(c)); i += 1; }
-        else { i += 1; }
+        } else if is_cmd_char(c) {
+            out.push(Tok::Cmd(c));
+            i += 1;
+        } else {
+            i += 1;
+        }
     }
     out
 }
 
 fn params_for(lower: char) -> usize {
-    match lower { 'm' | 'l' | 't' => 2, 'h' | 'v' => 1, 'c' => 6, 's' => 4, 'q' => 4, 'a' => 7, _ => 0 }
+    match lower {
+        'm' | 'l' | 't' => 2,
+        'h' | 'v' => 1,
+        'c' => 6,
+        's' => 4,
+        'q' => 4,
+        'a' => 7,
+        _ => 0,
+    }
 }
 
 fn pt(x: f32, y: f32, base: P2, rel: bool) -> P2 {
-    if rel { P2 { x: base.x + x, y: base.y + y } } else { P2 { x, y } }
+    if rel {
+        P2 {
+            x: base.x + x,
+            y: base.y + y,
+        }
+    } else {
+        P2 { x, y }
+    }
 }
 
 fn reflect(control: P2, end: P2) -> P2 {
-    P2 { x: 2.0 * end.x - control.x, y: 2.0 * end.y - control.y }
+    P2 {
+        x: 2.0 * end.x - control.x,
+        y: 2.0 * end.y - control.y,
+    }
 }
 
 fn parse_path(d: &str) -> Vec<Seg> {
@@ -220,62 +307,132 @@ fn parse_path(d: &str) -> Vec<Seg> {
     let mut has_prev_quad = false;
 
     while i < toks.len() {
-        if let Tok::Cmd(c) = toks[i] { cur_cmd = Some(c); i += 1; }
+        if let Tok::Cmd(c) = toks[i] {
+            cur_cmd = Some(c);
+            i += 1;
+        }
         let Some(c) = cur_cmd else { break };
         let lower = c.to_ascii_lowercase();
         if lower == 'z' {
             segs.push(Seg::Close);
-            pos = start; cur_cmd = None;
-            has_prev_cubic = false; has_prev_quad = false;
-            i += 1; continue;
+            pos = start;
+            cur_cmd = None;
+            has_prev_cubic = false;
+            has_prev_quad = false;
+            i += 1;
+            continue;
         }
         let n = params_for(lower);
-        if n == 0 { cur_cmd = None; continue; }
-        if i + n > toks.len() { break; }
+        if n == 0 {
+            cur_cmd = None;
+            continue;
+        }
+        if i + n > toks.len() {
+            break;
+        }
         let mut complete = true;
-        for t in &toks[i..i + n] { if let Tok::Cmd(_) = t { complete = false; break; } }
-        if !complete { break; }
+        for t in &toks[i..i + n] {
+            if let Tok::Cmd(_) = t {
+                complete = false;
+                break;
+            }
+        }
+        if !complete {
+            break;
+        }
         let mut nums = [0.0f32; 7];
-        for k in 0..n { nums[k] = match toks[i + k] { Tok::Num(v) => v, Tok::Cmd(_) => 0.0 }; }
+        for k in 0..n {
+            nums[k] = match toks[i + k] {
+                Tok::Num(v) => v,
+                Tok::Cmd(_) => 0.0,
+            };
+        }
         i += n;
 
         let rel = c.is_ascii_lowercase();
         match lower {
             'm' => {
                 let p = pt(nums[0], nums[1], pos, rel);
-                segs.push(Seg::Move(p)); pos = p; start = p;
-                has_prev_cubic = false; has_prev_quad = false;
+                segs.push(Seg::Move(p));
+                pos = p;
+                start = p;
+                has_prev_cubic = false;
+                has_prev_quad = false;
                 cur_cmd = if rel { Some('l') } else { Some('L') };
-            },
-            'l' => { let p = pt(nums[0], nums[1], pos, rel); segs.push(Seg::Line(p)); pos = p; has_prev_cubic = false; has_prev_quad = false; },
-            'h' => { let p = P2 { x: if rel { pos.x + nums[0] } else { nums[0] }, y: pos.y }; segs.push(Seg::Line(p)); pos = p; has_prev_cubic = false; has_prev_quad = false; },
-            'v' => { let p = P2 { x: pos.x, y: if rel { pos.y + nums[0] } else { nums[0] } }; segs.push(Seg::Line(p)); pos = p; has_prev_cubic = false; has_prev_quad = false; },
+            }
+            'l' => {
+                let p = pt(nums[0], nums[1], pos, rel);
+                segs.push(Seg::Line(p));
+                pos = p;
+                has_prev_cubic = false;
+                has_prev_quad = false;
+            }
+            'h' => {
+                let p = P2 {
+                    x: if rel { pos.x + nums[0] } else { nums[0] },
+                    y: pos.y,
+                };
+                segs.push(Seg::Line(p));
+                pos = p;
+                has_prev_cubic = false;
+                has_prev_quad = false;
+            }
+            'v' => {
+                let p = P2 {
+                    x: pos.x,
+                    y: if rel { pos.y + nums[0] } else { nums[0] },
+                };
+                segs.push(Seg::Line(p));
+                pos = p;
+                has_prev_cubic = false;
+                has_prev_quad = false;
+            }
             'c' => {
                 let c1 = pt(nums[0], nums[1], pos, rel);
                 let c2 = pt(nums[2], nums[3], pos, rel);
                 let e = pt(nums[4], nums[5], pos, rel);
                 segs.push(Seg::Cubic { c1, c2, end: e });
-                prev_cubic = c2; has_prev_cubic = true; has_prev_quad = false; pos = e;
-            },
+                prev_cubic = c2;
+                has_prev_cubic = true;
+                has_prev_quad = false;
+                pos = e;
+            }
             's' => {
-                let c1 = if has_prev_cubic { reflect(prev_cubic, pos) } else { pos };
+                let c1 = if has_prev_cubic {
+                    reflect(prev_cubic, pos)
+                } else {
+                    pos
+                };
                 let c2 = pt(nums[0], nums[1], pos, rel);
                 let e = pt(nums[2], nums[3], pos, rel);
                 segs.push(Seg::Cubic { c1, c2, end: e });
-                prev_cubic = c2; has_prev_cubic = true; has_prev_quad = false; pos = e;
-            },
+                prev_cubic = c2;
+                has_prev_cubic = true;
+                has_prev_quad = false;
+                pos = e;
+            }
             'q' => {
                 let c = pt(nums[0], nums[1], pos, rel);
                 let e = pt(nums[2], nums[3], pos, rel);
                 segs.push(Seg::Quad { c, end: e });
-                prev_quad = c; has_prev_quad = true; has_prev_cubic = false; pos = e;
-            },
+                prev_quad = c;
+                has_prev_quad = true;
+                has_prev_cubic = false;
+                pos = e;
+            }
             't' => {
-                let c = if has_prev_quad { reflect(prev_quad, pos) } else { pos };
+                let c = if has_prev_quad {
+                    reflect(prev_quad, pos)
+                } else {
+                    pos
+                };
                 let e = pt(nums[0], nums[1], pos, rel);
                 segs.push(Seg::Quad { c, end: e });
-                prev_quad = c; has_prev_quad = true; has_prev_cubic = false; pos = e;
-            },
+                prev_quad = c;
+                has_prev_quad = true;
+                has_prev_cubic = false;
+                pos = e;
+            }
             'a' => {
                 let rx = nums[0].abs();
                 let ry = nums[1].abs();
@@ -283,22 +440,35 @@ fn parse_path(d: &str) -> Vec<Seg> {
                 let large = nums[3] != 0.0;
                 let sweep = nums[4] != 0.0;
                 let e = pt(nums[5], nums[6], pos, rel);
-                segs.push(Seg::Arc(ArcInfo { end: e, rx, ry, phi_deg: phi, large, sweep }));
-                has_prev_cubic = false; has_prev_quad = false; pos = e;
-            },
-            _ => {},
+                segs.push(Seg::Arc(ArcInfo {
+                    end: e,
+                    rx,
+                    ry,
+                    phi_deg: phi,
+                    large,
+                    sweep,
+                }));
+                has_prev_cubic = false;
+                has_prev_quad = false;
+                pos = e;
+            }
+            _ => {}
         }
     }
     segs
 }
 
-
 // ── SVG document parsing (path + rect only) ─────────────────────────
 
 fn parse_view_box(svg: &str) -> Option<(P2, P2)> {
     let attr = capture_attr(svg, "viewBox")?;
-    let v: Vec<f32> = attr.split_whitespace().filter_map(|s| s.parse().ok()).collect();
-    if v.len() < 4 { return None; }
+    let v: Vec<f32> = attr
+        .split_whitespace()
+        .filter_map(|s| s.parse().ok())
+        .collect();
+    if v.len() < 4 {
+        return None;
+    }
     Some((P2 { x: v[0], y: v[1] }, P2 { x: v[2], y: v[3] }))
 }
 
@@ -312,7 +482,9 @@ fn capture_attr(hay: &str, name: &str) -> Option<String> {
 }
 
 fn find_sub(hay: &str, needle: &str, from: usize) -> Option<usize> {
-    hay[from.min(hay.len())..].find(needle).map(|i| i + from.min(hay.len()))
+    hay[from.min(hay.len())..]
+        .find(needle)
+        .map(|i| i + from.min(hay.len()))
 }
 
 fn attr_in(elem: &str, name: &str, from: usize) -> Option<String> {
@@ -327,18 +499,26 @@ fn attr_in(elem: &str, name: &str, from: usize) -> Option<String> {
 }
 
 fn attr_num_in(elem: &str, name: &str, default: f32) -> f32 {
-    attr_in(elem, name, 0).and_then(|s| s.trim().parse::<f32>().ok()).unwrap_or(default)
+    attr_in(elem, name, 0)
+        .and_then(|s| s.trim().parse::<f32>().ok())
+        .unwrap_or(default)
 }
 
 /// Resolve an SVG `fill` attribute to a colour, or None when it means INK
 /// (white / currentColor / empty / named non-hex colours are recoloured).
 fn colour_from_attr(fill: &str) -> Option<u32> {
     let f = fill.trim().to_ascii_lowercase();
-    if f.is_empty() || f == "none" || f == "currentcolor" { return None; }
-    if f == "white" || f == "#fff" || f == "#ffffff" { return None; }
+    if f.is_empty() || f == "none" || f == "currentcolor" {
+        return None;
+    }
+    if f == "white" || f == "#fff" || f == "#ffffff" {
+        return None;
+    }
     let hex = f.strip_prefix('#').unwrap_or(&f);
     if hex.len() == 6 && hex.chars().all(|c| c.is_ascii_hexdigit()) {
-        if let Ok(v) = u32::from_str_radix(hex, 16) { return Some(v); }
+        if let Ok(v) = u32::from_str_radix(hex, 16) {
+            return Some(v);
+        }
     }
     None
 }
@@ -346,7 +526,9 @@ fn colour_from_attr(fill: &str) -> Option<u32> {
 /// Build a rectangle outline (sharp or rounded). Rounded corners are emitted as
 /// [`Seg::Arc`] (90°, sweep clockwise) so they share the A-command arc expander.
 fn rect_outline(x: f32, y: f32, w: f32, h: f32, rx: f32, out: &mut Vec<Seg>) {
-    if w <= 0.0 || h <= 0.0 { return; }
+    if w <= 0.0 || h <= 0.0 {
+        return;
+    }
     let r = rx.max(0.0).min(w.min(h) * 0.5);
     if r <= 1e-4 {
         out.push(Seg::Move(P2 { x, y }));
@@ -360,7 +542,10 @@ fn rect_outline(x: f32, y: f32, w: f32, h: f32, rx: f32, out: &mut Vec<Seg>) {
     out.push(Seg::Move(P2 { x: x + r, y }));
     out.push(Seg::Line(P2 { x: x + w - r, y }));
     out.push(seg_arc(x + w - r, y + r, r, x + w, y + r));
-    out.push(Seg::Line(P2 { x: x + w, y: y + h - r }));
+    out.push(Seg::Line(P2 {
+        x: x + w,
+        y: y + h - r,
+    }));
     out.push(seg_arc(x + w, y + h - r, r, x + w - r, y + h));
     out.push(Seg::Line(P2 { x: x + r, y: y + h }));
     out.push(seg_arc(x + r, y + h, r, x, y + h - r));
@@ -371,12 +556,20 @@ fn rect_outline(x: f32, y: f32, w: f32, h: f32, rx: f32, out: &mut Vec<Seg>) {
 
 /// A 90° clockwise rounded-corner arc from the current position to (ex, ey).
 fn seg_arc(_center_x: f32, _center_y: f32, r: f32, ex: f32, ey: f32) -> Seg {
-    Seg::Arc(ArcInfo { end: P2 { x: ex, y: ey }, rx: r, ry: r, phi_deg: 0.0, large: false, sweep: true })
+    Seg::Arc(ArcInfo {
+        end: P2 { x: ex, y: ey },
+        rx: r,
+        ry: r,
+        phi_deg: 0.0,
+        large: false,
+        sweep: true,
+    })
 }
 
 /// Parse a minimal SVG document into parsed paint items.
 fn parse_svg(svg: &str) -> ParsedSvg {
-    let (origin, size) = parse_view_box(svg).unwrap_or((P2 { x: 0.0, y: 0.0 }, P2 { x: 100.0, y: 100.0 }));
+    let (origin, size) =
+        parse_view_box(svg).unwrap_or((P2 { x: 0.0, y: 0.0 }, P2 { x: 100.0, y: 100.0 }));
     let lower = svg.to_ascii_lowercase();
     let mut items: Vec<PaintItem> = Vec::new();
     let mut i = 0usize;
@@ -390,7 +583,9 @@ fn parse_svg(svg: &str) -> ParsedSvg {
             (None, None) => break,
         };
         let is_rect = tr.map(|r| r == next).unwrap_or(false);
-        let Some(rel) = svg[next..].find('>') else { break };
+        let Some(rel) = svg[next..].find('>') else {
+            break;
+        };
         let close = next + rel + 1;
         let elem = &svg[next..close.min(svg.len())];
         if is_rect {
@@ -402,24 +597,43 @@ fn parse_svg(svg: &str) -> ParsedSvg {
             let mut outline = Vec::new();
             rect_outline(x, yy, w, h, rx, &mut outline);
             let fill = attr_in(elem, "fill", 0).and_then(|f| colour_from_attr(&f));
-            items.push(PaintItem { fill, even_odd: false, segs: outline });
+            items.push(PaintItem {
+                fill,
+                even_odd: false,
+                segs: outline,
+            });
         } else {
-            let Some(d) = attr_in(elem, "d", 0) else { i = close; continue; };
-            let even_odd = attr_in(elem, "fill-rule", 0).map(|r| r.eq_ignore_ascii_case("evenodd")).unwrap_or(false);
+            let Some(d) = attr_in(elem, "d", 0) else {
+                i = close;
+                continue;
+            };
+            let even_odd = attr_in(elem, "fill-rule", 0)
+                .map(|r| r.eq_ignore_ascii_case("evenodd"))
+                .unwrap_or(false);
             let fill = attr_in(elem, "fill", 0).and_then(|f| colour_from_attr(&f));
             let segs = parse_path(&d);
-            items.push(PaintItem { fill, even_odd, segs });
+            items.push(PaintItem {
+                fill,
+                even_odd,
+                segs,
+            });
         }
         i = close;
     }
-    ParsedSvg { origin, size, items }
+    ParsedSvg {
+        origin,
+        size,
+        items,
+    }
 }
 
 // ── Arc → cubic expansion (SVG endpoint-to-centre, F.6.5) ──────────
 
 fn signed_angle(u: P2, v: P2) -> f32 {
     let mag = (u.x * u.x + u.y * u.y).sqrt() * (v.x * v.x + v.y * v.y).sqrt();
-    if mag < 1e-12 { return 0.0; }
+    if mag < 1e-12 {
+        return 0.0;
+    }
     let cos = ((u.x * v.x + u.y * v.y) / mag).max(-1.0).min(1.0);
     let cross = u.x * v.y - u.y * v.x;
     let a = cos.acos();
@@ -429,12 +643,18 @@ fn signed_angle(u: P2, v: P2) -> f32 {
 /// A point on a rotated ellipse and its tangent at parameter t.
 fn ellipse_point(t: f32, cx: f32, cy: f32, rx: f32, ry: f32, cp: f32, sp: f32) -> P2 {
     let (s, c) = t.sin_cos();
-    P2 { x: cx + rx * c * cp - ry * s * sp, y: cy + rx * c * sp + ry * s * cp }
+    P2 {
+        x: cx + rx * c * cp - ry * s * sp,
+        y: cy + rx * c * sp + ry * s * cp,
+    }
 }
 
 fn ellipse_tangent(t: f32, rx: f32, ry: f32, cp: f32, sp: f32) -> P2 {
     let (s, c) = t.sin_cos();
-    P2 { x: -rx * s * cp - ry * c * sp, y: -rx * s * sp + ry * c * cp }
+    P2 {
+        x: -rx * s * cp - ry * c * sp,
+        y: -rx * s * sp + ry * c * cp,
+    }
 }
 
 /// Expand an SVG arc from `start` to `info.end` into cubic [`Seg`]s appended to
@@ -444,10 +664,19 @@ fn arc_to_cubics(start: P2, info: ArcInfo, out: &mut Vec<Seg>) {
     let mut ry = info.ry;
     let phi = info.phi_deg.to_radians();
     let (cp, sp) = (phi.cos(), phi.sin());
-    if rx < 0.0 { rx = -rx; }
-    if ry < 0.0 { ry = -ry; }
-    if rx.abs() < 1e-7 || ry.abs() < 1e-7 { out.push(Seg::Line(info.end)); return; }
-    if (start.x - info.end.x).abs() < 1e-9 && (start.y - info.end.y).abs() < 1e-9 { return; }
+    if rx < 0.0 {
+        rx = -rx;
+    }
+    if ry < 0.0 {
+        ry = -ry;
+    }
+    if rx.abs() < 1e-7 || ry.abs() < 1e-7 {
+        out.push(Seg::Line(info.end));
+        return;
+    }
+    if (start.x - info.end.x).abs() < 1e-9 && (start.y - info.end.y).abs() < 1e-9 {
+        return;
+    }
 
     // F.6.5.1: transform start/end into the unrotated (-phi) frame.
     let dx = (start.x - info.end.x) * 0.5;
@@ -472,7 +701,11 @@ fn arc_to_cubics(start: P2, info: ArcInfo, out: &mut Vec<Seg>) {
     let den = rx2 * y1p2 + ry2 * x1p2;
     let radicand = if den.abs() < 1e-12 { 0.0 } else { num / den };
     let coef = radicand.max(0.0).sqrt();
-    let sign = if info.large == info.sweep { -1.0f32 } else { 1.0f32 };
+    let sign = if info.large == info.sweep {
+        -1.0f32
+    } else {
+        1.0f32
+    };
     let cxp = sign * coef * (rx * y1p) / ry;
     let cyp = sign * coef * (-(ry * x1p) / rx);
     let cx = cp * cxp - sp * cyp + (start.x + info.end.x) * 0.5;
@@ -485,8 +718,11 @@ fn arc_to_cubics(start: P2, info: ArcInfo, out: &mut Vec<Seg>) {
     let v2y = (-y1p - cyp) / ry;
     let theta1 = signed_angle(P2 { x: 1.0, y: 0.0 }, P2 { x: v1x, y: v1y });
     let mut delta = signed_angle(P2 { x: v1x, y: v1y }, P2 { x: v2x, y: v2y });
-    if !info.sweep && delta > 0.0 { delta -= std::f32::consts::TAU; }
-    else if info.sweep && delta < 0.0 { delta += std::f32::consts::TAU; }
+    if !info.sweep && delta > 0.0 {
+        delta -= std::f32::consts::TAU;
+    } else if info.sweep && delta < 0.0 {
+        delta += std::f32::consts::TAU;
+    }
 
     // Split into ≤90° chunks, replacing each with a standard cubic.
     let chunks = (delta.abs() / std::f32::consts::FRAC_PI_2).ceil().max(1.0) as usize;
@@ -499,8 +735,14 @@ fn arc_to_cubics(start: P2, info: ArcInfo, out: &mut Vec<Seg>) {
         let k = (4.0 / 3.0) * (d * 0.25).tan();
         let tan0 = ellipse_tangent(t0, rx, ry, cp, sp);
         let tan1 = ellipse_tangent(t1, rx, ry, cp, sp);
-        let c1 = P2 { x: p0.x + k * tan0.x, y: p0.y + k * tan0.y };
-        let c2 = P2 { x: p3.x - k * tan1.x, y: p3.y - k * tan1.y };
+        let c1 = P2 {
+            x: p0.x + k * tan0.x,
+            y: p0.y + k * tan0.y,
+        };
+        let c2 = P2 {
+            x: p3.x - k * tan1.x,
+            y: p3.y - k * tan1.y,
+        };
         out.push(Seg::Cubic { c1, c2, end: p3 });
     }
     let _ = theta1;
@@ -518,7 +760,10 @@ fn d2d_color(rgb: u32, alpha: f32) -> D2D1_COLOR_F {
 }
 
 fn transform_point(p: P2, origin: P2, scale: f32, off: P2) -> Vector2 {
-    Vector2 { X: off.x + (p.x - origin.x) * scale, Y: off.y + (p.y - origin.y) * scale }
+    Vector2 {
+        X: off.x + (p.x - origin.x) * scale,
+        Y: off.y + (p.y - origin.y) * scale,
+    }
 }
 
 unsafe fn emit_into_sink(sink: &ID2D1GeometrySink, segs: &[Seg], origin: P2, scale: f32, off: P2) {
@@ -543,10 +788,15 @@ unsafe fn emit_into_sink(sink: &ID2D1GeometrySink, segs: &[Seg], origin: P2, sca
     for seg in expanded {
         match seg {
             Seg::Move(p) => {
-                if open { sink.EndFigure(D2D1_FIGURE_END_CLOSED); }
-                sink.BeginFigure(transform_point(p, origin, scale, off), D2D1_FIGURE_BEGIN_FILLED);
+                if open {
+                    sink.EndFigure(D2D1_FIGURE_END_CLOSED);
+                }
+                sink.BeginFigure(
+                    transform_point(p, origin, scale, off),
+                    D2D1_FIGURE_BEGIN_FILLED,
+                );
                 open = true;
-            },
+            }
             Seg::Line(p) => sink.AddLine(transform_point(p, origin, scale, off)),
             Seg::Cubic { c1, c2, end } => {
                 let bez = D2D1_BEZIER_SEGMENT {
@@ -555,19 +805,24 @@ unsafe fn emit_into_sink(sink: &ID2D1GeometrySink, segs: &[Seg], origin: P2, sca
                     point3: transform_point(end, origin, scale, off),
                 };
                 sink.AddBezier(&bez);
-            },
+            }
             Seg::Quad { c, end } => {
                 let q = D2D1_QUADRATIC_BEZIER_SEGMENT {
                     point1: transform_point(c, origin, scale, off),
                     point2: transform_point(end, origin, scale, off),
                 };
                 sink.AddQuadraticBezier(&q);
-            },
-            Seg::Arc(_) => {},
-            Seg::Close => { sink.EndFigure(D2D1_FIGURE_END_CLOSED); open = false; },
+            }
+            Seg::Arc(_) => {}
+            Seg::Close => {
+                sink.EndFigure(D2D1_FIGURE_END_CLOSED);
+                open = false;
+            }
         }
     }
-    if open { sink.EndFigure(D2D1_FIGURE_END_CLOSED); }
+    if open {
+        sink.EndFigure(D2D1_FIGURE_END_CLOSED);
+    }
 }
 
 /// Build one fully-filled ID2D1PathGeometry for a paint item at the given slot.
@@ -580,12 +835,21 @@ unsafe fn build_item_geometry(
 ) -> windows::core::Result<ID2D1PathGeometry> {
     let geometry: ID2D1PathGeometry = unsafe { factory.CreatePathGeometry() }?;
     let sink: ID2D1GeometrySink = unsafe { geometry.Open() }?;
-    unsafe { sink.SetFillMode(if item.even_odd { D2D1_FILL_MODE_ALTERNATE } else { D2D1_FILL_MODE_WINDING }) };
+    unsafe {
+        sink.SetFillMode(if item.even_odd {
+            D2D1_FILL_MODE_ALTERNATE
+        } else {
+            D2D1_FILL_MODE_WINDING
+        })
+    };
     unsafe { emit_into_sink(&sink, &item.segs, origin, scale, off) };
     unsafe { sink.Close() }?;
     Ok(geometry)
 }
-struct ParsedLogo { grok: bool, parsed: ParsedSvg }
+struct ParsedLogo {
+    grok: bool,
+    parsed: ParsedSvg,
+}
 
 static PARSED_CACHE: OnceLock<Mutex<HashMap<String, std::sync::Arc<ParsedLogo>>>> = OnceLock::new();
 
@@ -598,9 +862,15 @@ fn parsed_logo(provider_id: &str) -> Option<std::sync::Arc<ParsedLogo>> {
     }
     let src = provider_svg_source(provider_id)?;
     let parsed = parse_svg(src);
-    if parsed.items.is_empty() { return None; }
-    let logo = std::sync::Arc::new(ParsedLogo { grok: is_grok(provider_id), parsed });
-    PARSED_CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+    if parsed.items.is_empty() {
+        return None;
+    }
+    let logo = std::sync::Arc::new(ParsedLogo {
+        grok: is_grok(provider_id),
+        parsed,
+    });
+    PARSED_CACHE
+        .get_or_init(|| Mutex::new(HashMap::new()))
         .lock()
         .map(|mut m| m.insert(provider_id.to_string(), logo.clone()))
         .ok();
@@ -611,9 +881,13 @@ fn parsed_logo(provider_id: &str) -> Option<std::sync::Arc<ParsedLogo>> {
 
 /// A resvg-rendered logo: premultiplied RGBA pixels (`data`) in a square
 /// (`size_px` × `size_px`) canvas, ready to be copied into an ID2D1Bitmap.
-struct RenderedLogo { size_px: u32, data: std::sync::Arc<Vec<u8>> }
+struct RenderedLogo {
+    size_px: u32,
+    data: std::sync::Arc<Vec<u8>>,
+}
 
-static RENDER_CACHE: OnceLock<Mutex<HashMap<String, std::sync::Arc<RenderedLogo>>>> = OnceLock::new();
+static RENDER_CACHE: OnceLock<Mutex<HashMap<String, std::sync::Arc<RenderedLogo>>>> =
+    OnceLock::new();
 
 /// Case-insensitive replace of `needle` with `replacement` (the frontend
 /// `tint()` substitutions are `/gi`, so `#FFFFFF` must match like `#ffffff`).
@@ -642,30 +916,48 @@ fn replace_ci(haystack: &str, needle: &str, replacement: &str) -> String {
 /// stroke-only. Grok is never recoloured: its SVG already carries the black
 /// rounded badge + white glyph.
 fn tint_svg(svg: &str, provider_id: &str, ink: u32) -> String {
-    if is_grok(provider_id) { return svg.to_owned(); }
+    if is_grok(provider_id) {
+        return svg.to_owned();
+    }
     let six = format!("{:06X}", ink & 0xFF_FFFF);
     let attr_fill = format!("fill=\"#{six}\"");
     let attr_stroke = format!("stroke=\"#{six}\"");
     let css_fill = format!("fill:#{six}");
     // Longest needles first so `fill:#fff` cannot match inside `fill:#ffffff`.
     const ATTR_FILL_NEEDLES: [&str; 5] = [
-        "fill=\"#ffffff\"", "fill=\"#fff\"", "fill=\"white\"",
-        "fill=\"currentcolor\"", "fill=\"black\"",
+        "fill=\"#ffffff\"",
+        "fill=\"#fff\"",
+        "fill=\"white\"",
+        "fill=\"currentcolor\"",
+        "fill=\"black\"",
     ];
     const ATTR_STROKE_NEEDLES: [&str; 3] = [
-        "stroke=\"white\"", "stroke=\"currentcolor\"", "stroke=\"black\"",
+        "stroke=\"white\"",
+        "stroke=\"currentcolor\"",
+        "stroke=\"black\"",
     ];
     const CSS_FILL_NEEDLES: [&str; 10] = [
-        "fill:#ffffff", "fill: #ffffff",
-        "fill:#fff", "fill: #fff",
-        "fill:white", "fill: white",
-        "fill:currentcolor", "fill: currentcolor",
-        "fill:black", "fill: black",
+        "fill:#ffffff",
+        "fill: #ffffff",
+        "fill:#fff",
+        "fill: #fff",
+        "fill:white",
+        "fill: white",
+        "fill:currentcolor",
+        "fill: currentcolor",
+        "fill:black",
+        "fill: black",
     ];
     let mut out = svg.to_owned();
-    for needle in ATTR_FILL_NEEDLES { out = replace_ci(&out, needle, &attr_fill); }
-    for needle in ATTR_STROKE_NEEDLES { out = replace_ci(&out, needle, &attr_stroke); }
-    for needle in CSS_FILL_NEEDLES { out = replace_ci(&out, needle, &css_fill); }
+    for needle in ATTR_FILL_NEEDLES {
+        out = replace_ci(&out, needle, &attr_fill);
+    }
+    for needle in ATTR_STROKE_NEEDLES {
+        out = replace_ci(&out, needle, &attr_stroke);
+    }
+    for needle in CSS_FILL_NEEDLES {
+        out = replace_ci(&out, needle, &css_fill);
+    }
     out
 }
 
@@ -673,7 +965,11 @@ fn tint_svg(svg: &str, provider_id: &str, ink: u32) -> String {
 /// `(provider_id, style, size_px)` so a steady-state strip does not re-render
 /// the SVG on every one-second repaint. The artwork keeps the optical inset
 /// the legacy path applied (`inset_fraction`), centred in the canvas.
-fn rendered_logo(provider_id: &str, style: IconStyle, size_px: f32) -> Option<std::sync::Arc<RenderedLogo>> {
+fn rendered_logo(
+    provider_id: &str,
+    style: IconStyle,
+    size_px: f32,
+) -> Option<std::sync::Arc<RenderedLogo>> {
     let px = size_px.max(1.0).round() as u32;
     let key = format!("{provider_id}|{style:?}|{px}");
     if let Some(m) = RENDER_CACHE.get()
@@ -683,7 +979,10 @@ fn rendered_logo(provider_id: &str, style: IconStyle, size_px: f32) -> Option<st
         return Some(logo.clone());
     }
     let src = provider_svg_source(provider_id)?;
-    let ink = match style { IconStyle::Solid => 0xFF_FFFFu32, _ => brand_color(provider_id) };
+    let ink = match style {
+        IconStyle::Solid => 0xFF_FFFFu32,
+        _ => brand_color(provider_id),
+    };
     let tinted = tint_svg(src, provider_id, ink);
     let opt = usvg::Options::default();
     let tree = usvg::Tree::from_str(&tinted, &opt).ok()?;
@@ -704,7 +1003,8 @@ fn rendered_logo(provider_id: &str, style: IconStyle, size_px: f32) -> Option<st
         size_px: px,
         data: std::sync::Arc::new(pixmap.data().to_vec()),
     });
-    RENDER_CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+    RENDER_CACHE
+        .get_or_init(|| Mutex::new(HashMap::new()))
         .lock()
         .map(|mut m| m.insert(key, logo.clone()))
         .ok();
@@ -719,8 +1019,14 @@ fn rendered_logo(provider_id: &str, style: IconStyle, size_px: f32) -> Option<st
 fn bitmap_from_rgba(target: &ID2D1DCRenderTarget, data: &[u8], size: u32) -> Option<ID2D1Bitmap> {
     let fmt = unsafe { target.GetPixelFormat() };
     let formats = [
-        D2D1_PIXEL_FORMAT { format: fmt.format, alphaMode: D2D1_ALPHA_MODE_PREMULTIPLIED },
-        D2D1_PIXEL_FORMAT { format: DXGI_FORMAT_B8G8R8A8_UNORM, alphaMode: D2D1_ALPHA_MODE_PREMULTIPLIED },
+        D2D1_PIXEL_FORMAT {
+            format: fmt.format,
+            alphaMode: D2D1_ALPHA_MODE_PREMULTIPLIED,
+        },
+        D2D1_PIXEL_FORMAT {
+            format: DXGI_FORMAT_B8G8R8A8_UNORM,
+            alphaMode: D2D1_ALPHA_MODE_PREMULTIPLIED,
+        },
     ];
     let mut swapped: Vec<u8> = Vec::with_capacity(data.len());
     for format in formats {
@@ -740,7 +1046,10 @@ fn bitmap_from_rgba(target: &ID2D1DCRenderTarget, data: &[u8], size: u32) -> Opt
         };
         if let Ok(bitmap) = unsafe {
             target.CreateBitmap(
-                D2D_SIZE_U { width: size, height: size },
+                D2D_SIZE_U {
+                    width: size,
+                    height: size,
+                },
                 Some(src.as_ptr().cast::<std::ffi::c_void>()),
                 size * 4,
                 &props,
@@ -764,7 +1073,9 @@ pub fn draw_icon(
     slot: IconSlot,
 ) -> bool {
     let slot = snap_slot(slot);
-    let Some(rendered) = rendered_logo(provider_id, style, slot.size_px) else { return false; };
+    let Some(rendered) = rendered_logo(provider_id, style, slot.size_px) else {
+        return false;
+    };
     // Create the bitmap before painting anything: if the target rejects the
     // buffer we return false and the caller paints the glyph fallback (with
     // its own tile) on a clean slot instead of over a half-drawn icon.
@@ -778,30 +1089,38 @@ pub fn draw_icon(
     if !is_grok(provider_id) {
         let rounded = D2D1_ROUNDED_RECT {
             rect: D2D_RECT_F {
-                left: slot.left, top: slot.top,
-                right: slot.left + slot_size, bottom: slot.top + slot_size,
+                left: slot.left,
+                top: slot.top,
+                right: slot.left + slot_size,
+                bottom: slot.top + slot_size,
             },
             radiusX: slot_size * 3.0 / 14.0,
             radiusY: slot_size * 3.0 / 14.0,
         };
         match style {
             IconStyle::Badge => {
-                if let Ok(brush) = unsafe { target.CreateSolidColorBrush(&d2d_color(brand, 0.18), None) } {
+                if let Ok(brush) =
+                    unsafe { target.CreateSolidColorBrush(&d2d_color(brand, 0.18), None) }
+                {
                     unsafe { target.FillRoundedRectangle(&rounded, &brush) };
                 }
-            },
+            }
             IconStyle::Solid => {
-                if let Ok(brush) = unsafe { target.CreateSolidColorBrush(&d2d_color(brand, 1.0), None) } {
+                if let Ok(brush) =
+                    unsafe { target.CreateSolidColorBrush(&d2d_color(brand, 1.0), None) }
+                {
                     unsafe { target.FillRoundedRectangle(&rounded, &brush) };
                 }
-            },
-            IconStyle::Pure => {},
+            }
+            IconStyle::Pure => {}
         }
     }
 
     let dest = D2D_RECT_F {
-        left: slot.left, top: slot.top,
-        right: slot.left + slot_size, bottom: slot.top + slot_size,
+        left: slot.left,
+        top: slot.top,
+        right: slot.left + slot_size,
+        bottom: slot.top + slot_size,
     };
     // 1:1 device-pixel blit. Linear filtering of an already-snapped bitmap
     // reintroduces the blur this snap exists to avoid.
@@ -814,26 +1133,46 @@ pub fn draw_icon(
     true
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     fn seg_kind(segs: &[Seg]) -> Vec<&'static str> {
-        segs.iter().map(|s| match s {
-            Seg::Move(_) => "M", Seg::Line(_) => "L", Seg::Cubic { .. } => "C",
-            Seg::Quad { .. } => "Q", Seg::Arc(_) => "A", Seg::Close => "Z",
-        }).collect()
+        segs.iter()
+            .map(|s| match s {
+                Seg::Move(_) => "M",
+                Seg::Line(_) => "L",
+                Seg::Cubic { .. } => "C",
+                Seg::Quad { .. } => "Q",
+                Seg::Arc(_) => "A",
+                Seg::Close => "Z",
+            })
+            .collect()
     }
 
     #[test]
     fn snap_slot_rounds_to_whole_device_pixels() {
-        let snapped = snap_slot(IconSlot { left: 10.4, top: 3.6, size_px: 17.5 });
+        let snapped = snap_slot(IconSlot {
+            left: 10.4,
+            top: 3.6,
+            size_px: 17.5,
+        });
         assert_eq!(snapped.left, 10.0);
         assert_eq!(snapped.top, 4.0);
         assert_eq!(snapped.size_px, 18.0);
-        let already = snap_slot(IconSlot { left: 8.0, top: 2.0, size_px: 14.0 });
-        assert_eq!(already, IconSlot { left: 8.0, top: 2.0, size_px: 14.0 });
+        let already = snap_slot(IconSlot {
+            left: 8.0,
+            top: 2.0,
+            size_px: 14.0,
+        });
+        assert_eq!(
+            already,
+            IconSlot {
+                left: 8.0,
+                top: 2.0,
+                size_px: 14.0
+            }
+        );
     }
 
     #[test]
@@ -843,8 +1182,13 @@ mod tests {
         let rel = parse_path("m10 10 l10 10 h5 v5");
         assert_eq!(seg_kind(&rel), vec!["M", "L", "L", "L"]);
         let last = *rel.last().unwrap();
-        let Seg::Line(p) = last else { panic!("last v"); };
-        assert!((p.x - 25.0).abs() < 1e-3 && (p.y - 25.0).abs() < 1e-3, "relative accum: {p:?}");
+        let Seg::Line(p) = last else {
+            panic!("last v");
+        };
+        assert!(
+            (p.x - 25.0).abs() < 1e-3 && (p.y - 25.0).abs() < 1e-3,
+            "relative accum: {p:?}"
+        );
     }
 
     #[test]
@@ -861,7 +1205,9 @@ mod tests {
         let segs = parse_path("M0 0 C10 0 10 10 20 10 S30 20 40 20");
         assert_eq!(seg_kind(&segs), vec!["M", "C", "C"]);
         // s reflects c2 = (10,10) about the previous end (20,10) => c1=(30,10).
-        let Seg::Cubic { c1, .. } = segs[2] else { panic!() };
+        let Seg::Cubic { c1, .. } = segs[2] else {
+            panic!()
+        };
         assert!((c1.x - 30.0).abs() < 1e-3, "reflected c1 {c1:?}");
     }
 
@@ -884,7 +1230,10 @@ mod tests {
         let scale = slot * inset / 24.8;
         let art_w = 24.8 * scale;
         let art_h = 20.0 * scale;
-        let off = P2 { x: (slot - art_w) * 0.5, y: (slot - art_h) * 0.5 };
+        let off = P2 {
+            x: (slot - art_w) * 0.5,
+            y: (slot - art_h) * 0.5,
+        };
         let t0 = transform_point(P2 { x: 3.5, y: 5.5 }, parsed.origin, scale, off);
         assert!((t0.X - off.x).abs() < 1e-2 && (t0.Y - off.y).abs() < 1e-2);
     }
@@ -892,11 +1241,21 @@ mod tests {
     #[test]
     fn arc_expands_to_a_cubic() {
         let mut out = Vec::new();
-        arc_to_cubics(P2 { x: 0.0, y: 0.0 }, ArcInfo { end: P2 { x: 0.0, y: 2.0 }, rx: 1.0, ry: 1.0, phi_deg: 0.0, large: false, sweep: true }, &mut out);
+        arc_to_cubics(
+            P2 { x: 0.0, y: 0.0 },
+            ArcInfo {
+                end: P2 { x: 0.0, y: 2.0 },
+                rx: 1.0,
+                ry: 1.0,
+                phi_deg: 0.0,
+                large: false,
+                sweep: true,
+            },
+            &mut out,
+        );
         assert!(out.len() >= 1, "arc must expand to beziers");
         assert!(out.iter().all(|s| matches!(s, Seg::Cubic { .. })));
     }
-
 
     #[test]
     fn optical_insets_follow_the_class() {
@@ -921,9 +1280,18 @@ mod tests {
     #[test]
     fn provider_id_alias_resolves_artwork() {
         assert!(provider_svg_source("mimo").is_some());
-        assert!(provider_svg_source("mimoapi").is_some(), "mimoapi aliases mimo");
-        assert!(provider_svg_source("alibabatokenplan").is_some(), "alibabatokenplan aliases alibaba");
-        assert!(provider_svg_source("arkcodingplan").is_some(), "arkcodingplan aliases volcengine-ark");
+        assert!(
+            provider_svg_source("mimoapi").is_some(),
+            "mimoapi aliases mimo"
+        );
+        assert!(
+            provider_svg_source("alibabatokenplan").is_some(),
+            "alibabatokenplan aliases alibaba"
+        );
+        assert!(
+            provider_svg_source("arkcodingplan").is_some(),
+            "arkcodingplan aliases volcengine-ark"
+        );
     }
 
     #[test]
@@ -933,7 +1301,10 @@ mod tests {
         // rejected circle-only (nanogpt), stroke-only (commandcode/mimo/
         // sakana/crossmodel) and clipPath/CSS style assets, degrading them to
         // blank tiles or letter marks.
-        assert!(!PROVIDER_ICON_TABLE.is_empty(), "icon table must be populated by build.rs");
+        assert!(
+            !PROVIDER_ICON_TABLE.is_empty(),
+            "icon table must be populated by build.rs"
+        );
         // ProviderIcon-manus.svg is corrupted in the repo baseline
         // (f40e2a420): its path data literally ends with
         // " (line truncated to 2000 chars)", so strict XML parsing rejects it.
@@ -944,7 +1315,9 @@ mod tests {
         let opt = usvg::Options::default();
         let mut failures: Vec<(String, String)> = Vec::new();
         for (id, src) in PROVIDER_ICON_TABLE {
-            if KNOWN_CORRUPT_ASSETS.contains(id) { continue; }
+            if KNOWN_CORRUPT_ASSETS.contains(id) {
+                continue;
+            }
             let tinted = tint_svg(src, id, 0x123456);
             if let Err(err) = usvg::Tree::from_str(&tinted, &opt) {
                 failures.push(((*id).to_string(), err.to_string()));
@@ -979,8 +1352,16 @@ mod tests {
             "qoder",
             0x12AB34,
         );
-        assert_eq!(s.matches("fill=\"#12AB34\"").count(), 5, "all white/current/black fills become ink: {s}");
-        assert_eq!(s.matches("stroke=\"#12AB34\"").count(), 2, "white + currentColor strokes become ink: {s}");
+        assert_eq!(
+            s.matches("fill=\"#12AB34\"").count(),
+            5,
+            "all white/current/black fills become ink: {s}"
+        );
+        assert_eq!(
+            s.matches("stroke=\"#12AB34\"").count(),
+            2,
+            "white + currentColor strokes become ink: {s}"
+        );
     }
 
     #[test]
@@ -993,8 +1374,15 @@ mod tests {
             "jetbrains",
             0x5D87FF,
         );
-        assert_eq!(s.matches("fill:#5D87FF").count(), 3, "css fills (hash, uppercase, named) become ink: {s}");
-        assert!(s.contains("style=\"fill:#5D87FF;fill-rule:nonzero;\""), "css fill replaced, rest kept: {s}");
+        assert_eq!(
+            s.matches("fill:#5D87FF").count(),
+            3,
+            "css fills (hash, uppercase, named) become ink: {s}"
+        );
+        assert!(
+            s.contains("style=\"fill:#5D87FF;fill-rule:nonzero;\""),
+            "css fill replaced, rest kept: {s}"
+        );
     }
 
     #[test]
@@ -1008,16 +1396,26 @@ mod tests {
             0x0000FF,
         );
         assert!(s.contains("fill=\"#4285F4\""), "explicit blue kept: {s}");
-        assert!(s.contains("fill=\"#111827\""), "explicit near-black kept: {s}");
+        assert!(
+            s.contains("fill=\"#111827\""),
+            "explicit near-black kept: {s}"
+        );
         assert!(s.contains("fill=\"none\""), "fill none kept: {s}");
         assert!(s.contains("fill: #999999"), "css grey kept: {s}");
-        assert!(!s.contains("fill=\"#0000FF\""), "nothing recoloured unless white/current/black: {s}");
+        assert!(
+            !s.contains("fill=\"#0000FF\""),
+            "nothing recoloured unless white/current/black: {s}"
+        );
     }
 
     #[test]
     fn grok_asset_is_never_recoloured() {
         let src = provider_svg_source("grok").expect("grok artwork");
-        assert_eq!(tint_svg(src, "grok", 0x12AB34), src, "grok keeps its own palette");
+        assert_eq!(
+            tint_svg(src, "grok", 0x12AB34),
+            src,
+            "grok keeps its own palette"
+        );
     }
 
     #[test]
@@ -1026,7 +1424,10 @@ mod tests {
         let brand = brand_color("qoder");
         let tinted = tint_svg(src, "qoder", brand);
         let needle = format!("fill=\"#{brand:06X}\"");
-        assert!(tinted.contains(&needle), "qoder named black fill not converted to brand: {tinted}");
+        assert!(
+            tinted.contains(&needle),
+            "qoder named black fill not converted to brand: {tinted}"
+        );
     }
 
     /// Icons the legacy path parser could not rasterise must still put real
@@ -1133,7 +1534,9 @@ mod tests {
         };
         const S: i32 = 48;
         let dc = CreateCompatibleDC(None);
-        if dc.is_invalid() { return None; }
+        if dc.is_invalid() {
+            return None;
+        }
         let info = BITMAPINFO {
             bmiHeader: BITMAPINFOHEADER {
                 biSize: size_of::<BITMAPINFOHEADER>() as u32,
@@ -1147,47 +1550,80 @@ mod tests {
             ..Default::default()
         };
         let mut bits: *mut std::ffi::c_void = std::ptr::null_mut();
-        let bitmap: HBITMAP = match CreateDIBSection(Some(dc), &info, DIB_RGB_COLORS, &mut bits, None, 0) {
-            Ok(b) if !bits.is_null() => b,
-            _ => { let _ = DeleteDC(dc); return None; },
-        };
+        let bitmap: HBITMAP =
+            match CreateDIBSection(Some(dc), &info, DIB_RGB_COLORS, &mut bits, None, 0) {
+                Ok(b) if !bits.is_null() => b,
+                _ => {
+                    let _ = DeleteDC(dc);
+                    return None;
+                }
+            };
         let _ = SelectObject(dc, bitmap.into());
         std::ptr::write_bytes(bits.cast::<u8>(), 0, (S * S * 4) as usize);
 
+        use windows::Win32::Foundation::RECT;
+        use windows::Win32::Graphics::Direct2D::Common::{
+            D2D1_ALPHA_MODE_IGNORE, D2D1_PIXEL_FORMAT,
+        };
         use windows::Win32::Graphics::Direct2D::{
-            D2D1CreateFactory, D2D1_FACTORY_TYPE_SINGLE_THREADED, D2D1_RENDER_TARGET_PROPERTIES,
-            D2D1_RENDER_TARGET_TYPE_SOFTWARE, D2D1_RENDER_TARGET_USAGE_GDI_COMPATIBLE,
-            D2D1_FEATURE_LEVEL_DEFAULT, ID2D1DCRenderTarget, ID2D1Factory,
+            D2D1_FACTORY_TYPE_SINGLE_THREADED, D2D1_FEATURE_LEVEL_DEFAULT,
+            D2D1_RENDER_TARGET_PROPERTIES, D2D1_RENDER_TARGET_TYPE_SOFTWARE,
+            D2D1_RENDER_TARGET_USAGE_GDI_COMPATIBLE, D2D1CreateFactory, ID2D1DCRenderTarget,
+            ID2D1Factory,
         };
         use windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_B8G8R8A8_UNORM;
-        use windows::Win32::Foundation::RECT;
-        use windows::Win32::Graphics::Direct2D::Common::{D2D1_ALPHA_MODE_IGNORE, D2D1_PIXEL_FORMAT};
 
-        let factory: ID2D1Factory = match unsafe { D2D1CreateFactory(D2D1_FACTORY_TYPE_SINGLE_THREADED, None) } {
-            Ok(f) => f,
-            Err(_) => { let _ = DeleteObject(bitmap.into()); let _ = DeleteDC(dc); return None; },
-        };
+        let factory: ID2D1Factory =
+            match unsafe { D2D1CreateFactory(D2D1_FACTORY_TYPE_SINGLE_THREADED, None) } {
+                Ok(f) => f,
+                Err(_) => {
+                    let _ = DeleteObject(bitmap.into());
+                    let _ = DeleteDC(dc);
+                    return None;
+                }
+            };
         let props = D2D1_RENDER_TARGET_PROPERTIES {
             r#type: D2D1_RENDER_TARGET_TYPE_SOFTWARE,
-            pixelFormat: D2D1_PIXEL_FORMAT { format: DXGI_FORMAT_B8G8R8A8_UNORM, alphaMode: D2D1_ALPHA_MODE_IGNORE },
-            dpiX: 0.0, dpiY: 0.0,
+            pixelFormat: D2D1_PIXEL_FORMAT {
+                format: DXGI_FORMAT_B8G8R8A8_UNORM,
+                alphaMode: D2D1_ALPHA_MODE_IGNORE,
+            },
+            dpiX: 0.0,
+            dpiY: 0.0,
             usage: D2D1_RENDER_TARGET_USAGE_GDI_COMPATIBLE,
             minLevel: D2D1_FEATURE_LEVEL_DEFAULT,
         };
         let target: ID2D1DCRenderTarget = match unsafe { factory.CreateDCRenderTarget(&props) } {
             Ok(t) => t,
-            Err(_) => { let _ = DeleteObject(bitmap.into()); let _ = DeleteDC(dc); return None; },
+            Err(_) => {
+                let _ = DeleteObject(bitmap.into());
+                let _ = DeleteDC(dc);
+                return None;
+            }
         };
-        let bounds = RECT { left: 0, top: 0, right: S, bottom: S };
+        let bounds = RECT {
+            left: 0,
+            top: 0,
+            right: S,
+            bottom: S,
+        };
         if unsafe { target.BindDC(dc, &bounds) }.is_err() {
-            let _ = DeleteObject(bitmap.into()); let _ = DeleteDC(dc); return None;
+            let _ = DeleteObject(bitmap.into());
+            let _ = DeleteDC(dc);
+            return None;
         }
-        let slot = IconSlot { left: 0.0, top: 0.0, size_px: S as f32 };
+        let slot = IconSlot {
+            left: 0.0,
+            top: 0.0,
+            size_px: S as f32,
+        };
         unsafe { target.BeginDraw() };
         let drawn = draw_icon(&target, provider_id, IconStyle::Pure, slot);
         let ended = unsafe { target.EndDraw(None, None) }.is_ok();
         if !drawn || !ended {
-            let _ = DeleteObject(bitmap.into()); let _ = DeleteDC(dc); return None;
+            let _ = DeleteObject(bitmap.into());
+            let _ = DeleteDC(dc);
+            return None;
         }
         let pixels = std::slice::from_raw_parts(bits.cast::<u8>(), (S * S * 4) as usize);
         let ink = |x0: i32, y0: i32, x1: i32, y1: i32| -> u64 {
@@ -1218,7 +1654,9 @@ mod tests {
         };
         const S: i32 = 32;
         let dc = CreateCompatibleDC(None);
-        if dc.is_invalid() { return None; }
+        if dc.is_invalid() {
+            return None;
+        }
         let info = BITMAPINFO {
             bmiHeader: BITMAPINFOHEADER {
                 biSize: size_of::<BITMAPINFOHEADER>() as u32,
@@ -1232,53 +1670,88 @@ mod tests {
             ..Default::default()
         };
         let mut bits: *mut std::ffi::c_void = std::ptr::null_mut();
-        let bitmap: HBITMAP = match CreateDIBSection(Some(dc), &info, DIB_RGB_COLORS, &mut bits, None, 0) {
-            Ok(b) if !bits.is_null() => b,
-            _ => { let _ = DeleteDC(dc); return None; },
-        };
+        let bitmap: HBITMAP =
+            match CreateDIBSection(Some(dc), &info, DIB_RGB_COLORS, &mut bits, None, 0) {
+                Ok(b) if !bits.is_null() => b,
+                _ => {
+                    let _ = DeleteDC(dc);
+                    return None;
+                }
+            };
         let _ = SelectObject(dc, bitmap.into());
         std::ptr::write_bytes(bits.cast::<u8>(), 0, (S * S * 4) as usize);
 
+        use windows::Win32::Foundation::RECT;
+        use windows::Win32::Graphics::Direct2D::Common::{
+            D2D_RECT_F, D2D1_ALPHA_MODE_IGNORE, D2D1_PIXEL_FORMAT,
+        };
         use windows::Win32::Graphics::Direct2D::{
-            D2D1CreateFactory, D2D1_FACTORY_TYPE_SINGLE_THREADED, D2D1_RENDER_TARGET_PROPERTIES,
-            D2D1_RENDER_TARGET_TYPE_SOFTWARE, D2D1_RENDER_TARGET_USAGE_GDI_COMPATIBLE,
-            D2D1_FEATURE_LEVEL_DEFAULT, ID2D1DCRenderTarget, ID2D1Factory,
+            D2D1_FACTORY_TYPE_SINGLE_THREADED, D2D1_FEATURE_LEVEL_DEFAULT,
+            D2D1_RENDER_TARGET_PROPERTIES, D2D1_RENDER_TARGET_TYPE_SOFTWARE,
+            D2D1_RENDER_TARGET_USAGE_GDI_COMPATIBLE, D2D1CreateFactory, ID2D1DCRenderTarget,
+            ID2D1Factory,
         };
         use windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_B8G8R8A8_UNORM;
-        use windows::Win32::Foundation::RECT;
-        use windows::Win32::Graphics::Direct2D::Common::{D2D1_ALPHA_MODE_IGNORE, D2D1_PIXEL_FORMAT, D2D_RECT_F};
 
-        let factory: ID2D1Factory = match unsafe { D2D1CreateFactory(D2D1_FACTORY_TYPE_SINGLE_THREADED, None) } {
-            Ok(f) => f,
-            Err(_) => { let _ = DeleteObject(bitmap.into()); let _ = DeleteDC(dc); return None; },
-        };
+        let factory: ID2D1Factory =
+            match unsafe { D2D1CreateFactory(D2D1_FACTORY_TYPE_SINGLE_THREADED, None) } {
+                Ok(f) => f,
+                Err(_) => {
+                    let _ = DeleteObject(bitmap.into());
+                    let _ = DeleteDC(dc);
+                    return None;
+                }
+            };
         let props = D2D1_RENDER_TARGET_PROPERTIES {
             r#type: D2D1_RENDER_TARGET_TYPE_SOFTWARE,
-            pixelFormat: D2D1_PIXEL_FORMAT { format: DXGI_FORMAT_B8G8R8A8_UNORM, alphaMode: D2D1_ALPHA_MODE_IGNORE },
-            dpiX: 0.0, dpiY: 0.0,
+            pixelFormat: D2D1_PIXEL_FORMAT {
+                format: DXGI_FORMAT_B8G8R8A8_UNORM,
+                alphaMode: D2D1_ALPHA_MODE_IGNORE,
+            },
+            dpiX: 0.0,
+            dpiY: 0.0,
             usage: D2D1_RENDER_TARGET_USAGE_GDI_COMPATIBLE,
             minLevel: D2D1_FEATURE_LEVEL_DEFAULT,
         };
         let target: ID2D1DCRenderTarget = match unsafe { factory.CreateDCRenderTarget(&props) } {
             Ok(t) => t,
-            Err(_) => { let _ = DeleteObject(bitmap.into()); let _ = DeleteDC(dc); return None; },
+            Err(_) => {
+                let _ = DeleteObject(bitmap.into());
+                let _ = DeleteDC(dc);
+                return None;
+            }
         };
-        let bounds = RECT { left: 0, top: 0, right: S, bottom: S };
+        let bounds = RECT {
+            left: 0,
+            top: 0,
+            right: S,
+            bottom: S,
+        };
         if unsafe { target.BindDC(dc, &bounds) }.is_err() {
-            let _ = DeleteObject(bitmap.into()); let _ = DeleteDC(dc); return None;
+            let _ = DeleteObject(bitmap.into());
+            let _ = DeleteDC(dc);
+            return None;
         }
         eprintln!("render_logo_smoke: pre-draw, factory bound");
-        let slot = IconSlot { left: 0.0, top: 0.0, size_px: S as f32 };
+        let slot = IconSlot {
+            left: 0.0,
+            top: 0.0,
+            size_px: S as f32,
+        };
         unsafe { target.BeginDraw() };
         eprintln!("render_logo_smoke: begin draw ok, calling draw_icon");
         let drawn = draw_icon(&target, "codex", IconStyle::Pure, slot);
         eprintln!("render_logo_smoke: draw_icon returned {drawn}");
         let ended = unsafe { target.EndDraw(None, None) }.is_ok();
         if !drawn || !ended {
-            let _ = DeleteObject(bitmap.into()); let _ = DeleteDC(dc); return None;
+            let _ = DeleteObject(bitmap.into());
+            let _ = DeleteDC(dc);
+            return None;
         }
         let pixels = std::slice::from_raw_parts(bits.cast::<u8>(), (S * S * 4) as usize);
-        let total = pixels.chunks_exact(4).fold(0u64, |a, px| a + u64::from(px[0]) + u64::from(px[1]) + u64::from(px[2]));
+        let total = pixels.chunks_exact(4).fold(0u64, |a, px| {
+            a + u64::from(px[0]) + u64::from(px[1]) + u64::from(px[2])
+        });
         let _ = SelectObject(dc, bitmap.into());
         let _ = DeleteObject(bitmap.into());
         let _ = DeleteDC(dc);

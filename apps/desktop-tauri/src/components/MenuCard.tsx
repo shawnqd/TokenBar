@@ -720,7 +720,12 @@ function MetricRow({
   // other window projects from its own length/reset metadata.
   const forecast = quotaForecastDisplay(snap.kind === "weekly" ? pace : null, snap);
   const marker = forecastMarkerPercent(forecast, display);
-  const forecastShown = forecast.available && !snap.isInformational && !snap.isExhausted;
+  // Text forecast row is shown only for hero (primary) and weekly windows.
+  // Monthly / non-hero session windows already convey pace via the bar notch;
+  // adding a text row to each makes the card feel cluttered.
+  const forecastEligible = hero || isWeeklyWindow(snap);
+  const forecastShown =
+    forecastEligible && forecast.available && !snap.isInformational && !snap.isExhausted;
   // The legacy reserve row is a compatibility fallback for windows the new
   // forecast cannot project (no length/reset metadata). Never renders beside
   // a real forecast.

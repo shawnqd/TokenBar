@@ -282,7 +282,8 @@ export default function ProviderUsageCard({
   const resetCredits = (detail.extraRateWindows ?? []).find(isResetCreditsExtra);
   for (const extra of detail.extraRateWindows ?? []) {
     if (isResetCreditsExtra(extra)) continue;
-    if (!isMeaningfulQuotaWindow(extra.window)) continue;
+    if (extra.id === "zai-account-balance" || extra.id === "zen-balance") continue;
+    if (!isMeaningfulQuotaWindow(extra.window) || !usageKnown(extra.window)) continue;
     bars.push({ key: extra.id, label: extra.title, rate: extra.window });
   }
 
@@ -361,6 +362,15 @@ export default function ProviderUsageCard({
               <i
                 key={`${point.date}-${index}`}
                 style={{ height: `${Math.max(6, (point.value / max) * 100)}%` }}
+              />
+            ))}
+          </div>
+        ) : series.length > 0 && tokenLead != null && tokenLead > 0 ? (
+          <div className="s5-chart-demo" aria-hidden>
+            {series.map((point, index) => (
+              <i
+                key={`${point.date}-${index}`}
+                style={{ height: "6%" }}
               />
             ))}
           </div>

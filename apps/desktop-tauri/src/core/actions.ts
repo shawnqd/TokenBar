@@ -30,6 +30,7 @@ export type SurfaceActionKind =
   | "setActiveTokenAccount"
   | "revokeCredentials"
   | "setCookieSource"
+  | "setUsageSource"
   | "setRegion"
   | "resetSettings"
   | "closeSettings"
@@ -123,6 +124,11 @@ export type SurfaceAction =
   | { type: "revokeCredentials"; target: Extract<SurfaceTarget, { kind: "provider" }> }
   | {
       type: "setCookieSource";
+      target: Extract<SurfaceTarget, { kind: "provider" }>;
+      source: string;
+    }
+  | {
+      type: "setUsageSource";
       target: Extract<SurfaceTarget, { kind: "provider" }>;
       source: string;
     }

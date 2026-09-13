@@ -3,7 +3,7 @@ import { render, act, waitFor } from "@testing-library/react";
 import React, { useEffect, useState } from "react";
 import { createUsageStore, keyFromSnapshot } from "./usageStore";
 import { createRefreshCoordinator } from "./refreshCoordinator";
-import { FIXTURE_SNAPSHOTS } from "./index";
+import { FIXTURE_SNAPSHOTS } from "./fixtures";
 import { useCoreSnapshot, useRefreshCommand, setCoreBridgeStore, setCoreBridgeCoordinator } from "./useCoreBridge";
 import { useSyncExternalStore } from "react";
 

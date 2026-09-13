@@ -92,7 +92,7 @@ const NAV_ICONS: Record<SettingsNavId, ReactElement> = {
 
 type NavEntry =
   | { type: "group"; labelKey: LocaleKey }
-  | { type: "item"; id: SettingsNavId; labelKey: LocaleKey };
+  | { type: "item"; id: SettingsNavId; labelKey: LocaleKey; footer?: boolean };
 
 export const SETTINGS_NAV_ITEMS: NavEntry[] = [
   { type: "group", labelKey: "SettingsNavGroupApp" },
@@ -102,13 +102,13 @@ export const SETTINGS_NAV_ITEMS: NavEntry[] = [
   { type: "item", id: "trayPanel", labelKey: "TabTrayPanel" },
   { type: "item", id: "floatBar", labelKey: "TabFloatBar" },
   { type: "item", id: "taskbarStatus", labelKey: "TabTaskbarStatus" },
+  { type: "item", id: "appearance", labelKey: "TabAppearance" },
   { type: "group", labelKey: "SettingsNavGroupFeedback" },
   { type: "item", id: "notifications", labelKey: "SectionNotifications" },
-  { type: "item", id: "appearance", labelKey: "TabAppearance" },
   { type: "group", labelKey: "SettingsNavGroupData" },
   { type: "item", id: "privacy", labelKey: "TabPrivacy" },
   { type: "item", id: "advanced", labelKey: "TabAdvanced" },
-  { type: "item", id: "about", labelKey: "TabAbout" },
+  { type: "item", id: "about", labelKey: "TabAbout", footer: true },
 ];
 
 export const SETTINGS_NAV_ORDER: SettingsNavId[] = SETTINGS_NAV_ITEMS.flatMap(
@@ -175,7 +175,7 @@ export default function SettingsNav({
           <button
             key={entry.id}
             type="button"
-            className={`settings-v5-nav__item${
+            className={`settings-v5-nav__item${entry.footer ? " settings-v5-nav__item--footer" : ""}${
               active === entry.id ? " is-active" : ""
             }`}
             aria-current={active === entry.id ? "page" : undefined}

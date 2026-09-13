@@ -47,6 +47,9 @@ pub struct ProviderDetail {
     // one of the pickers.
     pub cookie_source: Option<String>,
     pub region: Option<String>,
+    /// Persisted usage-source pin (auto | web | cli | oauth), always `Some`
+    /// because the settings getter defaults to "auto" (upstream parity).
+    pub usage_source: Option<String>,
 }
 
 pub(crate) fn build_provider_detail(provider_id: &str) -> Result<ProviderDetail, String> {
@@ -105,6 +108,7 @@ pub(crate) fn build_provider_detail(provider_id: &str) -> Result<ProviderDetail,
         has_snapshot: false,
         cookie_source: provider_cookie_source_lookup(&settings, id.cli_name()),
         region: provider_region_lookup(&settings, id.cli_name()),
+        usage_source: provider_usage_source_lookup(&settings, id.cli_name()),
     })
 }
 

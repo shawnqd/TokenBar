@@ -1,5 +1,5 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { TEST_PROVIDER_CATALOG } from "../../../test/providerCatalog";
 import type { SettingsSnapshot } from "../../../types/bridge";
 import { createUsageStore } from "../../../core/usageStore";
@@ -9,7 +9,9 @@ import ProvidersPage from "./ProvidersPage";
 import TrayPanelPage from "./TrayPanelPage";
 import { buildProviderCatalog } from "./htmlFixture";
 
-const tauriMocks = vi.hoisted(() => ({
+const tauriMocks = vi.hoisted(() => {
+  const state: { usageSource?: string } = { usageSource: undefined };
+  return {
   getProviderDetail: vi.fn(),
   refreshProviders: vi.fn(),
   openProviderDashboard: vi.fn(),
@@ -29,10 +31,22 @@ const tauriMocks = vi.hoisted(() => ({
   setManualCookie: vi.fn(),
   removeManualCookie: vi.fn(),
   setProviderCookieSource: vi.fn(),
+  getProviderCookieSource: vi.fn(),
+  getProviderCookieSourceOptions: vi.fn(),
+  getProviderAuthCapabilities: vi.fn(),
+  getTokenAccountProviders: vi.fn(),
+  onProviderUpdated: vi.fn(),
   setApiKey: vi.fn(),
   removeApiKey: vi.fn(),
-  invokeSurfaceAction: vi.fn(async () => "ok"),
-}));
+  state,
+  invokeSurfaceAction: vi.fn(async (action?: { type?: string; source?: string }) => {
+    if (action && action.type === "setUsageSource") {
+      state.usageSource = action.source;
+    }
+    return "ok";
+  }),
+  };
+});
 
 vi.mock("../../../hooks/useLocale", () => ({
   useLocale: () => ({ t: (key: string) => key }),
@@ -60,6 +74,11 @@ vi.mock("../../../lib/tauri", () => ({
   setManualCookie: tauriMocks.setManualCookie,
   removeManualCookie: tauriMocks.removeManualCookie,
   setProviderCookieSource: tauriMocks.setProviderCookieSource,
+  getProviderCookieSource: tauriMocks.getProviderCookieSource,
+  getProviderCookieSourceOptions: tauriMocks.getProviderCookieSourceOptions,
+  getProviderAuthCapabilities: tauriMocks.getProviderAuthCapabilities,
+  getTokenAccountProviders: tauriMocks.getTokenAccountProviders,
+  onProviderUpdated: tauriMocks.onProviderUpdated,
   setApiKey: tauriMocks.setApiKey,
   removeApiKey: tauriMocks.removeApiKey,
   getProviderRegionOptions: vi.fn().mockResolvedValue([]),
@@ -100,6 +119,15 @@ const snapshot = {
   providerMetrics: {},
 } as unknown as SettingsSnapshot;
 
+// The runtime catalog shape the page consumes exclusively (bootstrap
+// payload). TEST_PROVIDER_CATALOG stays a test fixture and is only used to
+// build this runtime-shaped input.
+const runtimeCatalog = TEST_PROVIDER_CATALOG.map(([id, displayName]) => ({
+  id,
+  displayName,
+  cookieDomain: id === "claude" ? "claude.ai" : null,
+}));
+
 function claudeLiveStore() {
   const store = createUsageStore();
   store.upsert(
@@ -122,7 +150,13 @@ function claudeLiveStore() {
 }
 
 describe("V5 settings pages from HTML", () => {
-  tauriMocks.getProviderDetail.mockResolvedValue({
+  beforeEach(() => {
+    tauriMocks.state.usageSource = undefined;
+  });
+
+  tauriMocks.getProviderDetail.mockImplementation((providerId: string) =>
+    Promise.resolve({
+      usageSource: tauriMocks.state.usageSource,
     id: "claude",
     displayName: "Claude",
     enabled: true,
@@ -151,7 +185,7 @@ describe("V5 settings pages from HTML", () => {
     buyCreditsUrl: "https://claude.ai/upgrade",
     lastError: null,
     loginFlow: "claude_cli",
-  });
+  }));
   tauriMocks.getProviderChartData.mockResolvedValue(null);
   clearChartCache();
   tauriMocks.getSettingsSnapshot.mockResolvedValue({ enableAnimations: false });
@@ -175,53 +209,154 @@ describe("V5 settings pages from HTML", () => {
   tauriMocks.setManualCookie.mockResolvedValue([]);
   tauriMocks.removeManualCookie.mockResolvedValue([]);
   tauriMocks.setProviderCookieSource.mockResolvedValue(undefined);
+  tauriMocks.getProviderCookieSource.mockResolvedValue("manual");
+  // 后端选项目录使用全称标签；codex 没有 Cookie 来源目录（真实口径）。
+  tauriMocks.getProviderCookieSourceOptions.mockImplementation((providerId: string) =>
+    Promise.resolve(
+      providerId === "codex"
+        ? []
+        : [
+            {
+              value: "auto",
+              label: "自动读取浏览器",
+              description: "自动读取浏览器里已登录的会话。",
+            },
+            {
+              value: "manual",
+              label: "使用已保存 Cookie",
+              description: "只使用你在应用里保存或导入的 Cookie（默认）。",
+            },
+          ],
+    ),
+  );
+  // caps 对齐真实目录：密钥型仅 requires_api_key 的服务商（DeepSeek）；
+  // Grok/Claude 的用量抓取不读粘贴密钥，绝不支持 API 密钥读取方式。
+  tauriMocks.getProviderAuthCapabilities.mockImplementation((providerId: string) =>
+    Promise.resolve({
+      supportsOAuth: false,
+      supportsCli: false,
+      supportsWeb: false,
+      supportsApiKey: providerId === "deepseek",
+      hasCookieDomain: false,
+      loginFlow: null,
+      availableSources: ["auto"],
+      ...(providerId === "claude"
+        ? {
+            supportsWeb: true,
+            hasCookieDomain: true,
+            loginFlow: "claude_cli",
+            availableSources: ["auto", "oauth", "web", "cli"],
+          }
+        : {}),
+      ...(providerId === "codex"
+        ? { supportsCli: true, loginFlow: "codex_cli", availableSources: ["auto", "oauth", "cli"] }
+        : {}),
+      ...(providerId === "grok"
+        ? {
+            supportsWeb: true,
+            hasCookieDomain: true,
+            availableSources: ["auto", "cli", "oauth", "web"],
+          }
+        : {}),
+      ...(providerId === "deepseek"
+        ? { supportsApiKey: true, availableSources: ["auto", "oauth"] }
+        : {}),
+    }),
+  );
   tauriMocks.setApiKey.mockResolvedValue([]);
   tauriMocks.removeApiKey.mockResolvedValue([]);
+  tauriMocks.getTokenAccountProviders.mockResolvedValue([]);
+  tauriMocks.onProviderUpdated.mockResolvedValue(() => {});
   tauriMocks.revokeProviderCredentials.mockResolvedValue(undefined);
 
   it("tray page uses HTML groups and preview, not old dashboard chrome", () => {
     render(
       <TrayPanelPage settings={snapshot} set={() => {}} saving={false} />,
     );
-    expect(screen.getByText("卡片内容")).toBeInTheDocument();
-    expect(screen.getByText("通知区与网格")).toBeInTheDocument();
+    expect(screen.getByText("显示内容")).toBeInTheDocument();
+    expect(screen.getByText("打开与账号")).toBeInTheDocument();
+    expect(screen.getByText("通知区与布局")).toBeInTheDocument();
     expect(screen.getByText("显示密度")).toBeInTheDocument();
+    expect(screen.getByText("设置打开时保留托盘")).toBeInTheDocument();
     expect(screen.getByText("实时预览")).toBeInTheDocument();
     expect(screen.getAllByText("Claude").length).toBeGreaterThan(0);
-    expect(document.querySelector(".tray-panel-reveal")).not.toBeNull();
+    expect(document.querySelector(".s5-tray-flyout")).not.toBeNull();
     expect(document.querySelector(".tray-panel")).not.toBeNull();
     expect(document.querySelector(".provider-grid")).not.toBeNull();
-    expect(document.querySelector(".flyout-footer")).not.toBeNull();
+    expect(document.querySelector(".flyout-footer")).toBeNull();
     expect(document.querySelector(".menu-card")).toBeNull();
     expect(document.querySelector(".settings-surf-page")).toBeNull();
   });
 
-  it("providers page uses HTML list-detail and three login methods", () => {
-    render(
-      <ProvidersPage settings={snapshot} set={() => {}} saving={false} />,
+  it("tray page scales s5-tray-flyout proportionally without distorting inner tray-panel", () => {
+    const { unmount } = render(
+      <TrayPanelPage
+        settings={{ ...snapshot, trayScalePercent: 120 }}
+        set={() => {}}
+        saving={false}
+      />,
     );
-    expect(screen.getByText("批量导入网页会话")).toBeInTheDocument();
-    expect(screen.getByText("怎么登录")).toBeInTheDocument();
-    expect(screen.getByText("打开网页登录")).toBeInTheDocument();
+    const flyout = document.querySelector<HTMLElement>(".s5-tray-flyout");
+    expect(flyout).not.toBeNull();
+    expect(flyout?.style.transform).toBe("");
+    expect(flyout?.style.zoom).toBe("1.02");
+    const panel = document.querySelector<HTMLElement>(".tray-panel");
+    expect(panel).not.toBeNull();
+    expect(panel?.getAttribute("style")).toBeNull();
+    unmount();
+
+    const { unmount: unmountDefault } = render(
+      <TrayPanelPage
+        settings={{ ...snapshot, trayScalePercent: 100 }}
+        set={() => {}}
+        saving={false}
+      />,
+    );
+    const defaultFlyout = document.querySelector<HTMLElement>(".s5-tray-flyout");
+    expect(defaultFlyout?.style.zoom).toBe("0.85");
+    unmountDefault();
+  });
+
+  it("providers page uses real auth capabilities with no generic WebView login", async () => {
+    render(
+      <ProvidersPage settings={snapshot} set={() => {}} saving={false} catalog={runtimeCatalog} />,
+    );
+    expect(screen.getByText("批量导入浏览器 Cookie")).toBeInTheDocument();
+    // L1 用量读取方式来自异步能力查询，等它渲染后再断言。
+    expect(await screen.findByText("用量读取方式")).toBeInTheDocument();
+    // 自动选择：服务商自动决定通道，下方不渲染任何管理项。
+    expect(screen.queryByPlaceholderText(/粘贴 Cookie 请求头/)).not.toBeInTheDocument();
+    // 切到 Cookies：默认使用已保存 Cookie，出现 Cookie 来源子下拉与管理区。
+    fireEvent.click(await screen.findByRole("button", { name: "自动选择" }));
+    fireEvent.click(await screen.findByRole("option", { name: "Cookies" }));
+    expect(await screen.findByText("Cookie 来源")).toBeInTheDocument();
+    expect(
+      await screen.findByText(/默认使用你在这里保存或导入的/),
+    ).toBeInTheDocument();
+    expect(await screen.findByPlaceholderText(/粘贴 Cookie 请求头/)).toBeInTheDocument();
+    expect(screen.queryByText("打开网页登录")).not.toBeInTheDocument();
+    expect(screen.queryByText("我已登录，捕获")).not.toBeInTheDocument();
     expect(screen.queryByText("打开登录")).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole("radio", { name: "密钥" }));
-    expect(screen.getByText("这个服务用密钥。填一次并保存，之后会自动刷新用量。")).toBeInTheDocument();
     expect(document.querySelector(".provider-detail")).toBeNull();
     expect(document.querySelector(".identity-section")).toBeNull();
   });
 
     it("does not claim a saved API key when none is stored", async () => {
       render(
-        <ProvidersPage settings={snapshot} set={() => {}} saving={false} />,
+        <ProvidersPage settings={snapshot} set={() => {}} saving={false} catalog={runtimeCatalog} />,
       );
-      fireEvent.click(screen.getByRole("radio", { name: "密钥" }));
-      expect(screen.queryByText("密钥已保存")).not.toBeInTheDocument();
-      expect(await screen.findByText("还没有保存密钥。")).toBeInTheDocument();
+      // 密钥型服务商（DeepSeek）：L1 切 API 密钥后显示密钥表单，未保存时
+      // 不得声称已保存。
+      fireEvent.click(await screen.findByText("DeepSeek"));
+      fireEvent.click(await screen.findByRole("button", { name: "自动选择" }));
+      fireEvent.click(await screen.findByRole("option", { name: "API 密钥" }));
+      expect(screen.queryByText("API 密钥已保存")).not.toBeInTheDocument();
+      expect(await screen.findByText("还没有保存 API 密钥。")).toBeInTheDocument();
     });
 
   it("lists the full catalog with brand icons, not letter marks", () => {
     render(
-      <ProvidersPage settings={snapshot} set={() => {}} saving={false} />,
+      <ProvidersPage settings={snapshot} set={() => {}} saving={false} catalog={runtimeCatalog} />,
     );
     const rows = document.querySelectorAll(".s5-prow");
     expect(rows.length).toBe(TEST_PROVIDER_CATALOG.length);
@@ -242,14 +377,15 @@ describe("V5 settings pages from HTML", () => {
 
   it("wires the original provider header actions with HTML stroke icons", async () => {
     render(
-      <ProvidersPage settings={snapshot} set={() => {}} saving={false} />,
+      <ProvidersPage settings={snapshot} set={() => {}} saving={false} catalog={runtimeCatalog} />,
     );
     expect(await screen.findByRole("button", { name: "刷新" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "切换账号" })).toBeInTheDocument();
+    // 运行时无多账号切换：动作栏不得出现「切换账号」（规范 v2.2.2）。
+    expect(screen.queryByRole("button", { name: "切换账号" })).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "用量页" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "状态" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "买额度" })).toBeInTheDocument();
-    expect(document.querySelectorAll(".s5-pd-act svg").length).toBeGreaterThanOrEqual(5);
+    expect(document.querySelectorAll(".s5-pd-act svg").length).toBeGreaterThanOrEqual(4);
 
     fireEvent.click(screen.getByRole("button", { name: "刷新" }));
     await waitFor(() => {
@@ -286,7 +422,7 @@ describe("V5 settings pages from HTML", () => {
 
   it("renders live quota from getProviderDetail instead of the HTML fixture percents", async () => {
     render(
-      <ProvidersPage settings={snapshot} set={() => {}} saving={false} coreStore={claudeLiveStore()} />,
+      <ProvidersPage settings={snapshot} set={() => {}} saving={false} catalog={runtimeCatalog} coreStore={claudeLiveStore()} />,
     );
     expect(await screen.findByText("41%")).toBeInTheDocument();
     expect(screen.queryByText("62%")).not.toBeInTheDocument();
@@ -299,6 +435,7 @@ describe("V5 settings pages from HTML", () => {
         settings={{ ...snapshot, dashboardShowAsUsed: false }}
         set={() => {}}
         saving={false}
+        catalog={runtimeCatalog}
         coreStore={claudeLiveStore()}
       />,
     );
@@ -309,7 +446,7 @@ describe("V5 settings pages from HTML", () => {
 
   it("shows the HTML period and chart-type options without the old Token 用量 chrome", async () => {
     render(
-      <ProvidersPage settings={snapshot} set={() => {}} saving={false} />,
+      <ProvidersPage settings={snapshot} set={() => {}} saving={false} catalog={runtimeCatalog} />,
     );
     expect(await screen.findByRole("radio", { name: "7 天" })).toBeInTheDocument();
     expect(screen.getByRole("radio", { name: "30 天" })).toBeInTheDocument();
@@ -344,7 +481,7 @@ describe("V5 settings pages from HTML", () => {
       },
     });
     render(
-      <ProvidersPage settings={snapshot} set={() => {}} saving={false} />,
+      <ProvidersPage settings={snapshot} set={() => {}} saving={false} catalog={runtimeCatalog} />,
     );
     expect(await screen.findByText("近 7 天使用")).toBeInTheDocument();
     expect(screen.getByText("≈ 4.2万")).toBeInTheDocument();
@@ -357,18 +494,152 @@ describe("V5 settings pages from HTML", () => {
     expect(screen.queryByRole("radio", { name: "构成" })).not.toBeInTheDocument();
   });
 
-  it("lists a relative update time without 已登录 or 更新 after minutes", () => {
+  it("lists healthy rows with the spec vocabulary 已登录 · 相对时间", () => {
     render(
-      <ProvidersPage settings={snapshot} set={() => {}} saving={false} coreStore={claudeLiveStore()} />,
+      <ProvidersPage settings={snapshot} set={() => {}} saving={false} catalog={runtimeCatalog} coreStore={claudeLiveStore()} />,
     );
-    expect(screen.queryByText(/已登录/)).not.toBeInTheDocument();
-    expect(screen.getByText("刚刚更新")).toBeInTheDocument();
+    // Spec §6.2: healthy list rows read 「已登录 · 时间」; a bare relative time
+    // without the status word is the drift the spec removed.
+    expect(screen.getByText("已登录 · 刚刚更新")).toBeInTheDocument();
   });
 
-  it("buildProviderCatalog keeps every catalog id", () => {
-    const rows = buildProviderCatalog();
+  it("buildProviderCatalog maps the runtime catalog 1:1 and never falls back to a static list", () => {
+    const rows = buildProviderCatalog(runtimeCatalog);
     expect(rows.map((row) => row.id)).toEqual(
       TEST_PROVIDER_CATALOG.map(([id]) => id),
     );
+    // Empty or failed bootstrap payload: honest empty result — no
+    // test-catalog fallback in production.
+    expect(buildProviderCatalog(undefined)).toEqual([]);
+    expect(buildProviderCatalog([])).toEqual([]);
+    // Capabilities not resolved yet: no fabricated auth entries.
+    expect(
+      buildProviderCatalog(runtimeCatalog, [], [], undefined)[0].methods,
+    ).toEqual([]);
+  });
+
+  it("renders the runtime usage-source dropdown and persists a validated pin", async () => {
+    render(
+      <ProvidersPage settings={snapshot} set={() => {}} saving={false} catalog={runtimeCatalog} />,
+    );
+    // Claude advertises four sources → the dropdown lists them all.
+    expect(await screen.findByText("用量读取方式")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "自动选择" }));
+    fireEvent.click(await screen.findByRole("option", { name: "CLI 登录" }));
+    await waitFor(() => {
+      expect(tauriMocks.invokeSurfaceAction).toHaveBeenCalledWith({
+        type: "setUsageSource",
+        target: { kind: "provider", providerId: "claude" },
+        source: "cli",
+      });
+    });
+  });
+
+  it("hides the paste editor under 自动读取浏览器 and shows it under manual", async () => {
+    tauriMocks.getProviderCookieSource.mockResolvedValue("auto");
+    render(
+      <ProvidersPage settings={snapshot} set={() => {}} saving={false} catalog={runtimeCatalog} />,
+    );
+    // 进入 Cookies 分支（L1 自动选择下不渲染任何管理项）。
+    fireEvent.click(await screen.findByRole("button", { name: "自动选择" }));
+    fireEvent.click(await screen.findByRole("option", { name: "Cookies" }));
+    expect(await screen.findByText(/自动读取浏览器中的 Claude Cookie/)).toBeInTheDocument();
+    // 已保存会话的全部管理 UI 属于「使用已保存 Cookie」分支：自动读取时
+    // 粘贴框、保存、删除、已保存徽标都不出现。
+    expect(screen.queryByPlaceholderText(/粘贴 Cookie 请求头/)).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "删除已保存 Cookie" })).not.toBeInTheDocument();
+    expect(screen.queryByText("会话 Cookie 已保存")).not.toBeInTheDocument();
+    fireEvent.click(await screen.findByRole("button", { name: "自动读取浏览器" }));
+    fireEvent.click(await screen.findByRole("option", { name: "使用已保存 Cookie" }));
+    expect(await screen.findByPlaceholderText(/粘贴 Cookie 请求头/)).toBeInTheDocument();
+    tauriMocks.getProviderCookieSource.mockResolvedValue("manual");
+  });
+
+  it("distinguishes saved vs unsaved session-cookie states", async () => {
+    render(
+      <ProvidersPage settings={snapshot} set={() => {}} saving={false} catalog={runtimeCatalog} />,
+    );
+    fireEvent.click(await screen.findByRole("button", { name: "自动选择" }));
+    fireEvent.click(await screen.findByRole("option", { name: "Cookies" }));
+    // 未保存：虚线描边 + 中性「未保存」徽标。
+    const area = await screen.findByPlaceholderText(/粘贴 Cookie 请求头/);
+    expect(area.className).toContain("is-empty");
+    expect(screen.getByText("未保存")).toBeInTheDocument();
+    expect(screen.queryByText("已保存")).not.toBeInTheDocument();
+  });
+
+  it("marks the saved session with the green state and solid outline", async () => {
+    tauriMocks.getManualCookies.mockResolvedValue([
+      { providerId: "claude", value: "session=abc" },
+    ] as never);
+    render(
+      <ProvidersPage settings={snapshot} set={() => {}} saving={false} catalog={runtimeCatalog} />,
+    );
+    fireEvent.click(await screen.findByRole("button", { name: "自动选择" }));
+    fireEvent.click(await screen.findByRole("option", { name: "Cookies" }));
+    const area = await screen.findByPlaceholderText(/已有一份。粘贴新的会覆盖旧的/);
+    expect(area.className).toContain("is-saved");
+    expect(await screen.findByText("已保存")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "删除已保存 Cookie" })).toBeInTheDocument();
+    tauriMocks.getManualCookies.mockResolvedValue([]);
+  });
+
+  it("names the real login action instead of a generic 打开登录", async () => {
+    render(
+      <ProvidersPage settings={snapshot} set={() => {}} saving={false} catalog={runtimeCatalog} />,
+    );
+    // Codex only offers its CLI flow: L1 切 CLI 登录后，按钮写明实际动作，
+    // 引导文案描述 CLI 动作而非系统浏览器流程。
+    fireEvent.click(await screen.findByText("Codex"));
+    fireEvent.click(await screen.findByRole("button", { name: "自动选择" }));
+    fireEvent.click(await screen.findByRole("option", { name: "CLI 登录" }));
+    expect(await screen.findByRole("button", { name: "运行 Codex 登录" })).toBeInTheDocument();
+    expect(screen.getByText("通过 Codex CLI 或 OAuth 完成登录。本页不需要粘贴密钥或 Cookie。")).toBeInTheDocument();
+    expect(screen.queryByText("打开登录")).not.toBeInTheDocument();
+  });
+
+  it("cascades the card body from the pinned usage source", async () => {
+    // L1 钉定 本机 CLI：下方只剩 CLI 登录块，不再显示认证方式分段。
+    const base = await tauriMocks.getProviderDetail.getMockImplementation()?.call(null) ??
+      (tauriMocks.getProviderDetail as unknown as { _mockDefault?: unknown })._mockDefault;
+    void base;
+    const previous = tauriMocks.getProviderDetail.getMockImplementation();
+    tauriMocks.getProviderDetail.mockImplementation((providerId: string) =>
+      Promise.resolve({
+        id: providerId,
+        displayName: providerId,
+        enabled: true,
+        email: null,
+        plan: null,
+        usageSource: "cli",
+        hasSnapshot: false,
+      }),
+    );
+    render(
+      <ProvidersPage settings={snapshot} set={() => {}} saving={false} catalog={runtimeCatalog} />,
+    );
+    fireEvent.click(await screen.findByText("Codex"));
+    expect(await screen.findByText("通过 Codex CLI 或 OAuth 完成登录。本页不需要粘贴密钥或 Cookie。")).toBeInTheDocument();
+    expect(screen.queryByText("选一种就行")).not.toBeInTheDocument();
+    expect(screen.queryByPlaceholderText(/粘贴 Cookie 请求头/)).not.toBeInTheDocument();
+    if (previous) tauriMocks.getProviderDetail.mockImplementation(previous);
+  });
+
+  it("keeps the usage-source dropdown for single-source providers", async () => {
+    render(
+      <ProvidersPage settings={snapshot} set={() => {}} saving={false} catalog={runtimeCatalog} />,
+    );
+    // 用户决策：不管有几种方式，所有服务商都有「用量读取方式」下拉（默认 自动选择）。
+    fireEvent.click(await screen.findByText("Grok"));
+    expect(await screen.findByText("用量读取方式")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "自动选择" })).toBeInTheDocument();
+  });
+
+  it("shows an honest empty state when the runtime catalog is missing", () => {
+    render(
+      <ProvidersPage settings={snapshot} set={() => {}} saving={false} catalog={[]} />,
+    );
+    expect(screen.getByText(/服务商目录尚未加载/)).toBeInTheDocument();
+    expect(document.querySelector(".s5-prow")).toBeNull();
   });
 });

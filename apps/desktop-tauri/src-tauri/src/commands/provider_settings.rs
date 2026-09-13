@@ -118,6 +118,51 @@ pub fn get_provider_cookie_source(provider_id: String) -> Result<Option<String>,
     ))
 }
 
+/// Persisted usage-source lookup for the detail DTO round-trip
+/// (upstream `provider_usage_source_lookup`).
+pub(crate) fn provider_usage_source_lookup(
+    settings: &Settings,
+    provider_id: &str,
+) -> Option<String> {
+    parse_provider_arg(provider_id)
+        .ok()
+        .map(|id| settings.usage_source(id).to_string())
+}
+
+/// Validate a usage-source pin against the provider's real
+/// `available_sources()` catalog before persisting it (upstream
+/// `set_provider_usage_source` semantics). Returns the normalized value.
+pub(crate) fn provider_usage_source_set(
+    settings: &mut Settings,
+    provider_id: &str,
+    source: String,
+) -> Result<String, String> {
+    let id = parse_provider_arg(provider_id)?;
+    let mode = SourceMode::parse(source.trim())
+        .ok_or_else(|| format!("Invalid usage source '{source}' for provider '{provider_id}'"))?;
+    let provider = instantiate_provider(id);
+    if !provider.available_sources().contains(&mode) {
+        return Err(format!(
+            "Usage source '{source}' is unavailable for provider '{provider_id}'"
+        ));
+    }
+    let value = match mode {
+        SourceMode::Auto => "auto",
+        SourceMode::Web => "web",
+        SourceMode::Cli => "cli",
+        SourceMode::OAuth => "oauth",
+    };
+    settings.set_usage_source(id, value);
+    Ok(value.to_string())
+}
+
+#[tauri::command]
+pub fn set_provider_usage_source(provider_id: String, source: String) -> Result<(), String> {
+    let mut settings = Settings::load();
+    provider_usage_source_set(&mut settings, &provider_id, source)?;
+    settings.save().map_err(|e| e.to_string())
+}
+
 fn region_provider(provider_id: &str) -> Option<codexbar::core::ProviderId> {
     use codexbar::core::ProviderId;
     Some(match provider_id {
@@ -254,7 +299,9 @@ fn litellm_workspace_change_allowed(
 mod tests {
     use codexbar::core::ProviderId;
 
-    use super::{litellm_workspace_change_allowed, workspace_provider};
+    use super::{
+        Language, cookie_source_options_for, litellm_workspace_change_allowed, workspace_provider,
+    };
 
     #[test]
     fn maps_opencode_go_workspace_provider() {
@@ -302,6 +349,38 @@ mod tests {
             )
             .is_ok()
         );
+    }
+
+    /// Upstream parity (Win-CodexBar main): the cookie-source picker exists for
+    /// exactly these providers, with these values. Grok was added upstream with
+    /// auto/manual/off; a provider here without its upstream set silently loses
+    /// the picker in Settings.
+    #[test]
+    fn cookie_source_options_match_upstream_catalog() {
+        fn values(id: &str) -> Vec<&'static str> {
+            cookie_source_options_for(id, Language::English)
+                .iter()
+                .map(|option| match option.value.as_str() {
+                    "auto" => "auto",
+                    "manual" => "manual",
+                    "off" => "off",
+                    other => unreachable!("unexpected option {other}"),
+                })
+                .collect()
+        }
+
+        assert_eq!(values("codex"), vec!["auto", "manual", "off"]);
+        assert_eq!(values("grok"), vec!["auto", "manual", "off"]);
+        assert_eq!(values("kimi"), vec!["auto", "manual", "off"]);
+        assert_eq!(values("kimik2"), vec!["auto", "manual", "off"]);
+        for id in [
+            "claude", "cursor", "opencode", "factory", "alibaba", "minimax", "augment", "amp",
+            "ollama", "mistral",
+        ] {
+            assert_eq!(values(id), vec!["auto", "manual"], "{id}");
+        }
+        // No cookie domain, no picker.
+        assert!(cookie_source_options_for("deepseek", Language::English).is_empty());
     }
 }
 
@@ -358,17 +437,19 @@ fn cookie_option(
     manual_desc: impl Into<String>,
     off_desc: Option<&str>,
 ) -> CookieSourceOption {
+    // Spec v2.2.2: Cookie 来源 options use the full names — never a bare
+    // "自动" that could be confused with the usage-source 自动选择.
     let (label, description) = match value {
         "auto" => (
-            locale::get_text(lang, locale::LocaleKey::Automatic),
+            locale::get_text(lang, locale::LocaleKey::CookieSourceAutoLabel),
             auto_desc.into(),
         ),
         "manual" => (
-            locale::get_text(lang, locale::LocaleKey::CookieSourceManual),
+            locale::get_text(lang, locale::LocaleKey::CookieSourceManualLabel),
             manual_desc.into(),
         ),
         "off" => (
-            locale::get_text(lang, locale::LocaleKey::ProviderDisabled),
+            locale::get_text(lang, locale::LocaleKey::CookieSourceOffLabel),
             off_desc.unwrap_or("").to_string(),
         ),
         other => (other.to_string(), String::new()),
@@ -390,7 +471,9 @@ fn cookie_option(
 pub fn cookie_source_options_for(provider_id: &str, lang: Language) -> Vec<CookieSourceOption> {
     let automatic_help = locale::get_text(lang, locale::LocaleKey::ProviderCookieAutoHelp);
     let disabled_help = locale::get_text(lang, locale::LocaleKey::ProviderCookieDisabledHelp);
-    let manual_help = locale::get_text(lang, locale::LocaleKey::BrowserCookiePlaceholderDefault);
+    // Dedicated manual-option description — the browser-cookie placeholder
+    // text must never leak in as a picker description.
+    let manual_help = locale::get_text(lang, locale::LocaleKey::ProviderCookieManualHelp);
 
     match provider_id {
         "codex" => vec![
@@ -405,20 +488,8 @@ pub fn cookie_source_options_for(provider_id: &str, lang: Language) -> Vec<Cooki
             cookie_option(lang, "off", "", "", Some(&disabled_help)),
         ],
         "claude" => vec![
-            cookie_option(
-                lang,
-                "auto",
-                locale::get_text(lang, locale::LocaleKey::ProviderClaudeCookiesHelp),
-                "",
-                None,
-            ),
-            cookie_option(
-                lang,
-                "manual",
-                "",
-                locale::get_text(lang, locale::LocaleKey::ProviderClaudeCookiesHelp),
-                None,
-            ),
+            cookie_option(lang, "auto", &automatic_help, "", None),
+            cookie_option(lang, "manual", "", &manual_help, None),
         ],
         "cursor" => vec![
             cookie_option(
@@ -430,7 +501,10 @@ pub fn cookie_source_options_for(provider_id: &str, lang: Language) -> Vec<Cooki
             ),
             cookie_option(lang, "manual", "", &manual_help, None),
         ],
-        "opencode" => vec![
+        // OpenCode Go reads the same saved web session as OpenCode (its own
+        // opencode.ai domain); upstream's catalog has no arm for it yet, but
+        // without options the user can never opt into auto browser reading.
+        "opencode" | "opencodego" => vec![
             cookie_option(lang, "auto", &automatic_help, "", None),
             cookie_option(lang, "manual", "", &manual_help, None),
         ],
@@ -466,6 +540,13 @@ pub fn cookie_source_options_for(provider_id: &str, lang: Language) -> Vec<Cooki
         "mistral" => vec![
             cookie_option(lang, "auto", &automatic_help, "", None),
             cookie_option(lang, "manual", "", &manual_help, None),
+        ],
+        // Upstream parity (Win-CodexBar main): grok exposes the same
+        // auto/manual/off picker as the other off-capable cookie providers.
+        "grok" => vec![
+            cookie_option(lang, "auto", &automatic_help, "", None),
+            cookie_option(lang, "manual", "", &manual_help, None),
+            cookie_option(lang, "off", "", "", Some(&disabled_help)),
         ],
         _ => Vec::new(),
     }
@@ -549,6 +630,11 @@ pub struct ProviderAuthCapabilities {
     /// execute. CLI support alone may only mean that an existing local session
     /// can be probed, so it must not create a fake "打开登录" button.
     pub login_flow: Option<&'static str>,
+    /// Selectable fetch sources from `Provider::available_sources()` — the
+    /// runtime catalog behind the usage-source picker (upstream validates
+    /// server-side; the picker itself only renders when more than one entry
+    /// exists). Normalized lowercase: auto | web | cli | oauth.
+    pub available_sources: Vec<&'static str>,
 }
 
 pub(crate) fn provider_login_flow(id: ProviderId) -> Option<&'static str> {
@@ -567,9 +653,14 @@ pub fn get_provider_auth_capabilities(
 ) -> Result<ProviderAuthCapabilities, String> {
     let id = parse_provider_arg(&provider_id)?;
     let provider = instantiate_provider(id);
+    // Only providers the catalog marks as genuinely key-required count as
+    // API-key providers. Config-file entries (Grok/Ollama point at local
+    // auth files; usage fetch never reads a pasted key) must not advertise
+    // an API-key credential — that advertised a fetch mode that does not
+    // exist.
     let supports_api_key = codexbar::settings::get_api_key_providers()
         .into_iter()
-        .any(|info| info.id == id);
+        .any(|info| info.id == id && info.requires_api_key);
     Ok(ProviderAuthCapabilities {
         supports_oauth: provider.supports_oauth(),
         supports_cli: provider.supports_cli(),
@@ -577,6 +668,16 @@ pub fn get_provider_auth_capabilities(
         supports_api_key,
         has_cookie_domain: id.cookie_domain().is_some(),
         login_flow: provider_login_flow(id),
+        available_sources: provider
+            .available_sources()
+            .iter()
+            .map(|mode| match mode {
+                SourceMode::Auto => "auto",
+                SourceMode::Web => "web",
+                SourceMode::Cli => "cli",
+                SourceMode::OAuth => "oauth",
+            })
+            .collect(),
     })
 }
 

@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { render, waitFor } from "@testing-library/react";
-import { fromBridge, zaiChinaBalanceBridge } from "../../core";
+import { fromBridge } from "../../core";
+import { zaiChinaBalanceBridge } from "../../core/fixtures";
 
 const tauriMocks = vi.hoisted(() => ({
   getLocaleStrings: vi.fn(),
@@ -91,7 +92,7 @@ describe("TrayCard OpenCode Go projection (core read model)", () => {
       .map((el) => el.textContent);
     // OpenCode Go layout: 5h hero on top, weekly + monthly as a 2-col pair.
     // Tiles use the short cycle labels (周/月) so label + reset share a line.
-    expect(labels).toEqual(["5 小时额度", "周", "月"]);
+    expect(labels).toEqual(["5 小时额度", "周额度", "月额度"]);
     const grid = container.querySelector(".tiles-grid-2col");
     expect(grid?.querySelectorAll(".quota-tile")).toHaveLength(2);
     expect(grid?.querySelector(".quota-tile--full")).toBeNull();
@@ -123,7 +124,7 @@ describe("TrayCard OpenCode Go projection (core read model)", () => {
     });
     const labels = Array.from(container.querySelectorAll(".quota-row__label, .quota-tile__label"))
       .map((el) => el.textContent);
-    expect(labels).toEqual(["5 小时额度", "周", "月"]);
+    expect(labels).toEqual(["5 小时额度", "周额度", "月额度"]);
     expect(container.querySelector(".quota-row__hero-pct")?.textContent).toBe("72%");
     expect(container.querySelector(".balance-block__amount")?.textContent).toBe("$38.80");
     expect(container.textContent).not.toContain("Renews");
@@ -144,6 +145,34 @@ describe("TrayCard OpenCode Go projection (core read model)", () => {
     expect(fullTile).not.toBeNull();
     expect(fullTile?.querySelector(".quota-tile__title")).not.toBeNull();
     expect(fullTile?.querySelector(".quota-tile__reset")).not.toBeNull();
+  });
+
+  it("renders Remaining Quota Model progress bar and auxiliary tiles with the reset on the bottom row", async () => {
+    const { container } = renderCard(opencodeCoreSnapshot(), { densityMode: "detailed" });
+    await waitFor(() => {
+      if (!container.querySelector(".tray-card")) throw new Error("card not rendered");
+    });
+    // Check progress-track-inner and bar-segment elements
+    const innerTracks = container.querySelectorAll(".progress-track-inner");
+    expect(innerTracks.length).toBeGreaterThanOrEqual(1);
+    const remainingSegments = container.querySelectorAll(".bar-segment--remaining");
+    expect(remainingSegments.length).toBeGreaterThanOrEqual(1);
+
+    // A 2-column tile is ~140px wide, so density-preview.html gives it three
+    // rows: `label … pct` head, the bar, and the reset time at the bottom. An
+    // inline reset squeezed the label into an ellipsis ("Cl…").
+    const tiles = container.querySelectorAll(".quota-tile");
+    expect(tiles.length).toBe(2);
+    for (const tile of Array.from(tiles)) {
+      const head = tile.querySelector(".quota-tile__head");
+      expect(head).not.toBeNull();
+      expect(head?.querySelector(".quota-tile__reset")).toBeNull();
+      expect(tile.querySelector(".progress-bar--tile")).not.toBeNull();
+      const sub = tile.querySelector(".quota-tile__sub");
+      expect(sub).not.toBeNull();
+      expect(sub?.querySelector(".quota-tile__reset")).not.toBeNull();
+      expect(tile.querySelector(".quota-tile__badge")).toBeNull();
+    }
   });
 
   it("minimal tier keeps the hero metric and never invents a bar", async () => {

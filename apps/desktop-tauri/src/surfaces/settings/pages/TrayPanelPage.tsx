@@ -3,6 +3,8 @@ import { useLocale } from "../../../hooks/useLocale";
 import type {
   LocalUsagePeriod,
   MenuBarDisplayMode,
+  ProviderChartData,
+  ProviderOutputSpeed,
   TrayIconMode,
 } from "../../../types/bridge";
 import type { SettingsPageProps } from "./pageTypes";
@@ -10,31 +12,29 @@ import TrayCard from "../../../surfaces/tray/TrayCard";
 import ProviderGrid from "../../../components/ProviderGrid";
 import { SurfacePreviewFrame } from "./HtmlSurfacePreviews";
 import { catalogPreviewSnapshots } from "../previews/catalogFixtures";
-import { quotaDisplayContext } from "../../../lib/quotaDisplay";
+import {
+  quotaDisplayContext,
+  quotaDisplayPreference,
+  resetDisplayPreference,
+} from "../../../lib/quotaDisplay";
 import { V5Field, V5Num, V5Section, V5Seg, V5Toggle } from "./v5Controls";
-
-const footerIconProps = {
-  width: 14,
-  height: 14,
-  viewBox: "0 0 24 24",
-  fill: "none",
-  stroke: "currentColor",
-  strokeWidth: 1.85,
-  strokeLinecap: "round" as const,
-  strokeLinejoin: "round" as const,
-  "aria-hidden": true,
-};
+import { useTrayCoreRecords, trayCoreStore } from "../../../surfaces/tray/trayCoreStore";
+import { useOutputSpeedSnapshot } from "../../../hooks/useOutputSpeedSnapshot";
+import { outputSpeedProviderId } from "../../../lib/outputSpeed";
+import { coreSnapshotToBridge } from "../../../lib/trayProviders";
+import { orderProviderSnapshots } from "../../../lib/providerOrder";
 
 const TRAY_DEFAULTS = {
   menuBarDisplayMode: "detailed" as MenuBarDisplayMode,
   localUsagePeriod: "today" as LocalUsagePeriod,
-  dashboardShowAsUsed: true,
-  dashboardResetTimeRelative: true,
+  dashboardQuotaDisplay: "follow" as const,
+  dashboardResetDisplay: "follow" as const,
   showAllTokenAccountsInMenu: false,
   trayIconMode: "single" as TrayIconMode,
   switcherShowsIcons: true,
   menuBarShowsHighestUsage: false,
   outputSpeedEnabled: true,
+  keepTrayPanelOnSettings: true,
   trayScalePercent: 100,
 };
 
@@ -46,39 +46,123 @@ const TRAY_DEFAULTS = {
  */
 const PREVIEW_PROVIDERS = ["claude", "deepseek", "cursor"];
 
+const PREVIEW_CHART_DATA: Record<string, ProviderChartData> = {
+  claude: {
+    providerId: "claude",
+    costHistory: [],
+    creditsHistory: [],
+    usageBreakdown: [],
+    localUsage: {
+      todayCost: 0.65,
+      todayTokens: 42_000,
+      sevenDayCost: 2.85,
+      sevenDayTokens: 186_000,
+      thirtyDayCost: 8.2,
+      thirtyDayTokens: 520_000,
+      todayTopModel: "claude-3-7-sonnet",
+      sevenDayTopModel: "claude-3-7-sonnet",
+      thirtyDayTopModel: "claude-3-7-sonnet",
+      estimateNote: "",
+    },
+  },
+};
+
+const PREVIEW_CLAUDE_SPEED: ProviderOutputSpeed = {
+  providerId: "claude",
+  status: "recent",
+  tokensPerSecond: 48.2,
+  outputTokens: 1240,
+  updatedAtMs: Date.now() - 30_000,
+  approximate: false,
+  recentSamples: [],
+};
+
 export default function TrayPanelPage({
   settings,
   set,
   saving,
+  catalog,
+  head,
 }: SettingsPageProps) {
   const { t } = useLocale();
   const scale = settings.trayScalePercent ?? 100;
   const [selectedProviderId, setSelectedProviderId] = useState<string | null>(
     null,
   );
+  const records = useTrayCoreRecords();
+  const outputSpeedEnabled = settings.outputSpeedEnabled !== false;
+  const liveSpeed = useOutputSpeedSnapshot(outputSpeedEnabled);
+
+  const shownProviderIds = settings.enabledProviders ?? [];
+  const enabledSnapshots = useMemo(() => {
+    return records
+      .filter(
+        (record) =>
+          record.snapshot != null &&
+          shownProviderIds.includes(record.snapshot.providerId),
+      )
+      .map((record) => coreSnapshotToBridge(record.snapshot!));
+  }, [records, shownProviderIds]);
 
   const preview = useMemo(() => {
-    const rows = catalogPreviewSnapshots().filter((row) =>
-      PREVIEW_PROVIDERS.includes(row.providerId),
-    );
-    if (!settings.menuBarShowsHighestUsage) return rows;
-    return [...rows].sort(
+    const rawRows =
+      enabledSnapshots.length > 0
+        ? orderProviderSnapshots(
+            enabledSnapshots,
+            catalog ?? [],
+            shownProviderIds,
+            settings.providerOrder,
+          )
+        : catalogPreviewSnapshots().filter((row) =>
+            PREVIEW_PROVIDERS.includes(row.providerId),
+          );
+
+    if (!settings.menuBarShowsHighestUsage) return rawRows;
+    return [...rawRows].sort(
       (left, right) => right.primary.usedPercent - left.primary.usedPercent,
     );
-  }, [settings.menuBarShowsHighestUsage]);
+  }, [
+    enabledSnapshots,
+    catalog,
+    shownProviderIds,
+    settings.providerOrder,
+    settings.menuBarShowsHighestUsage,
+  ]);
   const display = quotaDisplayContext(settings, "dashboard");
+  const quotaMode = quotaDisplayPreference(settings, "dashboard");
+  const resetMode = resetDisplayPreference(settings, "dashboard");
+  const effectiveQuotaLabel = display.showAsUsed
+    ? t("QuotaShowUsedOption")
+    : t("QuotaShowRemainingOption");
+  const quotaHelp = t(
+    quotaMode === "follow" ? "QuotaFollowHelper" : "QuotaOverrideHelper",
+  ).replace(
+    "{}",
+    effectiveQuotaLabel,
+  );
+  const effectiveResetLabel = display.resetTimeRelative
+    ? t("ResetTimeCountdownOption")
+    : t("ResetTimeAbsoluteOption");
+  const resetHelp = t(
+    resetMode === "follow" ? "QuotaFollowHelper" : "QuotaOverrideHelper",
+  ).replace(
+    "{}",
+    effectiveResetLabel,
+  );
   const isDetail = selectedProviderId !== null;
   const density = isDetail ? "detailed" : settings.menuBarDisplayMode;
   const visible = isDetail
     ? preview.filter((row) => row.providerId === selectedProviderId)
     : preview;
   const scaleRatio = Math.max(1, Math.min(2, scale / 100));
+  const previewScale = Math.min(1.04, Math.round(0.85 * scaleRatio * 100) / 100);
 
   return (
     <div className="s5-surf-split">
       <div className="s5-surf-fields">
+        {head}
         <V5Section
-          title="卡片内容"
+          title="显示内容"
           resetLabel={t("ComponentResetDefaults")}
           resetDisabled={saving}
           onReset={() => set(TRAY_DEFAULTS)}
@@ -97,29 +181,37 @@ export default function TrayPanelPage({
               }
             />
           </V5Field>
-          <V5Field label="额度数字">
+          <V5Field
+            label="额度数字"
+            help={quotaHelp}
+          >
             <V5Seg
-              value={settings.dashboardShowAsUsed ? "used" : "remain"}
+              value={quotaMode}
               disabled={saving}
               options={[
-                { value: "used", label: "已用" },
-                { value: "remain", label: "剩余" },
+                { value: "follow", label: t("QuotaFollowOption") },
+                { value: "used", label: t("QuotaShowUsedOption") },
+                { value: "remaining", label: t("QuotaShowRemainingOption") },
               ]}
               onChange={(value) =>
-                set({ dashboardShowAsUsed: value === "used" })
+                set({ dashboardQuotaDisplay: value as "follow" | "used" | "remaining" })
               }
             />
           </V5Field>
-          <V5Field label="重置时间">
+          <V5Field
+            label="重置时间"
+            help={resetHelp}
+          >
             <V5Seg
-              value={settings.dashboardResetTimeRelative ? "rel" : "abs"}
+              value={resetMode}
               disabled={saving}
               options={[
-                { value: "rel", label: "倒计时" },
-                { value: "abs", label: "绝对时间" },
+                { value: "follow", label: t("QuotaFollowOption") },
+                { value: "countdown", label: t("ResetTimeCountdownOption") },
+                { value: "absolute", label: t("ResetTimeAbsoluteOption") },
               ]}
               onChange={(value) =>
-                set({ dashboardResetTimeRelative: value === "rel" })
+                set({ dashboardResetDisplay: value as "follow" | "countdown" | "absolute" })
               }
             />
           </V5Field>
@@ -145,7 +237,21 @@ export default function TrayPanelPage({
               label="显示输出速度"
             />
           </V5Field>
-          <V5Field label="列出全部令牌账户">
+        </V5Section>
+
+        <V5Section title="打开与账号">
+          <V5Field
+            label="设置打开时保留托盘"
+            help="开着时，设置页在前也不会被点外侧关掉托盘。关掉则设置开着时点托盘外仍会关闭"
+          >
+            <V5Toggle
+              on={settings.keepTrayPanelOnSettings ?? true}
+              disabled={saving}
+              onChange={(v) => set({ keepTrayPanelOnSettings: v })}
+              label="设置打开时保留托盘"
+            />
+          </V5Field>
+          <V5Field label="列出全部令牌账户" help="在托盘面板中展开已保存的全部账号">
             <V5Toggle
               on={settings.showAllTokenAccountsInMenu}
               disabled={saving}
@@ -155,7 +261,7 @@ export default function TrayPanelPage({
           </V5Field>
         </V5Section>
 
-        <V5Section title="通知区与网格">
+        <V5Section title="通知区与布局">
           <V5Field
             label="托盘图标"
             help="通知区那个小图标，不是卡片上的品牌标"
@@ -206,8 +312,8 @@ export default function TrayPanelPage({
 
       <SurfacePreviewFrame kind="tray">
         <div
-          className="tray-panel-reveal s5-tray-flyout"
-          style={{ transform: `scale(${scaleRatio})` }}
+          className="s5-tray-flyout"
+          style={{ zoom: previewScale }}
         >
           <div className="tray-panel">
             <ProviderGrid
@@ -218,62 +324,41 @@ export default function TrayPanelPage({
               onSelect={setSelectedProviderId}
             />
             <div className="flyout-body">
-              {visible.map((snapshot, idx) => (
-                <div key={snapshot.providerId}>
-                  {idx > 0 && <div className="provider-stack-divider" />}
-                  <TrayCard
-                    provider={snapshot}
-                    densityMode={density}
-                    display={display}
-                    showProviderIcon={settings.switcherShowsIcons}
-                    localUsagePeriod={settings.localUsagePeriod}
-                    outputSpeed={null}
-                    detail={isDetail}
-                  />
-                </div>
-              ))}
-            </div>
-            <footer className="flyout-footer" aria-label={t("PanelMenu")}>
+              {visible.map((snapshot, idx) => {
+                const recordForSnapshot = records.find(
+                  (r) => r.snapshot?.providerId === snapshot.providerId,
+                );
+                const liveChart = recordForSnapshot
+                  ? trayCoreStore.getChartData(recordForSnapshot.key)
+                  : null;
+                const chartDataForCard =
+                  liveChart ?? PREVIEW_CHART_DATA[snapshot.providerId] ?? null;
 
-              <button type="button" className="footer-row">
-                <span className="footer-row__left">
-                  <span className="footer-row__icon">
-                    <svg {...footerIconProps}>
-                      <path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8" />
-                      <path d="M21 3v5h-5" />
-                      <path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16" />
-                      <path d="M3 21v-5h5" />
-                    </svg>
-                  </span>
-                  <span className="footer-row__label">{t("ActionRefresh")}</span>
-                </span>
-                <span className="footer-row__shortcut">Ctrl+R</span>
-              </button>
-              <button type="button" className="footer-row">
-                <span className="footer-row__left">
-                  <span className="footer-row__icon">
-                    <svg {...footerIconProps}>
-                      <circle cx="12" cy="12" r="3" />
-                      <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0 1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 2-2 2 2 0 0 1 2 2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z" />
-                    </svg>
-                  </span>
-                  <span className="footer-row__label">{t("MenuSettings")}</span>
-                </span>
-                <span className="footer-row__shortcut">Ctrl+,</span>
-              </button>
-              <button type="button" className="footer-row">
-                <span className="footer-row__left">
-                  <span className="footer-row__icon">
-                    <svg {...footerIconProps}>
-                      <path d="M18.36 6.64a9 9 0 1 1-12.73 0" />
-                      <line x1="12" y1="2" x2="12" y2="12" />
-                    </svg>
-                  </span>
-                  <span className="footer-row__label">{t("MenuQuit")}</span>
-                </span>
-                <span className="footer-row__shortcut">Ctrl+Q</span>
-              </button>
-            </footer>
+                const speedId = outputSpeedProviderId(snapshot.providerId);
+                const speedForCard = !outputSpeedEnabled
+                  ? null
+                  : (speedId && liveSpeed?.[speedId]) ||
+                    (snapshot.providerId === "claude" ? PREVIEW_CLAUDE_SPEED : null);
+
+                return (
+                  <div key={snapshot.providerId}>
+                    {idx > 0 && <div className="provider-stack-divider" />}
+                    <TrayCard
+                      provider={snapshot}
+                      densityMode={density}
+                      display={display}
+                      showProviderIcon={settings.switcherShowsIcons}
+                      localUsagePeriod={settings.localUsagePeriod ?? "today"}
+                      outputSpeed={speedForCard}
+                      outputSpeedEnabled={outputSpeedEnabled}
+                      chartData={chartDataForCard}
+                      detail={isDetail}
+                    />
+                  </div>
+                );
+              })}
+            </div>
+
           </div>
         </div>
       </SurfacePreviewFrame>

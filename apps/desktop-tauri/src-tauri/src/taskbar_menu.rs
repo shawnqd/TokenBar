@@ -40,9 +40,8 @@ use std::sync::Mutex;
 use std::time::Instant;
 
 use crate::shell::popup_chrome::{
-    ANIM_DURATION_MS, ANIM_TRAVEL_DIP, BACKDROP_BLUR_DIP, CORNER_RADIUS_DIP,
-    SHADOW_BLUR_DIP, SHADOW_GUTTER_DIP, SHADOW_OFFSET_Y_DIP, SHADOW_STRENGTH_DARK,
-    SHADOW_STRENGTH_LIGHT, TASKBAR_GAP_DIP,
+    ANIM_DURATION_MS, ANIM_TRAVEL_DIP, CORNER_RADIUS_DIP, SHADOW_BLUR_DIP, SHADOW_GUTTER_DIP,
+    SHADOW_OFFSET_Y_DIP, SHADOW_STRENGTH_DARK, SHADOW_STRENGTH_LIGHT, TASKBAR_GAP_DIP,
 };
 use crate::taskbar_widget::taskbar_is_light;
 
@@ -346,17 +345,6 @@ unsafe extern "system" {
     ) -> isize;
     fn SelectObject(hdc: isize, obj: isize) -> isize;
     fn DeleteObject(obj: isize) -> i32;
-    fn BitBlt(
-        dst: isize,
-        x: i32,
-        y: i32,
-        w: i32,
-        h: i32,
-        src: isize,
-        src_x: i32,
-        src_y: i32,
-        rop: u32,
-    ) -> i32;
     fn SetTextColor(hdc: isize, color: u32) -> u32;
     fn SetBkMode(hdc: isize, mode: i32) -> i32;
     fn CreateFontW(
@@ -644,96 +632,16 @@ fn blur_mask(mask: &mut Vec<f32>, w: i32, h: i32, radius: i32) {
     }
 }
 
-/// How much of the card is its own colour rather than the blurred backdrop.
-///
-/// This is the readability control, and it is the reason the value is this
-/// high: menu labels are 12 px, and a backdrop that shows through too strongly
-/// puts arbitrary desktop contrast directly behind them. Windows' own acrylic
-/// sits in the same range for the same reason.
-fn backdrop_tint(light: bool) -> f32 {
-    if light { 0.82 } else { 0.78 }
-}
-
-/// The desktop pixels the card will cover, blurred, as linear `[b, g, r]` per
-/// pixel.
-///
-/// `None` whenever anything at all goes wrong, and the caller then paints the
-/// flat theme colour — the pre-B2 look. That fallback is not defensive
-/// boilerplate: `BitBlt` from the screen DC is **not** guaranteed to capture
-/// hardware-composited content, and on some drivers it returns pure black. A
-/// black backdrop behind a menu is far worse than no backdrop, so an
-/// all-black-or-near-black capture is rejected as a failure too.
-///
-/// Captured once, at open time, which is the trade this approach makes: the
-/// backdrop is frozen while the menu is up. The alternative — a live backdrop —
-/// needs `WS_EX_NOREDIRECTIONBITMAP` plus DirectComposition, and that is a
-/// larger change than this whole module.
-fn capture_backdrop(origin: &Point, w: i32, h: i32) -> Option<Vec<f32>> {
-    const SRCCOPY: u32 = 0x00CC_0020;
-
-    let screen = unsafe { GetDC(0) };
-    if screen == 0 {
-        return None;
-    }
-    let dib = Dib::new(w, h);
-    let result = (|| {
-        let dib = dib.as_ref()?;
-        let copied =
-            unsafe { BitBlt(dib.hdc, 0, 0, w, h, screen, origin.x, origin.y, SRCCOPY) };
-        if copied == 0 {
-            return None;
-        }
-        let src = dib.slice();
-        let mut out = vec![0.0f32; (w * h * 3) as usize];
-        let mut sum = 0.0f64;
-        for index in 0..(w * h) as usize {
-            for channel in 0..3 {
-                let value = src[index * 4 + channel] as f32;
-                out[index * 3 + channel] = value;
-                sum += value as f64;
-            }
-        }
-        // Mean below this and the "capture" is a black rectangle, which is what
-        // a failed hardware-surface read looks like. A genuinely near-black
-        // desktop loses its blur here and gets the flat colour, which is a fair
-        // trade for never painting a black slab over a bright screen.
-        let mean = sum / (w * h * 3) as f64;
-        if mean < 4.0 {
-            return None;
-        }
-        Some(out)
-    })();
-    if let Some(dib) = dib.as_ref() {
-        dib.destroy();
-    }
-    unsafe { ReleaseDC(0, screen) };
-    result
-}
-
-/// Blur the captured backdrop in place, one channel at a time.
-///
-/// [`blur_mask`] operates on a single-channel plane, so the interleaved capture
-/// is split, blurred and re-interleaved rather than given its own blur.
-fn blur_backdrop(backdrop: &mut [f32], w: i32, h: i32, radius: i32) {
-    let count = (w * h) as usize;
-    let mut plane = vec![0.0f32; count];
-    for channel in 0..3 {
-        for index in 0..count {
-            plane[index] = backdrop[index * 3 + channel];
-        }
-        blur_mask(&mut plane, w, h, radius);
-        for index in 0..count {
-            backdrop[index * 3 + channel] = plane[index];
-        }
-    }
-}
-
 /// Builds the premultiplied BGRA bytes for the card and its shadow, plus the
 /// alpha channel on its own so [`restore_alpha`] can put it back after GDI has
 /// trampled it.
 ///
 /// `backdrop` is the blurred desktop behind the card, or `None` for the flat
 /// theme colour.
+fn backdrop_tint(light: bool) -> f32 {
+    if light { 0.82 } else { 0.78 }
+}
+
 fn compose_base(
     w: i32,
     h: i32,
@@ -766,7 +674,11 @@ fn compose_base(
     blur_mask(&mut shadow, w, h, m.blur);
     // Dark keeps the same ratio to light it has always had — a shadow needs
     // more opacity to register against a dark surface than a white one.
-    let strength = if light { SHADOW_STRENGTH_LIGHT } else { SHADOW_STRENGTH_DARK };
+    let strength = if light {
+        SHADOW_STRENGTH_LIGHT
+    } else {
+        SHADOW_STRENGTH_DARK
+    };
 
     let mut pixels = vec![0u8; (w * h * 4) as usize];
     let mut alpha = vec![0u8; (w * h) as usize];
@@ -803,7 +715,14 @@ fn compose_base(
 
 /// Blends an opaque rounded rectangle (the hover highlight) into premultiplied
 /// pixels that are already fully opaque there.
-fn blend_highlight(pixels: &mut [u8], w: i32, h: i32, rect: (f32, f32, f32, f32), radius: f32, color: u32) {
+fn blend_highlight(
+    pixels: &mut [u8],
+    w: i32,
+    h: i32,
+    rect: (f32, f32, f32, f32),
+    radius: f32,
+    color: u32,
+) {
     let cr = ((color >> 16) & 0xFF) as f32;
     let cg = ((color >> 8) & 0xFF) as f32;
     let cb = (color & 0xFF) as f32;
@@ -886,9 +805,8 @@ impl Dib {
             return None;
         }
         let mut bits: *mut c_void = std::ptr::null_mut();
-        let bitmap = unsafe {
-            CreateDIBSection(hdc, &raw const info, DIB_RGB_COLORS, &raw mut bits, 0, 0)
-        };
+        let bitmap =
+            unsafe { CreateDIBSection(hdc, &raw const info, DIB_RGB_COLORS, &raw mut bits, 0, 0) };
         if bitmap == 0 || bits.is_null() {
             unsafe { DeleteDC(hdc) };
             return None;
@@ -963,7 +881,9 @@ static CLASS_REGISTERED: Mutex<bool> = Mutex::new(false);
 /// This replaces the old `FindWindowW("#32768")` probe, which no longer matches
 /// anything now that the menu is our own window class.
 pub fn is_open() -> bool {
-    MENU.lock()
+    // This is queried from the global mouse hook. Never wait behind a paint or
+    // layered-window upload; a missed sample is safer than stalling input.
+    MENU.try_lock()
         .map(|guard| {
             guard
                 .as_ref()
@@ -1025,6 +945,15 @@ pub fn show(owner: isize, items: Vec<MenuItem>) {
         return;
     }
     close();
+    // `close()` uses the reverse animation and therefore may leave the old
+    // state alive for a few ticks. Never replace that state while its HWND is
+    // still dispatching `WM_TIMER`/`WM_DESTROY`: doing so lets the old window
+    // mutate the new state (and was a source of stuck menus and leaked canvases
+    // when a second right-click arrived during the close animation).
+    if MENU.lock().map(|guard| guard.is_some()).unwrap_or(false) {
+        tracing::debug!("menu: previous close animation still active; ignoring reopen");
+        return;
+    }
 
     let dpi = {
         let value = unsafe { GetDpiForWindow(owner) };
@@ -1058,33 +987,14 @@ pub fn show(owner: isize, items: Vec<MenuItem>) {
         (metrics.margin + card_w) as f32,
         (metrics.margin + card_h) as f32,
     );
-    // Position first: the backdrop has to be sampled from where the card will
-    // come to rest. Captured before the window exists, so nothing of our own is
-    // in the shot.
-    //
-    // The resting position, not the animated one — during the slide the frozen
-    // backdrop is offset from what is actually behind the card by up to
-    // `ANIM_TRAVEL_DIP`. Over 180 ms of a moving, fading card that is not
-    // visible, and re-capturing per frame would cost a screen blit and a blur
-    // every 10 ms.
+    // Do not capture and blur the desktop synchronously here. This function
+    // runs on the taskbar widget's owner thread, and BitBlt plus three
+    // separable blur passes can block that thread behind DWM/Explorer. The
+    // flat themed card is the safe hot-path appearance; the compositor remains
+    // available for offline previews/tests and can later consume a
+    // worker-produced cache without putting input handling at risk.
     let (x, y) = anchor_position(size, &metrics);
-    let backdrop = capture_backdrop(&Point { x, y }, size.cx, size.cy).map(|mut pixels| {
-        blur_backdrop(
-            &mut pixels,
-            size.cx,
-            size.cy,
-            ((BACKDROP_BLUR_DIP * dpi) / 96).max(1),
-        );
-        pixels
-    });
-    let (base, alpha) = compose_base(
-        size.cx,
-        size.cy,
-        card,
-        &metrics,
-        light,
-        backdrop.as_deref(),
-    );
+    let (base, alpha) = compose_base(size.cx, size.cy, card, &metrics, light, None);
 
     let Some(canvas) = Dib::new(size.cx, size.cy) else {
         return;
@@ -1177,7 +1087,9 @@ fn anchor_position(size: Size, m: &Metrics) -> (i32, i32) {
     let mut card_left = cursor.x;
     if has_work {
         let card_w = size.cx - m.margin * 2;
-        card_left = card_left.min(work.right - card_w - gap).max(work.left + gap);
+        card_left = card_left
+            .min(work.right - card_w - gap)
+            .max(work.left + gap);
     }
     // The window is the card grown by `margin` on every side, so the card's
     // bottom edge sits `size.cy - margin` below the window's top.
@@ -1244,7 +1156,13 @@ fn render_card() {
                 right: m.margin + m.check_col,
                 bottom: row.top + row.height,
             };
-            draw_glyph(state.canvas.hdc, check_font, &mut check, CHECK_GLYPH, icon_color);
+            draw_glyph(
+                state.canvas.hdc,
+                check_font,
+                &mut check,
+                CHECK_GLYPH,
+                icon_color,
+            );
         }
     }
     unsafe { DeleteObject(check_font) };
@@ -1393,7 +1311,10 @@ fn slide_frame(progress: f32, travel: i32) -> (i32, u8) {
     // Opacity leads the movement — the card should be readable by the time it
     // is most of the way up, not still fading in as it settles.
     let opacity = (progress * 1.6).clamp(0.0, 1.0);
-    ((remaining * travel as f32).round() as i32, (opacity * 255.0) as u8)
+    (
+        (remaining * travel as f32).round() as i32,
+        (opacity * 255.0) as u8,
+    )
 }
 
 /// The reverse of [`slide_frame`]: the card leaves from its resting position,
@@ -1607,7 +1528,11 @@ fn advance_animation() {
     let (elapsed, hwnd, closing) = {
         let Ok(guard) = MENU.lock() else { return };
         let Some(state) = guard.as_ref() else { return };
-        (state.shown_at.elapsed().as_millis(), state.hwnd, state.closing)
+        (
+            state.shown_at.elapsed().as_millis(),
+            state.hwnd,
+            state.closing,
+        )
     };
     if elapsed >= ANIM_DURATION_MS {
         unsafe { KillTimer(hwnd, ANIM_TIMER_ID) };
@@ -1815,12 +1740,10 @@ mod tests {
     }
 
     /// With no backdrop capture the card must paint exactly the flat theme
-    /// colour it painted before B2.
-    ///
-    /// This is the path taken whenever `BitBlt` cannot read the desktop, which
-    /// is a real possibility on hardware-composited content — so it is the
-    /// path most likely to be the one users actually see, and the one a
-    /// refactor is most likely to break unnoticed.
+    /// colour it painted before B2. This is the runtime hot path: opening the
+    /// menu must not wait on a desktop capture or pixel blur. The optional
+    /// backdrop path below remains available to offline compositor tests and
+    /// future worker-produced snapshots.
     #[test]
     fn without_a_backdrop_the_card_is_the_flat_theme_colour() {
         let m = Metrics::new(96, FALLBACK_FONT_SIZE_DIP);
@@ -1859,7 +1782,8 @@ mod tests {
             let shown = with_back[centre + 2] as i32;
 
             assert_ne!(
-                shown, flat[centre + 2] as i32,
+                shown,
+                flat[centre + 2] as i32,
                 "the desktop must reach the card at all (light={light})"
             );
             assert!(
@@ -1927,7 +1851,10 @@ mod tests {
         }
         let before: f32 = mask.iter().sum();
         blur_mask(&mut mask, w, h, 4);
-        assert!(mask[(20 * w + 12) as usize] > 0.0, "blur must reach outside");
+        assert!(
+            mask[(20 * w + 12) as usize] > 0.0,
+            "blur must reach outside"
+        );
         assert!(mask[(20 * w + 20) as usize] < 1.0, "centre must soften");
         let after: f32 = mask.iter().sum();
         // A box blur is energy-preserving away from the edges.
@@ -1990,7 +1917,6 @@ mod tests {
         });
         assert_eq!(hit, None);
     }
-
 
     /// A long status readout must not widen the card. This is the whole reason
     /// the menu was twice as wide as its actions needed.

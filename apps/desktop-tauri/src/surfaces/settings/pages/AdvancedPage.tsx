@@ -40,14 +40,8 @@ export default function AdvancedPage({
             label={t("AutoDownloadUpdates")}
           />
         </V5Field>
-        <V5Field label={t("InstallUpdatesOnQuit")}>
-          <V5Toggle
-            on={settings.installUpdatesOnQuit}
-            disabled={saving}
-            onChange={(v) => set({ installUpdatesOnQuit: v })}
-            label={t("InstallUpdatesOnQuit")}
-          />
-        </V5Field>
+        {/* 退出时安装更新：退出链路当前直接退出、未实现安装，
+            死开关暂时下架（2026-09-06 复核），实现后恢复。 */}
       </V5Section>
 
       <V5Section title="诊断">
@@ -70,7 +64,7 @@ export default function AdvancedPage({
         <V5Field label={t("SettingsSchemaVersion")}>
           <span className="s5-unit">{diagnostics.schemaVersion}</span>
         </V5Field>
-        <V5Field label="Cache / diagnostics">
+        <V5Field label="运行摘要" help="服务商数量、刷新间隔与平台信息（追踪记录仅存于当前进程）">
           <span className="s5-unit">{diagnostics.cacheSummary}</span>
           {diagnostics.error ? <p className="s5-hint">{diagnostics.error}</p> : null}
         </V5Field>

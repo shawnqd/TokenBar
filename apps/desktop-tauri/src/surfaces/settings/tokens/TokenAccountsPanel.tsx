@@ -15,6 +15,8 @@ interface Props {
    * When `false` (default), renders the full standalone-tab layout.
    */
   compact?: boolean;
+  /** 移除账号前的确认回调（V5 卡片传入；独立页签不传则直接删除）。 */
+  onConfirm?: (text: string, action: () => void) => void;
 }
 
 /**
@@ -29,7 +31,11 @@ interface Props {
  *   - `Settings.tsx::TokenAccountsTab` (compact=false, standalone tab)
  *   - `ProviderDetailPane.tsx` (compact=true, inline in detail pane)
  */
-export function TokenAccountsPanel({ providerId, compact = false }: Props) {
+export function TokenAccountsPanel({
+  providerId,
+  compact = false,
+  onConfirm,
+}: Props) {
   const { t } = useLocale();
   const dispatch = useDispatchAction();
   const [data, setData] = useState<ProviderTokenAccountsBridge | null>(null);
@@ -151,6 +157,17 @@ export function TokenAccountsPanel({ providerId, compact = false }: Props) {
   const placeholder = data?.support.placeholder ?? t("TokenAccountPastePlaceholder");
   const subtitle = data?.support.subtitle ?? "";
 
+  // V5 卡片内的中文占位：按服务商说明要粘贴的令牌种类（纯展示文案）。
+  const tokenPlaceholderZh: Record<string, string> = {
+    claude: "粘贴 sessionKey（浏览器 Cookie 里的会话令牌）",
+    cursor: "粘贴 Cursor 的 Cookie 请求头",
+    zai: "粘贴智谱 API 令牌",
+  };
+  const tokenPh =
+    compact && tokenPlaceholderZh[providerId]
+      ? tokenPlaceholderZh[providerId]
+      : placeholder;
+
   const body = (
     <>
       {subtitle && !compact && (
@@ -168,52 +185,55 @@ export function TokenAccountsPanel({ providerId, compact = false }: Props) {
       )}
 
       {data && data.accounts.length > 0 ? (
-        <ul className="credential-list token-accounts-list">
+        <div className="s5-token-list">
           {data.accounts.map((acct) => (
-            <li key={acct.id} className="credential-card token-accounts-card">
-              <div className="credential-card__header">
-                <div className="credential-card__info">
-                  <strong>{acct.label}</strong>
-                  <span className="credential-card__meta">
-                    {acct.isActive && (
-                      <span className="credential-card__badge credential-card__badge--set">
-                        {t("TokenAccountActive")}
-                      </span>
-                    )}
-                    <span className="credential-card__date">
-                      {t("TokenAccountAddedPrefix")} {acct.addedAt}
-                    </span>
-                    {acct.lastUsed && (
-                      <span className="credential-card__date">
-                        · {t("TokenAccountUsedPrefix")} {acct.lastUsed}
-                      </span>
-                    )}
-                  </span>
+            <div key={acct.id} className="s5-pd-row">
+              <div>
+                <div className="s5-field-label">
+                  {acct.label}
+                  {acct.isActive ? (
+                    <span className="s5-login-ok">正在使用</span>
+                  ) : null}
                 </div>
-                <div className="credential-card__actions">
-                  {!acct.isActive && (
-                    <button
-                      className="credential-btn credential-btn--secondary"
-                      disabled={busy}
-                      onClick={() => void handleSetActive(acct.id)}
-                    >
-                      {t("TokenAccountSetActive")}
-                    </button>
-                  )}
-                  <button
-                    className="credential-btn credential-btn--danger"
-                    disabled={busy}
-                    onClick={() => void handleRemove(acct.id)}
-                  >
-                    {t("TokenAccountRemove")}
-                  </button>
+                <div className="s5-field-help">
+                  {t("TokenAccountAddedPrefix")} {acct.addedAt}
+                  {acct.lastUsed
+                    ? ` · ${t("TokenAccountUsedPrefix")} ${acct.lastUsed}`
+                    : ""}
                 </div>
               </div>
-            </li>
+              <div className="s5-token-actions">
+                {!acct.isActive && (
+                  <button
+                    type="button"
+                    className="s5-ghost"
+                    disabled={busy}
+                    onClick={() => void handleSetActive(acct.id)}
+                  >
+                    {t("TokenAccountSetActive")}
+                  </button>
+                )}
+                <button
+                  type="button"
+                  className="s5-ghost danger"
+                  disabled={busy}
+                  onClick={() => {
+                    const action = () => void handleRemove(acct.id);
+                    if (onConfirm) {
+                      onConfirm(`删除账号「${acct.label}」？不会影响服务商账号本身。`, action);
+                    } else {
+                      action();
+                    }
+                  }}
+                >
+                  {t("TokenAccountRemove")}
+                </button>
+              </div>
+            </div>
           ))}
-        </ul>
+        </div>
       ) : (
-        <p className="credential-empty">{t("TokenAccountEmpty")}</p>
+        <p className="s5-pd-lead">{t("TokenAccountEmpty")}</p>
       )}
 
       {!compact && (
@@ -221,16 +241,20 @@ export function TokenAccountsPanel({ providerId, compact = false }: Props) {
       )}
       {providerId === "copilot" && (
         <button
-          className="credential-btn credential-btn--primary"
+          type="button"
+          className="s5-primary"
           disabled={busy}
           onClick={() => void handleProviderLogin()}
         >
           {t("TokenAccountGithubLoginButton")}
         </button>
       )}
-      <div className="credential-add-form token-accounts-add">
+      <div className="s5-pd-field">
+        <div className="s5-pd-field-head">
+          <div className="s5-field-label">{t("SectionAddAccount")}</div>
+        </div>
         <input
-          className="text-input"
+          className="s5-textin"
           type="text"
           placeholder={t("TokenAccountLabelPlaceholder")}
           value={addLabel}
@@ -238,15 +262,18 @@ export function TokenAccountsPanel({ providerId, compact = false }: Props) {
           disabled={busy}
         />
         <textarea
-          className="text-input credential-textarea"
-          placeholder={placeholder}
-          rows={compact ? 2 : 3}
+          className="s5-area"
+          placeholder={tokenPh}
+          rows={compact ? 3 : 3}
           value={addToken}
           onChange={(e) => setAddToken(e.target.value)}
           disabled={busy}
         />
+      </div>
+      <div className="s5-actions">
         <button
-          className="credential-btn credential-btn--primary"
+          type="button"
+          className="s5-primary"
           disabled={busy || !addLabel.trim() || !addToken.trim()}
           onClick={() => void handleAdd()}
         >
@@ -260,14 +287,17 @@ export function TokenAccountsPanel({ providerId, compact = false }: Props) {
     const activeCount = data?.accounts.filter((a) => a.isActive).length ?? 0;
     const total = data?.accounts.length ?? 0;
     return (
-      <details className="provider-detail-section token-accounts-inline">
-        <summary className="token-accounts-inline__summary">
+      <details className="s5-token-disclosure">
+        <summary className="s5-token-disclosure__summary">
           <span>{t("TokenAccountInlineSummary")}</span>
-          <span className="token-accounts-inline__count">
-            {activeCount > 0 ? `${activeCount}/${total}` : `${total}`}
+          <span className="s5-token-disclosure__count">
+            {activeCount > 0 ? `正在使用 ${activeCount}/${total}` : `${total}`}
+          </span>
+          <span className="s5-token-disclosure__chevron" aria-hidden>
+            ▾
           </span>
         </summary>
-        <div className="token-accounts-inline__body">{body}</div>
+        <div className="s5-token-disclosure__body">{body}</div>
       </details>
     );
   }

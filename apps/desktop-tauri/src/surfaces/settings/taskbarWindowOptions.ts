@@ -9,12 +9,13 @@ import type {
 import type { LocaleKey } from "../../i18n/keys";
 
 /**
- * Window kinds that are meaningful choices for a user to pin.
+ * Named windows the composer always knows how to spell.
  *
- * `primary` remains a persisted/runtime compatibility value for older
- * settings, but it is an internal fallback rather than a product concept.
- * The settings UI must expose the actual named cycle (5h/day/week/month), a
- * real balance, or a measured speed instead.
+ * `primary` is not in this list: official plans already publish 5h/day/week/
+ * month, and listing both "主额度" and "周" for the same reading is the
+ * confusion the filter exists to prevent. One-time grants with no cycle name
+ * (GLM 体验套餐 / ZCode Start Plan) are the exception — the native
+ * availability map offers `primary` only then, and the composer follows it.
  */
 export type ConfigurableTaskbarWindowKind = Exclude<
   TaskbarWindowKind,
@@ -30,10 +31,8 @@ export const CONFIGURABLE_TASKBAR_WINDOWS: ConfigurableTaskbarWindowKind[] = [
   "speed",
 ];
 
-export const TASKBAR_WINDOW_LABEL_KEYS: Record<
-  ConfigurableTaskbarWindowKind,
-  LocaleKey
-> = {
+export const TASKBAR_WINDOW_LABEL_KEYS: Record<TaskbarWindowKind, LocaleKey> = {
+  primary: "TaskbarWindowPrimary",
   session: "TaskbarWindowSession",
   daily: "TaskbarWindowDaily",
   weekly: "TaskbarWindowWeekly",
@@ -43,10 +42,8 @@ export const TASKBAR_WINDOW_LABEL_KEYS: Record<
 };
 
 /** Labels used by the V5 HTML-derived settings surface before locale wiring. */
-export const TASKBAR_WINDOW_LABELS_ZH: Record<
-  ConfigurableTaskbarWindowKind,
-  string
-> = {
+export const TASKBAR_WINDOW_LABELS_ZH: Record<TaskbarWindowKind, string> = {
+  primary: "主额度",
   session: "5h",
   daily: "日",
   weekly: "周",
@@ -72,8 +69,17 @@ export function taskbarWindowLabelFor(
   kind: TaskbarWindowKind,
   t: (key: LocaleKey) => string,
   language: Language,
+  providerId?: string,
 ): string {
-  if (kind === "primary") return kind;
+  if (kind === "primary") {
+    // Native only offers `primary` when the grant has no 5h/周/日/月 name.
+    // For z.ai that grant is the ZCode Start Plan, whose product name the
+    // tray already prints; keep the same words in the composer.
+    if (providerId === "zai") {
+      return language === "chinesetraditional" ? "體驗套餐" : "体验套餐";
+    }
+    return t("TaskbarWindowPrimary");
+  }
   const expanded = SETTINGS_LABEL_EXPANSIONS[language]?.[kind];
   if (expanded) return expanded;
   const key = TASKBAR_WINDOW_LABEL_KEYS[kind];
@@ -96,19 +102,28 @@ export function taskbarWindowOptionsFor(
   entry: TaskbarEntry,
   availability: TaskbarWindowAvailability | null,
   options: { preserveSelection?: boolean } = {},
-): ConfigurableTaskbarWindowKind[] {
-  if (!availability) return [...CONFIGURABLE_TASKBAR_WINDOWS];
+): TaskbarWindowKind[] {
+  if (!availability) {
+    // Keep a live unnamed-grant selection visible while the native map loads,
+    // otherwise the trigger flashes the first named cycle ("5h") and snaps back.
+    const loading: TaskbarWindowKind[] = [...CONFIGURABLE_TASKBAR_WINDOWS];
+    if (entry.window === "primary") insertPrimaryBeforeBalance(loading);
+    return loading;
+  }
 
   const allowed =
     entry.providerId === TASKBAR_PROVIDER_AUTO
       ? new Set(Object.values(availability).flat())
       : new Set(availability[entry.providerId] ?? []);
 
-  const offered = CONFIGURABLE_TASKBAR_WINDOWS.filter((kind) => allowed.has(kind));
+  const offered: TaskbarWindowKind[] = CONFIGURABLE_TASKBAR_WINDOWS.filter((kind) =>
+    allowed.has(kind),
+  );
+  if (allowed.has("primary")) insertPrimaryBeforeBalance(offered);
   // Keep an already-saved named choice editable while a provider is between
-  // refreshes or has just stopped publishing that window. `primary` is not
-  // retained here: it is an internal compatibility fallback and must never
-  // reappear as a user-facing option.
+  // refreshes or has just stopped publishing that window. A stored `primary`
+  // is only kept when the live map still offers it — once the grant becomes
+  // a named cycle, resurrecting "主额度" next to "周" is the old confusion.
   if (
     options.preserveSelection !== false &&
     entry.window !== "primary" &&
@@ -118,6 +133,13 @@ export function taskbarWindowOptionsFor(
     offered.push(entry.window);
   }
   return offered;
+}
+
+function insertPrimaryBeforeBalance(offered: TaskbarWindowKind[]): void {
+  if (offered.includes("primary")) return;
+  const balanceAt = offered.indexOf("balance");
+  if (balanceAt === -1) offered.push("primary");
+  else offered.splice(balanceAt, 0, "primary");
 }
 
 /** Read the same native availability map used by the running taskbar strip. */

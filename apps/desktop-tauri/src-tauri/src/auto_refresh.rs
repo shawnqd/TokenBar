@@ -65,8 +65,9 @@ pub(crate) fn schedule_refresh_enrichment(settings: &Settings) {
     if provider_ids.is_empty() {
         return;
     }
-    let Ok(guard) = Arc::clone(ENRICHMENT_LOCK.get_or_init(|| Arc::new(tokio::sync::Mutex::new(()))))
-        .try_lock_owned()
+    let Ok(guard) =
+        Arc::clone(ENRICHMENT_LOCK.get_or_init(|| Arc::new(tokio::sync::Mutex::new(()))))
+            .try_lock_owned()
     else {
         return;
     };
@@ -143,9 +144,13 @@ mod tests {
     #[test]
     fn enrichment_only_includes_enabled_local_log_providers() {
         let mut settings = Settings::default();
-        settings.enabled_providers = ["codex".to_string(), "claude".to_string(), "cursor".to_string()]
-            .into_iter()
-            .collect();
+        settings.enabled_providers = [
+            "codex".to_string(),
+            "claude".to_string(),
+            "cursor".to_string(),
+        ]
+        .into_iter()
+        .collect();
 
         let mut ids = enrichment_provider_ids(&settings);
         ids.sort();
@@ -169,9 +174,10 @@ mod tests {
         // lock the same way the background task does. Scheduling must skip
         // immediately instead of waiting, letting the core refresh command
         // finish and publish its results.
-        let _guard = Arc::clone(ENRICHMENT_LOCK.get_or_init(|| Arc::new(tokio::sync::Mutex::new(()))))
-            .try_lock_owned()
-            .expect("test holds enrichment lock");
+        let _guard =
+            Arc::clone(ENRICHMENT_LOCK.get_or_init(|| Arc::new(tokio::sync::Mutex::new(()))))
+                .try_lock_owned()
+                .expect("test holds enrichment lock");
         let settings = Settings::default();
         schedule_refresh_enrichment(&settings);
     }

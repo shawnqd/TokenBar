@@ -285,8 +285,8 @@ export function ProvidersSidebar({
           </svg>
         </span>
         <span className="providers-sidebar__pinned-name">
-          {/* TODO(lane-s-i18n): 批量导入网页会话 */}
-          批量导入网页会话
+          {/* TODO(lane-s-i18n): 批量导入浏览器 Cookie */}
+          批量导入浏览器 Cookie
         </span>
       </button>
       <ul

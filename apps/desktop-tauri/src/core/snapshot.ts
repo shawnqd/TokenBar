@@ -191,9 +191,19 @@ export function formatCycleTag(
   if (window.kind === "daily") return "日";
   if (window.kind === "weekly") return "周";
   if (window.kind === "monthly") return "月";
-  const label = window.label?.trim();
-  if (label && label.length > 0 && label.length <= 6) return label;
+  const label = window.label?.trim() ?? "";
+  if (isTrialQuotaTitle(label)) return "体";
+  if (label.length > 0 && label.length <= 6) return label;
   return formatWindowMinutes(minutes) ?? "额";
+}
+
+/** One-time ZCode Start Plan / 体验套餐 titles have no 5h/周 cycle word. */
+export function isTrialQuotaTitle(title: string): boolean {
+  const text = title.trim();
+  if (!text) return false;
+  if (text.includes("体验") || text.includes("體驗")) return true;
+  const lower = text.toLowerCase();
+  return lower.includes("start-plan") || lower.includes("start plan");
 }
 
 export function isShortTimeWindow(

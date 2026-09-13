@@ -24,6 +24,7 @@ import FontInstallDialog from "../FontInstallDialog";
 import type { ProviderSnapshot } from "../../../core/snapshot";
 import { projectSurface } from "../../../core/projection";
 import type { UsageStore } from "../../../core/usageStore";
+import { quotaPercentContext, quotaDisplayPreference, resetDisplayPreference } from "../../../lib/quotaDisplay";
 
 const DEFAULT_ENTRIES: TaskbarEntry[] = [
   { providerId: TASKBAR_PROVIDER_AUTO, window: "session" },
@@ -88,6 +89,8 @@ export default function TaskbarStatusPage({
   settings,
   set,
   saving,
+  catalog,
+  head,
   coreStore: injectedCoreStore,
 }: SettingsPageProps & { coreStore?: UsageStore | null }) {
   const { t, language } = useLocale();
@@ -127,12 +130,13 @@ export default function TaskbarStatusPage({
     [windowAvailability],
   );
   const windowLabelFor = useCallback(
-    (kind: TaskbarWindowKind) => taskbarWindowLabelFor(kind, t, language),
+    (kind: TaskbarWindowKind, entry: TaskbarEntry) =>
+      taskbarWindowLabelFor(kind, t, language, entry.providerId),
     [language, t],
   );
   const coreCells = useMemo(
-    () => (hasCoreInjection ? deriveTaskbarCellsFromSnapshots(coreSnapshots, entries, settings.taskbarShowAsUsed ?? true) : []),
-    [hasCoreInjection, coreSnapshots, entries, settings.taskbarShowAsUsed],
+    () => (hasCoreInjection ? deriveTaskbarCellsFromSnapshots(coreSnapshots, entries, quotaPercentContext(settings, "taskbar").showAsUsed) : []),
+    [hasCoreInjection, coreSnapshots, entries, settings],
   );
   // A preview is valid only when it is derived from the injected process
   // projection. The old no-store native preview made Settings a second
@@ -144,15 +148,29 @@ export default function TaskbarStatusPage({
   }, [settings.taskbarWidgetFontWeight]);
 
   const providers = useMemo(
-    () => catalogChoices(settings.enabledProviders),
-    [settings.enabledProviders],
+    () => catalogChoices(catalog, settings.enabledProviders),
+    [catalog, settings.enabledProviders],
   );
+  const quotaMode = quotaDisplayPreference(settings, "taskbar");
+  const resetMode = resetDisplayPreference(settings, "taskbar");
+  const effectiveQuotaLabel = quotaPercentContext(settings, "taskbar").showAsUsed
+    ? t("QuotaShowUsedOption")
+    : t("QuotaShowRemainingOption");
+  const effectiveResetLabel = resetMode === "countdown"
+    || (resetMode === "follow" && settings.resetTimeRelative)
+    ? t("ResetTimeCountdownOption")
+    : t("ResetTimeAbsoluteOption");
+  const quotaHelp = t(
+    quotaMode === "follow" ? "QuotaFollowHelper" : "QuotaOverrideHelper",
+  ).replace("{}", effectiveQuotaLabel);
+  const resetHelp = `${t(
+    resetMode === "follow" ? "QuotaFollowHelper" : "QuotaOverrideHelper",
+  ).replace("{}", effectiveResetLabel)} · ${t("TaskbarResetDisplayHelper")}`;
 
-  const tooltip = settings.taskbarTooltipEntries ?? [];
-  
   return (
     <div className="s5-surf-split s5-surf-split--taskbar">
       <div className="s5-surf-fields">
+        {head}
         <V5Section title="开关与位置">
           <V5Field label="显示小型状态栏">
             <V5Toggle
@@ -160,34 +178,6 @@ export default function TaskbarStatusPage({
               disabled={saving}
               onChange={(v) => set({ taskbarWidgetEnabled: v })}
               label="显示小型状态栏"
-            />
-          </V5Field>
-          <V5Field label="用量显示为" off={off}>
-            <V5Seg
-              value={settings.taskbarShowAsUsed ? "used" : "remain"}
-              disabled={saving || off}
-              options={[
-                { value: "used", label: "已用" },
-                { value: "remain", label: "剩余" },
-              ]}
-              onChange={(value) => set({ taskbarShowAsUsed: value === "used" })}
-            />
-          </V5Field>
-          <V5Field
-            label="重置时间显示为"
-            help="只影响右键菜单状态行，条带正文不印重置"
-            off={off}
-          >
-            <V5Seg
-              value={settings.taskbarResetTimeRelative ? "rel" : "abs"}
-              disabled={saving || off}
-              options={[
-                { value: "rel", label: "倒计时" },
-                { value: "abs", label: "具体时间" },
-              ]}
-              onChange={(value) =>
-                set({ taskbarResetTimeRelative: value === "rel" })
-              }
             />
           </V5Field>
           <V5Field label="显示位置" off={off}>
@@ -207,31 +197,46 @@ export default function TaskbarStatusPage({
           </V5Field>
         </V5Section>
 
-        <V5Section
-          title="悬停内容"
-          resetLabel="恢复悬停默认"
-          resetDisabled={saving || off}
-          onReset={() => set({ taskbarTooltipEntries: [] })}
-          hint="留空则悬停跟条带一样。"
-        >
-          <V5EntryList
-            entries={tooltip}
-            providers={providers}
-            followLabel="跟随托盘"
-            onChange={(next) => set({ taskbarTooltipEntries: next })}
-            newWindow="session"
-            maxEntries={6}
-            minEntries={0}
-            addLabel="添加条目"
-            disabled={saving || off}
-            windowOptionsFor={windowOptionsFor}
-            windowLabelFor={windowLabelFor}
-          />
+        <V5Section title="显示内容">
+          <V5Field
+            label="用量显示为"
+            help={quotaHelp}
+            off={off}
+          >
+            <V5Seg
+              value={quotaMode}
+              disabled={saving || off}
+              options={[
+                { value: "follow", label: t("QuotaFollowOption") },
+                { value: "used", label: t("QuotaShowUsedOption") },
+                { value: "remaining", label: t("QuotaShowRemainingOption") },
+              ]}
+              onChange={(value) => set({ taskbarQuotaDisplay: value as "follow" | "used" | "remaining" })}
+            />
+          </V5Field>
+          <V5Field
+            label="重置时间显示为"
+            help={resetHelp}
+            off={off}
+          >
+            <V5Seg
+              value={resetMode}
+              disabled={saving || off}
+              options={[
+                { value: "follow", label: t("QuotaFollowOption") },
+                { value: "countdown", label: t("ResetTimeCountdownOption") },
+                { value: "absolute", label: t("ResetTimeAbsoluteOption") },
+              ]}
+              onChange={(value) =>
+                set({ taskbarResetDisplay: value as "follow" | "countdown" | "absolute" })
+              }
+            />
+          </V5Field>
         </V5Section>
 
         <V5Section
           title="条目组合"
-          resetLabel="恢复条带默认"
+          resetLabel="恢复条目默认"
           resetDisabled={saving || off}
           onReset={() => set({ taskbarWidgetEntries: DEFAULT_ENTRIES })}
           hint="至少 1 条、最多 6 条。条带只画前 4 条，多出来的会标「条带不可见」。"
@@ -239,7 +244,7 @@ export default function TaskbarStatusPage({
           <V5EntryList
             entries={entries}
             providers={providers}
-            followLabel="跟随托盘"
+            followLabel="跟随"
             onChange={(next) => set({ taskbarWidgetEntries: next })}
             newWindow="weekly"
             maxEntries={6}
@@ -270,6 +275,17 @@ export default function TaskbarStatusPage({
             });
           }}
         >
+          <V5Field label="条带宽度" help="96 到 240 像素，每格 4。内容超出单格会被遮挡，不显示省略号；调大宽度可显示更多内容。默认 136" off={off}>
+            <V5Num
+              value={width}
+              min={96}
+              max={240}
+              step={4}
+              unit="px"
+              disabled={saving || off}
+              onChange={(v) => set({ taskbarWidgetWidth: v })}
+            />
+          </V5Field>
           <V5Field label="字号" help="10 到 16 像素" off={off}>
             <V5Num
               value={settings.taskbarWidgetFontSize ?? 12}
@@ -339,21 +355,6 @@ export default function TaskbarStatusPage({
               </div>
             </div>
           </V5Field>
-          <V5Field
-            label="条带宽度"
-            help="96 到 240 像素，每格 4。现在程序默认 132，设计默认 136"
-            off={off}
-          >
-            <V5Num
-              value={width}
-              min={96}
-              max={240}
-              step={4}
-              unit="px"
-              disabled={saving || off}
-              onChange={(v) => set({ taskbarWidgetWidth: v })}
-            />
-          </V5Field>
           <V5Field label="文本对齐" off={off}>
             <V5Seg
               value={settings.taskbarWidgetTextAlign}
@@ -416,7 +417,10 @@ export default function TaskbarStatusPage({
               onChange={(value) => set({ taskbarWidgetIconStyle: value as HtmlIconStyle })}
             />
           </V5Field>
-          <p className="s5-hint">颜色跟系统任务栏走，不能自定义背景。</p>
+          <p className="s5-hint">
+            颜色模式由“外观 → 主题”统一控制：自动跟随 Windows 任务栏，浅色/深色可手动覆盖。
+            条带仍保持透明融合，不绘制独立不透明底板。
+          </p>
         </V5Section>
       </div>
 

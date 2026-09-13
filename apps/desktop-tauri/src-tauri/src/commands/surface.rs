@@ -150,6 +150,10 @@ pub enum SurfaceAction {
         target: WireSurfaceTarget,
         source: String,
     },
+    SetUsageSource {
+        target: WireSurfaceTarget,
+        source: String,
+    },
     SetRegion {
         target: WireSurfaceTarget,
         region: String,
@@ -224,9 +228,7 @@ fn provider_id_of(target: &WireSurfaceTarget) -> Result<&str, String> {
 
 fn settings_tab_of(target: &WireSurfaceTarget) -> String {
     match target {
-        WireSurfaceTarget::Settings { tab } => {
-            tab.clone().unwrap_or_else(|| "general".to_string())
-        }
+        WireSurfaceTarget::Settings { tab } => tab.clone().unwrap_or_else(|| "general".to_string()),
         _ => "general".to_string(),
     }
 }
@@ -274,8 +276,7 @@ pub async fn surface_action(
             Ok("quit".to_string())
         }
         SurfaceAction::SelectProvider { target } => {
-            crate::shell::flyout_window::open_or_focus(&app, None)
-                .map_err(|e| e.to_string())?;
+            crate::shell::flyout_window::open_or_focus(&app, None).map_err(|e| e.to_string())?;
             if let Some(pid) = optional_provider_id(&target) {
                 let _ = app.emit("flyout-select-provider", pid.to_string());
                 return Ok(format!("select_provider:{pid}"));
@@ -374,18 +375,12 @@ pub async fn surface_action(
             crate::commands::add_token_account(provider_id.clone(), label, token)?;
             Ok(format!("add_token_account:{provider_id}"))
         }
-        SurfaceAction::RemoveTokenAccount {
-            target,
-            account_id,
-        } => {
+        SurfaceAction::RemoveTokenAccount { target, account_id } => {
             let provider_id = provider_id_of(&target)?.to_string();
             crate::commands::remove_token_account(provider_id.clone(), account_id)?;
             Ok(format!("remove_token_account:{provider_id}"))
         }
-        SurfaceAction::SetActiveTokenAccount {
-            target,
-            account_id,
-        } => {
+        SurfaceAction::SetActiveTokenAccount { target, account_id } => {
             let provider_id = provider_id_of(&target)?.to_string();
             crate::commands::set_active_token_account(provider_id.clone(), account_id)?;
             Ok(format!("set_active_token_account:{provider_id}"))
@@ -399,6 +394,11 @@ pub async fn surface_action(
             let provider_id = provider_id_of(&target)?.to_string();
             crate::commands::set_provider_cookie_source(provider_id.clone(), source)?;
             Ok(format!("set_cookie_source:{provider_id}"))
+        }
+        SurfaceAction::SetUsageSource { target, source } => {
+            let provider_id = provider_id_of(&target)?.to_string();
+            crate::commands::set_provider_usage_source(provider_id.clone(), source)?;
+            Ok(format!("set_usage_source:{provider_id}"))
         }
         SurfaceAction::SetRegion { target, region } => {
             let provider_id = provider_id_of(&target)?.to_string();
@@ -414,7 +414,8 @@ pub async fn surface_action(
             Ok("settings_updated".to_string())
         }
         SurfaceAction::CloseSettings { .. } => {
-            if let Some(window) = app.get_webview_window(crate::shell::settings_window::SETTINGS_LABEL)
+            if let Some(window) =
+                app.get_webview_window(crate::shell::settings_window::SETTINGS_LABEL)
             {
                 crate::shell::settings_window::dismiss(&app, &window)?;
             }
@@ -736,8 +737,7 @@ mod tests_surface_action {
 
     #[test]
     fn surface_action_deserializes_refresh_and_open_settings() {
-        let a: SurfaceAction =
-            serde_json::from_str(r#"{"type":"refresh"}"#).expect("refresh");
+        let a: SurfaceAction = serde_json::from_str(r#"{"type":"refresh"}"#).expect("refresh");
         matches!(a, SurfaceAction::Refresh { .. });
         let b: SurfaceAction = serde_json::from_str(
             r#"{"type":"openSettings","target":{"kind":"settings","tab":"general"}}"#,
@@ -816,10 +816,9 @@ mod tests_surface_action {
 
     #[test]
     fn surface_action_deserializes_dismiss_reorder_and_clear_cache() {
-        let _: SurfaceAction = serde_json::from_str(
-            r#"{"type":"dismiss","target":{"kind":"summary"}}"#,
-        )
-        .expect("dismiss");
+        let _: SurfaceAction =
+            serde_json::from_str(r#"{"type":"dismiss","target":{"kind":"summary"}}"#)
+                .expect("dismiss");
         let reorder: SurfaceAction = serde_json::from_str(
             r#"{"type":"reorderProviders","target":{"kind":"summary"},"providerIds":["claude","codex"]}"#,
         )
@@ -830,10 +829,9 @@ mod tests_surface_action {
             }
             _ => panic!("wrong variant"),
         }
-        let _: SurfaceAction = serde_json::from_str(
-            r#"{"type":"clearCache","target":{"kind":"settings"}}"#,
-        )
-        .expect("clearCache");
+        let _: SurfaceAction =
+            serde_json::from_str(r#"{"type":"clearCache","target":{"kind":"settings"}}"#)
+                .expect("clearCache");
     }
 
     #[test]
@@ -864,10 +862,9 @@ mod tests_surface_action {
             r#"{"type":"openExternalUrl","target":{"kind":"app"},"url":"https://example.com"}"#,
         )
         .expect("openExternalUrl");
-        let _: SurfaceAction = serde_json::from_str(
-            r#"{"type":"closeSettings","target":{"kind":"settings"}}"#,
-        )
-        .expect("closeSettings");
+        let _: SurfaceAction =
+            serde_json::from_str(r#"{"type":"closeSettings","target":{"kind":"settings"}}"#)
+                .expect("closeSettings");
         let update: SurfaceAction = serde_json::from_str(
             r#"{"type":"updateSettings","target":{"kind":"settings"},"patch":{"theme":"dark"}}"#,
         )
@@ -880,10 +877,9 @@ mod tests_surface_action {
             r#"{"type":"registerGlobalShortcut","target":{"kind":"app"},"accelerator":"Ctrl+Shift+U"}"#,
         )
         .expect("registerGlobalShortcut");
-        let _: SurfaceAction = serde_json::from_str(
-            r#"{"type":"unregisterGlobalShortcut","target":{"kind":"app"}}"#,
-        )
-        .expect("unregisterGlobalShortcut");
+        let _: SurfaceAction =
+            serde_json::from_str(r#"{"type":"unregisterGlobalShortcut","target":{"kind":"app"}}"#)
+                .expect("unregisterGlobalShortcut");
         let lang: SurfaceAction = serde_json::from_str(
             r#"{"type":"setUiLanguage","target":{"kind":"settings"},"language":"chinese"}"#,
         )

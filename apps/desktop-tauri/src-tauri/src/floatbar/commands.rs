@@ -73,6 +73,30 @@ pub fn resize_float_bar(app: AppHandle, width: f64, height: f64) -> Result<(), S
 }
 
 #[tauri::command]
+pub fn adjust_float_bar_geometry(
+    app: AppHandle,
+    width: f64,
+    height: f64,
+    x: Option<f64>,
+    y: Option<f64>,
+    is_expanded: Option<bool>,
+) -> Result<(), String> {
+    let settings = Settings::load();
+    if let Some(window) = app.get_webview_window(floatbar_window::FLOATBAR_LABEL) {
+        floatbar_window::adjust_geometry(
+            &window,
+            width,
+            height,
+            x,
+            y,
+            is_expanded.unwrap_or(false),
+            settings.float_bar_click_through,
+        )?;
+    }
+    Ok(())
+}
+
+#[tauri::command]
 pub fn set_float_bar_orientation(app: AppHandle, orientation: String) -> Result<(), String> {
     let orientation = normalize_float_bar_orientation(&orientation);
     let mut settings = Settings::load();

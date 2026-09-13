@@ -50,6 +50,10 @@ export type UpdateChannel = "stable" | "beta";
 export type ThemePreference = "auto" | "light" | "dark";
 
 export type MenuBarDisplayMode = "minimal" | "compact" | "detailed";
+/** Per-surface quota percentage preference. `follow` inherits General. */
+export type QuotaDisplayPreference = "follow" | "used" | "remaining";
+/** Per-surface reset-time preference. `follow` inherits General. */
+export type ResetDisplayPreference = "follow" | "countdown" | "absolute";
 /** Which period the panel's local-usage stats lead with. */
 export type LocalUsagePeriod = "today" | "7d" | "30d";
 export type FloatBarOrientation = "horizontal" | "vertical";
@@ -352,6 +356,8 @@ export interface SettingsSnapshot {
   resetTimeRelative: boolean;
   menuBarDisplayMode: MenuBarDisplayMode;
   outputSpeedEnabled?: boolean;
+  /** Keep the tray flyout open through outside clicks while Settings is visible. Default on. */
+  keepTrayPanelOnSettings?: boolean;
   localUsagePeriod?: LocalUsagePeriod;
   hidePersonalInfo: boolean;
   updateChannel: UpdateChannel;
@@ -415,16 +421,23 @@ export interface SettingsSnapshot {
 
   // ── Per-component quota presentation ───────────────────────────────
   //
-  // Each surface owns its own used-vs-remaining and relative-vs-absolute
-  // reset choice. `showAsUsed` / `resetTimeRelative` above are legacy
-  // migration sources only — do not read them in new code.
-  /** Floating bar: `true` shows used, `false` shows remaining. */
+  // The mode is the source of truth. The booleans are effective-value
+  // compatibility fields supplied by the backend for older consumers.
+  /** Floating bar: follow the General default or override it. */
+  floatBarQuotaDisplay?: QuotaDisplayPreference;
+  /** Effective compatibility value: `true` shows used. */
   floatBarShowAsUsed: boolean;
-  /** Floating bar: `true` shows a countdown, `false` an absolute time. */
+  /** Floating bar reset mode: follow, countdown, or absolute. */
+  floatBarResetDisplay?: ResetDisplayPreference;
+  /** Effective compatibility value: `true` shows a countdown. */
   floatBarResetTimeRelative: boolean;
-  /** Tray flyout + PopOut panel: `true` shows used, `false` shows remaining. */
+  /** Tray flyout + PopOut panel quota mode. */
+  dashboardQuotaDisplay?: QuotaDisplayPreference;
+  /** Effective compatibility value: `true` shows used. */
   dashboardShowAsUsed: boolean;
-  /** Tray flyout + PopOut panel: countdown (`true`) or absolute time. */
+  /** Tray flyout + PopOut reset mode. */
+  dashboardResetDisplay?: ResetDisplayPreference;
+  /** Effective compatibility value: `true` shows countdown. */
   dashboardResetTimeRelative: boolean;
   /**
    * Legacy dashboard-only provider filter, retained for settings migration.
@@ -436,14 +449,13 @@ export interface SettingsSnapshot {
    * cards now render the quota windows returned by each provider.
    */
   dashboardQuotaWindows: string[];
-  /**
-   * Windows taskbar strip and notification-area icon: `true` shows used,
-   * `false` shows remaining. There is no `taskbarResetTimeRelative` companion —
-   * the native strip renders no reset text, so such a setting would be inert.
-   */
+  /** Windows taskbar strip and notification-area icon quota mode. */
+  taskbarQuotaDisplay?: QuotaDisplayPreference;
+  /** Effective compatibility value: `true` shows used. */
   taskbarShowAsUsed: boolean;
-  /** Countdown (`true`) or the reset moment itself (`false`), for the strip
-   *  family's surfaces — today that is the context menu's status row. */
+  /** Windows taskbar/tray reset mode (the tray context menu uses it). */
+  taskbarResetDisplay?: ResetDisplayPreference;
+  /** Effective compatibility value: `true` shows countdown. */
   taskbarResetTimeRelative: boolean;
   /**
    * Ordered right-click actions for the mini status bar.
@@ -478,6 +490,7 @@ export interface SettingsUpdate {
   resetTimeRelative?: boolean;
   menuBarDisplayMode?: MenuBarDisplayMode;
   outputSpeedEnabled?: boolean;
+  keepTrayPanelOnSettings?: boolean;
   localUsagePeriod?: LocalUsagePeriod;
   hidePersonalInfo?: boolean;
   updateChannel?: UpdateChannel;
@@ -522,13 +535,19 @@ export interface SettingsUpdate {
   taskbarWidgetValueGapPx?: number;
   floatBarShowAsUsed?: boolean;
   floatBarResetTimeRelative?: boolean;
+  floatBarQuotaDisplay?: QuotaDisplayPreference;
+  floatBarResetDisplay?: ResetDisplayPreference;
   dashboardShowAsUsed?: boolean;
   dashboardResetTimeRelative?: boolean;
+  dashboardQuotaDisplay?: QuotaDisplayPreference;
+  dashboardResetDisplay?: ResetDisplayPreference;
   /** Legacy dashboard-only filters; retained for migration compatibility. */
   dashboardProviderIds?: string[];
   dashboardQuotaWindows?: string[];
   taskbarShowAsUsed?: boolean;
   taskbarResetTimeRelative?: boolean;
+  taskbarQuotaDisplay?: QuotaDisplayPreference;
+  taskbarResetDisplay?: ResetDisplayPreference;
   taskbarTooltipEntries?: TaskbarEntry[];
 }
 
@@ -967,6 +986,9 @@ export interface ProviderDetail {
   cookieSource: string | null;
   /** Phase 6c — currently-persisted region value. `null` for non-regional providers. */
   region: string | null;
+  /** Persisted usage-source pin (auto | web | cli | oauth); always present
+   *  because the backend getter defaults to "auto" (upstream parity). */
+  usageSource: string | null;
 }
 
 // ── Phase 6c — cookie-source & region pickers ────────────────────────
@@ -996,6 +1018,10 @@ export interface ProviderAuthCapabilitiesBridge {
   hasCookieDomain: boolean;
   /** A real executable login flow; absent when the provider only supports probing. */
   loginFlow?: string | null;
+  /** Selectable fetch sources from the provider's runtime catalog
+   *  (normalized lowercase: auto | web | cli | oauth). The usage-source
+   *  picker renders only when more than one entry exists. */
+  availableSources: string[];
 }
 
 // ── Phase 6d — credential detection ──────────────────────────────────

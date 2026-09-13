@@ -27,6 +27,7 @@ pub struct SettingsUpdate {
     pub reset_time_relative: Option<bool>,
     pub menu_bar_display_mode: Option<String>,
     pub output_speed_enabled: Option<bool>,
+    pub keep_tray_panel_on_settings: Option<bool>,
     pub local_usage_period: Option<String>,
     pub hide_personal_info: Option<bool>,
     pub update_channel: Option<String>,
@@ -71,18 +72,25 @@ pub struct SettingsUpdate {
     pub taskbar_widget_icon_style: Option<String>,
     pub taskbar_widget_icon_gap_px: Option<u8>,
     pub taskbar_widget_value_gap_px: Option<u8>,
-    // Per-component quota presentation. Each surface owns its own pair; the
-    // legacy `show_as_used` / `reset_time_relative` above are migration-only.
+    // Per-component quota presentation. `follow` inherits the General-page
+    // default; the legacy booleans remain accepted as explicit overrides for
+    // older frontend callers.
+    pub float_bar_quota_display: Option<String>,
     pub float_bar_show_as_used: Option<bool>,
+    pub float_bar_reset_display: Option<String>,
     pub float_bar_reset_time_relative: Option<bool>,
+    pub dashboard_quota_display: Option<String>,
     pub dashboard_show_as_used: Option<bool>,
+    pub dashboard_reset_display: Option<String>,
     pub dashboard_reset_time_relative: Option<bool>,
     /// Which providers the tray flyout and pop-out panel show. Empty = all
     /// enabled, the counterpart of `float_bar_provider_ids`.
     pub dashboard_provider_ids: Option<Vec<String>>,
     /// Which quota-window cycles the dashboard cards render. Empty = all.
     pub dashboard_quota_windows: Option<Vec<String>>,
+    pub taskbar_quota_display: Option<String>,
     pub taskbar_show_as_used: Option<bool>,
+    pub taskbar_reset_display: Option<String>,
     pub taskbar_reset_time_relative: Option<bool>,
     pub taskbar_tooltip_entries: Option<Vec<TaskbarEntryBridge>>,
 }
@@ -94,8 +102,12 @@ impl SettingsUpdate {
             || self.codex_custom_sessions_dirs.is_some()
             || self.high_usage_threshold.is_some()
             || self.critical_usage_threshold.is_some()
+            || self.show_as_used.is_some()
+            || self.reset_time_relative.is_some()
             || self.float_bar_show_as_used.is_some()
             || self.float_bar_reset_time_relative.is_some()
+            || self.float_bar_quota_display.is_some()
+            || self.float_bar_reset_display.is_some()
             || self.float_bar_entries.is_some()
     }
 
@@ -107,14 +119,21 @@ impl SettingsUpdate {
         self.tray_icon_mode.is_some()
             || self.switcher_shows_icons.is_some()
             || self.menu_bar_shows_highest_usage.is_some()
+            || self.show_as_used.is_some()
+            || self.reset_time_relative.is_some()
             || self.dashboard_show_as_used.is_some()
             || self.dashboard_reset_time_relative.is_some()
+            || self.dashboard_quota_display.is_some()
+            || self.dashboard_reset_display.is_some()
             || self.dashboard_provider_ids.is_some()
             || self.dashboard_quota_windows.is_some()
             || self.taskbar_show_as_used.is_some()
             || self.taskbar_reset_time_relative.is_some()
+            || self.taskbar_quota_display.is_some()
+            || self.taskbar_reset_display.is_some()
             || self.menu_bar_display_mode.is_some()
             || self.output_speed_enabled.is_some()
+            || self.keep_tray_panel_on_settings.is_some()
             || self.local_usage_period.is_some()
             || self.provider_metrics.is_some()
             || self.enabled_providers.is_some()
@@ -214,6 +233,9 @@ impl SettingsUpdate {
         if let Some(v) = self.output_speed_enabled {
             settings.output_speed_enabled = v;
         }
+        if let Some(v) = self.keep_tray_panel_on_settings {
+            settings.keep_tray_panel_on_settings = v;
+        }
         if let Some(ref v) = self.local_usage_period
             && matches!(v.as_str(), "today" | "7d" | "30d")
         {
@@ -231,26 +253,72 @@ impl SettingsUpdate {
         if let Some(v) = self.show_all_token_accounts_in_menu {
             settings.show_all_token_accounts_in_menu = v;
         }
-        // Per-component quota presentation. Deliberately applied one field at a
-        // time with no cross-assignment: a floating-bar change must never touch
-        // the dashboard's or the taskbar's stored choice.
+        // Legacy boolean updates are treated as explicit surface overrides so
+        // older frontends keep their old behavior. New callers should send the
+        // string mode (`follow`, `used`/`remaining`, `countdown`/`absolute`).
         if let Some(v) = self.float_bar_show_as_used {
-            settings.float_bar_show_as_used = v;
+            settings.float_bar_quota_display = if v {
+                QuotaDisplayPreference::Used
+            } else {
+                QuotaDisplayPreference::Remaining
+            };
         }
         if let Some(v) = self.float_bar_reset_time_relative {
-            settings.float_bar_reset_time_relative = v;
+            settings.float_bar_reset_display = if v {
+                ResetDisplayPreference::Countdown
+            } else {
+                ResetDisplayPreference::Absolute
+            };
+        }
+        if let Some(v) = self
+            .float_bar_quota_display
+            .as_deref()
+            .and_then(QuotaDisplayPreference::parse)
+        {
+            settings.float_bar_quota_display = v;
+        }
+        if let Some(v) = self
+            .float_bar_reset_display
+            .as_deref()
+            .and_then(ResetDisplayPreference::parse)
+        {
+            settings.float_bar_reset_display = v;
         }
         if let Some(ref entries) = self.float_bar_entries {
             let requested: Vec<codexbar::settings::TaskbarEntry> =
                 entries.iter().map(Into::into).collect();
-            settings.float_bar_entries =
-                codexbar::settings::normalize_float_bar_entries(&requested, &settings.float_bar_provider_ids);
+            settings.float_bar_entries = codexbar::settings::normalize_float_bar_entries(
+                &requested,
+                &settings.float_bar_provider_ids,
+            );
         }
         if let Some(v) = self.dashboard_show_as_used {
-            settings.dashboard_show_as_used = v;
+            settings.dashboard_quota_display = if v {
+                QuotaDisplayPreference::Used
+            } else {
+                QuotaDisplayPreference::Remaining
+            };
         }
         if let Some(v) = self.dashboard_reset_time_relative {
-            settings.dashboard_reset_time_relative = v;
+            settings.dashboard_reset_display = if v {
+                ResetDisplayPreference::Countdown
+            } else {
+                ResetDisplayPreference::Absolute
+            };
+        }
+        if let Some(v) = self
+            .dashboard_quota_display
+            .as_deref()
+            .and_then(QuotaDisplayPreference::parse)
+        {
+            settings.dashboard_quota_display = v;
+        }
+        if let Some(v) = self
+            .dashboard_reset_display
+            .as_deref()
+            .and_then(ResetDisplayPreference::parse)
+        {
+            settings.dashboard_reset_display = v;
         }
         if let Some(ref ids) = self.dashboard_provider_ids {
             settings.dashboard_provider_ids = ids.clone();
@@ -260,10 +328,32 @@ impl SettingsUpdate {
                 codexbar::settings::normalize_dashboard_quota_windows(windows);
         }
         if let Some(v) = self.taskbar_reset_time_relative {
-            settings.taskbar_reset_time_relative = v;
+            settings.taskbar_reset_display = if v {
+                ResetDisplayPreference::Countdown
+            } else {
+                ResetDisplayPreference::Absolute
+            };
         }
         if let Some(v) = self.taskbar_show_as_used {
-            settings.taskbar_show_as_used = v;
+            settings.taskbar_quota_display = if v {
+                QuotaDisplayPreference::Used
+            } else {
+                QuotaDisplayPreference::Remaining
+            };
+        }
+        if let Some(v) = self
+            .taskbar_quota_display
+            .as_deref()
+            .and_then(QuotaDisplayPreference::parse)
+        {
+            settings.taskbar_quota_display = v;
+        }
+        if let Some(v) = self
+            .taskbar_reset_display
+            .as_deref()
+            .and_then(ResetDisplayPreference::parse)
+        {
+            settings.taskbar_reset_display = v;
         }
         if let Some(ref entries) = self.taskbar_tooltip_entries {
             let requested: Vec<codexbar::settings::TaskbarEntry> =
@@ -271,6 +361,7 @@ impl SettingsUpdate {
             settings.taskbar_tooltip_entries =
                 codexbar::settings::normalize_taskbar_entries(&requested);
         }
+        settings.sync_quota_display_effective();
         self
     }
 
@@ -574,14 +665,21 @@ pub fn get_taskbar_preview_lines() -> Vec<TaskbarStripCell> {
             .map(|line| {
                 let provider_id = line.icon_provider_id.unwrap_or_default();
                 let ready = line.state == "ready";
-                let reason = if ready { None } else { Some(line.value.clone()) };
+                let reason = if ready {
+                    None
+                } else {
+                    Some(line.value.clone())
+                };
                 let icon = if provider_id.is_empty() {
                     None
                 } else {
                     Some(TaskbarStripIcon {
                         provider_id: provider_id.clone(),
                         asset_id: provider_id.clone(),
-                        brand_color: format!("#{:06x}", crate::taskbar_icons::brand_color(&provider_id)),
+                        brand_color: format!(
+                            "#{:06x}",
+                            crate::taskbar_icons::brand_color(&provider_id)
+                        ),
                         fallback_glyph: line.mark.map(|mark| mark.glyph.to_string()),
                     })
                 };
@@ -656,6 +754,8 @@ pub async fn update_settings(
     let timeout_recovery_disabled = patch.provider_timeout_recovery_enabled == Some(false);
     let previous_language = settings.ui_language;
     #[cfg(windows)]
+    let theme_changed = patch.theme.is_some();
+    #[cfg(windows)]
     let taskbar_widget_toggled = patch.taskbar_widget_enabled;
     #[cfg(windows)]
     let taskbar_widget_position = patch.taskbar_widget_position.clone();
@@ -690,7 +790,9 @@ pub async fn update_settings(
     if enabled_providers_changed {
         let enabled_ids = settings.get_enabled_provider_ids();
         let state = app.state::<Mutex<AppState>>();
-        if let Some(projection) = invalidate_provider_refresh_and_prune_disabled(&state, &enabled_ids)? {
+        if let Some(projection) =
+            invalidate_provider_refresh_and_prune_disabled(&state, &enabled_ids)?
+        {
             crate::events::emit_provider_projection_updated(&app, &projection);
         }
     }
@@ -755,6 +857,13 @@ pub async fn update_settings(
     if let Some(value_gap) = taskbar_widget_value_gap_px {
         crate::taskbar_widget::set_value_gap(value_gap);
     }
+    #[cfg(windows)]
+    if theme_changed {
+        // The native strip is not a WebView, so the normal settings-changed
+        // broadcast cannot update it. Keep the global Appearance → Theme
+        // preference in the same owner-thread-safe cache used by WM_PAINT.
+        crate::taskbar_widget::set_theme(settings.theme);
+    }
     if rebuild_tray_menu {
         crate::tray_bridge::rebuild_tray_menu(&app);
     }
@@ -774,9 +883,10 @@ pub async fn update_settings(
 pub fn reset_settings() -> Result<SettingsSnapshot, String> {
     let settings = Settings::default();
     settings.save().map_err(|e| e.to_string())?;
+    #[cfg(windows)]
+    crate::taskbar_widget::set_theme(settings.theme);
     Ok(SettingsSnapshot::from(settings))
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -805,6 +915,14 @@ mod tests {
             }
             .refreshes_tray_presentation()
         );
+        assert!(
+            SettingsUpdate {
+                dashboard_quota_display: Some("follow".to_string()),
+                dashboard_reset_display: Some("absolute".to_string()),
+                ..Default::default()
+            }
+            .refreshes_tray_presentation()
+        );
     }
 
     /// The floating bar has its own notify channel. A floating-bar-only change
@@ -825,6 +943,67 @@ mod tests {
         };
         assert!(dashboard_only.refreshes_tray_presentation());
         assert!(!dashboard_only.notifies_float_bar());
+
+        let float_bar_mode_only = SettingsUpdate {
+            float_bar_quota_display: Some("remaining".to_string()),
+            float_bar_reset_display: Some("follow".to_string()),
+            ..Default::default()
+        };
+        assert!(float_bar_mode_only.notifies_float_bar());
+        assert!(!float_bar_mode_only.refreshes_tray_presentation());
+    }
+
+    #[test]
+    fn quota_display_modes_round_trip_from_camel_case_and_resolve_follow() {
+        let patch: SettingsUpdate = serde_json::from_str(
+            r#"{
+                "showAsUsed": false,
+                "resetTimeRelative": false,
+                "floatBarQuotaDisplay": "follow",
+                "floatBarResetDisplay": "follow",
+                "dashboardQuotaDisplay": "used",
+                "dashboardResetDisplay": "absolute",
+                "taskbarQuotaDisplay": "remaining",
+                "taskbarResetDisplay": "countdown"
+            }"#,
+        )
+        .expect("mode fields must deserialize from camelCase");
+
+        let mut settings = Settings::default();
+        patch.apply_to(&mut settings).expect("patch applies");
+
+        assert_eq!(settings.float_bar_quota_display, QuotaDisplayPreference::Follow);
+        assert_eq!(settings.float_bar_reset_display, ResetDisplayPreference::Follow);
+        assert!(!settings.float_bar_show_as_used);
+        assert!(!settings.float_bar_reset_time_relative);
+        assert_eq!(settings.dashboard_quota_display, QuotaDisplayPreference::Used);
+        assert!(settings.dashboard_show_as_used);
+        assert_eq!(settings.dashboard_reset_display, ResetDisplayPreference::Absolute);
+        assert!(!settings.dashboard_reset_time_relative);
+        assert_eq!(settings.taskbar_quota_display, QuotaDisplayPreference::Remaining);
+        assert!(!settings.taskbar_show_as_used);
+        assert_eq!(settings.taskbar_reset_display, ResetDisplayPreference::Countdown);
+        assert!(settings.taskbar_reset_time_relative);
+
+        let json = serde_json::to_value(SettingsSnapshot::from(settings)).expect("snapshot serializes");
+        assert_eq!(json["floatBarQuotaDisplay"], serde_json::json!("follow"));
+        assert_eq!(json["dashboardQuotaDisplay"], serde_json::json!("used"));
+        assert_eq!(json["taskbarQuotaDisplay"], serde_json::json!("remaining"));
+        assert_eq!(json["floatBarShowAsUsed"], serde_json::json!(false));
+        assert_eq!(json["dashboardShowAsUsed"], serde_json::json!(true));
+    }
+
+    #[test]
+    fn global_theme_round_trips_to_the_settings_snapshot() {
+        let patch: SettingsUpdate = serde_json::from_str(r#"{"theme":"dark"}"#)
+            .expect("theme must deserialize from the settings bridge");
+        let mut settings = Settings::default();
+        patch.apply_to(&mut settings).expect("theme patch applies");
+        assert_eq!(settings.theme, ThemePreference::Dark);
+
+        let json = serde_json::to_value(SettingsSnapshot::from(settings))
+            .expect("snapshot with theme serializes");
+        assert_eq!(json["theme"], serde_json::json!("dark"));
     }
 
     /// Writing one component's preference must leave the other two alone —

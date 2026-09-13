@@ -31,6 +31,22 @@ export function resizeFloatBar(width: number, height: number): Promise<void> {
   return invoke<void>("resize_float_bar", { width, height });
 }
 
+export function adjustFloatBarGeometry(
+  width: number,
+  height: number,
+  x?: number | null,
+  y?: number | null,
+  isExpanded?: boolean | null,
+): Promise<void> {
+  return invoke<void>("adjust_float_bar_geometry", {
+    width,
+    height,
+    x: x ?? null,
+    y: y ?? null,
+    isExpanded: isExpanded ?? null,
+  });
+}
+
 export function setFloatBarOrientation(orientation: string): Promise<void> {
   return invoke<void>("set_float_bar_orientation", { orientation });
 }

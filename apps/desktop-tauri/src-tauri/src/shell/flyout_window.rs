@@ -8,8 +8,8 @@
 //! Outside clicks are classified by the global mouse hook against the native
 //! window rectangle and then handled on the Tauri main thread.
 
-use std::sync::{Mutex, OnceLock};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
 
 use tauri::{AppHandle, Emitter, Manager, PhysicalPosition, WebviewUrl};
@@ -108,7 +108,9 @@ fn controller() -> &'static Mutex<FlyoutController> {
 }
 
 fn with_controller<T>(operation: impl FnOnce(&mut FlyoutController) -> T) -> T {
-    let mut guard = controller().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    let mut guard = controller()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     operation(&mut guard)
 }
 
@@ -165,6 +167,7 @@ fn remembered_size(props: &crate::surface::WindowProperties) -> (f64, f64) {
         .and_then(|geometry| geometry.height)
         .map(|value| value as f64)
         .unwrap_or(props.height);
+    let (width, height) = snap_default_card_size(width, height, props);
     let width = props.min_width.map_or(width, |min| width.max(min));
     let height = props.min_height.map_or(height, |min| height.max(min));
     let width = props.max_width.map_or(width, |max| width.min(max));
@@ -188,13 +191,15 @@ fn remember_geometry(window: &tauri::WebviewWindow) {
     };
     let scale = window.scale_factor().unwrap_or(1.0).max(0.5);
     let (width, height) = logical_card_size_from_physical_inner(size.width, size.height, scale);
+    let props = SurfaceMode::TrayPanel.window_properties();
+    let (width, height) = snap_default_card_size(width as f64, height as f64, &props);
     crate::geometry_store::save_entry(
         FLYOUT_LABEL,
         crate::geometry_store::StoredGeometry {
             x: position.x,
             y: position.y,
-            width: Some(width),
-            height: Some(height),
+            width: Some(width.round() as u32),
+            height: Some(height.round() as u32),
         },
     );
 }
@@ -208,6 +213,29 @@ fn logical_card_size_from_physical_inner(
     let gutter = CHROME_GUTTER_DIP * 2.0;
     let width = ((physical_width as f64 / scale) - gutter).round().max(1.0) as u32;
     let height = ((physical_height as f64 / scale) - gutter).round().max(1.0) as u32;
+    (width, height)
+}
+
+/// HWND client size jitters by a few DIP (DWM shadow, 125% rounding). That
+/// noise used to be saved as a new card size, then the 12px gutter was added
+/// again on open — 320 became 349, then wider every close. Snap back unless
+/// the user clearly dragged past the default.
+fn snap_default_card_size(
+    width: f64,
+    height: f64,
+    props: &crate::surface::WindowProperties,
+) -> (f64, f64) {
+    const SNAP_DIP: f64 = 96.0;
+    let width = if (width - props.width).abs() <= SNAP_DIP {
+        props.width
+    } else {
+        width
+    };
+    let height = if (height - props.height).abs() <= SNAP_DIP {
+        props.height
+    } else {
+        height
+    };
     (width, height)
 }
 
@@ -241,13 +269,17 @@ pub struct ClickOutsideContext {
     /// close animation from reopening and immediately closing the panel.
     pub tray_icon_rect: Option<ScreenRect>,
     pub settings_visible: bool,
+    /// Mirrors `Settings::keep_tray_panel_on_settings`. When Settings is
+    /// visible this is the only thing that can still allow an outside click
+    /// to close the flyout — proof mode and the native menu stay exclusive.
+    pub keep_tray_panel_on_settings: bool,
     pub proof_mode: bool,
     pub native_menu_tracking: bool,
 }
 
 pub fn should_dismiss_for_click(ctx: &ClickOutsideContext, x: i32, y: i32) -> bool {
     !ctx.proof_mode
-        && !ctx.settings_visible
+        && !(ctx.settings_visible && ctx.keep_tray_panel_on_settings)
         && !ctx.native_menu_tracking
         && !ctx.flyout_rect.contains(x, y)
         && !ctx
@@ -332,7 +364,6 @@ struct CursorPoint {
     y: i32,
 }
 
-
 #[cfg(windows)]
 const WH_MOUSE_LL: i32 = 14;
 #[cfg(windows)]
@@ -407,15 +438,21 @@ fn reassert_drag_resize_child(window: &tauri::WebviewWindow) {
     use raw_window_handle::{HasWindowHandle, RawWindowHandle};
     const CLASS: &str = "TAURI_DRAG_RESIZE_BORDERS";
     const NAME: &str = "TAURI_DRAG_RESIZE_WINDOW";
-    // HWND_TOP = 0; SWP_NOMOVE|SWP_NOSIZE|SWP_NOACTIVATE = 0x02|0x01|0x10
-    const SWP_NOACTIVATE_NOMOVE_NOSIZE: u32 = 0x10 | 0x02 | 0x01;
-    let Ok(handle) = window.window_handle() else { return };
+    // HWND_TOP = 0; keep this cross-window restack asynchronous so a delayed
+    // WebView2 child repair cannot wait on another GUI thread.
+    const SWP_NOACTIVATE_NOMOVE_NOSIZE: u32 = 0x10 | 0x02 | 0x01 | 0x4000;
+    let Ok(handle) = window.window_handle() else {
+        return;
+    };
     let RawWindowHandle::Win32(handle) = handle.as_raw() else {
         return;
     };
     let inner = handle.hwnd.get();
     const GA_ROOT: u32 = 2;
-    let parent = unsafe { let r = GetAncestor(inner, GA_ROOT); if r != 0 { r } else { inner } };
+    let parent = unsafe {
+        let r = GetAncestor(inner, GA_ROOT);
+        if r != 0 { r } else { inner }
+    };
     let class: Vec<u16> = CLASS.encode_utf16().chain(std::iter::once(0)).collect();
     let name: Vec<u16> = NAME.encode_utf16().chain(std::iter::once(0)).collect();
     let mut child = unsafe { FindWindowExW(parent, 0, class.as_ptr(), name.as_ptr()) };
@@ -566,9 +603,7 @@ fn post_input_event(app: &AppHandle, event: FlyoutInputEvent) {
 
 fn dispatch_input_event(app: &AppHandle, event: FlyoutInputEvent) {
     match event {
-        FlyoutInputEvent::MouseDown { x, y, generation } => {
-            close_if_outside(app, x, y, generation)
-        }
+        FlyoutInputEvent::MouseDown { x, y, generation } => close_if_outside(app, x, y, generation),
     }
 }
 
@@ -661,6 +696,8 @@ fn close_if_outside(app: &AppHandle, x: i32, y: i32, generation: u64) {
                 height: anchor.height as i32,
             }),
         settings_visible: crate::shell::settings_window::is_visible(app),
+        keep_tray_panel_on_settings: codexbar::settings::Settings::load()
+            .keep_tray_panel_on_settings,
         proof_mode: crate::proof_harness::is_proof_mode(app),
         native_menu_tracking: native_menu_is_tracking(),
     };
@@ -697,6 +734,14 @@ fn show_window(app: &AppHandle, window: &tauri::WebviewWindow) -> Result<(), Str
     let was_visible = window.is_visible().unwrap_or(false);
     let was_closing = cancel_pending_close();
     set_phase(FlyoutPhase::Showing);
+    if !was_visible {
+        // Prewarmed HWND keeps the last client size. Re-apply the snapped
+        // card so a leftover 349-wide window does not survive a geometry
+        // migration or a snap-to-default save.
+        let props = SurfaceMode::TrayPanel.window_properties();
+        let (width, height) = remembered_size(&props);
+        let _ = window.set_size(tauri::LogicalSize::new(width, height));
+    }
     super::dwm::force_flyout_shell(window);
     // Grab a tiny desktop snapshot while hidden (~1ms). Blur/BMP stay off
     // this thread so click-to-show matches FluentFlyout / Telegram: the
@@ -1061,6 +1106,7 @@ mod tests {
             },
             tray_icon_rect: None,
             settings_visible: false,
+            keep_tray_panel_on_settings: true,
             proof_mode: false,
             native_menu_tracking: false,
         }
@@ -1122,6 +1168,7 @@ mod tests {
     fn companion_surfaces_and_proof_mode_are_never_closed_by_hook() {
         let mut ctx = context();
         ctx.settings_visible = true;
+        ctx.keep_tray_panel_on_settings = true;
         assert!(!should_dismiss_for_click(&ctx, 0, 0));
         ctx.settings_visible = false;
         ctx.proof_mode = true;
@@ -1129,6 +1176,22 @@ mod tests {
         ctx.proof_mode = false;
         ctx.native_menu_tracking = true;
         assert!(!should_dismiss_for_click(&ctx, 0, 0));
+    }
+
+    #[test]
+    fn settings_open_keeps_tray_only_when_opted_in() {
+        let mut ctx = context();
+        ctx.settings_visible = true;
+        ctx.keep_tray_panel_on_settings = true;
+        assert!(
+            !should_dismiss_for_click(&ctx, 0, 0),
+            "default: Settings open blocks outside-click dismiss"
+        );
+        ctx.keep_tray_panel_on_settings = false;
+        assert!(
+            should_dismiss_for_click(&ctx, 0, 0),
+            "turning the option off restores outside-click dismiss"
+        );
     }
 
     #[test]
@@ -1161,6 +1224,16 @@ mod tests {
             logical_card_size_from_physical_inner(415, 985, 1.25),
             (320, 776)
         );
+    }
+
+    #[test]
+    fn chrome_noise_snaps_back_to_the_320_card() {
+        let props = SurfaceMode::TrayPanel.window_properties();
+        // Live AppData after v3: 349×856. That is DWM/DPI leftover, not a
+        // user drag. Snap it so the next open is not 349+12 gutter.
+        assert_eq!(snap_default_card_size(349.0, 856.0, &props), (320.0, 776.0));
+        // A real drag past the snap window is kept.
+        assert_eq!(snap_default_card_size(420.0, 900.0, &props), (420.0, 900.0));
     }
 
     #[test]

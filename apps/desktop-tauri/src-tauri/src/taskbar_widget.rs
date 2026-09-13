@@ -20,9 +20,11 @@
 //!
 //! # What is fragile
 //!
-//! Everything about positioning inside the taskbar is undocumented. The timer
-//! re-applies position because taskbar moves, DPI changes, theme changes and
-//! Explorer restarts all invalidate the geometry.
+//! Everything about positioning inside the taskbar is undocumented. Geometry
+//! is sampled by a disposable background worker because taskbar moves, DPI
+//! changes, theme changes and Explorer restarts can invalidate it. The owner
+//! thread only consumes a versioned result; it never walks Explorer's child
+//! tree or samples screen pixels while painting.
 //!
 //! Controlled by `Settings::taskbar_widget_enabled`, surfaced as a Settings
 //! toggle. Off by default.
@@ -30,9 +32,12 @@
 #![cfg(windows)]
 
 use std::ffi::c_void;
-use std::sync::{Mutex, OnceLock};
-
-use tauri::Manager;
+use std::sync::{
+    Mutex, OnceLock,
+    atomic::{AtomicU64, Ordering},
+};
+use std::thread;
+use std::time::{Duration, Instant};
 
 /// One printable cell of the strip under the `[icon][tag][value]` cluster
 /// model.
@@ -72,14 +77,60 @@ pub const MAX_VISIBLE_COLUMNS: usize = 2;
 pub const MAX_VISIBLE_ENTRIES: usize = MAX_VISIBLE_ROWS * MAX_VISIBLE_COLUMNS;
 
 static WIDGET_HWND: Mutex<isize> = Mutex::new(0);
-/// The color-key painter is visually transparent, so this sibling keeps the
-/// full rectangle interactive without covering the taskbar pixels.
-static HIT_PROXY_HWND: Mutex<isize> = Mutex::new(0);
-/// TASK-021 item 9: the strip's own hover tooltip (`tooltips_class32`),
-/// distinct from the notification-area tray icon's tooltip in `tray_bridge.rs`
-/// but composed from the same `build_tooltip` text.
-static TOOLTIP_HWND: Mutex<isize> = Mutex::new(0);
+/// The Shell_TrayWnd currently hosting the strip. Explorer can replace this
+/// window during a shell restart or a taskbar/virtual-desktop transition, so
+/// the geometry worker must never treat the handle captured at startup as
+/// permanent.
+static CURRENT_PARENT_HWND: Mutex<isize> = Mutex::new(0);
+/// Latest parent discovered by the worker and waiting for the widget owner
+/// thread to apply with SetParent. `Some(0)` means Explorer temporarily has no
+/// taskbar and both windows must be hidden until one returns.
+static PENDING_PARENT_HWND: Mutex<Option<isize>> = Mutex::new(None);
 pub(crate) static APP_HANDLE: OnceLock<tauri::AppHandle> = OnceLock::new();
+
+/// The Explorer taskbar geometry is sampled away from the widget's window
+/// procedure. Explorer owns the parent window, so querying its child tree from
+/// our UI thread can synchronously wait for Explorer and make the whole strip
+/// appear hung. The UI thread only consumes this cached, versioned geometry.
+type ScreenRect = (i32, i32, i32, i32);
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Geometry {
+    screen: ScreenRect,
+    child: ScreenRect,
+    parent: isize,
+    dpi: u32,
+    desktop: Option<[u8; 16]>,
+}
+static GEOMETRY_CACHE: Mutex<Option<Geometry>> = Mutex::new(None);
+static GEOMETRY_GENERATION: AtomicU64 = AtomicU64::new(0);
+/// Theme registry reads are also kept off WM_PAINT. The geometry worker
+/// refreshes the system brightness value; the renderer uses alpha and never
+/// samples or keys against a taskbar pixel.
+static TASKBAR_THEME_CACHE: Mutex<Option<bool>> = Mutex::new(None);
+/// Keep settings/refresh bursts from filling the widget's owner queue with
+/// duplicate invalidations. Cleared when the owner consumes the message.
+static REPAINT_PENDING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+/// Explorer can emit several layout notifications for one visual change.
+static REASSERT_PENDING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+/// Reparenting is a window-tree mutation and therefore runs only on the
+/// widget's owner thread. This flag coalesces the worker's repeated discovery
+/// of the same new Shell_TrayWnd handle.
+static REPARENT_PENDING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+/// A desktop/theme transition asks the disposable worker to refresh the system
+/// brightness cache. No desktop pixel is sampled by the renderer.
+static THEME_REFRESH_REQUESTED: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+/// A virtual-desktop transition invalidates the composed child surface even
+/// when Explorer reports the same HWND and rectangle. Consume this on the
+/// owner thread so the first frame after the transition cannot reuse stale
+/// geometry or pixels; the worker publishes a fresh version before showing it
+/// again.
+static DESKTOP_SWITCH_PENDING: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+/// System virtual-desktop notifications are delivered to this process through
+/// an out-of-context WinEvent hook. The handle is kept so stop() can unhook it
+/// before destroying the child windows.
+static DESKTOP_SWITCH_HOOK: Mutex<isize> = Mutex::new(0);
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum WidgetPosition {
@@ -94,6 +145,11 @@ static WIDGET_WIDTH: Mutex<i32> = Mutex::new(136);
 static WIDGET_TEXT_ALIGN: Mutex<u32> = Mutex::new(0);
 static WIDGET_CONTENT: Mutex<String> = Mutex::new(String::new());
 static WIDGET_FONT_FAMILY: Mutex<String> = Mutex::new(String::new());
+/// The global Appearance → Theme preference used by the native strip. Auto
+/// means the Windows taskbar brightness; Light/Dark are explicit text-contrast
+/// overrides. The setting is cached here so WM_PAINT never loads settings.json.
+static WIDGET_THEME: Mutex<codexbar::settings::ThemePreference> =
+    Mutex::new(codexbar::settings::ThemePreference::Auto);
 /// Official-icon slot size in logical pixels, clamped 10..=18 (default 14).
 static WIDGET_ICON_SIZE: Mutex<i32> = Mutex::new(14);
 /// Icon render style: `pure` | `badge` | `solid` (default `pure`).
@@ -104,21 +160,37 @@ static WIDGET_VALUE_GAP: Mutex<i32> = Mutex::new(2);
 const WS_POPUP: u32 = 0x8000_0000;
 const WS_CHILD: u32 = 0x4000_0000;
 const WS_SYSMENU: u32 = 0x0008_0000;
-const WS_VISIBLE: u32 = 0x1000_0000;
 const GWL_STYLE: i32 = -16;
 
 const WS_EX_TOOLWINDOW: u32 = 0x0000_0080;
 const WS_EX_LAYERED: u32 = 0x0008_0000;
+const WS_EX_NOACTIVATE: u32 = 0x0800_0000;
 
 const SWP_FRAMECHANGED: u32 = 0x0020;
 const SWP_NOZORDER: u32 = 0x0004;
+/// Do not let USER32 copy pixels from the old client rectangle when the
+/// native strip moves between taskbar layout states. The old rectangle can
+/// belong to a third-party monitor (or to a previous strip position), and
+/// copying it is how a one-frame ghost survives a reassert.
+const SWP_NOCOPYBITS: u32 = 0x0100;
+/// `HWND_TOP` brings the native child above Explorer's taskbar paint siblings.
+/// The measured rectangle is already clamped to the free taskbar band, so this
+/// only restores visibility after Explorer/DWM reorders the child tree.
+const HWND_TOP: isize = 0;
+const SW_HIDE: i32 = 0;
 const SW_SHOW: i32 = 5;
 
 const WM_DESTROY: u32 = 0x0002;
+const WM_SIZE: u32 = 0x0005;
+const WM_SETTINGCHANGE: u32 = 0x001A;
+const WM_DISPLAYCHANGE: u32 = 0x007E;
 const WM_PAINT: u32 = 0x000F;
+const WM_DPICHANGED: u32 = 0x02E0;
 const WM_ERASEBKGND: u32 = 0x0014;
-const WM_TIMER: u32 = 0x0113;
 const WM_COMMAND: u32 = 0x0111;
+const WM_APP_REASSERT: u32 = 0x8000 + 0x41;
+const WM_APP_REPAINT: u32 = 0x8000 + 0x42;
+const WM_APP_REPARENT: u32 = 0x8000 + 0x43;
 const WM_RBUTTONUP: u32 = 0x0205;
 const WM_NCHITTEST: u32 = 0x0084;
 const WM_MOUSEACTIVATE: u32 = 0x0021;
@@ -126,34 +198,35 @@ const HTCLIENT: isize = 1;
 const MA_NOACTIVATE: isize = 3;
 
 const SWP_NOACTIVATE: u32 = 0x0010;
-const SWP_NOSIZE: u32 = 0x0001;
-const SWP_NOMOVE: u32 = 0x0002;
-const LWA_COLORKEY: u32 = 0x0000_0001;
 const DT_SINGLELINE: u32 = 0x0020;
 const DT_VCENTER: u32 = 0x0004;
 const DT_LEFT: u32 = 0x0000;
 const DT_CENTER: u32 = 0x0001;
 const DT_RIGHT: u32 = 0x0002;
 const DT_NOPREFIX: u32 = 0x0800;
-const DT_END_ELLIPSIS: u32 = 0x8000;
-const WS_EX_TOPMOST: u32 = 0x0000_0008;
-
-// ── Hover tooltip (TASK-021 item 9) ─────────────────────────────────────────
-const WM_USER: u32 = 0x0400;
-const TTS_ALWAYSTIP: u32 = 0x0001;
-const TTS_NOPREFIX: u32 = 0x0002;
-const TTF_IDISHWND: u32 = 0x0001;
-const TTF_SUBCLASS: u32 = 0x0010;
-const TTM_ACTIVATE: u32 = WM_USER + 1;
-const TTM_ADDTOOLW: u32 = WM_USER + 50;
-const TTM_SETMAXTIPWIDTH: u32 = WM_USER + 24;
-const TTM_UPDATETIPTEXTW: u32 = WM_USER + 57;
-const ICC_WIN95_CLASSES: u32 = 0x0000_00FF;
-const CW_USEDEFAULT: i32 = 0x8000_0000u32 as i32;
 
 const TRANSPARENT_BK: i32 = 1;
-const REASSERT_TIMER_ID: usize = 1;
-const REASSERT_INTERVAL_MS: u32 = 1000;
+
+// Layered-window upload constants. The mini taskbar now uses a single
+// premultiplied-alpha surface rather than a colour-keyed child plus hit proxy.
+const ULW_ALPHA: u32 = 0x0000_0002;
+const AC_SRC_OVER: u8 = 0;
+const AC_SRC_ALPHA: u8 = 1;
+const DIB_RGB_COLORS: u32 = 0;
+const BI_RGB: u32 = 0;
+/// Geometry sampling is deliberately slow and off the window message thread.
+/// It is only used to notice taskbar/DPI/layout changes; content repainting is
+/// driven by data/settings changes instead of a heartbeat. A 250ms cadence is
+/// cheap on the disposable worker and closes the visible stale-frame window
+/// after a desktop switch or an Explorer taskbar relayout.
+const GEOMETRY_POLL_INTERVAL: Duration = Duration::from_millis(250);
+/// Pixel/theme sampling is more expensive than rectangle queries, so it keeps
+/// its original two-second cadence unless a desktop switch explicitly asks for
+/// an immediate refresh.
+const THEME_POLL_INTERVAL: Duration = Duration::from_millis(2000);
+
+const EVENT_SYSTEM_DESKTOPSWITCH: u32 = 0x0023;
+const WINEVENT_OUTOFCONTEXT: u32 = 0x0000;
 
 /// Gap kept between the strip and the task-button band beside it.
 const WIDGET_MARGIN_DIP: i32 = 8;
@@ -180,22 +253,6 @@ struct PaintStruct {
     rgb_reserved: [u8; 32],
 }
 
-/// `TOOLINFOW` (commctrl.h). Field order/types match the SDK struct exactly so
-/// `repr(C)` produces identical layout (including the implicit padding before
-/// `hwnd` on 64-bit) without a manual padding field.
-#[repr(C)]
-struct ToolInfoW {
-    cb_size: u32,
-    u_flags: u32,
-    hwnd: isize,
-    u_id: usize,
-    rect: Rect,
-    h_inst: isize,
-    lpsz_text: *mut u16,
-    l_param: isize,
-    lp_reserved: *mut c_void,
-}
-
 #[repr(C)]
 struct WndClassW {
     style: u32,
@@ -210,15 +267,25 @@ struct WndClassW {
     lpsz_class_name: *const u16,
 }
 
+type WinEventProc = unsafe extern "system" fn(
+    hook: isize,
+    event: u32,
+    hwnd: isize,
+    id_object: isize,
+    id_child: isize,
+    event_thread: u32,
+    event_time: u32,
+);
+
 #[link(name = "user32")]
 unsafe extern "system" {
     fn FindWindowW(class_name: *const u16, window_name: *const u16) -> isize;
     fn FindWindowExW(parent: isize, after: isize, class: *const u16, name: *const u16) -> isize;
-    fn GetClassNameW(hwnd: isize, class_name: *mut u16, max_count: i32) -> i32;
     fn SetParent(hwnd: isize, new_parent: isize) -> isize;
     fn GetParent(hwnd: isize) -> isize;
     fn SetWindowLongPtrW(hwnd: isize, index: i32, value: isize) -> isize;
     fn GetWindowRect(hwnd: isize, rect: *mut Rect) -> i32;
+    fn GetWindowThreadProcessId(hwnd: isize, process_id: *mut u32) -> u32;
     fn RegisterClassW(class: *const WndClassW) -> u16;
     fn CreateWindowExW(
         ex_style: u32,
@@ -237,27 +304,51 @@ unsafe extern "system" {
     fn DefWindowProcW(hwnd: isize, msg: u32, wparam: usize, lparam: isize) -> isize;
     fn BeginPaint(hwnd: isize, ps: *mut PaintStruct) -> isize;
     fn EndPaint(hwnd: isize, ps: *const PaintStruct) -> i32;
-    fn FillRect(hdc: isize, rect: *const Rect, brush: isize) -> i32;
     fn DrawTextW(hdc: isize, text: *const u16, count: i32, rect: *mut Rect, format: u32) -> i32;
     fn GetClientRect(hwnd: isize, rect: *mut Rect) -> i32;
     fn SetWindowPos(hwnd: isize, after: isize, x: i32, y: i32, w: i32, h: i32, flags: u32) -> i32;
-    fn SetTimer(hwnd: isize, id: usize, elapse: u32, func: *const c_void) -> usize;
-    fn KillTimer(hwnd: isize, id: usize) -> i32;
-    fn InvalidateRect(hwnd: isize, rect: *const Rect, erase: i32) -> i32;
+    fn PostMessageW(hwnd: isize, msg: u32, wparam: usize, lparam: isize) -> i32;
     fn IsWindow(hwnd: isize) -> i32;
+    fn IsWindowVisible(hwnd: isize) -> i32;
     fn GetDpiForWindow(hwnd: isize) -> u32;
     fn ScreenToClient(hwnd: isize, point: *mut Point) -> i32;
     fn DestroyWindow(hwnd: isize) -> i32;
     fn ShowWindow(hwnd: isize, cmd_show: i32) -> i32;
-    fn GetDC(hwnd: isize) -> isize;
-    fn ReleaseDC(hwnd: isize, hdc: isize) -> i32;
-    fn GetPixel(hdc: isize, x: i32, y: i32) -> u32;
-    fn SetLayeredWindowAttributes(hwnd: isize, color_key: u32, alpha: u8, flags: u32) -> i32;
-    fn SendMessageW(hwnd: isize, msg: u32, wparam: usize, lparam: isize) -> isize;
+    fn UpdateLayeredWindow(
+        hwnd: isize,
+        hdc_dst: isize,
+        ppt_dst: *const Point,
+        psize: *const Size,
+        hdc_src: isize,
+        ppt_src: *const Point,
+        cr_key: u32,
+        blend: *const BlendFunction,
+        flags: u32,
+    ) -> i32;
+    fn SetWinEventHook(
+        event_min: u32,
+        event_max: u32,
+        hmod_win_event_proc: isize,
+        lpfn_win_event_proc: Option<WinEventProc>,
+        id_process: u32,
+        id_thread: u32,
+        flags: u32,
+    ) -> isize;
+    fn UnhookWinEvent(hwin_event_hook: isize) -> i32;
 }
 
 #[link(name = "gdi32")]
 unsafe extern "system" {
+    fn CreateCompatibleDC(hdc: isize) -> isize;
+    fn DeleteDC(hdc: isize) -> i32;
+    fn CreateDIBSection(
+        hdc: isize,
+        bitmap_info: *const BitmapInfo,
+        usage: u32,
+        bits: *mut *mut c_void,
+        section: isize,
+        offset: u32,
+    ) -> isize;
     fn CreateFontW(
         height: i32,
         width: i32,
@@ -278,27 +369,11 @@ unsafe extern "system" {
     fn DeleteObject(obj: isize) -> i32;
     fn SetTextColor(hdc: isize, color: u32) -> u32;
     fn SetBkMode(hdc: isize, mode: i32) -> i32;
-    fn CreateSolidBrush(color: u32) -> isize;
 }
 
 #[link(name = "kernel32")]
 unsafe extern "system" {
     fn GetModuleHandleW(name: *const u16) -> isize;
-}
-
-/// Only used to make sure `tooltips_class32` is registered before we create
-/// the strip's hover tooltip — comctl32 v6 (already the default on Windows
-/// 10/11) does this automatically, but calling it explicitly costs nothing
-/// and removes the dependency on that default holding.
-#[repr(C)]
-struct InitCommonControlsExStruct {
-    dw_size: u32,
-    dw_icc: u32,
-}
-
-#[link(name = "comctl32")]
-unsafe extern "system" {
-    fn InitCommonControlsEx(icc: *const InitCommonControlsExStruct) -> i32;
 }
 
 const HKEY_CURRENT_USER: isize = -2147483647; // 0x80000001, sign-extended to isize
@@ -361,11 +436,167 @@ pub(crate) fn taskbar_is_light() -> bool {
     ok == 0 && data != 0
 }
 
+/// Returns the current Windows virtual-desktop identifier when Explorer has
+/// published it. The value is a stable 16-byte GUID in the same per-user
+/// registry location used by the shell. It is read only from the disposable
+/// geometry worker as a fallback for systems that do not deliver
+/// `EVENT_SYSTEM_DESKTOPSWITCH` to an out-of-context hook (or deliver it after
+/// the first frame has already been composed).
+fn current_virtual_desktop() -> Option<[u8; 16]> {
+    let sub_key = wide(r"Software\Microsoft\Windows\CurrentVersion\Explorer\VirtualDesktops");
+    let value_name = wide("CurrentVirtualDesktop");
+    let mut hkey: isize = 0;
+    let opened = unsafe {
+        RegOpenKeyExW(
+            HKEY_CURRENT_USER,
+            sub_key.as_ptr(),
+            0,
+            KEY_READ,
+            &raw mut hkey,
+        )
+    };
+    if opened != 0 {
+        return None;
+    }
+    let mut data = [0u8; 16];
+    let mut size = data.len() as u32;
+    let mut value_type: u32 = 0;
+    let queried = unsafe {
+        RegQueryValueExW(
+            hkey,
+            value_name.as_ptr(),
+            std::ptr::null(),
+            &raw mut value_type,
+            data.as_mut_ptr(),
+            &raw mut size,
+        )
+    };
+    unsafe { RegCloseKey(hkey) };
+    if queried == 0 && size >= data.len() as u32 {
+        Some(data)
+    } else {
+        None
+    }
+}
+
 #[repr(C)]
 #[derive(Default)]
 struct Point {
     x: i32,
     y: i32,
+}
+
+#[repr(C)]
+#[derive(Default, Clone, Copy)]
+struct Size {
+    cx: i32,
+    cy: i32,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct BlendFunction {
+    blend_op: u8,
+    blend_flags: u8,
+    source_constant_alpha: u8,
+    alpha_format: u8,
+}
+
+#[repr(C)]
+#[derive(Default, Clone, Copy)]
+struct BitmapInfoHeader {
+    size: u32,
+    width: i32,
+    height: i32,
+    planes: u16,
+    bit_count: u16,
+    compression: u32,
+    size_image: u32,
+    x_pels_per_meter: i32,
+    y_pels_per_meter: i32,
+    clr_used: u32,
+    clr_important: u32,
+}
+
+#[repr(C)]
+#[derive(Default, Clone, Copy)]
+struct BitmapInfo {
+    header: BitmapInfoHeader,
+    colors: [u32; 3],
+}
+
+/// A short-lived top-down 32-bit canvas used by the single taskbar window.
+/// Keeping it on the owner thread makes the layered upload atomic with the
+/// corresponding `SetWindowPos` and eliminates the old click proxy window.
+struct SurfaceCanvas {
+    hdc: isize,
+    bitmap: isize,
+    previous: isize,
+    bits: usize,
+    len: usize,
+}
+
+impl SurfaceCanvas {
+    fn new(width: i32, height: i32) -> Option<Self> {
+        if width <= 0 || height <= 0 {
+            return None;
+        }
+        let info = BitmapInfo {
+            header: BitmapInfoHeader {
+                size: std::mem::size_of::<BitmapInfoHeader>() as u32,
+                width,
+                // Negative height means top-down; row 0 is the first visible
+                // taskbar row and no coordinate inversion is needed.
+                height: -height,
+                planes: 1,
+                bit_count: 32,
+                compression: BI_RGB,
+                ..BitmapInfoHeader::default()
+            },
+            colors: [0; 3],
+        };
+        let hdc = unsafe { CreateCompatibleDC(0) };
+        if hdc == 0 {
+            return None;
+        }
+        let mut bits: *mut c_void = std::ptr::null_mut();
+        let bitmap = unsafe {
+            CreateDIBSection(
+                hdc,
+                &raw const info,
+                DIB_RGB_COLORS,
+                &raw mut bits,
+                0,
+                0,
+            )
+        };
+        if bitmap == 0 || bits.is_null() {
+            unsafe { DeleteDC(hdc) };
+            return None;
+        }
+        let previous = unsafe { SelectObject(hdc, bitmap) };
+        Some(Self {
+            hdc,
+            bitmap,
+            previous,
+            bits: bits as usize,
+            len: (width as usize).saturating_mul(height as usize).saturating_mul(4),
+        })
+    }
+
+    fn pixels(&self) -> &mut [u8] {
+        unsafe { std::slice::from_raw_parts_mut(self.bits as *mut u8, self.len) }
+    }
+}
+
+impl Drop for SurfaceCanvas {
+    fn drop(&mut self) {
+        unsafe {
+            SelectObject(self.hdc, self.previous);
+            DeleteObject(self.bitmap);
+            DeleteDC(self.hdc);
+        }
+    }
 }
 
 fn wide(s: &str) -> Vec<u16> {
@@ -378,12 +609,6 @@ pub fn set_entries(entries: Vec<StripLine>) {
         *guard = entries;
     }
     repaint();
-    // TASK-021 item 9: this is the same beat `tray_bridge::update_tray_icon_and_tooltip`
-    // rebuilds the tray icon's tooltip on (it calls `set_entries` immediately
-    // before composing that tooltip) — not the 1s `REASSERT_TIMER_ID` tick,
-    // which only repositions/repaints already-resolved data and would otherwise
-    // reload `Settings` from disk once a second for no new information.
-    update_tooltip_text();
 }
 
 /// The font family the strip paints with, falling back the same way `paint`
@@ -423,6 +648,119 @@ fn taskbar() -> isize {
     unsafe { FindWindowW(wide("Shell_TrayWnd").as_ptr(), std::ptr::null()) }
 }
 
+/// Inspect one window from a foreign process and, when it is a compact
+/// taskbar-aligned surface, fold its right edge into the left-side anchor.
+///
+/// TrafficMonitor's current Win11 implementation keeps a visible dialog below
+/// a hidden owner window, so looking only at direct `Shell_TrayWnd` children is
+/// not enough. This predicate deliberately rejects full-screen/normal app
+/// windows: only surfaces no taller than twice the taskbar are eligible. It is
+/// called by the disposable geometry worker, never by the owner thread.
+fn consider_foreign_taskbar_window(
+    hwnd: isize,
+    parent: isize,
+    parent_process: u32,
+    own_widget: isize,
+    screen_parent: &Rect,
+    parent_rect: &Rect,
+    taskbar_height: i32,
+    minimum_height: i32,
+    rightmost: &mut Option<i32>,
+) {
+    if hwnd == 0 || hwnd == own_widget || unsafe { IsWindowVisible(hwnd) } == 0 {
+        return;
+    }
+    let mut child_process = 0u32;
+    unsafe { GetWindowThreadProcessId(hwnd, &raw mut child_process) };
+    if child_process == 0 || child_process == parent_process {
+        return;
+    }
+
+    let mut rect = Rect::default();
+    if unsafe { GetWindowRect(hwnd, &raw mut rect) } == 0 {
+        return;
+    }
+    let candidate_height = rect.bottom - rect.top;
+    if candidate_height < minimum_height || candidate_height > taskbar_height.saturating_mul(2) {
+        return;
+    }
+    let vertical_overlap = (rect.bottom.min(screen_parent.bottom)
+        - rect.top.max(screen_parent.top))
+        .max(0);
+    if vertical_overlap < minimum_height {
+        return;
+    }
+
+    let mut left_point = Point {
+        x: rect.left,
+        y: rect.top,
+    };
+    let mut right_point = Point {
+        x: rect.right,
+        y: rect.top,
+    };
+    if unsafe { ScreenToClient(parent, &raw mut left_point) } == 0 {
+        return;
+    }
+    if unsafe { ScreenToClient(parent, &raw mut right_point) } == 0 {
+        return;
+    }
+    if left_point.x < parent_rect.left || right_point.x > parent_rect.right {
+        return;
+    }
+    *rightmost = Some(rightmost.unwrap_or(right_point.x).max(right_point.x));
+}
+
+/// Walk a bounded depth of a window's descendants. A bounded walk is enough
+/// for taskbar monitors (owner → dialog → optional child) and prevents an
+/// unrelated application's deep control tree from becoming a heartbeat cost.
+fn scan_foreign_taskbar_descendants(
+    root: isize,
+    parent: isize,
+    parent_process: u32,
+    own_widget: isize,
+    screen_parent: &Rect,
+    parent_rect: &Rect,
+    taskbar_height: i32,
+    minimum_height: i32,
+    depth: u8,
+    rightmost: &mut Option<i32>,
+) {
+    let mut after = 0;
+    loop {
+        let child = unsafe { FindWindowExW(root, after, std::ptr::null(), std::ptr::null()) };
+        if child == 0 {
+            break;
+        }
+        after = child;
+        consider_foreign_taskbar_window(
+            child,
+            parent,
+            parent_process,
+            own_widget,
+            screen_parent,
+            parent_rect,
+            taskbar_height,
+            minimum_height,
+            rightmost,
+        );
+        if depth > 0 {
+            scan_foreign_taskbar_descendants(
+                child,
+                parent,
+                parent_process,
+                own_widget,
+                screen_parent,
+                parent_rect,
+                taskbar_height,
+                minimum_height,
+                depth - 1,
+                rightmost,
+            );
+        }
+    }
+}
+
 /// Where the native taskbar child should sit, returned in screen coordinates
 /// so the same geometry can be measured before and after `SetParent`.
 ///
@@ -430,22 +768,11 @@ fn taskbar() -> isize {
 /// i.e. flush against the actual notification area, not merely "somewhere
 /// left of the task buttons".
 ///
-/// Two earlier anchors were tried and both landed on top of something:
-///
-/// - Left of the task-button band (`ReBarWindow32`) put it directly in space
-///   a third-party monitor (TrafficMonitor) already paints into — and that
-///   tool draws its stats straight onto taskbar pixels wider than its own
-///   window bounds, so it silently overwrites whatever else is there.
-/// - Right of `ReBarWindow32` still landed under running-app icons on this
-///   machine: Windows 11 lays icons out via a separate XAML/composition
-///   surface (`Windows.UI.Composition.DesktopWindowContentBridge`) that does
-///   not reliably match `ReBarWindow32`'s own reported bounds, so "past the
-///   rebar's right edge" was not actually past the visible icons.
-///
-/// `TrayNotifyWnd`'s left edge held steady across repeated measurements
-/// where `ReBarWindow32`'s right edge visibly did not, so it is the more
-/// trustworthy boundary to anchor from. `ReBarWindow32`'s edge is still used
-/// as a clamp (never render on top of it) rather than as the primary anchor.
+/// `TrayNotifyWnd` is the stable Win11 anchor used by TrafficMonitor.  The
+/// left-side mode additionally discovers visible *foreign-process* taskbar
+/// children (for example TrafficMonitor) and starts after their actual bounds;
+/// it does not depend on Explorer's private XAML class names.  Explorer's
+/// composition surface is never treated as an authoritative pixel rectangle.
 fn target_rect(parent: isize, position: WidgetPosition) -> Option<(i32, i32, i32, i32)> {
     let mut screen_parent = Rect::default();
     if unsafe { GetWindowRect(parent, &raw mut screen_parent) } == 0 {
@@ -490,68 +817,59 @@ fn target_rect(parent: isize, position: WidgetPosition) -> Option<(i32, i32, i32
         Some(point.x)
     };
 
-    // Third-party taskbar monitors (notably TrafficMonitor) often draw their
-    // text directly into the taskbar, beyond the bounds of their helper
-    // window. Put our readout after the rightmost non-system child in the
-    // left taskbar zone so those direct-to-screen paints cannot overwrite it.
-    let status_component_right = || -> Option<i32> {
-        let rebar_left = local_edge("ReBarWindow32", false).unwrap_or(parent_rect.right);
-        let mut after = 0;
+    // Third-party taskbar monitors (notably TrafficMonitor) can paint through
+    // an owned dialog rather than a direct Shell_TrayWnd child. Walk a small
+    // descendant depth below the taskbar and below top-level owners so the
+    // anchor follows the actual occupied surface without hard-coded Explorer
+    // class names. This runs only on the disposable geometry worker.
+    let foreign_component_right = || -> Option<i32> {
+        let mut parent_process = 0u32;
+        unsafe { GetWindowThreadProcessId(parent, &raw mut parent_process) };
+        let own_widget = WIDGET_HWND.lock().map(|guard| *guard).unwrap_or(0);
+        let minimum_height = (height / 2).max(1);
         let mut rightmost = None;
+
+        // First cover Shell_TrayWnd descendants. This also catches monitors
+        // that Explorer exposes directly in its child/owner chain.
+        scan_foreign_taskbar_descendants(
+            parent,
+            parent,
+            parent_process,
+            own_widget,
+            &screen_parent,
+            &parent_rect,
+            taskbar_height,
+            minimum_height,
+            4,
+            &mut rightmost,
+        );
+
+        // TrafficMonitor's Win11 dialog is owned by a hidden top-level window,
+        // so it is not guaranteed to appear as a direct taskbar child. A depth
+        // two scan of top-level owners finds that dialog while rejecting large
+        // app windows through the size/vertical-overlap predicate above.
+        let mut after = 0;
         loop {
-            let child = unsafe { FindWindowExW(parent, after, std::ptr::null(), std::ptr::null()) };
-            if child == 0 {
+            let top = unsafe { FindWindowExW(0, after, std::ptr::null(), std::ptr::null()) };
+            if top == 0 {
                 break;
             }
-            after = child;
-
-            let mut class_buf = [0u16; 128];
-            let class_len =
-                unsafe { GetClassNameW(child, class_buf.as_mut_ptr(), class_buf.len() as i32) };
-            let class = String::from_utf16_lossy(&class_buf[..class_len.max(0) as usize]);
-            if matches!(
-                class.as_str(),
-                "Shell_TrayWnd"
-                    | "TrayNotifyWnd"
-                    | "ReBarWindow32"
-                    | "Start"
-                    | "TrayDummySearchControl"
-                    | "Windows.UI.Core.CoreWindow"
-                    | "Windows.UI.Composition.DesktopWindowContentBridge"
-                    | "CodexBarTaskbarWidget"
-                    | "CodexBarTaskbarWidgetHit"
-            ) {
+            after = top;
+            if top == parent {
                 continue;
             }
-
-            let mut rect = Rect::default();
-            if unsafe { GetWindowRect(child, &raw mut rect) } == 0 {
-                continue;
-            }
-            if rect.right <= rect.left || rect.bottom <= rect.top {
-                continue;
-            }
-            let mut right_point = Point {
-                x: rect.right,
-                y: rect.top,
-            };
-            if unsafe { ScreenToClient(parent, &raw mut right_point) } == 0 {
-                continue;
-            }
-            let mut left_point = Point {
-                x: rect.left,
-                y: rect.top,
-            };
-            if unsafe { ScreenToClient(parent, &raw mut left_point) } == 0 {
-                continue;
-            }
-            let vertically_aligned = rect.bottom > screen_parent.top
-                && rect.top < screen_parent.bottom
-                && rect.bottom - rect.top >= height / 2;
-            if vertically_aligned && left_point.x >= parent_rect.left && right_point.x <= rebar_left
-            {
-                rightmost = Some(rightmost.unwrap_or(right_point.x).max(right_point.x));
-            }
+            scan_foreign_taskbar_descendants(
+                top,
+                parent,
+                parent_process,
+                own_widget,
+                &screen_parent,
+                &parent_rect,
+                taskbar_height,
+                minimum_height,
+                2,
+                &mut rightmost,
+            );
         }
         rightmost
     };
@@ -565,16 +883,14 @@ fn target_rect(parent: isize, position: WidgetPosition) -> Option<(i32, i32, i32
             .unwrap_or(parent_rect.right - margin)
     };
     let x = if position == WidgetPosition::Left {
-        // Prefer the space immediately after an existing taskbar status
-        // component. Fall back to the physical left edge only when Explorer
-        // exposes no such child window.
-        status_component_right()
+        // Prefer the space immediately after an existing foreign status
+        // component. Fall back to the taskbar's own left inset when there is
+        // no such component.
+        foreign_component_right()
             .map(|right| right + margin)
             .unwrap_or(margin)
     } else {
-        let band_right = local_edge("ReBarWindow32", true);
-        let left_bound = band_right.map(|r| r + margin).unwrap_or(margin);
-        (right_bound - desired_width).max(left_bound)
+        (right_bound - desired_width).max(parent_rect.left + margin)
     };
     let width = (right_bound - x).min(desired_width);
     if width <= 0 {
@@ -606,6 +922,45 @@ fn current_position() -> WidgetPosition {
         .unwrap_or(WidgetPosition::Notification)
 }
 
+fn current_widget_theme() -> codexbar::settings::ThemePreference {
+    WIDGET_THEME
+        .lock()
+        .map(|theme| *theme)
+        .unwrap_or(codexbar::settings::ThemePreference::Auto)
+}
+
+fn resolve_widget_theme(theme: codexbar::settings::ThemePreference, system_is_light: bool) -> bool {
+    match theme {
+        codexbar::settings::ThemePreference::Light => true,
+        codexbar::settings::ThemePreference::Dark => false,
+        codexbar::settings::ThemePreference::Auto => system_is_light,
+    }
+}
+
+/// Returns the effective text contrast without touching the registry. The
+/// worker refreshes `TASKBAR_THEME_CACHE`; an explicit Appearance override is
+/// therefore visible on the very next paint rather than after the next poll.
+fn widget_is_light() -> bool {
+    resolve_widget_theme(current_widget_theme(), cached_taskbar_is_light())
+}
+
+/// Applies the global Appearance → Theme preference to the native strip.
+///
+/// This is intentionally one shared setting rather than a second taskbar-only
+/// theme switch. `Auto` follows the actual Windows taskbar; explicit values
+/// choose the text contrast while the alpha surface keeps the strip visually
+/// merged with Explorer's surface.
+pub fn set_theme(theme: codexbar::settings::ThemePreference) {
+    if let Ok(mut current) = WIDGET_THEME.lock() {
+        *current = theme;
+    }
+    // Theme changes often arrive with no geometry notification. Ask the
+    // disposable worker to refresh the system brightness cache, then repaint
+    // the alpha surface on the owner thread.
+    THEME_REFRESH_REQUESTED.store(true, Ordering::Release);
+    repaint();
+}
+
 /// Updates placement immediately when the Settings page changes it.
 pub fn set_position(position: &str) {
     let next = if position.eq_ignore_ascii_case("left") {
@@ -617,9 +972,9 @@ pub fn set_position(position: &str) {
         *current = next;
     }
     let hwnd = WIDGET_HWND.lock().map(|g| *g).unwrap_or(0);
-    if hwnd != 0 && unsafe { IsWindow(hwnd) } != 0 {
-        reassert(hwnd);
-        unsafe { InvalidateRect(hwnd, std::ptr::null(), 1) };
+    if hwnd != 0 {
+        request_reassert(hwnd);
+        request_repaint(hwnd);
     }
 }
 
@@ -629,8 +984,8 @@ pub fn set_font_weight(weight: u16) {
         *current = value;
     }
     let hwnd = WIDGET_HWND.lock().map(|g| *g).unwrap_or(0);
-    if hwnd != 0 && unsafe { IsWindow(hwnd) } != 0 {
-        unsafe { InvalidateRect(hwnd, std::ptr::null(), 1) };
+    if hwnd != 0 {
+        request_repaint(hwnd);
     }
 }
 
@@ -653,9 +1008,9 @@ pub fn set_width(width: u16) {
         *current = i32::from(width.clamp(96, 240));
     }
     let hwnd = WIDGET_HWND.lock().map(|g| *g).unwrap_or(0);
-    if hwnd != 0 && unsafe { IsWindow(hwnd) } != 0 {
-        reassert(hwnd);
-        unsafe { InvalidateRect(hwnd, std::ptr::null(), 1) };
+    if hwnd != 0 {
+        request_reassert(hwnd);
+        request_repaint(hwnd);
     }
 }
 
@@ -710,8 +1065,20 @@ pub fn set_icon_style(style: &str) {
 
 fn repaint() {
     let hwnd = WIDGET_HWND.lock().map(|g| *g).unwrap_or(0);
-    if hwnd != 0 && unsafe { IsWindow(hwnd) } != 0 {
-        unsafe { InvalidateRect(hwnd, std::ptr::null(), 1) };
+    if hwnd != 0 {
+        request_repaint(hwnd);
+    }
+}
+
+/// Post a coalesced repaint to the owner thread. Keeping the window operation
+/// on that thread avoids mixing settings/refresh workers with a cross-thread
+/// native child.
+fn request_repaint(hwnd: isize) {
+    if hwnd == 0 || REPAINT_PENDING.swap(true, Ordering::AcqRel) {
+        return;
+    }
+    if unsafe { PostMessageW(hwnd, WM_APP_REPAINT, 0, 0) } == 0 {
+        REPAINT_PENDING.store(false, Ordering::Release);
     }
 }
 
@@ -724,282 +1091,345 @@ pub fn set_content(content: &str) {
         *current = value.to_string();
     }
     let hwnd = WIDGET_HWND.lock().map(|g| *g).unwrap_or(0);
-    if hwnd != 0 && unsafe { IsWindow(hwnd) } != 0 {
-        unsafe { InvalidateRect(hwnd, std::ptr::null(), 1) };
+    if hwnd != 0 {
+        request_repaint(hwnd);
     }
 }
 
-// ── Hover tooltip (TASK-021 item 9) ─────────────────────────────────────────
-//
-// Standard Win32 `tooltips_class32` control with `TTF_SUBCLASS`: the tooltip
-// control subclasses the target window itself (installs its own WNDPROC ahead
-// of ours, then chains to ours for anything it doesn't need) and drives its
-// own `WM_MOUSEMOVE`/hover/leave bookkeeping — no manual `TrackMouseEvent`
-// state machine needed here, and it does not disturb the strip's or the hit
-// proxy's own message handling below.
-//
-// The tool is registered against BOTH `hwnd` and the hit proxy, mirroring the
-// same "either one might be the window that actually receives the mouse"
-// uncertainty the file already documents for right-click handling — cheaper
-// to cover both than to guess.
-
-/// Composes the same tooltip text the notification-area tray icon shows.
-///
-/// Reuses `tray_bridge::build_tooltip` (made `pub(crate)` there for this)
-/// rather than re-deriving which window/provider resolves and how a balance
-/// or error line prints — see that function's own doc comment for why a
-/// second copy of those rules would eventually drift from the original.
-fn compose_tooltip_text() -> String {
-    let Some(app) = APP_HANDLE.get() else {
-        return "CodexBar Desktop".to_string();
-    };
-    let settings = codexbar::settings::Settings::load();
-    let snapshots = app
-        .try_state::<Mutex<crate::state::AppState>>()
-        .map(|state| state.lock().unwrap().provider_cache.clone())
-        .unwrap_or_default();
-    crate::tray_bridge::build_tooltip(&snapshots, settings.ui_language, &settings.taskbar_tooltip_entries)
-}
-
-/// Registers one tool (`target`) on the shared tooltip control, with the
-/// current composed text as its initial content.
-fn add_tooltip_tool(tooltip: isize, target: isize, instance: isize) {
-    if target == 0 {
+/// Ask the widget's owning thread to apply the most recently sampled geometry.
+/// `SetWindowPos` is intentionally never called directly by settings/refresh
+/// worker threads: Windows sends window-position messages to the owner thread
+/// synchronously, which can deadlock when that thread is painting.
+fn request_reassert(hwnd: isize) {
+    if hwnd == 0 || REASSERT_PENDING.swap(true, Ordering::AcqRel) {
         return;
     }
-    let mut text = wide(&compose_tooltip_text());
-    let mut info = ToolInfoW {
-        cb_size: std::mem::size_of::<ToolInfoW>() as u32,
-        u_flags: TTF_SUBCLASS | TTF_IDISHWND,
-        hwnd: target,
-        u_id: target as usize,
-        rect: Rect::default(),
-        h_inst: instance,
-        lpsz_text: text.as_mut_ptr(),
-        l_param: 0,
-        lp_reserved: std::ptr::null_mut(),
-    };
-    unsafe { SendMessageW(tooltip, TTM_ADDTOOLW, 0, &raw mut info as isize) };
+    if unsafe { PostMessageW(hwnd, WM_APP_REASSERT, 0, 0) } == 0 {
+        REASSERT_PENDING.store(false, Ordering::Release);
+    }
 }
 
-/// A hidden top-level window, created solely to own the tooltip.
-///
-/// **This is the fix for "the tooltip never appears".** `CreateWindowExW`'s
-/// ninth argument is the *owner* for a `WS_POPUP` window, and an owner has to
-/// be a top-level window. The strip's HWND is not one: it is a child inside
-/// **Explorer's** taskbar window tree, so Windows resolves the owner by walking
-/// up to its top-level ancestor — a window belonging to another process. A
-/// tooltip owned across a process boundary like that does not show.
-///
-/// Deliberately **not** `menu_host`'s window: that one is `HWND_MESSAGE`, and a
-/// message-only window is not a valid owner for a visible popup either. It is
-/// also part of M3, which has not been seen on screen yet, and a fix for one
-/// unverified thing should not be able to break another.
-///
-/// `WS_EX_TOOLWINDOW` and never shown, so it stays out of Alt-Tab and off the
-/// taskbar. Zero-sized because nothing ever paints it.
-fn tooltip_owner() -> isize {
-    static OWNER: Mutex<isize> = Mutex::new(0);
-    let Ok(mut guard) = OWNER.lock() else {
-        return 0;
-    };
-    if *guard != 0 && unsafe { IsWindow(*guard) } != 0 {
-        return *guard;
+fn take_pending_parent() -> Option<isize> {
+    PENDING_PARENT_HWND
+        .lock()
+        .ok()
+        .and_then(|mut pending| pending.take())
+}
+
+/// Queues a parent-window change for the widget's owner thread. `SetParent`
+/// and the accompanying style/Z-order changes are deliberately not executed
+/// from the geometry worker: doing so would make the child receive synchronous
+/// window messages on a thread that does not own its message pump.
+fn request_reparent(hwnd: isize, parent: isize) {
+    if hwnd == 0 {
+        return;
     }
-    let instance = unsafe { GetModuleHandleW(std::ptr::null()) };
-    // `static` is the class comctl32 guarantees is registered; the window is
-    // never shown, so its class behaviour is irrelevant beyond existing.
-    let class = wide("static");
-    let title = wide("");
-    let owner = unsafe {
-        CreateWindowExW(
-            WS_EX_TOOLWINDOW,
-            class.as_ptr(),
-            title.as_ptr(),
-            WS_POPUP,
+    if let Ok(mut pending) = PENDING_PARENT_HWND.lock() {
+        *pending = Some(parent);
+    }
+    if REPARENT_PENDING.swap(true, Ordering::AcqRel) {
+        return;
+    }
+    if unsafe { PostMessageW(hwnd, WM_APP_REPARENT, 0, 0) } == 0 {
+        REPARENT_PENDING.store(false, Ordering::Release);
+    }
+}
+
+/// The callback is intentionally tiny. WinEvent callbacks may run while the
+/// shell is in the middle of switching desktops; querying its window tree or
+/// moving a cross-process child here would reintroduce the freeze this module
+/// is designed to avoid. The owner thread consumes the posted messages,
+/// while the worker refreshes the system theme cache on its next pass.
+unsafe extern "system" fn desktop_switch_proc(
+    _hook: isize,
+    event: u32,
+    _hwnd: isize,
+    _id_object: isize,
+    _id_child: isize,
+    _event_thread: u32,
+    _event_time: u32,
+) {
+    if event != EVENT_SYSTEM_DESKTOPSWITCH {
+        return;
+    }
+    DESKTOP_SWITCH_PENDING.store(true, Ordering::Release);
+    THEME_REFRESH_REQUESTED.store(true, Ordering::Release);
+    let hwnd = WIDGET_HWND.lock().map(|guard| *guard).unwrap_or(0);
+    if hwnd != 0 {
+        request_reassert(hwnd);
+        request_repaint(hwnd);
+    }
+}
+
+fn install_desktop_switch_hook() {
+    if DESKTOP_SWITCH_HOOK.lock().map(|hook| *hook).unwrap_or(0) != 0 {
+        return;
+    }
+    let hook = unsafe {
+        SetWinEventHook(
+            EVENT_SYSTEM_DESKTOPSWITCH,
+            EVENT_SYSTEM_DESKTOPSWITCH,
+            0,
+            Some(desktop_switch_proc),
             0,
             0,
-            0,
-            0,
-            0,
-            0,
-            instance,
-            std::ptr::null_mut(),
+            WINEVENT_OUTOFCONTEXT,
         )
     };
-    if owner == 0 {
-        tracing::warn!(
-            error = %std::io::Error::last_os_error(),
-            "taskbar widget: hidden tooltip owner creation failed"
-        );
-        return 0;
-    }
-    *guard = owner;
-    owner
-}
-
-/// Creates the strip's own hover tooltip and attaches it to both the painter
-/// window and the hit proxy. Called once per `start()`, mirroring how
-/// `WIDGET_HWND`/`HIT_PROXY_HWND` are themselves created once per `start()`.
-fn create_tooltip(hwnd: isize, proxy: isize) {
-    if TOOLTIP_HWND.lock().map(|g| *g).unwrap_or(0) != 0 {
-        return;
-    }
-    let icc = InitCommonControlsExStruct {
-        dw_size: std::mem::size_of::<InitCommonControlsExStruct>() as u32,
-        dw_icc: ICC_WIN95_CLASSES,
-    };
-    unsafe { InitCommonControlsEx(&raw const icc) };
-
-    let instance = unsafe { GetModuleHandleW(std::ptr::null()) };
-    let tooltip = unsafe {
-        CreateWindowExW(
-            WS_EX_TOPMOST,
-            wide("tooltips_class32").as_ptr(),
-            std::ptr::null(),
-            WS_POPUP | TTS_ALWAYSTIP | TTS_NOPREFIX,
-            CW_USEDEFAULT,
-            CW_USEDEFAULT,
-            CW_USEDEFAULT,
-            CW_USEDEFAULT,
-            // The hidden top-level owner, NOT `hwnd` — see `tooltip_owner`.
-            tooltip_owner(),
-            0,
-            instance,
-            std::ptr::null_mut(),
-        )
-    };
-    if tooltip == 0 {
-        tracing::warn!(
-            error = %std::io::Error::last_os_error(),
-            "taskbar widget: tooltip window creation failed"
-        );
-        return;
-    }
-
-    add_tooltip_tool(tooltip, proxy, instance);
-    add_tooltip_tool(tooltip, hwnd, instance);
-    // The tooltip has never once been seen on screen, and everything cheap has
-    // already been ruled out, so log enough to tell the difference between "not
-    // created", "created but no tools" and "created, tools registered, still
-    // invisible" without another build.
-    tracing::info!(
-        tooltip = format!("{tooltip:#x}"),
-        owner = format!("{:#x}", tooltip_owner()),
-        strip = format!("{hwnd:#x}"),
-        proxy = format!("{proxy:#x}"),
-        chars = compose_tooltip_text().chars().count(),
-        "taskbar widget: hover tooltip created"
-    );
-    unsafe {
-        // Enables word-wrap sizing and, with it, honors the "\n" line breaks
-        // `build_tooltip` joins its rows with — a plain tooltip otherwise
-        // renders embedded newlines as garbage rather than separate lines.
-        SendMessageW(tooltip, TTM_SETMAXTIPWIDTH, 0, 320);
-        SendMessageW(tooltip, TTM_ACTIVATE, 1, 0);
-    }
-
-    if let Ok(mut guard) = TOOLTIP_HWND.lock() {
-        *guard = tooltip;
+    if hook == 0 {
+        tracing::warn!("taskbar widget: could not install virtual-desktop switch hook");
+    } else if let Ok(mut guard) = DESKTOP_SWITCH_HOOK.lock() {
+        *guard = hook;
     }
 }
 
-/// Pushes fresh tooltip text to both registered tools. Called from
-/// `set_entries`, the same call site `tray_bridge` uses right before it
-/// rebuilds the tray icon's own tooltip — see that call site's comment for why
-/// this beat was chosen over the 1-second reassert timer.
-fn update_tooltip_text() {
-    let tooltip = TOOLTIP_HWND.lock().map(|g| *g).unwrap_or(0);
-    if tooltip == 0 || unsafe { IsWindow(tooltip) } == 0 {
-        return;
+fn uninstall_desktop_switch_hook() {
+    let hook = DESKTOP_SWITCH_HOOK
+        .lock()
+        .map(|mut guard| std::mem::take(&mut *guard))
+        .unwrap_or(0);
+    if hook != 0 {
+        unsafe { UnhookWinEvent(hook) };
     }
-    let text = compose_tooltip_text();
-    let proxy = HIT_PROXY_HWND.lock().map(|g| *g).unwrap_or(0);
-    let widget = WIDGET_HWND.lock().map(|g| *g).unwrap_or(0);
-    for target in [proxy, widget] {
-        if target == 0 {
-            continue;
+}
+
+/// Samples Explorer's child tree away from the widget window procedure. If a
+/// shell/XAML call stalls, only this disposable worker is affected; the Tauri
+/// and taskbar message loops keep running. A changed result is posted back to
+/// the widget thread, which performs only the short cached `SetWindowPos`.
+fn start_geometry_worker(hwnd: isize, parent: isize) {
+    let generation = GEOMETRY_GENERATION.fetch_add(1, Ordering::SeqCst) + 1;
+    thread::spawn(move || {
+        let mut last_theme_sample: Option<Instant> = None;
+        let mut observed_parent = parent;
+        let mut last_virtual_desktop = current_virtual_desktop();
+        loop {
+            if GEOMETRY_GENERATION.load(Ordering::SeqCst) != generation
+                || unsafe { IsWindow(hwnd) } == 0
+            {
+                break;
+            }
+
+            // Some Windows builds do not deliver EVENT_SYSTEM_DESKTOPSWITCH
+            // reliably to an out-of-context hook. Comparing Explorer's
+            // published virtual-desktop GUID keeps the detection on the same
+            // disposable worker and still invalidates the old composed frame
+            // before the next visible paint.
+            let virtual_desktop = current_virtual_desktop();
+            let desktop_changed = match (last_virtual_desktop, virtual_desktop) {
+                (Some(previous), Some(current)) => previous != current,
+                _ => false,
+            };
+            if virtual_desktop.is_some() {
+                last_virtual_desktop = virtual_desktop;
+            }
+            if desktop_changed {
+                DESKTOP_SWITCH_PENDING.store(true, Ordering::Release);
+                THEME_REFRESH_REQUESTED.store(true, Ordering::Release);
+                request_reassert(hwnd);
+                request_repaint(hwnd);
+            }
+
+            let current_parent = taskbar();
+            let attached_parent = CURRENT_PARENT_HWND.lock().map(|guard| *guard).unwrap_or(0);
+            let actual_parent = unsafe { GetParent(hwnd) };
+            if current_parent == 0 {
+                // Keep the hidden child in its last valid parent while Explorer
+                // is between taskbar hosts. Comparing `actual_parent` here
+                // would enqueue the same hide message every 250ms because the
+                // zero-parent transition intentionally keeps the child owned.
+                if attached_parent != 0 {
+                    request_reparent(hwnd, 0);
+                }
+                last_theme_sample = None;
+                thread::sleep(GEOMETRY_POLL_INTERVAL);
+                continue;
+            }
+            if current_parent != observed_parent
+                || current_parent != attached_parent
+                || actual_parent != current_parent
+            {
+                observed_parent = current_parent;
+                last_theme_sample = None;
+                request_reparent(hwnd, current_parent);
+                thread::sleep(GEOMETRY_POLL_INTERVAL);
+                continue;
+            }
+
+            if let Some(screen) = target_rect(current_parent, current_position()) {
+                let theme_due = THEME_REFRESH_REQUESTED.swap(false, Ordering::AcqRel)
+                    || last_theme_sample
+                        .map(|sampled| sampled.elapsed() >= THEME_POLL_INTERVAL)
+                        .unwrap_or(true);
+                if theme_due {
+                    let light = taskbar_is_light();
+                    if let Ok(mut cache) = TASKBAR_THEME_CACHE.lock() {
+                        *cache = Some(light);
+                    }
+                    last_theme_sample = Some(Instant::now());
+                }
+                if let Some(child) = child_rect(current_parent, screen) {
+                    let dpi = unsafe { GetDpiForWindow(current_parent) }.max(96);
+                    let next = Geometry {
+                        screen,
+                        child,
+                        parent: current_parent,
+                        dpi,
+                        desktop: virtual_desktop,
+                    };
+                    let changed = GEOMETRY_CACHE
+                        .lock()
+                        .map(|mut cache| {
+                            let changed = cache.as_ref() != Some(&next);
+                            *cache = Some(next);
+                            changed
+                        })
+                        .unwrap_or(false);
+                    // A desktop switch can preserve both the rectangle and
+                    // the visible bit while discarding the composed child
+                    // surface. The WinEvent callback posts an immediate
+                    // reassert; this visibility check is the fallback for
+                    // shells that do not deliver that event to our process.
+                    let hidden = unsafe { IsWindowVisible(hwnd) } == 0;
+                    if changed || hidden {
+                        request_reassert(hwnd);
+                    }
+                }
+            }
+
+            thread::sleep(GEOMETRY_POLL_INTERVAL);
         }
-        let mut wide_text = wide(&text);
-        let mut info = ToolInfoW {
-            cb_size: std::mem::size_of::<ToolInfoW>() as u32,
-            u_flags: TTF_SUBCLASS | TTF_IDISHWND,
-            hwnd: target,
-            u_id: target as usize,
-            rect: Rect::default(),
-            h_inst: 0,
-            lpsz_text: wide_text.as_mut_ptr(),
-            l_param: 0,
-            lp_reserved: std::ptr::null_mut(),
-        };
-        unsafe { SendMessageW(tooltip, TTM_UPDATETIPTEXTW, 0, &raw mut info as isize) };
+    });
+}
+
+/// Applies a newly discovered Shell_TrayWnd parent on the widget's owner
+/// thread. Keeping the single surface hidden until the worker measures a rectangle is
+/// important: a reparented child otherwise keeps its old taskbar-relative
+/// coordinates for one paint and can briefly cover a different monitor.
+fn apply_parent(hwnd: isize, parent: isize) {
+    if parent == 0 {
+        unsafe {
+            if IsWindow(hwnd) != 0 {
+                ShowWindow(hwnd, SW_HIDE);
+            }
+        }
+        if let Ok(mut cache) = GEOMETRY_CACHE.lock() {
+            *cache = None;
+        }
+        if let Ok(mut cache) = TASKBAR_THEME_CACHE.lock() {
+            *cache = None;
+        }
+        if let Ok(mut current) = CURRENT_PARENT_HWND.lock() {
+            *current = 0;
+        }
+        return;
     }
+    if unsafe { IsWindow(parent) } == 0 || unsafe { IsWindow(hwnd) } == 0 {
+        return;
+    }
+
+    let current = unsafe { GetParent(hwnd) };
+    unsafe {
+        // Hide before SetParent so the old screen rectangle cannot be
+        // composited while Explorer is changing its child tree.
+        ShowWindow(hwnd, SW_HIDE);
+        if current != parent {
+            SetParent(hwnd, parent);
+            SetWindowLongPtrW(hwnd, GWL_STYLE, (WS_CHILD | WS_SYSMENU) as isize);
+        }
+    }
+
+    if unsafe { GetParent(hwnd) } != parent {
+        tracing::warn!(
+            "taskbar widget: reparent failed widget={hwnd:#x} expected_host={parent:#x}"
+        );
+        return;
+    }
+
+    // The old child coordinates belong to the old parent. A hidden 1×1
+    // placement makes the intermediate state deterministic; the worker will
+    // publish the real screen/client rectangle on its next pass.
+    unsafe {
+        SetWindowPos(hwnd, HWND_TOP, 0, 0, 1, 1, SWP_NOACTIVATE | SWP_NOCOPYBITS);
+    }
+    if let Ok(mut current_parent) = CURRENT_PARENT_HWND.lock() {
+        *current_parent = parent;
+    }
+    if let Ok(mut cache) = GEOMETRY_CACHE.lock() {
+        *cache = None;
+    }
+    if let Ok(mut cache) = TASKBAR_THEME_CACHE.lock() {
+        *cache = None;
+    }
+    THEME_REFRESH_REQUESTED.store(true, Ordering::Release);
+    tracing::info!("taskbar widget: reattached to Shell_TrayWnd host={parent:#x}");
 }
 
 fn reassert(hwnd: isize) {
-    let parent = taskbar();
-    if parent == 0 {
+    if DESKTOP_SWITCH_PENDING.swap(false, Ordering::AcqRel) {
+        unsafe {
+            // Do not publish the old taskbar-relative frame while
+            // DWM/Explorer is switching desktop surfaces. The geometry worker
+            // will repopulate the versioned cache, then call reassert again.
+            if hwnd != 0 && IsWindow(hwnd) != 0 {
+                ShowWindow(hwnd, SW_HIDE);
+            }
+        }
+        if let Ok(mut cache) = GEOMETRY_CACHE.lock() {
+            *cache = None;
+        }
+        if let Ok(mut cache) = TASKBAR_THEME_CACHE.lock() {
+            *cache = None;
+        }
         return;
     }
-    if let Some(rect) = target_rect(parent, current_position()) {
-        let (x, y, w, h) = child_rect(parent, rect).unwrap_or(rect);
-        let proxy = HIT_PROXY_HWND.lock().map(|g| *g).unwrap_or(0);
-        unsafe {
-            SetWindowPos(hwnd, 0, x, y, w, h, SWP_NOACTIVATE | SWP_NOZORDER);
-            if proxy != 0 && IsWindow(proxy) != 0 {
-                SetWindowPos(proxy, hwnd, x, y, w, h, SWP_NOACTIVATE);
-            }
-        }
-    } else {
-        // Geometry unknown this tick — keep the existing position and only
-        // reassert topmost order until Explorer exposes valid geometry again.
-        unsafe {
-            SetWindowPos(
-                hwnd,
-                0,
-                0,
-                0,
-                0,
-                0,
-                SWP_NOACTIVATE | SWP_NOZORDER | SWP_NOMOVE | SWP_NOSIZE,
-            )
-        };
+    let Some(geometry) = GEOMETRY_CACHE.lock().ok().and_then(|cache| *cache) else {
+        return;
+    };
+    if hwnd == 0 || unsafe { IsWindow(hwnd) } == 0 {
+        return;
     }
+    if unsafe { GetParent(hwnd) } != geometry.parent {
+        // The worker has observed a different Explorer host.  Do not apply a
+        // rectangle belonging to the previous host; the next pass will queue
+        // the reparent operation and publish a new generation.
+        return;
+    }
+    let (x, y, w, h) = geometry.child;
+    unsafe {
+        SetWindowPos(
+            hwnd,
+            HWND_TOP,
+            x,
+            y,
+            w,
+            h,
+            // This handler runs on the widget's owning thread. A synchronous
+            // move keeps the widget and the Explorer taskbar in one committed
+            // layout state instead of leaving an asynchronous old rectangle
+            // visible for one or more paints. Do not suppress Z-order here:
+            // Explorer may put its composition surface above a child while a
+            // virtual desktop is changing, which hides or partially replaces
+            // the strip until the next taskbar redraw.
+            SWP_NOACTIVATE | SWP_NOCOPYBITS,
+        );
+        // Visibility is published only after one measured anchor. There is no
+        // second proxy whose stale rectangle could cover the newly rendered
+        // surface.
+        ShowWindow(hwnd, SW_SHOW);
+    }
+    // Render and upload after the position is committed. The upload is
+    // premultiplied-alpha and therefore cannot retain a previous rectangle or
+    // a guessed background colour.
+    render_surface(hwnd);
 }
 
-fn taskbar_background_color(light: bool) -> u32 {
-    let parent = taskbar();
-    if parent != 0 {
-        let mut parent_screen = Rect::default();
-        let mut widget_screen = Rect::default();
-        if unsafe { GetWindowRect(parent, &raw mut parent_screen) } != 0
-            && unsafe {
-                GetWindowRect(
-                    WIDGET_HWND.lock().map(|g| *g).unwrap_or(0),
-                    &raw mut widget_screen,
-                )
-            } != 0
-        {
-            let sample_x = if widget_screen.left > parent_screen.left + 2 {
-                widget_screen.left - 2
-            } else {
-                (widget_screen.right + 2).min(parent_screen.right - 1)
-            };
-            let sample_y = (parent_screen.top + parent_screen.bottom) / 2;
-            // Sample the real desktop surface, not Shell_TrayWnd's client DC;
-            // Explorer's XAML taskbar background is otherwise reported as
-            // white even when the visible acrylic surface is tinted.
-            let hdc = unsafe { GetDC(0) };
-            if hdc != 0 {
-                let color = unsafe { GetPixel(hdc, sample_x, sample_y) };
-                unsafe { ReleaseDC(0, hdc) };
-                if color != 0xFFFF_FFFF {
-                    return color;
-                }
-            }
-        }
-    }
-    if light { 0x00E9_EFEE } else { 0x0020_2020 }
+fn cached_taskbar_is_light() -> bool {
+    TASKBAR_THEME_CACHE
+        .lock()
+        .ok()
+        .and_then(|cache| *cache)
+        .unwrap_or(false)
 }
 
 unsafe extern "system" fn wnd_proc(hwnd: isize, msg: u32, wparam: usize, lparam: isize) -> isize {
@@ -1007,44 +1437,9 @@ unsafe extern "system" fn wnd_proc(hwnd: isize, msg: u32, wparam: usize, lparam:
         // Painting is fully covered by WM_PAINT; letting the default proc
         // erase first only produces a flash of the class brush.
         WM_ERASEBKGND => 1,
-        WM_PAINT => {
-            unsafe { paint(hwnd) };
-            0
-        }
-        WM_TIMER if wparam == REASSERT_TIMER_ID => {
-            reassert(hwnd);
-            unsafe { InvalidateRect(hwnd, std::ptr::null(), 0) };
-            0
-        }
-        WM_NCHITTEST => HTCLIENT,
-        WM_MOUSEACTIVATE => MA_NOACTIVATE,
-        WM_RBUTTONUP => {
-            crate::taskbar_context_menu::show(hwnd, crate::taskbar_context_menu::MenuSurface::Strip);
-            0
-        }
-        WM_COMMAND => {
-            crate::taskbar_context_menu::handle_command(wparam & 0xffff);
-            0
-        }
-        WM_DESTROY => {
-            unsafe { KillTimer(hwnd, REASSERT_TIMER_ID) };
-            if let Ok(mut guard) = WIDGET_HWND.lock() {
-                *guard = 0;
-            }
-            0
-        }
-        _ => unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) },
-    }
-}
-
-unsafe extern "system" fn hit_proxy_proc(
-    hwnd: isize,
-    msg: u32,
-    wparam: usize,
-    lparam: isize,
-) -> isize {
-    match msg {
-        WM_ERASEBKGND => 1,
+        // Layered windows are presented with `UpdateLayeredWindow`; WM_PAINT
+        // is only validated so an Explorer invalidate cannot trigger a second
+        // renderer with a different theme/geometry snapshot.
         WM_PAINT => {
             let mut ps = PaintStruct {
                 hdc: 0,
@@ -1060,10 +1455,52 @@ unsafe extern "system" fn hit_proxy_proc(
             }
             0
         }
+        WM_APP_REPAINT => {
+            REPAINT_PENDING.store(false, Ordering::Release);
+            render_surface(hwnd);
+            0
+        }
+        WM_APP_REPARENT => {
+            if let Some(parent) = take_pending_parent() {
+                apply_parent(hwnd, parent);
+            }
+            // A worker update can race the owner-thread handler. Clear the
+            // coalescing bit only after consuming the pending value, then
+            // immediately schedule the newest value if one arrived meanwhile.
+            REPARENT_PENDING.store(false, Ordering::Release);
+            if let Some(parent) = PENDING_PARENT_HWND.lock().ok().and_then(|pending| *pending) {
+                request_reparent(hwnd, parent);
+            }
+            0
+        }
+        WM_SETTINGCHANGE | WM_DISPLAYCHANGE | WM_DPICHANGED => {
+            // Theme/DPI/display changes invalidate the cached system brightness
+            // and the layered bitmap. No screen pixels are sampled here.
+            THEME_REFRESH_REQUESTED.store(true, Ordering::Release);
+            request_reassert(hwnd);
+            request_repaint(hwnd);
+            0
+        }
+        WM_SIZE => {
+            request_reassert(hwnd);
+            request_repaint(hwnd);
+            0
+        }
+        // Geometry changes are posted by the background worker. Keeping this
+        // work out of a heartbeat timer prevents Explorer layout probes and
+        // full repaints from running once a second on the window thread.
+        WM_APP_REASSERT => {
+            REASSERT_PENDING.store(false, Ordering::Release);
+            reassert(hwnd);
+            0
+        }
         WM_NCHITTEST => HTCLIENT,
         WM_MOUSEACTIVATE => MA_NOACTIVATE,
         WM_RBUTTONUP => {
-            crate::taskbar_context_menu::show(hwnd, crate::taskbar_context_menu::MenuSurface::Strip);
+            crate::taskbar_context_menu::show(
+                hwnd,
+                crate::taskbar_context_menu::MenuSurface::Strip,
+            );
             0
         }
         WM_COMMAND => {
@@ -1071,7 +1508,19 @@ unsafe extern "system" fn hit_proxy_proc(
             0
         }
         WM_DESTROY => {
-            if let Ok(mut guard) = HIT_PROXY_HWND.lock() {
+            GEOMETRY_GENERATION.fetch_add(1, Ordering::SeqCst);
+            REPAINT_PENDING.store(false, Ordering::Release);
+            REASSERT_PENDING.store(false, Ordering::Release);
+            REPARENT_PENDING.store(false, Ordering::Release);
+            THEME_REFRESH_REQUESTED.store(false, Ordering::Release);
+            DESKTOP_SWITCH_PENDING.store(false, Ordering::Release);
+            if let Ok(mut pending) = PENDING_PARENT_HWND.lock() {
+                *pending = None;
+            }
+            if let Ok(mut parent) = CURRENT_PARENT_HWND.lock() {
+                *parent = 0;
+            }
+            if let Ok(mut guard) = WIDGET_HWND.lock() {
                 *guard = 0;
             }
             0
@@ -1124,40 +1573,37 @@ fn cell_rects(client: &Rect, count: usize, pad: i32) -> Vec<Rect> {
         .collect()
 }
 
-unsafe fn paint(hwnd: isize) {
-    let mut ps = PaintStruct {
-        hdc: 0,
-        f_erase: 0,
-        rc_paint: Rect::default(),
-        f_restore: 0,
-        f_inc_update: 0,
-        rgb_reserved: [0; 32],
-    };
-    let hdc = unsafe { BeginPaint(hwnd, &raw mut ps) };
-    tracing::debug!("taskbar widget: paint hdc={hdc:#x}");
-    if hdc == 0 {
+fn render_surface(hwnd: isize) {
+    let mut client = Rect::default();
+    if unsafe { GetClientRect(hwnd, &raw mut client) } == 0 {
         return;
     }
+    let width = (client.right - client.left).max(0);
+    let height = (client.bottom - client.top).max(0);
+    let Some(canvas) = SurfaceCanvas::new(width, height) else {
+        tracing::warn!("taskbar widget: could not allocate {width}x{height} alpha surface");
+        return;
+    };
+    let hdc = canvas.hdc;
+    tracing::debug!("taskbar widget: render surface hdc={hdc:#x} size={width}x{height}");
 
-    let mut client = Rect::default();
-    unsafe { GetClientRect(hwnd, &raw mut client) };
 
-    let light = taskbar_is_light();
+    let light = widget_is_light();
     let text = if light {
         0x003A_3A3Au32
     } else {
         0x00FF_FFFFu32
     };
-    // Use the adjacent taskbar pixel as both the temporary GDI canvas and the
-    // color key. Antialiased glyph edges therefore blend with Explorer's real
-    // surface instead of producing magenta fringes or an opaque rectangle.
-    let background = taskbar_background_color(light);
-    let brush = unsafe { CreateSolidBrush(background) };
-    unsafe {
-        FillRect(hdc, &raw const client, brush);
-        DeleteObject(brush);
-        SetLayeredWindowAttributes(hwnd, background, 0, LWA_COLORKEY);
-    }
+    // This nominal colour is used only for muted-tag contrast.  The canvas
+    // itself remains transparent; DWM supplies the real taskbar background.
+    let background = if cached_taskbar_is_light() {
+        0x00E9_EFEE
+    } else {
+        0x0020_2020
+    };
+    // Clear before either renderer so a Direct2D failure cannot expose bytes
+    // from a previous provider frame through the layered surface.
+    canvas.pixels().fill(0);
 
     let dpi = unsafe { GetDpiForWindow(hwnd) };
     let dpi = if dpi == 0 { 96 } else { dpi };
@@ -1168,11 +1614,17 @@ unsafe fn paint(hwnd: isize) {
         .map(|weight| *weight)
         .unwrap_or(400) as f32;
     let family = widget_font_family();
-    let icon_size_px = ((WIDGET_ICON_SIZE.lock().map(|s| *s).unwrap_or(14) * dpi as i32) as f32) / 96.0;
-    let icon_gap_px = ((WIDGET_ICON_GAP.lock().map(|s| *s).unwrap_or(5) * dpi as i32) as f32) / 96.0;
-    let value_gap_px = ((WIDGET_VALUE_GAP.lock().map(|s| *s).unwrap_or(2) * dpi as i32) as f32) / 96.0;
+    let icon_size_px =
+        ((WIDGET_ICON_SIZE.lock().map(|s| *s).unwrap_or(14) * dpi as i32) as f32) / 96.0;
+    let icon_gap_px =
+        ((WIDGET_ICON_GAP.lock().map(|s| *s).unwrap_or(5) * dpi as i32) as f32) / 96.0;
+    let value_gap_px =
+        ((WIDGET_VALUE_GAP.lock().map(|s| *s).unwrap_or(2) * dpi as i32) as f32) / 96.0;
     let icon_style = crate::taskbar_icons::IconStyle::parse(
-        &WIDGET_ICON_STYLE.lock().map(|s| s.clone()).unwrap_or_else(|_| "pure".to_string()),
+        &WIDGET_ICON_STYLE
+            .lock()
+            .map(|s| s.clone())
+            .unwrap_or_else(|_| "pure".to_string()),
     );
 
     let entries = LINES.lock().map(|g| g.clone()).unwrap_or_default();
@@ -1218,7 +1670,7 @@ unsafe fn paint(hwnd: isize) {
             }),
         })
         .collect();
-    let drawn = crate::taskbar_text::draw_strip_cells(
+    let drawn = crate::taskbar_text::draw_strip_cells_premultiplied(
         hdc,
         to_win_rect(&client),
         &cells,
@@ -1242,7 +1694,19 @@ unsafe fn paint(hwnd: isize) {
         let font_height = -((font_size * dpi as i32) / 96);
         let font = unsafe {
             CreateFontW(
-                font_height, 0, 0, 0, font_weight as i32, 0, 0, 0, 1, 0, 0, 4, 0,
+                font_height,
+                0,
+                0,
+                0,
+                font_weight as i32,
+                0,
+                0,
+                0,
+                1,
+                0,
+                0,
+                4,
+                0,
                 wide(&family).as_ptr(),
             )
         };
@@ -1251,14 +1715,21 @@ unsafe fn paint(hwnd: isize) {
             SetBkMode(hdc, TRANSPARENT_BK);
             SetTextColor(hdc, text);
         }
-        let format = align | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX | DT_END_ELLIPSIS;
+        // DrawTextW clips to the supplied cell rectangle by default. Do not
+        // use DT_END_ELLIPSIS here: DirectWrite can fail transiently during a
+        // taskbar/DPI transition, and the fallback must obey the same hard
+        // boundary instead of reintroducing the intermittent `...` that the
+        // native renderer intentionally removed.
+        let format = align | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX;
         for (line, rect) in visible.iter().zip(line_rects.iter()) {
             let mut r = *rect;
-            // GDI has one text colour per DC, so the fallback prints the tag and
-            // value inline; the glyph goes in front only when there is no icon.
-            let body = match (line.icon_provider_id.is_some(), line.mark) {
-                (false, Some(mark)) => format!("{} {} {}", mark.glyph, line.tag, line.value),
-                _ => format!("{} {}", line.tag, line.value).trim().to_string(),
+            // GDI has one text colour per DC, so the fallback prints the mark,
+            // tag and value inline.  Including the mark even when an official
+            // SVG exists keeps the degraded frame identifiable instead of
+            // showing a misleading text-only cell.
+            let body = match line.mark {
+                Some(mark) => format!("{} {} {}", mark.glyph, line.tag, line.value),
+                None => format!("{} {}", line.tag, line.value).trim().to_string(),
             };
             let wide_text = wide(&body);
             unsafe { DrawTextW(hdc, wide_text.as_ptr(), -1, &raw mut r, format) };
@@ -1267,10 +1738,39 @@ unsafe fn paint(hwnd: isize) {
             SelectObject(hdc, previous);
             DeleteObject(font);
         }
+        // GDI does not preserve alpha in a DIB section.  Promote only pixels
+        // it actually touched; untouched pixels stay alpha zero and continue
+        // to reveal Explorer's taskbar surface.
+        for pixel in canvas.pixels().chunks_exact_mut(4) {
+            if pixel[0] != 0 || pixel[1] != 0 || pixel[2] != 0 {
+                pixel[3] = 0xFF;
+            }
+        }
     }
 
-    unsafe {
-        EndPaint(hwnd, &raw const ps);
+    let size = Size { cx: width, cy: height };
+    let source = Point::default();
+    let blend = BlendFunction {
+        blend_op: AC_SRC_OVER,
+        blend_flags: 0,
+        source_constant_alpha: 0xFF,
+        alpha_format: AC_SRC_ALPHA,
+    };
+    let uploaded = unsafe {
+        UpdateLayeredWindow(
+            hwnd,
+            0,
+            std::ptr::null(),
+            &raw const size,
+            canvas.hdc,
+            &raw const source,
+            0,
+            &raw const blend,
+            ULW_ALPHA,
+        )
+    };
+    if uploaded == 0 {
+        tracing::warn!("taskbar widget: UpdateLayeredWindow failed; keeping last frame");
     }
 }
 
@@ -1279,6 +1779,7 @@ unsafe fn paint(hwnd: isize) {
 /// a convenience surface and must not take the app down with it.
 pub fn install() {
     let settings = codexbar::settings::Settings::load();
+    set_theme(settings.theme);
     set_position(&settings.taskbar_widget_position);
     set_font_weight(settings.taskbar_widget_font_weight);
     set_content(&settings.taskbar_widget_content);
@@ -1325,7 +1826,10 @@ pub(crate) fn set_enabled(enabled: bool) {
         return;
     };
     let app = app.clone();
-    if app.run_on_main_thread(move || apply_enabled(enabled)).is_err() {
+    if app
+        .run_on_main_thread(move || apply_enabled(enabled))
+        .is_err()
+    {
         tracing::warn!("taskbar widget toggle could not reach the main thread");
     }
 }
@@ -1342,23 +1846,24 @@ fn apply_enabled(enabled: bool) {
 
 /// Destroys the strip window, if any. Safe to call when it doesn't exist.
 pub fn stop() {
-    // Destroyed first: the tooltip control subclassed both target windows
-    // (`TTF_SUBCLASS`), and tearing it down before its subclassed targets are
-    // themselves destroyed lets its own `WM_NCDESTROY` handling un-subclass
-    // them cleanly.
-    let tooltip = TOOLTIP_HWND.lock().map(|g| *g).unwrap_or(0);
-    if tooltip != 0 && unsafe { IsWindow(tooltip) } != 0 {
-        unsafe { DestroyWindow(tooltip) };
+    GEOMETRY_GENERATION.fetch_add(1, Ordering::SeqCst);
+    REPAINT_PENDING.store(false, Ordering::Release);
+    REASSERT_PENDING.store(false, Ordering::Release);
+    REPARENT_PENDING.store(false, Ordering::Release);
+    THEME_REFRESH_REQUESTED.store(false, Ordering::Release);
+    DESKTOP_SWITCH_PENDING.store(false, Ordering::Release);
+    uninstall_desktop_switch_hook();
+    if let Ok(mut pending) = PENDING_PARENT_HWND.lock() {
+        *pending = None;
     }
-    if let Ok(mut guard) = TOOLTIP_HWND.lock() {
-        *guard = 0;
+    if let Ok(mut parent) = CURRENT_PARENT_HWND.lock() {
+        *parent = 0;
     }
-    let proxy = HIT_PROXY_HWND.lock().map(|g| *g).unwrap_or(0);
-    if proxy != 0 && unsafe { IsWindow(proxy) } != 0 {
-        unsafe { DestroyWindow(proxy) };
+    if let Ok(mut cache) = TASKBAR_THEME_CACHE.lock() {
+        *cache = None;
     }
-    if let Ok(mut guard) = HIT_PROXY_HWND.lock() {
-        *guard = 0;
+    if let Ok(mut cache) = GEOMETRY_CACHE.lock() {
+        *cache = None;
     }
     let hwnd = WIDGET_HWND.lock().map(|g| *g).unwrap_or(0);
     if hwnd != 0 && unsafe { IsWindow(hwnd) } != 0 {
@@ -1367,6 +1872,40 @@ pub fn stop() {
     if let Ok(mut guard) = WIDGET_HWND.lock() {
         *guard = 0;
     }
+}
+
+/// Computes a safe first rectangle without walking Explorer's child tree. The
+/// detailed anchor is filled in by the background geometry worker after the
+/// window has been created.
+fn fallback_screen_rect(parent: isize, position: WidgetPosition) -> Option<ScreenRect> {
+    let mut screen_parent = Rect::default();
+    let mut client = Rect::default();
+    if unsafe { GetWindowRect(parent, &raw mut screen_parent) } == 0
+        || unsafe { GetClientRect(parent, &raw mut client) } == 0
+    {
+        return None;
+    }
+    let taskbar_height = client.bottom - client.top;
+    if taskbar_height <= 0 {
+        return None;
+    }
+    let dpi = unsafe { GetDpiForWindow(parent) };
+    let dpi = if dpi == 0 { 96 } else { dpi };
+    let scale = |dip: i32| (dip * dpi as i32) / 96;
+    let desired_width = scale(WIDGET_WIDTH.lock().map(|width| *width).unwrap_or(136));
+    let margin = scale(WIDGET_MARGIN_DIP);
+    let height = scale(WIDGET_HEIGHT_DIP).min(taskbar_height);
+    let right_bound = client.right - margin;
+    let x = match position {
+        WidgetPosition::Left => margin,
+        WidgetPosition::Notification => (right_bound - desired_width).max(margin),
+    };
+    let width = (right_bound - x).min(desired_width);
+    if width <= 0 {
+        return None;
+    }
+    let y = screen_parent.top + (taskbar_height - height) / 2;
+    Some((screen_parent.left + x, y, width, height))
 }
 
 /// Creates the strip. No-op when the taskbar cannot be found or the window
@@ -1385,7 +1924,6 @@ pub fn start() -> Result<(), String> {
     }
 
     let class_name = wide("CodexBarTaskbarWidget");
-    let hit_class_name = wide("CodexBarTaskbarWidgetHit");
     let instance = unsafe { GetModuleHandleW(std::ptr::null()) };
     let class = WndClassW {
         style: 0,
@@ -1402,30 +1940,18 @@ pub fn start() -> Result<(), String> {
     // A duplicate registration is fine — only the first call in a process
     // succeeds and the class persists.
     unsafe { RegisterClassW(&raw const class) };
-    let hit_class = WndClassW {
-        style: 0,
-        lpfn_wnd_proc: Some(hit_proxy_proc),
-        cb_cls_extra: 0,
-        cb_wnd_extra: 0,
-        h_instance: instance,
-        h_icon: 0,
-        h_cursor: 0,
-        hbr_background: 0,
-        lpsz_menu_name: std::ptr::null(),
-        lpsz_class_name: hit_class_name.as_ptr(),
-    };
-    unsafe { RegisterClassW(&raw const hit_class) };
-
     let screen_rect =
-        target_rect(parent, current_position()).ok_or("taskbar geometry unavailable")?;
+        fallback_screen_rect(parent, current_position()).ok_or("taskbar geometry unavailable")?;
     let (x, y, w, h) = child_rect(parent, screen_rect).unwrap_or(screen_rect);
 
     // Match TrafficMonitor: create a native popup first, then attach it to
     // Explorer's taskbar and convert it to a child window. Creating first is
-    // important for the cross-process SetParent path.
+    // important for the cross-process SetParent path. The first placement is
+    // deliberately a cheap rectangle; the detailed Explorer anchor is filled
+    // in by the background worker after the window exists.
     let hwnd = unsafe {
         CreateWindowExW(
-            WS_EX_TOOLWINDOW | WS_EX_LAYERED,
+            WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE | WS_EX_LAYERED,
             class_name.as_ptr(),
             wide("TokenBar Taskbar").as_ptr(),
             WS_POPUP | WS_SYSMENU,
@@ -1448,7 +1974,11 @@ pub fn start() -> Result<(), String> {
         SetWindowLongPtrW(
             hwnd,
             GWL_STYLE,
-            (WS_CHILD | WS_VISIBLE | WS_SYSMENU) as isize,
+            // Keep the fallback rectangle invisible. It is only a creation
+            // coordinate; showing it before Explorer's first measured anchor
+            // briefly places the strip at the taskbar's physical left edge,
+            // where it can cover TrafficMonitor or leave a stale frame behind.
+            (WS_CHILD | WS_SYSMENU) as isize,
         );
     }
     if unsafe { GetParent(hwnd) } != parent {
@@ -1466,55 +1996,30 @@ pub fn start() -> Result<(), String> {
             h,
             SWP_FRAMECHANGED | SWP_NOACTIVATE | SWP_NOZORDER,
         );
-        ShowWindow(hwnd, SW_SHOW);
-    }
-
-    let proxy = unsafe {
-        CreateWindowExW(
-            WS_EX_TOOLWINDOW,
-            hit_class_name.as_ptr(),
-            wide("TokenBar Taskbar Hit").as_ptr(),
-            WS_CHILD | WS_VISIBLE,
-            x,
-            y,
-            w,
-            h,
-            parent,
-            0,
-            instance,
-            std::ptr::null_mut(),
-        )
-    };
-    if proxy == 0 {
-        unsafe { DestroyWindow(hwnd) };
-        return Err("CreateWindowExW hit proxy failed".into());
-    }
-    unsafe {
-        SetWindowPos(proxy, hwnd, x, y, w, h, SWP_NOACTIVATE);
-        ShowWindow(proxy, SW_SHOW);
-    }
-    if let Ok(mut guard) = HIT_PROXY_HWND.lock() {
-        *guard = proxy;
     }
 
     if let Ok(mut guard) = WIDGET_HWND.lock() {
         *guard = hwnd;
     }
-    // TASK-021 item 9: hover tooltip, driven by the same data the
-    // notification-area tray icon's tooltip uses.
-    create_tooltip(hwnd, proxy);
-    unsafe {
-        SetTimer(
-            hwnd,
-            REASSERT_TIMER_ID,
-            REASSERT_INTERVAL_MS,
-            std::ptr::null(),
-        )
-    };
-    reassert(hwnd);
+    if let Ok(mut current_parent) = CURRENT_PARENT_HWND.lock() {
+        *current_parent = parent;
+    }
+    if let Ok(mut pending) = PENDING_PARENT_HWND.lock() {
+        *pending = None;
+    }
+    DESKTOP_SWITCH_PENDING.store(false, Ordering::Release);
+    // The creation rectangle above is intentionally not a valid cache entry:
+    // the worker must publish one Explorer-measured geometry before the surface
+    // becomes visible. This makes the first frame obey the same anchor rule as
+    // every later frame, including when TrafficMonitor is already present.
+    if let Ok(mut cache) = GEOMETRY_CACHE.lock() {
+        *cache = None;
+    }
+    install_desktop_switch_hook();
+    start_geometry_worker(hwnd, parent);
 
     tracing::info!(
-        "taskbar widget: hwnd={hwnd:#x} hit_proxy={proxy:#x} host={parent:#x} rect=({x},{y},{w},{h}) mode=native-child"
+        "taskbar widget: hwnd={hwnd:#x} host={parent:#x} rect=({x},{y},{w},{h}) mode=single-layered-child"
     );
     Ok(())
 }
@@ -1525,7 +2030,12 @@ mod tests {
 
     /// 200 wide, 40 tall, 6px padding — roughly the real strip at 96 DPI.
     fn client() -> Rect {
-        Rect { left: 0, top: 0, right: 200, bottom: 40 }
+        Rect {
+            left: 0,
+            top: 0,
+            right: 200,
+            bottom: 40,
+        }
     }
 
     /// One entry keeps the whole strip, exactly as before the grid existed.
@@ -1605,11 +2115,26 @@ mod tests {
         assert_eq!(cell_rects(&client(), 0, 6).len(), 1);
     }
 
+    #[test]
+    fn widget_theme_auto_uses_system_brightness_but_overrides_are_explicit() {
+        use codexbar::settings::ThemePreference;
+
+        assert!(resolve_widget_theme(ThemePreference::Auto, true));
+        assert!(!resolve_widget_theme(ThemePreference::Auto, false));
+        assert!(resolve_widget_theme(ThemePreference::Light, false));
+        assert!(!resolve_widget_theme(ThemePreference::Dark, true));
+    }
+
     /// A strip narrower than its own padding must not produce inverted rects,
     /// which DirectWrite would reject and leave the strip blank.
     #[test]
     fn degenerate_widths_stay_ordered() {
-        let narrow = Rect { left: 0, top: 0, right: 8, bottom: 40 };
+        let narrow = Rect {
+            left: 0,
+            top: 0,
+            right: 8,
+            bottom: 40,
+        };
         for r in cell_rects(&narrow, 4, 6) {
             assert!(r.right >= r.left, "inverted rect: {r:?}");
             assert!(r.bottom >= r.top, "inverted rect: {r:?}");

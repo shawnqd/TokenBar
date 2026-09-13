@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import type { ProviderDetail } from "../../../types/bridge";
-import { getProviderDetail } from "../../../lib/tauri";
+import { getProviderDetail, onProviderUpdated } from "../../../lib/tauri";
 import { useDispatchAction } from "../../../core/useCoreBridge";
 
 const iconProps = {
@@ -20,16 +20,6 @@ function IconRefresh() {
       <path d="M21 3v5h-5" />
       <path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16" />
       <path d="M3 21v-5h5" />
-    </svg>
-  );
-}
-
-function IconSwitch() {
-  return (
-    <svg {...iconProps}>
-      <circle cx="6" cy="5" r="2.1" />
-      <path d="M2.6 12.2c.4-2 1.7-3 3.4-3s3 1 3.4 3" />
-      <path d="M10.2 5.5h3.4M12 3.7v3.6" />
     </svg>
   );
 }
@@ -94,6 +84,31 @@ export default function ProviderActionBar({
     };
   }, [providerId, onDetail, onError]);
 
+  // Upstream parity: the detail pane re-reads the authoritative DTO when the
+  // backend emits `provider-updated`, so list rows (projection) and the
+  // detail card (get_provider_detail) can never drift after a background or
+  // tray-side refresh. A payload for another provider is ignored.
+  useEffect(() => {
+    let disposed = false;
+    const unlisten = onProviderUpdated((snapshot) => {
+      if (disposed) return;
+      if (snapshot.providerId && snapshot.providerId !== providerId) return;
+      void getProviderDetail(providerId)
+        .then((next) => {
+          if (disposed) return;
+          setDetail(next);
+          onDetail?.(next);
+        })
+        .catch(() => {
+          // Keep the last known detail; the next event retries.
+        });
+    });
+    return () => {
+      disposed = true;
+      void unlisten.then((fn) => fn()).catch(() => {});
+    };
+  }, [providerId, onDetail]);
+
   const run = async (work: () => Promise<void>) => {
     setBusy(true);
     onError(null);
@@ -128,29 +143,6 @@ export default function ProviderActionBar({
         <IconRefresh />
         刷新
       </button>
-      {detail?.loginFlow ? (
-        <button
-          type="button"
-          className="s5-pd-act"
-          disabled={busy}
-          onClick={() =>
-            void run(async () => {
-              await dispatch({
-                type: "triggerLogin",
-                target: { kind: "provider", providerId },
-              });
-              await dispatch({
-                type: "refresh",
-                target: { kind: "provider", providerId },
-                force: true,
-              });
-            })
-          }
-        >
-          <IconSwitch />
-          切换账号
-        </button>
-      ) : null}
       {detail?.dashboardUrl ? (
         <button
           type="button"

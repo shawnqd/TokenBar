@@ -200,17 +200,17 @@ pub(crate) fn show(hwnd: isize, surface: MenuSurface) {
     insert_strip_toggle(
         &mut items,
         &mut ids,
-        get_text(
-            settings.ui_language,
-            LocaleKey::TaskbarContextMenuShowStrip,
-        ),
+        get_text(settings.ui_language, LocaleKey::TaskbarContextMenuShowStrip),
         settings.taskbar_widget_enabled,
     );
 
     if let Ok(mut guard) = MENU_COMMAND_IDS.lock() {
         *guard = ids;
     }
-    tracing::info!(rows = items.len(), "strip menu: handing rows to the renderer");
+    tracing::info!(
+        rows = items.len(),
+        "strip menu: handing rows to the renderer"
+    );
     crate::taskbar_menu::show(hwnd, items);
 }
 
@@ -290,7 +290,8 @@ mod tests {
         drop_status_rows(&mut strip);
 
         assert!(
-            tray.iter().any(|entry| entry.disabled && !entry.is_separator),
+            tray.iter()
+                .any(|entry| entry.disabled && !entry.is_separator),
             "the fixture has a status row to drop, or this test proves nothing"
         );
         assert!(
@@ -390,7 +391,10 @@ mod tests {
         assert!(items[status].disabled);
 
         // Nothing from the old fixed list survives.
-        assert!(ids.iter().any(|id| id == "toggle_float_bar"), "float bar row");
+        assert!(
+            ids.iter().any(|id| id == "toggle_float_bar"),
+            "float bar row"
+        );
         assert!(ids.iter().any(|id| id == "about"), "about row");
     }
 

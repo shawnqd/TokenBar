@@ -214,8 +214,28 @@ function resolveUsageKnown(slot: BridgeWindowSlot, balanceCarrier: boolean): boo
   if (slot.usageKnown === false) return false;
   if (balanceCarrier) return false;
   if (slot.window.isInformational) return false;
+  if (isDateOnlyRenewalMarker(slot.window)) return false;
   if (slot.usageKnown === true) return true;
   return true;
+}
+
+/**
+ * Whether a window is a bare renewal date wearing a rate window's clothes.
+ *
+ * OpenCode/OpenCode Go parse an account renewal instant and ship it as a
+ * 0% extra window: no cycle kind, no cycle length, no text payload — the 0%
+ * is the parser's neutral default, not a reading, so there is no usage to
+ * know. The same shape with a description is a real grant (the ZCode one-time
+ * Start Plan ships its remaining amount as "剩余 …") and must stay visible.
+ */
+function isDateOnlyRenewalMarker(window: BridgeRateWindow): boolean {
+  return (
+    window.kind == null &&
+    window.windowMinutes == null &&
+    (window.usedPercent == null || window.usedPercent === 0) &&
+    window.resetsAt != null &&
+    !window.resetDescription?.trim()
+  );
 }
 
 function resolveDisplayKind(

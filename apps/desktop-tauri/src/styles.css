@@ -753,7 +753,8 @@ html {
 
 /* Portaled panel — fixed positioning computed from the trigger's
    bounding rect (see FormControls.tsx `Select`), so it floats above any
-   scrollable ancestor instead of being clipped by it.
+   scrollable ancestor instead of being clipped by it. The panel flips to the
+   trigger's top edge when the lower viewport cannot fit the list.
    Solid --dropdown-panel-bg (not translucent --panel-bg / backdrop-filter):
    a frosted panel over Settings rows was reading as "transparent" because
    the rows underneath stayed fully visible. */
@@ -774,10 +775,24 @@ html {
   transform-origin: top center;
   animation: dropdown-panel-in 120ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
 }
+.dropdown__panel--above {
+  transform-origin: bottom center;
+  animation-name: dropdown-panel-in-above;
+}
 @keyframes dropdown-panel-in {
   from {
     opacity: 0;
     transform: scale(0.96) translateY(-4px);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1) translateY(0);
+  }
+}
+@keyframes dropdown-panel-in-above {
+  from {
+    opacity: 0;
+    transform: scale(0.96) translateY(4px);
   }
   to {
     opacity: 1;
@@ -5641,32 +5656,37 @@ body:has(.menu-surface--popout) .popout-scale-shell,
    frontend frame owns the visible radius, border and shadow. Keeping these
    effects inside a small transparent gutter avoids the square Win32 frame
    that previously made Settings look flat and unrelated to the flyout. */
+:root:has(.settings-window-frame),
 html:has(.settings-window-frame),
-body:has(.settings-window-frame),
-body:has(.settings-window-frame) #root {
+body:has(.settings-window-frame) {
   width: 100%;
-  /* The detached native window is the viewport. Keep this chain definite so
-     the flex body and its scroll panel can resolve their percentage sizes on
-     the first WebView2 paint. The content panes below still own scrolling;
-     this does not make the window content-driven. */
   height: 100%;
   min-height: 0;
-  background: transparent;
+  margin: 0;
+  padding: 0;
   overflow: hidden;
+  background: transparent !important;
+}
+
+html:has(.settings-window-frame) #root,
+body:has(.settings-window-frame) #root {
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+  background: transparent !important;
 }
 
 .settings-surface--full.settings-window-frame {
   position: relative;
   width: 100%;
   height: 100%;
-  /* Transparent gutter that holds the drop shadow. 24px clears the
-     native-menu-style shadow everywhere (it reaches ~6px down and ~3px
-     sideways), so the falloff fades out well inside the window edge.
-     Unlike the tray flyout (which is anchored to the tray and deliberately has
-     no shadow at all), a Settings window floats on the desktop and needs the
-     separation. */
-  padding: 24px;
-  background: transparent;
+  box-sizing: border-box;
+  overflow: hidden;
+  padding: 12px;
+  background: transparent !important;
 }
 
 /* Settings drop shadow, matched to the native taskbar context menu
@@ -5680,7 +5700,7 @@ body:has(.settings-window-frame) #root {
 .settings-window-frame::before {
   content: "";
   position: absolute;
-  inset: 24px;
+  inset: 12px;
   border-radius: var(--window-radius);
   box-shadow: 0 3px 3px rgba(0, 0, 0, 0.32);
   pointer-events: none;
@@ -5770,7 +5790,7 @@ body:has(.settings-window-frame) #root {
   box-shadow: 0 3px 3px rgba(0, 0, 0, 0.15);
 }
 
-/* Detached Settings lives inside `.settings-window-frame` with a 24px gutter.
+/* Detached Settings lives inside `.settings-window-frame` with a 12px gutter.
    Never use 100vh here — that forces the card to be taller than the frame's
    content box and was one source of the "whole window stretch" flash. */
 .settings {
@@ -7624,17 +7644,20 @@ body:has(.tray-panel-reveal) #root {
 /* This file is imported after tray-v5.css. The flyout HWND is the card;
    DWM draws Modern Acrylic, rounded corners and the drop shadow. */
 
-.tray-panel-reveal .tray-panel {
+.tray-panel-reveal .tray-panel,
+.s5-tray-flyout .tray-panel {
   --flyout-inset-x: 14px;
   --flyout-inset-y: 12px;
 }
 
-.tray-panel-reveal .flyout-body {
+.tray-panel-reveal .flyout-body,
+.s5-tray-flyout .flyout-body {
   padding: 12px 14px !important;
   gap: 0 !important;
 }
 
-.tray-panel-reveal .provider-grid {
+.tray-panel-reveal .provider-grid,
+.s5-tray-flyout .provider-grid {
   display: flex;
   flex-direction: row;
   align-items: center;
@@ -7645,17 +7668,20 @@ body:has(.tray-panel-reveal) #root {
   border-bottom: 1px solid var(--flyout-divider) !important;
 }
 
-[data-theme="light"] .tray-panel-reveal .provider-grid {
+[data-theme="light"] .tray-panel-reveal .provider-grid,
+[data-theme="light"] .s5-tray-flyout .provider-grid {
   border: none !important;
   border-bottom: 1px solid var(--flyout-divider) !important;
 }
 
-.tray-panel-reveal .flyout-footer {
+.tray-panel-reveal .flyout-footer,
+.s5-tray-flyout .flyout-footer {
   /* Keep in lockstep with tray-v5.css .flyout-footer (2/4 slim rows). */
   padding: 2px 4px !important;
 }
 
-.tray-panel-reveal .footer-row {
+.tray-panel-reveal .footer-row,
+.s5-tray-flyout .footer-row {
   padding: 0 8px !important;
   margin: 0 !important;
   appearance: none;
@@ -7667,7 +7693,8 @@ body:has(.tray-panel-reveal) #root {
 /* Legacy `.tray-card { padding: 10px 12px }` in this file loads after
    tray-v5.css and was adding a second inset only on the card stack —
    grid and footer stayed at 5px, content sat at 17px. */
-.tray-panel-reveal .tray-card {
+.tray-panel-reveal .tray-card,
+.s5-tray-flyout .tray-card {
   padding: 0 !important;
   margin: 0 !important;
   border: none !important;
@@ -7677,14 +7704,19 @@ body:has(.tray-panel-reveal) #root {
   cursor: default;
 }
 .tray-panel-reveal .tray-card:hover,
-.tray-panel-reveal .tray-card--selected {
+.tray-panel-reveal .tray-card--selected,
+.s5-tray-flyout .tray-card:hover,
+.s5-tray-flyout .tray-card--selected {
   background: transparent !important;
   border: none !important;
 }
 
 .tray-panel-reveal .provider-grid__item,
 .tray-panel-reveal .provider-grid--sparse .provider-grid__item,
-.tray-panel-reveal .provider-grid--compact .provider-grid__item {
+.tray-panel-reveal .provider-grid--compact .provider-grid__item,
+.s5-tray-flyout .provider-grid__item,
+.s5-tray-flyout .provider-grid--sparse .provider-grid__item,
+.s5-tray-flyout .provider-grid--compact .provider-grid__item {
   width: 34px;
   height: 34px;
   min-width: 34px;

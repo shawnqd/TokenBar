@@ -94,8 +94,14 @@ mod tests {
         // Full falloff must fit: offset + ~2*sigma. sigma ~= 3.46 for three
         // box passes at r=3, so extent ~= 3 + 14 < 22.
         assert!(SHADOW_GUTTER_DIP >= SHADOW_OFFSET_Y_DIP + 2 * 5);
-        assert_eq!(TASKBAR_GAP_DIP, 6, "menu and flyout share the card-to-taskbar gap");
-        assert_eq!(BACKDROP_BLUR_DIP, 14, "menu and flyout share the frost kernel");
+        assert_eq!(
+            TASKBAR_GAP_DIP, 6,
+            "menu and flyout share the card-to-taskbar gap"
+        );
+        assert_eq!(
+            BACKDROP_BLUR_DIP, 14,
+            "menu and flyout share the frost kernel"
+        );
         assert_eq!(backdrop_tint(false), 0.78);
         assert_eq!(backdrop_tint(true), 0.82);
     }

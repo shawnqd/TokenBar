@@ -88,10 +88,10 @@ export function CookieFileImport() {
           </svg>
         </span>
         <div>
-          <h3>批量导入网页会话</h3>
+          <h3>批量导入浏览器 Cookie</h3>
           <p>
             {/* TODO(lane-s-i18n) */}
-            不是第四种登录。和每家里的「捕获 / 粘贴」一样，都是网页会话，只是一次写给好几家。
+            这是手动 Cookie 来源，和每家里的「粘贴」相同，只是一次写给好几家；不会打开新的浏览器。
           </p>
         </div>
       </div>

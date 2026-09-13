@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo } from "react";
 import { useLocale } from "../../../hooks/useLocale";
+import type { LocaleKey } from "../../../i18n/keys";
 import type {
   FloatBarOrientation,
   FloatBarResetWindow,
@@ -22,13 +23,21 @@ import {
   taskbarWindowOptionsFor,
   useTaskbarWindowAvailability,
 } from "../taskbarWindowOptions";
+import {
+  quotaDisplayContext,
+  quotaDisplayPreference,
+  resetDisplayPreference,
+} from "../../../lib/quotaDisplay";
 
-const RESET_CHIPS: { value: FloatBarResetWindow; label: string }[] = [
-  { value: "primary", label: "主窗口" },
-  { value: "session", label: "会话" },
-  { value: "daily", label: "日" },
-  { value: "weekly", label: "周" },
-  { value: "monthly", label: "月" },
+/** Same vocabulary the float bar runtime uses for inline reset labels
+ *  (`FloatBar.tsx` RESET_WINDOW_LABEL_KEYS); "primary"/"session" are internal
+ *  compat identifiers and must never surface as user copy. */
+const RESET_CHIPS: { value: FloatBarResetWindow; labelKey: LocaleKey }[] = [
+  { value: "primary", labelKey: "FloatBarResetWindowPrimary" },
+  { value: "session", labelKey: "TaskbarWindowSession" },
+  { value: "daily", labelKey: "TaskbarWindowDaily" },
+  { value: "weekly", labelKey: "TaskbarWindowWeekly" },
+  { value: "monthly", labelKey: "TaskbarWindowMonthly" },
 ];
 
 function opacityPercent(value: number): number {
@@ -40,6 +49,8 @@ export default function FloatBarPage({
   settings,
   set,
   saving,
+  catalog,
+  head,
 }: SettingsPageProps) {
   const { t, language } = useLocale();
   const enabled = settings.floatBarEnabled;
@@ -52,8 +63,8 @@ export default function FloatBarPage({
   }, [settings.floatBarEntries, settings.floatBarProviderIds]);
 
   const providers = useMemo(
-    () => catalogChoices(settings.enabledProviders),
-    [settings.enabledProviders],
+    () => catalogChoices(catalog, settings.enabledProviders),
+    [catalog, settings.enabledProviders],
   );
   const windowAvailability = useTaskbarWindowAvailability(enabled);
   const windowOptionsFor = useCallback(
@@ -64,7 +75,8 @@ export default function FloatBarPage({
     [windowAvailability],
   );
   const windowLabelFor = useCallback(
-    (kind: TaskbarWindowKind) => taskbarWindowLabelFor(kind, t, language),
+    (kind: TaskbarWindowKind, entry: TaskbarEntry) =>
+      taskbarWindowLabelFor(kind, t, language, entry.providerId),
     [language, t],
   );
 
@@ -75,12 +87,34 @@ export default function FloatBarPage({
 
   const opacity = opacityPercent(settings.floatBarOpacity ?? 80);
   const windows = settings.floatBarResetWindows ?? [];
+  const quotaMode = quotaDisplayPreference(settings, "floatBar");
+  const resetMode = resetDisplayPreference(settings, "floatBar");
+  const display = quotaDisplayContext(settings, "floatBar");
+  const effectiveQuotaLabel = display.showAsUsed
+    ? t("QuotaShowUsedOption")
+    : t("QuotaShowRemainingOption");
+  const quotaHelp = t(
+    quotaMode === "follow" ? "QuotaFollowHelper" : "QuotaOverrideHelper",
+  ).replace(
+    "{}",
+    effectiveQuotaLabel,
+  );
+  const effectiveResetLabel = display.resetTimeRelative
+    ? t("ResetTimeCountdownOption")
+    : t("ResetTimeAbsoluteOption");
+  const resetHelp = t(
+    resetMode === "follow" ? "QuotaFollowHelper" : "QuotaOverrideHelper",
+  ).replace(
+    "{}",
+    effectiveResetLabel,
+  );
 
   return (
     <div className="s5-surf-split">
       <div className="s5-surf-fields">
+        {head}
         <V5Section
-          title="窗口"
+          title="窗口与交互"
           resetLabel={t("ComponentResetDefaults")}
           resetDisabled={saving}
           onReset={() =>
@@ -88,17 +122,12 @@ export default function FloatBarPage({
               floatBarEnabled: false,
               floatBarOrientation: "horizontal",
               floatBarStyle: "floating",
-              floatBarOpacity: 80,
-              floatBarScale: 100,
-              floatBarShowCost: false,
-              floatBarShowResetInline: false,
-              floatBarResetWindows: ["primary"],
               floatBarDarkText: false,
               floatBarClickThrough: false,
             })
           }
         >
-          <V5Field label="显示悬浮栏">
+          <V5Field label="显示悬浮栏" help="在桌面上方常驻显示灵动微胶囊悬浮栏">
             <V5Toggle
               on={enabled}
               disabled={saving}
@@ -106,7 +135,7 @@ export default function FloatBarPage({
               label="显示悬浮栏"
             />
           </V5Field>
-          <V5Field label="方向" help="两态有名，不用下拉" off={off}>
+          <V5Field label="排列方向" help="桌面停靠排布方向" off={off}>
             <V5Seg
               value={
                 settings.floatBarOrientation === "vertical" ? "v" : "h"
@@ -125,7 +154,7 @@ export default function FloatBarPage({
               }
             />
           </V5Field>
-          <V5Field label="样式" off={off}>
+          <V5Field label="窗口样式" help="药丸悬浮或贴边风格" off={off}>
             <V5Seg
               value={settings.floatBarStyle === "taskbar" ? "edge" : "float"}
               disabled={saving || off}
@@ -142,61 +171,93 @@ export default function FloatBarPage({
               }
             />
           </V5Field>
-          <V5Field label="不透明度" help="30% 到 100%，每格 5%" off={off}>
-            <div className="s5-range-row">
-              <input
-                type="range"
-                min={30}
-                max={100}
-                step={5}
-                value={opacity}
-                disabled={saving || off}
-                onChange={(event) =>
-                  set({ floatBarOpacity: Number(event.target.value) })
-                }
-              />
-              <span className="s5-unit">{opacity}%</span>
-            </div>
-          </V5Field>
-          <V5Field label="缩放" help="75% 到 200%，每格 5%" off={off}>
-            <div className="s5-range-row">
-              <input
-                type="range"
-                min={75}
-                max={200}
-                step={5}
-                value={settings.floatBarScale ?? 100}
-                disabled={saving || off}
-                onChange={(event) =>
-                  set({ floatBarScale: Number(event.target.value) })
-                }
-              />
-              <span className="s5-unit">{settings.floatBarScale ?? 100}%</span>
-            </div>
-          </V5Field>
-          <V5Field label="显示费用" help="没有费用数据时格子留空" off={off}>
+          <V5Field label="浅色桌面自适应" help="在亮色桌面壁纸下增强对比度与文字清晰度" off={off}>
             <V5Toggle
-              on={settings.floatBarShowCost ?? false}
+              on={settings.floatBarDarkText}
               disabled={saving || off}
-              onChange={(v) => set({ floatBarShowCost: v })}
-              label="显示费用"
+              onChange={(v) => set({ floatBarDarkText: v })}
+              label="浅色桌面自适应"
             />
           </V5Field>
           <V5Field
-            label="条内显示重置"
-            help="关掉后重置时间只出现在悬停提示里"
+            label="鼠标点击穿透"
+            help="开启后鼠标穿透悬浮栏；如需移动或关闭，请在设置中操作"
+            off={off}
+          >
+            <V5Toggle
+              on={settings.floatBarClickThrough}
+              disabled={saving || off}
+              onChange={(v) => set({ floatBarClickThrough: v })}
+              label="鼠标点击穿透"
+            />
+          </V5Field>
+        </V5Section>
+
+        <V5Section
+          title="显示内容"
+          resetLabel={t("ComponentResetDefaults")}
+          resetDisabled={saving}
+          onReset={() =>
+            set({
+              floatBarQuotaDisplay: "follow",
+              floatBarShowResetInline: false,
+              floatBarResetDisplay: "follow",
+              floatBarResetWindows: ["primary"],
+              floatBarShowCost: false,
+            })
+          }
+        >
+          <V5Field
+            label="额度展示口径"
+            help={quotaHelp}
+            off={off}
+          >
+            <V5Seg
+              value={quotaMode}
+              disabled={saving || off}
+              options={[
+                { value: "follow", label: t("QuotaFollowOption") },
+                { value: "used", label: t("QuotaShowUsedOption") },
+                { value: "remaining", label: t("QuotaShowRemainingOption") },
+              ]}
+              onChange={(value) =>
+                set({ floatBarQuotaDisplay: value as "follow" | "used" | "remaining" })
+              }
+            />
+          </V5Field>
+          <V5Field
+            label="条内显示重置时间"
+            help="在服务商胶囊内直接呈现重置时间或倒计时"
             off={off}
           >
             <V5Toggle
               on={settings.floatBarShowResetInline}
               disabled={saving || off}
               onChange={(v) => set({ floatBarShowResetInline: v })}
-              label="条内显示重置"
+              label="条内显示重置时间"
             />
           </V5Field>
           <V5Field
-            label="重置窗口"
-            help="主窗口、会话、日、周、月，有数量上限"
+            label="重置时间形式"
+            help={resetHelp}
+            off={off || !settings.floatBarShowResetInline}
+          >
+            <V5Seg
+              value={resetMode}
+              disabled={saving || off || !settings.floatBarShowResetInline}
+              options={[
+                { value: "follow", label: t("QuotaFollowOption") },
+                { value: "countdown", label: t("ResetTimeCountdownOption") },
+                { value: "absolute", label: t("ResetTimeAbsoluteOption") },
+              ]}
+              onChange={(value) =>
+                set({ floatBarResetDisplay: value as "follow" | "countdown" | "absolute" })
+              }
+            />
+          </V5Field>
+          <V5Field
+            label="重置周期窗口"
+            help="选择内联重置时间对应的额度周期"
             off={off || !settings.floatBarShowResetInline}
           >
             <div className="s5-chips">
@@ -215,53 +276,38 @@ export default function FloatBarPage({
                       set({ floatBarResetWindows: next });
                     }}
                   >
-                    {chip.label}
+                    {t(chip.labelKey)}
                   </button>
                 );
               })}
             </div>
           </V5Field>
-          <V5Field label="深色文字" help="浅色桌面背景时把字改成深色" off={off}>
+          <V5Field label="显示费用与余额" help="在胶囊旁呈现今日或累计费用/余额" off={off}>
             <V5Toggle
-              on={settings.floatBarDarkText}
+              on={settings.floatBarShowCost ?? false}
               disabled={saving || off}
-              onChange={(v) => set({ floatBarDarkText: v })}
-              label="深色文字"
-            />
-          </V5Field>
-          <V5Field
-            label="点击穿透"
-            help="打开后点不到条子，只能回设置关掉"
-            off={off}
-          >
-            <V5Toggle
-              on={settings.floatBarClickThrough}
-              disabled={saving || off}
-              onChange={(v) => set({ floatBarClickThrough: v })}
-              label="点击穿透"
+              onChange={(v) => set({ floatBarShowCost: v })}
+              label="显示费用与余额"
             />
           </V5Field>
         </V5Section>
 
         <V5Section
-          title="显示内容"
+          title="服务商与额度"
           resetLabel={t("ComponentResetDefaults")}
           resetDisabled={saving}
           onReset={() => {
-            
             set({
-              floatBarShowAsUsed: true,
-              floatBarResetTimeRelative: true,
               floatBarProviderIds: [],
-                floatBarEntries: [],
+              floatBarEntries: [],
             });
           }}
-          hint="和小型状态栏同一套：每行选服务商和窗口。至少 1 条。空的「跟随已启用」表示按服务商页的顺序带上已打开的商。"
+          hint="每行选定服务商与额度周期。留空时「跟随」自动按服务商顺序展示。"
         >
           <V5EntryList
             entries={entries}
             providers={providers}
-            followLabel="跟随已启用"
+            followLabel="跟随"
             onChange={commitEntries}
             newWindow="session"
             maxEntries={6}
@@ -271,35 +317,50 @@ export default function FloatBarPage({
             windowOptionsFor={windowOptionsFor}
             windowLabelFor={windowLabelFor}
           />
-          <V5Field label="额度数字" off={off}>
-            <V5Seg
-              value={settings.floatBarShowAsUsed ? "used" : "remain"}
-              disabled={saving || off}
-              options={[
-                { value: "used", label: "已用" },
-                { value: "remain", label: "剩余" },
-              ]}
-              onChange={(value) =>
-                set({ floatBarShowAsUsed: value === "used" })
-              }
-            />
+        </V5Section>
+
+        <V5Section
+          title="外观与尺寸"
+          resetLabel={t("ComponentResetDefaults")}
+          resetDisabled={saving}
+          onReset={() =>
+            set({
+              floatBarOpacity: 80,
+              floatBarScale: 100,
+            })
+          }
+        >
+          <V5Field label="毛玻璃不透明度" help="30% 到 100%，每格 5%" off={off}>
+            <div className="s5-range-row">
+              <input
+                type="range"
+                min={30}
+                max={100}
+                step={5}
+                value={opacity}
+                disabled={saving || off}
+                onChange={(event) =>
+                  set({ floatBarOpacity: Number(event.target.value) })
+                }
+              />
+              <span className="s5-unit">{opacity}%</span>
+            </div>
           </V5Field>
-          <V5Field
-            label="重置时间"
-            help="条子里不显示重置时，仍用在悬停提示里"
-            off={off}
-          >
-            <V5Seg
-              value={settings.floatBarResetTimeRelative ? "rel" : "abs"}
-              disabled={saving || off}
-              options={[
-                { value: "rel", label: "倒计时" },
-                { value: "abs", label: "绝对时间" },
-              ]}
-              onChange={(value) =>
-                set({ floatBarResetTimeRelative: value === "rel" })
-              }
-            />
+          <V5Field label="界面缩放" help="75% 到 200%，每格 5%" off={off}>
+            <div className="s5-range-row">
+              <input
+                type="range"
+                min={75}
+                max={200}
+                step={5}
+                value={settings.floatBarScale ?? 100}
+                disabled={saving || off}
+                onChange={(event) =>
+                  set({ floatBarScale: Number(event.target.value) })
+                }
+              />
+              <span className="s5-unit">{settings.floatBarScale ?? 100}%</span>
+            </div>
           </V5Field>
         </V5Section>
       </div>

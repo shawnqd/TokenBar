@@ -50,34 +50,9 @@ export default function PrivacyPage({
         </V5Field>
       </V5Section>
 
-      <V5Section
-        title={t("SectionKeychainAccess")}
-        hint="关掉总开关后，「减少提示」会变灰。"
-      >
-        <V5Field
-          label={t("DisableAllKeychainLabel")}
-          help={t("DisableAllKeychainHelper")}
-        >
-          <V5Toggle
-            on={settings.disableKeychainAccess}
-            disabled={saving}
-            onChange={(v) => set({ disableKeychainAccess: v })}
-            label={t("DisableAllKeychainLabel")}
-          />
-        </V5Field>
-        <V5Field
-          label={t("AvoidKeychainPromptsLabel")}
-          help={t("AvoidKeychainPromptsHelper")}
-          off={settings.disableKeychainAccess}
-        >
-          <V5Toggle
-            on={settings.claudeAvoidKeychainPrompts}
-            disabled={saving || settings.disableKeychainAccess}
-            onChange={(v) => set({ claudeAvoidKeychainPrompts: v })}
-            label={t("AvoidKeychainPromptsLabel")}
-          />
-        </V5Field>
-      </V5Section>
+      {/* 钥匙串开关已移除（2026-09-06 复核）：Windows 凭据实际走
+          Windows Credential Manager（keyring::Entry），不经过这两个开关，
+          它们是无消费方的死控件；底层凭据存储不受影响。 */}
 
       <V5Section
         title={t("CodexLocalLogsTitle")}
@@ -100,7 +75,10 @@ export default function PrivacyPage({
       </V5Section>
 
       <V5Section title={t("SettingsLocalCache")}>
-        <V5Field label={t("SettingsClearCache")} help="不会登出，也不会删除凭据">
+        <V5Field
+          label={t("SettingsClearCache")}
+          help="只清理本地用量与图表缓存；不会登出，不会删除凭据与设置"
+        >
           <button
             type="button"
             className="s5-ghost danger"

@@ -212,11 +212,19 @@ pub(super) struct RawSettings {
     // setting" from "new file that explicitly stored `false`". A struct-level
     // default would have produced `Some(true)` and destroyed that distinction.
     #[serde(default)]
+    float_bar_quota_display: Option<String>,
+    #[serde(default)]
     float_bar_show_as_used: Option<bool>,
+    #[serde(default)]
+    float_bar_reset_display: Option<String>,
     #[serde(default)]
     float_bar_reset_time_relative: Option<bool>,
     #[serde(default)]
+    dashboard_quota_display: Option<String>,
+    #[serde(default)]
     dashboard_show_as_used: Option<bool>,
+    #[serde(default)]
+    dashboard_reset_display: Option<String>,
     #[serde(default)]
     dashboard_reset_time_relative: Option<bool>,
     #[serde(default)]
@@ -226,11 +234,45 @@ pub(super) struct RawSettings {
     #[serde(default)]
     dashboard_quota_windows: Vec<String>,
     #[serde(default)]
+    taskbar_quota_display: Option<String>,
+    #[serde(default)]
     taskbar_show_as_used: Option<bool>,
+    #[serde(default)]
+    taskbar_reset_display: Option<String>,
     #[serde(default)]
     taskbar_reset_time_relative: Option<bool>,
     #[serde(default)]
     taskbar_tooltip_entries: Option<Vec<TaskbarEntry>>,
+}
+
+fn migrate_quota_display_mode(
+    mode: Option<&str>,
+    legacy_show_as_used: Option<bool>,
+) -> QuotaDisplayPreference {
+    mode.and_then(QuotaDisplayPreference::parse)
+        .or_else(|| legacy_show_as_used.map(|used| {
+            if used {
+                QuotaDisplayPreference::Used
+            } else {
+                QuotaDisplayPreference::Remaining
+            }
+        }))
+        .unwrap_or_default()
+}
+
+fn migrate_reset_display_mode(
+    mode: Option<&str>,
+    legacy_relative: Option<bool>,
+) -> ResetDisplayPreference {
+    mode.and_then(ResetDisplayPreference::parse)
+        .or_else(|| legacy_relative.map(|relative| {
+            if relative {
+                ResetDisplayPreference::Countdown
+            } else {
+                ResetDisplayPreference::Absolute
+            }
+        }))
+        .unwrap_or_default()
 }
 
 fn default_taskbar_widget_position() -> String {
@@ -383,13 +425,19 @@ impl Default for RawSettings {
             taskbar_widget_icon_style: s.taskbar_widget_icon_style.clone(),
             taskbar_widget_icon_gap_px: s.taskbar_widget_icon_gap_px,
             taskbar_widget_value_gap_px: s.taskbar_widget_value_gap_px,
+            float_bar_quota_display: Some(s.float_bar_quota_display.as_str().to_string()),
             float_bar_show_as_used: Some(s.float_bar_show_as_used),
+            float_bar_reset_display: Some(s.float_bar_reset_display.as_str().to_string()),
             float_bar_reset_time_relative: Some(s.float_bar_reset_time_relative),
+            dashboard_quota_display: Some(s.dashboard_quota_display.as_str().to_string()),
             dashboard_show_as_used: Some(s.dashboard_show_as_used),
+            dashboard_reset_display: Some(s.dashboard_reset_display.as_str().to_string()),
             dashboard_reset_time_relative: Some(s.dashboard_reset_time_relative),
             dashboard_provider_ids: s.dashboard_provider_ids,
             dashboard_quota_windows: s.dashboard_quota_windows,
+            taskbar_quota_display: Some(s.taskbar_quota_display.as_str().to_string()),
             taskbar_show_as_used: Some(s.taskbar_show_as_used),
+            taskbar_reset_display: Some(s.taskbar_reset_display.as_str().to_string()),
             taskbar_reset_time_relative: Some(s.taskbar_reset_time_relative),
             taskbar_tooltip_entries: Some(s.taskbar_tooltip_entries.clone()),
         }
@@ -602,6 +650,34 @@ impl From<RawSettings> for Settings {
                 .avoid_keychain_prompts = true;
         }
 
+        // A legacy file has only the per-surface booleans. Preserve those
+        // explicit choices as overrides; a file with neither the new mode nor
+        // the old boolean becomes `Follow` and inherits the General default.
+        let float_bar_quota_display = migrate_quota_display_mode(
+            raw.float_bar_quota_display.as_deref(),
+            raw.float_bar_show_as_used,
+        );
+        let float_bar_reset_display = migrate_reset_display_mode(
+            raw.float_bar_reset_display.as_deref(),
+            raw.float_bar_reset_time_relative,
+        );
+        let dashboard_quota_display = migrate_quota_display_mode(
+            raw.dashboard_quota_display.as_deref(),
+            raw.dashboard_show_as_used,
+        );
+        let dashboard_reset_display = migrate_reset_display_mode(
+            raw.dashboard_reset_display.as_deref(),
+            raw.dashboard_reset_time_relative,
+        );
+        let taskbar_quota_display = migrate_quota_display_mode(
+            raw.taskbar_quota_display.as_deref(),
+            raw.taskbar_show_as_used,
+        );
+        let taskbar_reset_display = migrate_reset_display_mode(
+            raw.taskbar_reset_display.as_deref(),
+            raw.taskbar_reset_time_relative,
+        );
+
         Settings {
             enabled_providers: raw.enabled_providers,
             refresh_interval_secs: raw.refresh_interval_secs,
@@ -702,28 +778,30 @@ impl From<RawSettings> for Settings {
                 "badge" | "solid" => raw.taskbar_widget_icon_style,
                 _ => "pure".to_string(),
             },
-            // One-time seeding from the legacy globals. A file written by this
-            // version stores all six keys, so this only fires for older files.
-            float_bar_show_as_used: raw.float_bar_show_as_used.unwrap_or(raw.show_as_used),
-            float_bar_reset_time_relative: raw
-                .float_bar_reset_time_relative
-                .unwrap_or(raw.reset_time_relative),
-            dashboard_show_as_used: raw.dashboard_show_as_used.unwrap_or(raw.show_as_used),
-            dashboard_reset_time_relative: raw
-                .dashboard_reset_time_relative
-                .unwrap_or(raw.reset_time_relative),
+            float_bar_quota_display,
+            float_bar_show_as_used: float_bar_quota_display
+                .resolves_to_used(raw.show_as_used),
+            float_bar_reset_display,
+            float_bar_reset_time_relative: float_bar_reset_display
+                .resolves_to_relative(raw.reset_time_relative),
+            dashboard_quota_display,
+            dashboard_show_as_used: dashboard_quota_display
+                .resolves_to_used(raw.show_as_used),
+            dashboard_reset_display,
+            dashboard_reset_time_relative: dashboard_reset_display
+                .resolves_to_relative(raw.reset_time_relative),
             // No legacy global to migrate from: the dashboard has always shown
             // every enabled provider, and empty means exactly that.
             dashboard_provider_ids: raw.dashboard_provider_ids,
             dashboard_quota_windows: normalize_dashboard_quota_windows(
                 &raw.dashboard_quota_windows,
             ),
-            taskbar_show_as_used: raw.taskbar_show_as_used.unwrap_or(raw.show_as_used),
-            // Absent key falls back to the legacy global, matching how
-            // `taskbar_show_as_used` migrates.
-            taskbar_reset_time_relative: raw
-                .taskbar_reset_time_relative
-                .unwrap_or(raw.reset_time_relative),
+            taskbar_quota_display,
+            taskbar_show_as_used: taskbar_quota_display
+                .resolves_to_used(raw.show_as_used),
+            taskbar_reset_display,
+            taskbar_reset_time_relative: taskbar_reset_display
+                .resolves_to_relative(raw.reset_time_relative),
             // Empty / absent → empty list; the tooltip builder falls back to
             // strip entries at read time so upgrading does not invent a second
             // configuration the user never set.

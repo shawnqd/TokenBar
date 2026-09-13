@@ -1,4 +1,4 @@
-import { useMemo, useState, cloneElement, type ReactElement, type MouseEvent as ReactMouseEvent } from "react";
+import { useEffect, useMemo, useRef, useState, cloneElement, type ReactElement, type MouseEvent as ReactMouseEvent } from "react";
 import { createPortal } from "react-dom";
 import type { CSSProperties } from "react";
 import type {
@@ -29,6 +29,7 @@ import {
   quotaForecastDisplay,
   quotaPercentDisplay,
   type QuotaDisplayContext,
+  type QuotaLevel,
 } from "../../lib/quotaDisplay";
 import { isResetCreditsExtra, parseResetCreditsCount } from "../../lib/quotaWindows";
 import { formatRelativeUpdated } from "../../lib/relativeTime";
@@ -52,6 +53,8 @@ import "./tray-v5.css";
    clipped by the panel's overflow:hidden chrome (flyout-body is a scroll
    container), so the tip must render outside that subtree: portal to <body>,
    anchored at the trigger's rect (clamped to the right edge), pointer-inert. */
+const TIP_SHOW_DELAY_MS = 450;
+
 function Tip({
   text,
   children,
@@ -62,30 +65,46 @@ function Tip({
   onlyOnOverflow?: boolean;
 }) {
   const [anchor, setAnchor] = useState<{ left: number; top: number; isTop: boolean } | null>(null);
+  // 悬停延迟：掠过行/磁贴时不弹浮窗，停留 ~450ms 才出现；离开立即取消。
+  const timerRef = useRef<number | null>(null);
+  const clearTimer = () => {
+    if (timerRef.current != null) {
+      window.clearTimeout(timerRef.current);
+      timerRef.current = null;
+    }
+  };
+  const showTip = (el: HTMLElement) => {
+    if (onlyOnOverflow) {
+      const isOverflowing =
+        el.scrollWidth > el.clientWidth ||
+        Array.from(el.querySelectorAll<HTMLElement>("*")).some(
+          (child) => child.scrollWidth > child.clientWidth,
+        );
+      if (!isOverflowing) return;
+    }
+    const rect = el.getBoundingClientRect();
+    const isTop = rect.top >= 70;
+    const top = isTop ? rect.top : rect.bottom + 6;
+    const maxLeft = Math.max(8, window.innerWidth - 280);
+    const left = Math.max(8, Math.min(rect.left, maxLeft));
+    setAnchor({ left, top, isTop });
+  };
+  useEffect(() => clearTimer, []);
   return (
     <>
       {cloneElement(children, {
         onMouseEnter: (event: ReactMouseEvent<HTMLElement>) => {
+          clearTimer();
           const el = event.currentTarget;
-          if (onlyOnOverflow) {
-            const isOverflowing =
-              el.scrollWidth > el.clientWidth ||
-              Array.from(el.querySelectorAll<HTMLElement>("*")).some(
-                (child) => child.scrollWidth > child.clientWidth,
-              );
-            if (!isOverflowing) {
-              setAnchor(null);
-              return;
-            }
-          }
-          const rect = el.getBoundingClientRect();
-          const isTop = rect.top >= 70;
-          const top = isTop ? rect.top : rect.bottom + 6;
-          const maxLeft = Math.max(8, window.innerWidth - 280);
-          const left = Math.max(8, Math.min(rect.left, maxLeft));
-          setAnchor({ left, top, isTop });
+          timerRef.current = window.setTimeout(() => {
+            timerRef.current = null;
+            showTip(el);
+          }, TIP_SHOW_DELAY_MS);
         },
-        onMouseLeave: () => setAnchor(null),
+        onMouseLeave: () => {
+          clearTimer();
+          setAnchor(null);
+        },
       })}
       {anchor != null &&
         createPortal(
@@ -121,6 +140,8 @@ export interface TrayCardProps {
   /** Most recent completed-response speed for providers that expose it,
    *  injected from the core enrichment read model. */
   outputSpeed?: ProviderOutputSpeed | null;
+  /** Whether the output-speed capability is globally enabled in settings. */
+  outputSpeedEnabled?: boolean;
   /** Which period the insight "near usage" row leads with. */
   localUsagePeriod?: LocalUsagePeriod;
   /** Show the provider brand icon in the card header. */
@@ -535,6 +556,99 @@ const StatBarsIcon = ({ width = 12, height = 12 }: IconProps) => (
   </svg>
 );
 
+/* ── Progress bar (Remaining Quota Model) ────────────────────────────── */
+
+interface RemainingProgressBarProps {
+  fillPercent: number;
+  markerPercent: number | null;
+  tone: PaceTone | "neutral";
+  level?: QuotaLevel;
+  extraClass?: string;
+  containerClass?: string;
+  showAsUsed?: boolean;
+}
+
+function RemainingProgressBar({
+  fillPercent,
+  markerPercent,
+  tone,
+  level = "normal",
+  extraClass = "",
+  containerClass = "progress-bar",
+  showAsUsed = false,
+}: RemainingProgressBarProps) {
+  const pct = Math.min(100, Math.max(0, fillPercent));
+  const hasNotch = markerPercent != null && Number.isFinite(markerPercent);
+  const notch = hasNotch ? Math.min(100, Math.max(0, markerPercent!)) : null;
+
+  if (notch == null) {
+    return (
+      <div className={`${containerClass} ${extraClass}`.trim()}>
+        <div className="progress-track-inner">
+          <div
+            className="bar-segment bar-segment--remaining progress-fill"
+            data-level={level}
+            style={{ width: `${pct}%` } as CSSProperties}
+          />
+        </div>
+      </div>
+    );
+  }
+
+  let isReserve = false;
+  let surplusWidth = 0;
+  let surplusLeft = 0;
+  let gapWidth = 0;
+  let gapLeft = 0;
+
+  if (!showAsUsed) {
+    isReserve = pct >= notch || tone === "reserve";
+    if (isReserve) {
+      surplusWidth = Math.max(0, pct - notch);
+      surplusLeft = notch;
+    } else {
+      gapWidth = Math.max(0, notch - pct);
+      gapLeft = pct;
+    }
+  } else {
+    isReserve = pct <= notch || tone === "reserve";
+    if (!isReserve) {
+      gapWidth = Math.max(0, pct - notch);
+      gapLeft = notch;
+    }
+  }
+
+  const notchClass = isReserve ? "" : "is-deficit";
+
+  return (
+    <div className={`${containerClass} ${extraClass}`.trim()}>
+      <div className="progress-track-inner">
+        <div
+          className="bar-segment bar-segment--remaining progress-fill"
+          data-level={level}
+          style={{ width: `${pct}%` } as CSSProperties}
+        />
+        {surplusWidth > 0 && (
+          <div
+            className="bar-segment bar-segment--reserve-surplus"
+            style={{ left: `${surplusLeft}%`, width: `${surplusWidth}%` } as CSSProperties}
+          />
+        )}
+        {gapWidth > 0 && (
+          <div
+            className="bar-segment bar-segment--deficit-gap"
+            style={{ left: `${gapLeft}%`, width: `${gapWidth}%` } as CSSProperties}
+          />
+        )}
+      </div>
+      <div
+        className={`progress-notch ${notchClass}`.trim()}
+        style={{ left: `${notch}%` } as CSSProperties}
+      />
+    </div>
+  );
+}
+
 /* ── Hero row (own reset-hook call per window) ────────────────────────── */
 
 function HeroRow({
@@ -543,12 +657,15 @@ function HeroRow({
   display,
   pace,
   windowKind,
+  isCompact,
 }: {
   title: string;
   snap: RateWindowSnapshot;
   display: QuotaDisplayContext;
   pace: PaceSnapshot | null;
   windowKind: RateWindowSnapshot["kind"];
+  /** Compact tier keeps only the leading pace segment (spec §5.3). */
+  isCompact?: boolean;
 }) {
   const { t, language } = useLocale();
   const reset = useResetDisplay(snap.resetsAt, snap.resetDescription, display.resetTimeRelative);
@@ -565,7 +682,9 @@ function HeroRow({
       const runway = paceRunwayText(tone, forecast, t, language);
       if (runway) badge += runway;
     }
+    if (isCompact) badge = badge.split("·")[0].trim();
   }
+
   return (
     <div className="quota-row">
       <div className="quota-row__head">
@@ -588,21 +707,14 @@ function HeroRow({
         </span>
         {badge ? <span className={`soft-badge soft-badge--${tone}`}>{badge}</span> : null}
       </div>
-      <div className="progress-bar">
-        <div
-          className="progress-fill"
-          data-level={percent.level}
-          style={{ width: `${percent.fillPercent}%` } as CSSProperties}
-        />
-        {marker != null && (
-          <Tip text={t("PanelExpected")}>
-            <div
-              className={`progress-notch progress-notch--${tone}`}
-              style={{ left: `${marker}%` } as CSSProperties}
-            />
-          </Tip>
-        )}
-      </div>
+      <RemainingProgressBar
+        fillPercent={percent.fillPercent}
+        markerPercent={marker}
+        tone={tone}
+        level={percent.level}
+        extraClass={isCompact ? "progress-bar--compact" : ""}
+        showAsUsed={display.showAsUsed}
+      />
     </div>
   );
 }
@@ -623,89 +735,78 @@ function QuotaTile({
   const { t, language } = useLocale();
   const percent = quotaPercentDisplay(snap, display);
   const reset = useResetDisplay(snap.resetsAt, snap.resetDescription, display.resetTimeRelative);
-  // Weekly tile gets the bridge's weekly pace; other cycles project linearly.
-  // Only the bar notch is drawn (no text badge) so the forecast is a visual
-  // hint, not another line of copy. On-pace windows draw nothing — the notch
-  // exists to call out 结余/超支, an invisible onpace marker is noise.
   const forecast = quotaForecastDisplay(snap.kind === "weekly" ? pace : null, snap);
-  const notchTone = forecast.available ? paceToneOf(forecast) : null;
-  const notch =
-    notchTone !== null && notchTone !== "onpace" ? forecastMarkerPercent(forecast, display) : null;
-  // 悬浮浮窗:完整标签 + 重置时间(头部行会截断两者,浮窗给全量)。
-  const headResetText =
+  const tone = forecast.available ? paceToneOf(forecast) : "neutral";
+  const marker = forecast.available ? forecastMarkerPercent(forecast, display) : null;
+  const delta = Math.abs(forecast.deltaPercent ?? 0);
+
+  let autoBadgeText: string | null = null;
+  if (forecast.available) {
+    if (tone === "onpace") {
+      autoBadgeText = t("QuotaPaceOnPace");
+    } else if (tone === "reserve") {
+      autoBadgeText = `+${delta.toFixed(0)}% ${t("QuotaPaceInReserve")}`;
+    } else if (tone === "deficit") {
+      autoBadgeText = `${delta.toFixed(0)}% ${t("QuotaPaceInDeficit")}`;
+    }
+  }
+
+  const rawReset =
     compactResetText(snap.resetsAt, language) ??
     (reset.kind !== "unknown" ? reset.text : "");
-  const headTip =
-    headResetText && !headResetText.includes("重置")
-      ? `${label} · 重置 ${headResetText}`
-      : headResetText
-        ? `${label} · ${headResetText}`
-        : label;
-  // Full-width tiles (the secondary cycle): label + reset share the head line
-  // (weight tells them apart), bar below — density-preview.html full row.
-  if (fullWidth) {
-    return (
-      <div className="quota-tile quota-tile--full">
-        <Tip text={headTip}>
-          <div className="quota-tile__head">
-            <span className="quota-tile__title">
-              <span className="quota-tile__label">{shortTileLabel(label, language)}</span>
-              <span className="quota-tile__reset" data-reset-state={reset.kind}>
-                {compactResetText(snap.resetsAt, language) ?? (reset.kind !== "unknown" ? reset.text : "")}
-              </span>
-            </span>
-            <strong className="quota-tile__val">{percent.rounded}%</strong>
-          </div>
+  const resetText = rawReset
+    ? (rawReset.includes("重置") ? rawReset : `重置 ${rawReset}`)
+    : "";
+
+  /* Two tile shapes, both from density-preview.html:
+     - full-width secondary tile: the head is a single 2-end row
+       (`标签 + 重置 … 百分比`) — it has the whole card width, so the reset
+       rides next to the label and the block stays 2 rows.
+     - 2-column grid tile: only ~140px wide, so an inline reset squeezes the
+       label down to an ellipsis ("Cl…"). The reset therefore drops to a third
+       row at the bottom, and the head keeps `标签 … 百分比` to itself. */
+  const tileHead = (full: boolean) => (
+    <div className="quota-tile__head">
+      <span className="quota-tile__title">
+        <Tip text={label} onlyOnOverflow>
+          <span className="quota-tile__label">{label}</span>
         </Tip>
-        <div className="progress-bar progress-bar--tile">
-          <div
-            className="progress-fill"
-            data-level={percent.level}
-            style={{ width: `${percent.fillPercent}%` } as CSSProperties}
-          />
-          {notch != null && notchTone && (
-            <Tip text={t("PanelExpected")}>
-              <div
-                className={`progress-notch progress-notch--${notchTone}`}
-                style={{ left: `${notch}%` } as CSSProperties}
-              />
-            </Tip>
-          )}
-        </div>
-      </div>
-    );
-  }
-  // Half-width extras: label + pct on the head line, reset below the bar.
-  return (
-    <div className="quota-tile">
-      <Tip text={headTip}>
-        <div className="quota-tile__head">
-          <span className="quota-tile__title">
-            <span className="quota-tile__label">{shortTileLabel(label, language)}</span>
-            <span className="quota-tile__reset" data-reset-state={reset.kind}>
-              {compactResetText(snap.resetsAt, language) ?? (reset.kind !== "unknown" ? reset.text : "")}
-            </span>
+        {full && resetText && (
+          <span className="quota-tile__reset" data-reset-state={reset.kind}>
+            {resetText}
           </span>
-          <strong className="quota-tile__val">{percent.rounded}%</strong>
-        </div>
-      </Tip>
-      <div className="progress-bar progress-bar--tile">
-        <div
-          className="progress-fill"
-          data-level={percent.level}
-          style={{ width: `${percent.fillPercent}%` } as CSSProperties}
-        />
-        {notch != null && notchTone && (
-          <Tip text={t("PanelExpected")}>
-            <div
-              className={`progress-notch progress-notch--${notchTone}`}
-              style={{ left: `${notch}%` } as CSSProperties}
-            />
-          </Tip>
         )}
-      </div>
+      </span>
+      <strong className="quota-tile__val font-mono">{percent.rounded}%</strong>
     </div>
   );
+
+  const bar = (
+    <RemainingProgressBar
+      fillPercent={percent.fillPercent}
+      markerPercent={marker}
+      tone={tone}
+      level={percent.level}
+      extraClass="progress-bar--tile"
+      showAsUsed={display.showAsUsed}
+    />
+  );
+
+  const tileBody = (
+    <div className={fullWidth ? "quota-tile quota-tile--full" : "quota-tile"}>
+      {tileHead(fullWidth)}
+      {bar}
+      {!fullWidth && (
+        <div className="quota-tile__sub">
+          <span className="quota-tile__reset" data-reset-state={reset.kind}>
+            {resetText || "—"}
+          </span>
+        </div>
+      )}
+    </div>
+  );
+
+  return tileBody;
 }
 
 /* ── Balance / status blocks (never fabricate) ────────────────────────── */
@@ -733,7 +834,9 @@ function resolveBalanceStatus(
     return { label: t("TrayLoading"), tone: "neutral" };
   }
   if (displayState === "unsupported" || displayState === "unknown") {
-    return { label: t("TrayStatusError"), tone: "neutral" };
+    // HTML convention: an unknown reading is an em-dash placeholder, never an
+    // error label — "（错误）" would dress absence as a failure.
+    return { label: "—", tone: "neutral" };
   }
   return null;
 }
@@ -742,23 +845,73 @@ function BalanceBlock({
   balance,
   status,
   isCompact,
+  variant = "line",
 }: {
   balance: BalanceView | null;
   status: BalanceStatus | null;
   isCompact?: boolean;
+  /**
+   * `dual` renders the wallet row as density-preview.html's `.dual-pill-bottom`
+   * variant: the label keeps the left edge and the amount (plus its gift/
+   * converted figure) is pushed to the right, so the bottom track reads as a
+   * wallet footer rather than a second line of the quota above it.
+   */
+  variant?: "line" | "dual";
 }) {
   if (!balance) return null;
-  const badge = status ?? { label: "", tone: "neutral" as const };
-  const titleClean = balance.title.replace(/^💳\s*/, "");
+  const titleClean = balance.title.replace(/^💳\s*/, "") || "余额";
+  const displayTitle = titleClean === "余额" ? "账户余额" : titleClean;
   const fullText = balance.breakdown
-    ? `${titleClean}: ${balance.amount} (${balance.breakdown})`
-    : `${titleClean}: ${balance.amount}`;
+    ? `${displayTitle}: ${balance.amount} (${balance.breakdown})`
+    : `${displayTitle}: ${balance.amount}`;
+
+  let cnyText: string | null = null;
+  let giftText: string | null = null;
+  if (balance.breakdown) {
+    const parts = balance.breakdown.split("·").map((s) => s.trim());
+    const cnyPart = parts.find((s) => s.includes("折合"));
+    const giftPart = parts.find((s) => s.includes("赠送"));
+    const otherPart = parts.find((s) => !s.includes("折合") && !s.includes("赠送"));
+
+    if (cnyPart) {
+      const clean = cnyPart.replace(/^含?折合\s*/, "").replace(/[()（）]/g, "");
+      cnyText = `(${clean})`;
+    }
+    if (giftPart) {
+      giftText = giftPart.replace(/^含/, "").trim();
+    } else if (otherPart) {
+      giftText = otherPart.replace(/^含/, "").trim();
+    } else if (!cnyPart && balance.breakdown) {
+      giftText = balance.breakdown.replace(/^含/, "").trim();
+    }
+  }
+
+  const badgeText = status?.label || giftText;
+  const badgeTone = status?.label ? status.tone : "reserve";
+
+  const walletIcon = (
+    <svg
+      width="12"
+      height="12"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className="balance-single-line__icon"
+      style={{ flexShrink: 0, alignSelf: "center", opacity: 0.75 }}
+    >
+      <rect x="2" y="5" width="20" height="14" rx="2" />
+      <line x1="2" y1="10" x2="22" y2="10" />
+    </svg>
+  );
   if (isCompact) {
     return (
       <div
         className="balance-compact-row balance-block"
         data-balance-kind={balance.kind}
-        data-balance-state={badge.tone}
+        data-balance-state={badgeTone}
       >
         <Tip text={fullText} onlyOnOverflow>
           <div className="balance-compact-row__left balance-block__head">
@@ -776,19 +929,50 @@ function BalanceBlock({
               <rect x="2" y="5" width="20" height="14" rx="2" />
               <line x1="2" y1="10" x2="22" y2="10" />
             </svg>
-            <span className="balance-compact-row__label balance-block__label">{titleClean}:</span>
-            <span
+            <span className="balance-compact-row__label balance-block__label">{displayTitle}:</span>
+            <strong
               className="balance-compact-row__amount balance-block__amount font-mono"
               data-unavailable={balance.unavailable ? "true" : undefined}
             >
               {balance.amount}
-            </span>
-            {balance.breakdown ? (
-              <span className="balance-compact-row__sub balance-block__gift font-mono">({balance.breakdown})</span>
+            </strong>
+            {cnyText ? (
+              <span className="balance-compact-row__sub balance-block__gift font-mono">{cnyText}</span>
             ) : null}
           </div>
         </Tip>
-        {badge.label && <span className={`soft-badge soft-badge--${badge.tone}`}>{badge.label}</span>}
+        {badgeText ? (
+          <span className={`soft-badge soft-badge--${badgeTone}`}>{badgeText}</span>
+        ) : null}
+      </div>
+    );
+  }
+  if (variant === "dual") {
+    return (
+      <div
+        className="balance-single-line balance-block"
+        data-balance-kind={balance.kind}
+        data-balance-state={badgeTone}
+      >
+        <Tip text={fullText} onlyOnOverflow>
+          <div className="balance-single-line__left balance-block__head">
+            {walletIcon}
+            <span className="balance-block__label">{displayTitle}</span>
+          </div>
+        </Tip>
+        <div className="balance-single-line__right">
+          <strong
+            className="balance-single-line__amount balance-block__amount font-mono"
+            data-unavailable={balance.unavailable ? "true" : undefined}
+          >
+            {balance.amount}
+          </strong>
+          {balance.breakdown ? (
+            <span className="balance-single-line__cny balance-block__gift font-mono">
+              {cnyText ?? `(${balance.breakdown})`}
+            </span>
+          ) : null}
+        </div>
       </div>
     );
   }
@@ -796,52 +980,58 @@ function BalanceBlock({
     <div
       className="balance-single-line balance-block"
       data-balance-kind={balance.kind}
-      data-balance-state={badge.tone}
+      data-balance-state={badgeTone}
     >
       <Tip text={fullText} onlyOnOverflow>
         <div className="balance-single-line__left balance-block__head">
-          <svg
-            width="12"
-            height="12"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="2"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            className="balance-single-line__icon"
-            style={{ flexShrink: 0, opacity: 0.7 }}
-          >
-            <rect x="2" y="5" width="20" height="14" rx="2" />
-            <line x1="2" y1="10" x2="22" y2="10" />
-          </svg>
+          {walletIcon}
           <span className="balance-single-line__label balance-block__label">
-            {titleClean}
+            {displayTitle}
           </span>
-          <span
+          <strong
             className="balance-single-line__amount balance-block__amount font-mono"
             data-unavailable={balance.unavailable ? "true" : undefined}
           >
             {balance.amount}
-          </span>
-          {balance.breakdown ? (
-            <span className="balance-single-line__sub balance-block__gift font-mono">
-              ({balance.breakdown})
+          </strong>
+          {cnyText ? (
+            <span className="balance-single-line__cny balance-block__gift font-mono">
+              {cnyText}
             </span>
           ) : null}
         </div>
       </Tip>
-      {badge.label && <span className={`soft-badge soft-badge--${badge.tone}`}>{badge.label}</span>}
+      {badgeText ? (
+        <div className="balance-single-line__right">
+          <span className={`soft-badge soft-badge--${badgeTone}`}>{badgeText}</span>
+        </div>
+      ) : null}
     </div>
   );
 }
 
+/**
+ * Block D — the status / telemetry card of density-preview.html.
+ *
+ * The sandbox splits the provider's status text on `·` into a readiness title
+ * and a trailing badge ("部署运行正常 · 按量就绪"); that split is the shape the
+ * projection already reports, so it is reproduced verbatim. The deployment
+ * grid the sandbox draws beside it needs model / region / latency fields the
+ * telemetry projection does not expose, so none is drawn — a tile is only
+ * added once real data backs it (spec §6 note, "不渲染无数据的积木").
+ */
 function StatusBlock({ headline }: { headline: string }) {
+  const [titlePart, badgePart] = headline.split("·");
+  const title = titlePart?.trim() || headline.trim();
+  const badge = badgePart?.trim() || null;
   return (
-    <div className="status-block">
-      <div className="status-headline">
-        <span className="status-indicator-dot" />
-        <span>{headline}</span>
+    <div className="telemetry-card">
+      <div className="telemetry-card__head">
+        <div className="telemetry-card__status">
+          <span className="status-indicator-dot" />
+          <span>{title}</span>
+        </div>
+        {badge ? <span className="soft-badge soft-badge--reserve">{badge}</span> : null}
       </div>
     </div>
   );
@@ -890,6 +1080,7 @@ function MinimalCard({
   showProviderIcon,
   hasOutputSpeed,
   quotaMissing,
+  errorReason,
 }: {
   providerId: string;
   displayName: string;
@@ -905,6 +1096,7 @@ function MinimalCard({
   showProviderIcon: boolean;
   hasOutputSpeed: boolean;
   quotaMissing: string | null;
+  errorReason: string | null;
 }) {
   const { t, language } = useLocale();
   const isZh =
@@ -986,19 +1178,40 @@ function MinimalCard({
         )}
       </div>
       {hasBar && hero && (
-        <div className="minimal-streamlined__bar-wrap">
-          <div className="progress-fill" style={{ width: `${quotaPercentDisplay(hero.snap, display).fillPercent}%` } as CSSProperties} />
-          {notchLeft != null && (
-            <div
-              className={`progress-notch progress-notch--${paceTone}`}
-              style={{ left: `${notchLeft}%` } as CSSProperties}
-            />
-          )}
-        </div>
+        <RemainingProgressBar
+          fillPercent={quotaPercentDisplay(hero.snap, display).fillPercent}
+          markerPercent={notchLeft}
+          tone={paceTone}
+          containerClass="minimal-streamlined__bar-wrap"
+          showAsUsed={display.showAsUsed}
+        />
       )}
       <div className="minimal-streamlined__row2">
         <span className="minimal-streamlined__badges">
-          {!hero && quotaMissing ? (
+          {errorReason ? (
+            <span
+              className="soft-badge soft-badge--deficit minimal-streamlined__status-badge"
+              title={errorReason}
+            >
+              <svg
+                className="minimal-streamlined__status-icon"
+                width="10"
+                height="10"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2.5"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                aria-hidden="true"
+              >
+                <circle cx="12" cy="12" r="10" />
+                <line x1="12" y1="8" x2="12" y2="12" />
+                <line x1="12" y1="16" x2="12.01" y2="16" />
+              </svg>
+              <span>{t("TrayStatusError")}</span>
+            </span>
+          ) : !hero && quotaMissing ? (
             <span className="soft-badge soft-badge--neutral minimal-streamlined__quota-missing">
               {quotaMissing}
             </span>
@@ -1024,6 +1237,7 @@ export default function TrayCard({
   densityMode,
   display,
   outputSpeed = null,
+  outputSpeedEnabled = true,
   localUsagePeriod = "7d",
   showProviderIcon = true,
   detail = false,
@@ -1055,7 +1269,7 @@ export default function TrayCard({
     [core, displayWindows, display.showAsUsed],
   );
   const caps = projection.capabilities;
-  const hasOutputSpeed = caps.supportsOutputSpeed;
+  const hasOutputSpeed = outputSpeedEnabled && caps.supportsOutputSpeed;
   const hasLocalUsage = caps.supportsCharts || caps.supportsLocalCost;
 
   const balanceInfo = useMemo(() => {
@@ -1148,56 +1362,29 @@ export default function TrayCard({
     return isZh ? `${formatted} 到期` : `Expires ${formatted}`;
   }, [inventoryInfo?.earliestExpiry, t, language, isZh]);
 
+  /* The card's companion line already prints the count and the earliest expiry
+     (「额外重置 · 剩余 5 次 · 9/21 7:41 到期」), and the old tip opened by
+     repeating both before listing anything. What the card cannot show is where
+     each individual credit lands, so that is all the tip keeps; with no known
+     expiries there is nothing extra to say and no tip is rendered. */
   const inventoryTipText = useMemo(() => {
     if (!inventoryInfo) return null;
-    const count =
-      inventoryInfo.count ??
-      (inventoryInfo.expiries.length > 0 ? inventoryInfo.expiries.length : null);
     const expiries = inventoryInfo.expiries;
-    const lines: string[] = [];
-
-    if (count != null) {
-      lines.push(
-        isZh
-          ? `${t("PanelResetCreditsTitle")} (${t("PanelResetCreditsRemaining")} ${count} ${t("PanelResetCreditsUnit")})`
-          : `${t("PanelResetCreditsTitle")} (${count} ${t("PanelResetCreditsRemaining")})`,
-      );
-    } else {
-      lines.push(t("PanelResetCreditsTitle"));
-    }
-
-    const totalRows = Math.max(count ?? 0, expiries.length);
-    if (totalRows > 0) {
-      for (let i = 0; i < totalRows; i++) {
-        const iso = expiries[i] ?? (i === 0 ? inventoryInfo.earliestExpiry : null);
-        const prefix = isZh ? `第 ${i + 1} 次` : `Credit ${i + 1}`;
-        if (iso) {
-          const formatted = formatResetDisplay({
-            resetsAt: iso,
-            resetDescription: null,
-            relative: false,
-            t,
-            locale: localeCodeFor(language),
-          }).text;
-          const timeText = isZh ? `${formatted} 到期` : `Expires ${formatted}`;
-          lines.push(`${prefix} · ${timeText}`);
-        } else {
-          lines.push(`${prefix} · ${isZh ? "未提供到期时间" : "No expiry provided"}`);
-        }
-      }
-    } else if (inventoryInfo.earliestExpiry) {
-      const formatted = formatResetDisplay({
-        resetsAt: inventoryInfo.earliestExpiry,
-        resetDescription: null,
-        relative: false,
-        t,
-        locale: localeCodeFor(language),
-      }).text;
-      const timeText = isZh ? `${formatted} 到期` : `Expires ${formatted}`;
-      lines.push(timeText);
-    }
-
-    return lines.join("\n");
+    if (expiries.length === 0) return null;
+    return expiries
+      .map((iso, index) => {
+        const formatted = formatResetDisplay({
+          resetsAt: iso,
+          resetDescription: null,
+          relative: false,
+          t,
+          locale: localeCodeFor(language),
+        }).text;
+        const prefix = isZh ? `第 ${index + 1} 次` : `Credit ${index + 1}`;
+        const timeText = isZh ? `${formatted} 到期` : `Expires ${formatted}`;
+        return `${prefix} · ${timeText}`;
+      })
+      .join("\n");
   }, [inventoryInfo, isZh, t, language]);
 
   const balanceText = balanceInfo.balance ? balanceInfo.balance.amount : null;
@@ -1228,9 +1415,13 @@ export default function TrayCard({
       ? (isZh ? `余额 ${balanceText}` : `Bal ${balanceText}`)
       : null;
   const condensedChip = [tileChip, balanceChip, resetChip].filter(Boolean).join("·") || null;
+  const hasError = core.error != null && core.error.trim() !== "";
+  const errorReason = hasError ? localizeProviderError(core.error!, t) : null;
 
   // Minimal tier: no card-header / card-zone split — a two-row streamlined
-  // card (spec 5.4).
+  // card (spec 5.4). It carries no context actions either: the reference's
+  // streamlined tier has no header to host them, and detail always forces the
+  // detailed tier (TrayPanel), so this combination never reaches the product.
   if (densityMode === "minimal") {
     return (
       <div className="tray-card tray-card--minimal" id={`card-${core.providerId}`}>
@@ -1249,27 +1440,13 @@ export default function TrayCard({
           showProviderIcon={showProviderIcon}
           hasOutputSpeed={hasOutputSpeed}
           quotaMissing={quotaUnavailableText}
+          errorReason={errorReason}
         />
-        {hasContext && (
-          <div className={`context-actions${canDashboard && canStatus ? "" : " context-actions--single"}`}>
-            {canDashboard && (
-              <button type="button" className="context-btn" onClick={() => onOpenExternalUsage?.(core.providerId)}>
-                <ChartIcon />{t("ActionUsageDashboard")}
-              </button>
-            )}
-            {canStatus && (
-              <button type="button" className="context-btn" onClick={() => onOpenExternalStatus?.(core.providerId)}>
-                <StatBarsIcon />{t("ActionStatusPage")}
-              </button>
-            )}
-          </div>
-        )}
       </div>
     );
   }
 
   const isRefreshing = core.displayState === "refreshing";
-  const hasError = core.error != null && core.error.trim() !== "";
 
   const updatedRaw = core.updatedAt == null ||
     Number.isNaN(Date.parse(core.updatedAt))
@@ -1286,7 +1463,7 @@ export default function TrayCard({
     updatedClass += " is-refreshing";
     updatedContent = (
       <>
-        <svg className="spin" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" style={{ display: "inline-block", verticalAlign: "-1px", marginRight: 3 }}>
+        <svg className="card-header__updated-icon spin" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
           <path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/>
           <path d="M21 3v5h-5"/>
           <path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/>
@@ -1297,15 +1474,15 @@ export default function TrayCard({
     );
   } else if (hasError) {
     updatedClass += " is-error";
-    updatedTitle = `${t("StatusUnableToGetUsage")}：${localizeProviderError(core.error!, t)}`;
+    updatedTitle = `${t("StatusUnableToGetUsage")}：${errorReason}`;
     updatedContent = (
       <>
-        <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" style={{ display: "inline-block", verticalAlign: "-1px", marginRight: 3 }}>
+        <svg className="card-header__updated-icon" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
           <circle cx="12" cy="12" r="10"/>
           <line x1="12" y1="8" x2="12" y2="12"/>
           <line x1="12" y1="16" x2="12.01" y2="16"/>
         </svg>
-        {t("TrayStatusError")}
+        <span className="card-header__updated-label">{t("TrayStatusError")}</span>
       </>
     );
   }
@@ -1336,8 +1513,42 @@ export default function TrayCard({
             <Tip text={core.displayName} onlyOnOverflow>
               <span className="card-header__name">{core.displayName}</span>
             </Tip>
-            <span className={updatedClass} title={updatedTitle}>{updatedContent}</span>
+            {updatedTitle ? (
+              <Tip text={updatedTitle}>
+                <span className={updatedClass}>{updatedContent}</span>
+              </Tip>
+            ) : (
+              <span className={updatedClass}>{updatedContent}</span>
+            )}
           </div>
+          {hasContext && (
+            <div className="card-header__right">
+              <div className="card-header__actions">
+                {canDashboard && (
+                  <button
+                    type="button"
+                    className="card-header-btn"
+                    title={t("ActionUsageDashboard")}
+                    aria-label={t("ActionUsageDashboard")}
+                    onClick={() => onOpenExternalUsage?.(core.providerId)}
+                  >
+                    <ChartIcon width={13} height={13} />
+                  </button>
+                )}
+                {canStatus && (
+                  <button
+                    type="button"
+                    className="card-header-btn"
+                    title={t("ActionStatusPage")}
+                    aria-label={t("ActionStatusPage")}
+                    onClick={() => onOpenExternalStatus?.(core.providerId)}
+                  >
+                    <StatBarsIcon width={13} height={13} />
+                  </button>
+                )}
+              </div>
+            </div>
+          )}
       </div>
 
       <div className={`card-zone${zoneTone}`}>
@@ -1352,6 +1563,7 @@ export default function TrayCard({
                     display={display}
                     pace={core.pace}
                     windowKind={hero.snap.kind}
+                    isCompact={isCompact}
                   />
                   {secondary && (
                     <QuotaTile label={secondary.label} snap={secondary.snap} display={display} pace={core.pace} fullWidth />
@@ -1473,6 +1685,7 @@ export default function TrayCard({
                   balance={balanceInfo.balance}
                   status={balanceStatus}
                   isCompact={isCompact}
+                  variant="dual"
                 />
               </div>
             )}
@@ -1571,21 +1784,6 @@ export default function TrayCard({
         </div>
         ) : null}
       </div>
-
-      {hasContext && (
-        <div className={`context-actions${canDashboard && canStatus ? "" : " context-actions--single"}`}>
-          {canDashboard && (
-            <button type="button" className="context-btn" onClick={() => onOpenExternalUsage?.(core.providerId)}>
-              <ChartIcon />{t("ActionUsageDashboard")}
-            </button>
-          )}
-          {canStatus && (
-            <button type="button" className="context-btn" onClick={() => onOpenExternalStatus?.(core.providerId)}>
-              <StatBarsIcon />{t("ActionStatusPage")}
-            </button>
-          )}
-        </div>
-      )}
     </div>
   );
 }

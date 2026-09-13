@@ -661,9 +661,9 @@ fn test_legacy_per_provider_fields_migrate_into_provider_configs() {
     assert_eq!(settings.cookie_source(ProviderId::Claude), "browser");
     assert_eq!(settings.cookie_source(ProviderId::Cursor), "manual");
     assert_eq!(settings.cookie_source(ProviderId::Alibaba), "manual");
-    // 2026-08-30 认证合同:未设置的 provider 默认 auto —— 启用且支持网页
-    // 会话的服务商自动读取浏览器 Cookie(docs/COOKIES.md)。
-    assert_eq!(settings.cookie_source(ProviderId::Amp), "auto");
+    // 2026-09-05 上游对齐:未设置的 provider 默认 manual —— 浏览器 Cookie
+    // 读取是显式 opt-in（DPAPI/杀软顾虑,上游 Win-CodexBar 同款默认）。
+    assert_eq!(settings.cookie_source(ProviderId::Amp), "manual");
 
     // Manual cookie headers + api regions
     assert_eq!(
@@ -773,8 +773,8 @@ fn test_new_format_provider_configs_only() {
         settings.manual_cookie_header(ProviderId::Alibaba),
         "ali=PLACEHOLDER"
     );
-    // Untouched providers still get their defaults(2026-08-30:默认 auto)。
-    assert_eq!(settings.cookie_source(ProviderId::Claude), "auto");
+    // Untouched providers still get their defaults(2026-09-05 上游对齐:默认 manual)。
+    assert_eq!(settings.cookie_source(ProviderId::Claude), "manual");
     assert_eq!(settings.api_region(ProviderId::Zai), "global");
 }
 
@@ -794,7 +794,7 @@ fn test_default_settings_skip_empty_provider_configs() {
 #[test]
 fn test_per_provider_defaults_applied() {
     let settings = Settings::default();
-    assert_eq!(settings.cookie_source(ProviderId::Codex), "auto");
+    assert_eq!(settings.cookie_source(ProviderId::Codex), "manual");
     assert_eq!(settings.usage_source(ProviderId::Codex), "auto");
     assert_eq!(settings.api_region(ProviderId::Alibaba), "singapore");
     assert_eq!(settings.api_region(ProviderId::Zai), "global");
@@ -863,6 +863,12 @@ fn per_component_display_settings_seed_from_legacy_globals() {
     let settings: Settings =
         serde_json::from_str(r#"{"show_as_used":false,"reset_time_relative":false}"#).unwrap();
 
+    assert_eq!(settings.float_bar_quota_display, QuotaDisplayPreference::Follow);
+    assert_eq!(settings.dashboard_quota_display, QuotaDisplayPreference::Follow);
+    assert_eq!(settings.taskbar_quota_display, QuotaDisplayPreference::Follow);
+    assert_eq!(settings.float_bar_reset_display, ResetDisplayPreference::Follow);
+    assert_eq!(settings.dashboard_reset_display, ResetDisplayPreference::Follow);
+    assert_eq!(settings.taskbar_reset_display, ResetDisplayPreference::Follow);
     assert!(!settings.float_bar_show_as_used);
     assert!(!settings.dashboard_show_as_used);
     assert!(!settings.taskbar_show_as_used);
@@ -896,6 +902,12 @@ fn per_component_display_settings_keep_explicit_values_over_legacy_globals() {
     assert!(settings.dashboard_show_as_used);
     assert!(settings.float_bar_reset_time_relative);
     assert!(settings.dashboard_reset_time_relative);
+    assert_eq!(settings.float_bar_quota_display, QuotaDisplayPreference::Remaining);
+    assert_eq!(settings.taskbar_quota_display, QuotaDisplayPreference::Remaining);
+    assert_eq!(settings.dashboard_quota_display, QuotaDisplayPreference::Follow);
+    assert_eq!(settings.float_bar_reset_display, ResetDisplayPreference::Follow);
+    assert_eq!(settings.dashboard_reset_display, ResetDisplayPreference::Follow);
+    assert_eq!(settings.taskbar_reset_display, ResetDisplayPreference::Follow);
 }
 
 /// Components are independent after the seed: a file that stores different
@@ -903,11 +915,13 @@ fn per_component_display_settings_keep_explicit_values_over_legacy_globals() {
 #[test]
 fn per_component_display_settings_round_trip_independently() {
     let mut settings = Settings::default();
-    settings.float_bar_show_as_used = false;
-    settings.dashboard_show_as_used = true;
-    settings.taskbar_show_as_used = false;
-    settings.float_bar_reset_time_relative = true;
-    settings.dashboard_reset_time_relative = false;
+    settings.float_bar_quota_display = QuotaDisplayPreference::Remaining;
+    settings.dashboard_quota_display = QuotaDisplayPreference::Used;
+    settings.taskbar_quota_display = QuotaDisplayPreference::Remaining;
+    settings.float_bar_reset_display = ResetDisplayPreference::Countdown;
+    settings.dashboard_reset_display = ResetDisplayPreference::Absolute;
+    settings.taskbar_reset_display = ResetDisplayPreference::Absolute;
+    settings.sync_quota_display_effective();
 
     let json = serde_json::to_string(&settings).unwrap();
     let restored: Settings = serde_json::from_str(&json).unwrap();
@@ -917,6 +931,13 @@ fn per_component_display_settings_round_trip_independently() {
     assert!(!restored.taskbar_show_as_used);
     assert!(restored.float_bar_reset_time_relative);
     assert!(!restored.dashboard_reset_time_relative);
+    assert!(!restored.taskbar_reset_time_relative);
+    assert_eq!(restored.float_bar_quota_display, QuotaDisplayPreference::Remaining);
+    assert_eq!(restored.dashboard_quota_display, QuotaDisplayPreference::Used);
+    assert_eq!(restored.taskbar_quota_display, QuotaDisplayPreference::Remaining);
+    assert_eq!(restored.float_bar_reset_display, ResetDisplayPreference::Countdown);
+    assert_eq!(restored.dashboard_reset_display, ResetDisplayPreference::Absolute);
+    assert_eq!(restored.taskbar_reset_display, ResetDisplayPreference::Absolute);
 }
 
 /// This used to assert the taskbar had **no** reset-time mode, on the grounds
@@ -937,10 +958,12 @@ fn taskbar_reset_time_mode_round_trips() {
         "a countdown is the default, matching the other components"
     );
 
-    settings.taskbar_reset_time_relative = false;
+    settings.taskbar_reset_display = ResetDisplayPreference::Absolute;
+    settings.sync_quota_display_effective();
     let json = serde_json::to_string(&settings).unwrap();
     let restored: Settings = serde_json::from_str(&json).unwrap();
     assert!(!restored.taskbar_reset_time_relative);
+    assert_eq!(restored.taskbar_reset_display, ResetDisplayPreference::Absolute);
 
     // Independent of the other components, like every other key in this family.
     assert!(restored.dashboard_reset_time_relative);
@@ -994,6 +1017,12 @@ fn dashboard_provider_filter_absent_from_older_files_means_all() {
 #[test]
 fn per_component_display_settings_default_to_used_and_relative() {
     let settings = Settings::default();
+    assert_eq!(settings.float_bar_quota_display, QuotaDisplayPreference::Follow);
+    assert_eq!(settings.dashboard_quota_display, QuotaDisplayPreference::Follow);
+    assert_eq!(settings.taskbar_quota_display, QuotaDisplayPreference::Follow);
+    assert_eq!(settings.float_bar_reset_display, ResetDisplayPreference::Follow);
+    assert_eq!(settings.dashboard_reset_display, ResetDisplayPreference::Follow);
+    assert_eq!(settings.taskbar_reset_display, ResetDisplayPreference::Follow);
     assert!(settings.float_bar_show_as_used);
     assert!(settings.dashboard_show_as_used);
     assert!(settings.taskbar_show_as_used);

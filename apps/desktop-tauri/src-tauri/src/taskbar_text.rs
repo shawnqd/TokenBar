@@ -27,36 +27,37 @@
 //! Drawing an `IDWriteTextLayout` directly requires implementing the
 //! `IDWriteTextRenderer` callback interface. `ID2D1DCRenderTarget::BindDC` plus
 //! `DrawTextLayout` reaches the same pixels with consumer-side calls only, and
-//! it renders onto the *existing* HDC — which matters, because the strip's
-//! layered-window colour-key transparency, taskbar background sampling and
-//! hit-testing took several rounds to get right and must not be disturbed.
+//! it renders onto the *existing* HDC. The mini taskbar gives this target a
+//! premultiplied-alpha DIB and uploads that one surface with
+//! `UpdateLayeredWindow`, so the renderer never needs to know Explorer's
+//! background colour or maintain a separate hit-test window.
 
 #![cfg(windows)]
 
 use std::cell::RefCell;
 
+use windows::core::Interface;
 use windows::Win32::Foundation::{HWND, RECT};
 use windows::Win32::Graphics::Direct2D::Common::{
-    D2D1_ALPHA_MODE_IGNORE, D2D1_COLOR_F, D2D1_PIXEL_FORMAT, D2D_RECT_F,
+    D2D1_ALPHA_MODE_IGNORE, D2D1_ALPHA_MODE_PREMULTIPLIED, D2D1_COLOR_F,
+    D2D1_PIXEL_FORMAT, D2D_RECT_F,
 };
 use windows::Win32::Graphics::Direct2D::{
-    D2D1CreateFactory, D2D1_DRAW_TEXT_OPTIONS_NONE, D2D1_FACTORY_TYPE_SINGLE_THREADED,
+    D2D1CreateFactory, ID2D1DCRenderTarget, ID2D1Factory, ID2D1SolidColorBrush,
+    D2D1_DRAW_TEXT_OPTIONS_CLIP, D2D1_DRAW_TEXT_OPTIONS_NONE, D2D1_FACTORY_TYPE_SINGLE_THREADED,
     D2D1_FEATURE_LEVEL_DEFAULT, D2D1_RENDER_TARGET_PROPERTIES, D2D1_RENDER_TARGET_TYPE_SOFTWARE,
     D2D1_RENDER_TARGET_USAGE_GDI_COMPATIBLE, D2D1_ROUNDED_RECT, D2D1_TEXT_ANTIALIAS_MODE_GRAYSCALE,
-    ID2D1DCRenderTarget, ID2D1Factory, ID2D1SolidColorBrush,
 };
 use windows::Win32::Graphics::DirectWrite::{
-    DWRITE_FONT_AXIS_ATTRIBUTES_VARIABLE,
-    DWRITE_FONT_AXIS_RANGE, DWRITE_FONT_AXIS_TAG_WEIGHT, DWRITE_FONT_AXIS_VALUE,
-    DWRITE_FONT_STRETCH_NORMAL, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_WEIGHT,
-    DWRITE_MEASURING_MODE_NATURAL, DWRITE_PARAGRAPH_ALIGNMENT_CENTER, DWRITE_TEXT_ALIGNMENT, DWRITE_TEXT_ALIGNMENT_CENTER,
-    DWRITE_TEXT_METRICS, DWRITE_TRIMMING, DWRITE_TRIMMING_GRANULARITY_CHARACTER,
-    DWRITE_TEXT_ALIGNMENT_LEADING, DWRITE_TEXT_ALIGNMENT_TRAILING, DWRITE_WORD_WRAPPING_NO_WRAP,
-    IDWriteFactory, IDWriteFontCollection, IDWriteFontFace5,
-    IDWriteFontFamily2, IDWriteTextFormat, IDWriteTextFormat3,
+    IDWriteFactory, IDWriteFontCollection, IDWriteFontFace5, IDWriteFontFamily2, IDWriteTextFormat,
+    IDWriteTextFormat3, DWRITE_FONT_AXIS_ATTRIBUTES_VARIABLE, DWRITE_FONT_AXIS_RANGE,
+    DWRITE_FONT_AXIS_TAG_WEIGHT, DWRITE_FONT_AXIS_VALUE, DWRITE_FONT_STRETCH_NORMAL,
+    DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_WEIGHT, DWRITE_MEASURING_MODE_NATURAL,
+    DWRITE_PARAGRAPH_ALIGNMENT_CENTER, DWRITE_TEXT_ALIGNMENT, DWRITE_TEXT_ALIGNMENT_CENTER,
+    DWRITE_TEXT_ALIGNMENT_LEADING, DWRITE_TEXT_ALIGNMENT_TRAILING, DWRITE_TEXT_METRICS,
+    DWRITE_TRIMMING, DWRITE_TRIMMING_GRANULARITY_CHARACTER, DWRITE_WORD_WRAPPING_NO_WRAP,
 };
 use windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_B8G8R8A8_UNORM;
-use windows::core::Interface;
 
 /// Horizontal placement of a line inside the strip.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -127,14 +128,25 @@ struct Renderer {
 
 impl Renderer {
     fn new() -> windows::core::Result<Self> {
+        Self::new_with_alpha_mode(D2D1_ALPHA_MODE_IGNORE)
+    }
+
+    /// Renderer used by the rebuilt taskbar upload path.  Unlike the legacy
+    /// colour-key painter it preserves a real alpha channel in the DIB.
+    fn new_premultiplied() -> windows::core::Result<Self> {
+        Self::new_with_alpha_mode(D2D1_ALPHA_MODE_PREMULTIPLIED)
+    }
+
+    fn new_with_alpha_mode(
+        alpha_mode: windows::Win32::Graphics::Direct2D::Common::D2D1_ALPHA_MODE,
+    ) -> windows::core::Result<Self> {
         let d2d: ID2D1Factory =
             unsafe { D2D1CreateFactory(D2D1_FACTORY_TYPE_SINGLE_THREADED, None)? };
         let dwrite = crate::bundled_fonts::shared().factory.clone();
 
-        // `D2D1_ALPHA_MODE_IGNORE` keeps this an opaque draw onto the DC, which
-        // is what the colour-key transparency downstream expects: the strip
-        // paints the sampled taskbar colour and Explorer's pixels show through
-        // wherever that exact colour survives.
+        // `D2D1_ALPHA_MODE_IGNORE` is retained for the popup/menu renderer,
+        // whose DIB is intentionally opaque. The taskbar path opts into
+        // `PREMULTIPLIED` below so untouched pixels stay transparent.
         // Software, not DEFAULT. DEFAULT lets Direct2D spin up a D3D device;
         // for a two-line text strip drawn onto a GDI DC that buys nothing and
         // costs a GPU/driver dependency — and it was observed to block
@@ -145,7 +157,7 @@ impl Renderer {
             r#type: D2D1_RENDER_TARGET_TYPE_SOFTWARE,
             pixelFormat: D2D1_PIXEL_FORMAT {
                 format: DXGI_FORMAT_B8G8R8A8_UNORM,
-                alphaMode: D2D1_ALPHA_MODE_IGNORE,
+                 alphaMode: alpha_mode,
             },
             dpiX: 0.0,
             dpiY: 0.0,
@@ -155,8 +167,8 @@ impl Renderer {
         let target = unsafe { d2d.CreateDCRenderTarget(&properties)? };
 
         // Grayscale, never ClearType. ClearType's subpixel fringes are coloured,
-        // and a coloured fringe next to a colour-keyed background is exactly the
-        // magenta/blue edge artifact this widget already fought once.
+        // and those fringes are especially visible when a glyph is composited
+        // over a changing taskbar surface.
         unsafe { target.SetTextAntialiasMode(D2D1_TEXT_ANTIALIAS_MODE_GRAYSCALE) };
 
         Ok(Self { dwrite, target })
@@ -251,8 +263,7 @@ pub fn measure_width(text: &str, style: &TextStyle<'_>) -> Option<f32> {
     })
 }
 
-
-// ── Strip cells (official icon + dimmed tag + bold value, one cluster) ──
+// ── Strip cells (official icon + dimmed tag + same-weight value, one cluster) ──
 
 /// One cell of the strip under the icon+tag+value cluster model.
 pub struct StripCell<'a> {
@@ -269,6 +280,11 @@ pub struct StripCell<'a> {
 /// Draw the strip's cells, each as one left-packed `[icon][tag][value]` cluster
 /// that `style.align` moves as a whole (never stretched). Returns false when
 /// DirectWrite is unavailable, letting the caller keep a GDI fallback.
+///
+/// The strip receives a fresh `BeginPaint` DC for every paint pass. Do not cache
+/// the Direct2D DC render target across those passes: rebinding a target after
+/// its previous DC has been released can block inside Direct2D. The menu path
+/// still uses the cached renderer because it paints onto a long-lived DIB DC.
 pub fn draw_strip_cells(
     hdc: isize,
     bounds: RECT,
@@ -280,29 +296,80 @@ pub fn draw_strip_cells(
     value_gap_px: f32,
     icon_style: crate::taskbar_icons::IconStyle,
 ) -> bool {
-    RENDERER.with(|cell| {
-        let mut slot = cell.borrow_mut();
-        if slot.is_none() {
-            match Renderer::new() {
-                Ok(renderer) => *slot = Some(renderer),
-                Err(err) => {
-                    tracing::warn!("taskbar text: DirectWrite unavailable: {err}");
-                    return false;
-                },
-            }
+    let renderer = match Renderer::new() {
+        Ok(renderer) => renderer,
+        Err(err) => {
+            tracing::warn!("taskbar text: DirectWrite unavailable: {err}");
+            return false;
         }
-        let renderer = slot.as_ref().expect("renderer initialized above");
-        match unsafe {
-            draw_strip_cells_with(renderer, hdc, bounds, cells, style, background_rgb, icon_size_px, icon_gap_px, value_gap_px, icon_style)
-        } {
-            Ok(()) => true,
-            Err(err) => {
-                tracing::warn!("taskbar text: strip cell draw failed: {err}");
-                *slot = None;
-                false
-            },
+    };
+    match unsafe {
+        draw_strip_cells_with(
+            &renderer,
+            hdc,
+            bounds,
+            cells,
+            style,
+            background_rgb,
+            icon_size_px,
+            icon_gap_px,
+            value_gap_px,
+            icon_style,
+            false,
+        )
+    } {
+        Ok(()) => true,
+        Err(err) => {
+            tracing::warn!("taskbar text: strip cell draw failed: {err}");
+            false
         }
-    })
+    }
+}
+
+/// Draws the same cells into a premultiplied-alpha DIB.
+///
+/// The rebuilt mini taskbar uses this path exclusively.  Transparent pixels
+/// remain transparent and DWM blends text/icon edges over Explorer's actual
+/// taskbar surface; no sampled background colour or colour key is involved.
+pub fn draw_strip_cells_premultiplied(
+    hdc: isize,
+    bounds: RECT,
+    cells: &[StripCell<'_>],
+    style: &TextStyle<'_>,
+    background_rgb: u32,
+    icon_size_px: f32,
+    icon_gap_px: f32,
+    value_gap_px: f32,
+    icon_style: crate::taskbar_icons::IconStyle,
+) -> bool {
+    let renderer = match Renderer::new_premultiplied() {
+        Ok(renderer) => renderer,
+        Err(err) => {
+            tracing::warn!("taskbar text: premultiplied DirectWrite unavailable: {err}");
+            return false;
+        }
+    };
+    match unsafe {
+        draw_strip_cells_with(
+            &renderer,
+            hdc,
+            bounds,
+            cells,
+            style,
+            background_rgb,
+            icon_size_px,
+            icon_gap_px,
+            value_gap_px,
+            icon_style,
+            true,
+        )
+    } {
+        Ok(()) => true,
+        Err(err) => {
+            tracing::warn!("taskbar text: premultiplied strip draw failed: {err}");
+            false
+        }
+    }
 }
 
 fn blend(rgb: u32, bg: u32, t: f32) -> u32 {
@@ -314,47 +381,176 @@ fn blend(rgb: u32, bg: u32, t: f32) -> u32 {
 }
 
 /// Width of one run via DirectWrite, in device pixels.
-unsafe fn run_width(dwrite: &IDWriteFactory, text: &str, weight: f32, size_px: f32) -> f32 {
-    if text.is_empty() { return 0.0; }
-    let family: Vec<u16> = "x".encode_utf16().chain(std::iter::once(0)).collect();
-    let locale: Vec<u16> = "en-us".encode_utf16().chain(std::iter::once(0)).collect();
-    let Ok(format) = (unsafe {
-        dwrite.CreateTextFormat(
-            windows::core::PCWSTR(family.as_ptr()),
-            None,
-            DWRITE_FONT_WEIGHT(weight.round().clamp(1.0, 999.0) as i32),
-            DWRITE_FONT_STYLE_NORMAL,
-            DWRITE_FONT_STRETCH_NORMAL,
-            size_px,
-            windows::core::PCWSTR(locale.as_ptr()),
-        )
-    }) else { return 0.0 };
+///
+/// The format is the *same object that will draw the run*. Keeping measurement
+/// and drawing on one format matters here: the selected bundled family and its
+/// `wght` axis must affect both, otherwise a variable-weight change can make a
+/// cluster look as if it randomly overflows its cell.
+unsafe fn run_width(dwrite: &IDWriteFactory, text: &str, format: &IDWriteTextFormat) -> f32 {
+    if text.is_empty() {
+        return 0.0;
+    }
     let utf16: Vec<u16> = text.encode_utf16().collect();
-    let Ok(layout) = (unsafe { dwrite.CreateTextLayout(&utf16, &format, 1.0e6, 1.0e6) }) else { return 0.0 };
+    let Ok(layout) = (unsafe { dwrite.CreateTextLayout(&utf16, format, 1.0e6, 1.0e6) }) else {
+        return 0.0;
+    };
     let mut metrics = DWRITE_TEXT_METRICS::default();
     unsafe { layout.GetMetrics(&mut metrics) }.ok();
-    metrics.width
+    metrics.width.max(0.0)
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct RunBounds {
+    left: f32,
+    right: f32,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct StripCellLayout {
+    icon_left: f32,
+    icon_size: f32,
+    tag: Option<RunBounds>,
+    value: Option<RunBounds>,
+}
+
+fn finite_non_negative(value: f32) -> f32 {
+    if value.is_finite() {
+        value.max(0.0)
+    } else {
+        0.0
+    }
+}
+
+/// Allocate one `[icon][tag][value]` cluster inside a cell.
+///
+/// The native strip can be as narrow as a couple of dozen pixels per cell when
+/// four entries are visible. This helper is intentionally pure so its contract
+/// can be tested without a window: every returned run is bounded by the cell,
+/// the value receives space before the tag, and alignment moves the complete
+/// (possibly clipped) cluster rather than splitting it across the cell.
+fn layout_strip_cell(
+    left: f32,
+    right: f32,
+    icon_size_px: f32,
+    icon_gap_px: f32,
+    value_gap_px: f32,
+    tag_width: f32,
+    value_width: f32,
+    align: TextAlign,
+) -> StripCellLayout {
+    let mut left = if left.is_finite() { left } else { 0.0 };
+    let mut right = if right.is_finite() { right } else { left };
+    if right < left {
+        std::mem::swap(&mut left, &mut right);
+    }
+    let available = (right - left).max(0.0);
+    let requested_icon = finite_non_negative(icon_size_px).max(1.0).round();
+    // A corrupt/temporarily tiny cell must not produce a slot outside the
+    // window. Normal cells keep the requested whole-pixel icon size.
+    let icon_size = requested_icon.min(available);
+    let tag_requested = finite_non_negative(tag_width);
+    let value_requested = finite_non_negative(value_width);
+    let value_gap = finite_non_negative(value_gap_px);
+    let has_text = tag_requested > 0.0 || value_requested > 0.0;
+    let icon_gap = finite_non_negative(icon_gap_px).min((available - icon_size).max(0.0));
+    let text_capacity = (available - icon_size - if has_text { icon_gap } else { 0.0 }).max(0.0);
+
+    // The value is the readable signal in a dense strip. Give it its natural
+    // width first, then let the tag consume whatever remains. The value gap is
+    // only reserved when both runs have visible width.
+    let value_alloc = value_requested.min(text_capacity);
+    let remaining = (text_capacity - value_alloc).max(0.0);
+    let tag_alloc = if tag_requested > 0.0 {
+        if value_alloc > 0.0 {
+            if remaining > value_gap {
+                (remaining - value_gap).min(tag_requested)
+            } else {
+                0.0
+            }
+        } else {
+            remaining.min(tag_requested)
+        }
+    } else {
+        0.0
+    };
+    let value_gap = if tag_alloc > 0.0 && value_alloc > 0.0 {
+        value_gap.min(remaining)
+    } else {
+        0.0
+    };
+    let text_left = left + icon_size + if has_text { icon_gap } else { 0.0 };
+    let tag_right = (text_left + tag_alloc).min(right);
+    let value_left = if value_alloc > 0.0 {
+        if tag_alloc > 0.0 {
+            (tag_right + value_gap).min(right)
+        } else {
+            text_left.min(right)
+        }
+    } else {
+        right
+    };
+    let value_right = (value_left + value_alloc).min(right).max(value_left);
+
+    let cluster_width =
+        icon_size + if has_text { icon_gap } else { 0.0 } + tag_alloc + value_gap + value_alloc;
+    let offset = match align {
+        TextAlign::Left => 0.0,
+        TextAlign::Center => (available - cluster_width).max(0.0) * 0.5,
+        TextAlign::Right => (available - cluster_width).max(0.0),
+    };
+    let shift = left + offset - left;
+    let shift_bounds = |bounds: RunBounds| RunBounds {
+        left: (bounds.left + shift).clamp(left, right),
+        right: (bounds.right + shift).clamp(left, right),
+    };
+    StripCellLayout {
+        icon_left: (left + offset).clamp(left, right),
+        icon_size,
+        tag: (tag_alloc > 0.0).then(|| {
+            shift_bounds(RunBounds {
+                left: text_left,
+                right: tag_right,
+            })
+        }),
+        value: (value_alloc > 0.0).then(|| {
+            shift_bounds(RunBounds {
+                left: value_left,
+                right: value_right,
+            })
+        }),
+    }
 }
 
 unsafe fn draw_run(
     target: &ID2D1DCRenderTarget,
     format: &IDWriteTextFormat,
     text: &str,
-    x: f32,
+    left: f32,
+    right: f32,
     top: f32,
     bottom: f32,
     brush: &ID2D1SolidColorBrush,
 ) {
-    if text.is_empty() { return; }
+    if text.is_empty() || !left.is_finite() || !right.is_finite() || right <= left {
+        return;
+    }
     let utf16: Vec<u16> = text.encode_utf16().collect();
-    let rect = D2D_RECT_F { left: x, top, right: x + 1.0e6, bottom };
+    let rect = D2D_RECT_F {
+        left,
+        top,
+        right,
+        bottom,
+    };
     unsafe {
         target.DrawText(
             &utf16,
             format,
             &rect,
             brush,
-            D2D1_DRAW_TEXT_OPTIONS_NONE,
+            // DrawText does not clip to layoutRect unless CLIP is requested.
+            // The finite rect and this flag together make the cell boundary a
+            // hard fence, including during antialiasing.
+            D2D1_DRAW_TEXT_OPTIONS_CLIP,
             DWRITE_MEASURING_MODE_NATURAL,
         )
     };
@@ -371,73 +567,154 @@ unsafe fn draw_strip_cells_with(
     icon_gap_px: f32,
     value_gap_px: f32,
     icon_style: crate::taskbar_icons::IconStyle,
+    premultiplied_surface: bool,
 ) -> windows::core::Result<()> {
     let target = &renderer.target;
-    unsafe {
-        target.BindDC(windows::Win32::Graphics::Gdi::HDC(hdc as *mut _), &bounds)?
-    };
+    unsafe { target.BindDC(windows::Win32::Graphics::Gdi::HDC(hdc as *mut _), &bounds)? };
 
     let tag_style = TextStyle {
-        family: style.family, weight: style.weight, size_px: style.size_px,
-        align: TextAlign::Left, color_rgb: style.color_rgb,
+        family: style.family,
+        weight: style.weight,
+        size_px: style.size_px,
+        align: TextAlign::Left,
+        color_rgb: style.color_rgb,
     };
+    // Tag and value share the user's weight. Pinning the value run at 600
+    // made YaHei snap numbers to Bold while the tag stayed Regular, and the
+    // settings slider could not change the numbers. Layout width must use
+    // the same weight as the drawn run so the cluster does not drift.
     let value_style = TextStyle {
-        family: style.family, weight: style.weight, size_px: style.size_px,
-        align: TextAlign::Left, color_rgb: style.color_rgb,
+        family: style.family,
+        weight: style.weight,
+        size_px: style.size_px,
+        align: TextAlign::Left,
+        color_rgb: style.color_rgb,
     };
-    let tag_format = unsafe { create_format(&renderer.dwrite, &tag_style)? };
-    let value_format = unsafe { create_format(&renderer.dwrite, &value_style)? };
+    // The native strip never inserts an ellipsis. DirectWrite's trimming sign
+    // can appear even when a short run exactly matches its natural width, and
+    // this surface has a clearer overflow rule: the cell boundary is the hard
+    // fence and the settings width is how the user makes more content visible.
+    // Both runs therefore use a no-trim format and are clipped only by the
+    // finite rectangle passed to `draw_run`.
+    let tag_format = unsafe { create_format_with_trimming(&renderer.dwrite, &tag_style, false)? };
+    let value_format =
+        unsafe { create_format_with_trimming(&renderer.dwrite, &value_style, false)? };
     let text_brush = unsafe { target.CreateSolidColorBrush(&color_of(style.color_rgb), None) }?;
     let tag_color = blend(style.color_rgb, background_rgb, 0.35);
-    let tag_brush = unsafe { target.CreateSolidColorBrush(&color_of(tag_color), None) }?;
+    let tag_brush = if premultiplied_surface {
+        // Keep the muted tag as alpha rather than baking a guessed taskbar
+        // colour into it.  The actual taskbar surface is supplied by DWM.
+        unsafe { target.CreateSolidColorBrush(&color_of_blend(style.color_rgb, 0.65), None) }?
+    } else {
+        unsafe { target.CreateSolidColorBrush(&color_of(tag_color), None) }?
+    };
 
     let mark_style = TextStyle {
-        family: style.family, weight: style.weight, size_px: style.size_px,
-        align: TextAlign::Center, color_rgb: style.color_rgb,
+        family: style.family,
+        weight: style.weight,
+        size_px: style.size_px,
+        align: TextAlign::Center,
+        color_rgb: style.color_rgb,
     };
     let mark_format = unsafe { create_format(&renderer.dwrite, &mark_style)? };
 
     let gap = icon_gap_px.max(0.0);
     let value_gap = value_gap_px.max(0.0);
     unsafe { target.BeginDraw() };
-    for cell in cells {
-        let left = cell.rect.left as f32;
-        let right = cell.rect.right as f32;
-        let top = cell.rect.top as f32;
-        let bottom = cell.rect.bottom as f32;
-        let avail = (right - left).max(0.0);
-        let slot_px = icon_size_px.max(1.0).round();
-        let tag_w = unsafe { run_width(&renderer.dwrite, cell.tag, style.weight, style.size_px) };
-        // Match value_style.weight so the layout width agrees with
-        // the text run actually drawn; a hard-coded 600 made the value
-        // drift visually away from the tag at non-default font weights.
-        let value_w = unsafe { run_width(&renderer.dwrite, cell.value, style.weight, style.size_px) };
-        let cluster_w = slot_px + gap + tag_w + value_gap + value_w;
-        let start_x = match style.align {
-            TextAlign::Left => left,
-            TextAlign::Center => left + ((avail - cluster_w).max(0.0)) * 0.5,
-            TextAlign::Right => left + (avail - cluster_w).max(0.0),
-        };
-
-        let ctop = top + (bottom - top - slot_px).max(0.0) * 0.5;
-        let slot = crate::taskbar_icons::snap_slot(crate::taskbar_icons::IconSlot {
-            left: start_x,
-            top: ctop,
-            size_px: slot_px,
-        });
-        let mut cursor = start_x;
-        let mut drew_svg = false;
-        if let Some(provider) = cell.icon_provider {
-            drew_svg = crate::taskbar_icons::draw_icon(target, provider, icon_style, slot);
+    if premultiplied_surface {
+        // Do not let a previous provider frame remain in the DIB when the
+        // current entry list is shorter or an icon disappears.
+        unsafe {
+            target.Clear(Some(&D2D1_COLOR_F {
+                r: 0.0,
+                g: 0.0,
+                b: 0.0,
+                a: 0.0,
+            }));
         }
-        if !drew_svg {
+    }
+    for cell in cells {
+        let mut left = cell.rect.left as f32;
+        let mut right = cell.rect.right as f32;
+        if right < left {
+            std::mem::swap(&mut left, &mut right);
+        }
+        let mut top = cell.rect.top as f32;
+        let mut bottom = cell.rect.bottom as f32;
+        if bottom < top {
+            std::mem::swap(&mut top, &mut bottom);
+        }
+        let tag_w = unsafe { run_width(&renderer.dwrite, cell.tag, &tag_format) };
+        let value_w = unsafe { run_width(&renderer.dwrite, cell.value, &value_format) };
+        let layout = layout_strip_cell(
+            left,
+            right,
+            icon_size_px,
+            gap,
+            value_gap,
+            tag_w,
+            value_w,
+            style.align,
+        );
+        let cell_height = (bottom - top).max(0.0);
+        let drawable_icon_size = layout.icon_size.min(cell_height);
+        let ctop = top + (cell_height - drawable_icon_size).max(0.0) * 0.5;
+        let snapped = crate::taskbar_icons::snap_slot(crate::taskbar_icons::IconSlot {
+            left: layout.icon_left,
+            top: ctop,
+            size_px: drawable_icon_size,
+        });
+        // snap_slot intentionally rounds for crisp bitmap rendering. Clamp the
+        // rounded result back to this cell so a half-pixel/DPI transition cannot
+        // leak an icon into a neighbour.
+        let slot_left = snapped.left.clamp(left, right);
+        let slot_right = (snapped.left + snapped.size_px).min(right).max(slot_left);
+        let slot_top = snapped.top.clamp(top, bottom);
+        let slot_bottom = (snapped.top + snapped.size_px).min(bottom).max(slot_top);
+        let slot = crate::taskbar_icons::IconSlot {
+            left: slot_left,
+            top: slot_top,
+            size_px: (slot_right - slot_left)
+                .min(slot_bottom - slot_top)
+                .max(0.0),
+        };
+        let mut drew_svg = false;
+        if slot.size_px > 0.0 {
+            if let Some(provider) = cell.icon_provider {
+                drew_svg = crate::taskbar_icons::draw_icon(target, provider, icon_style, slot);
+            }
+        }
+        if !drew_svg && slot.size_px > 0.0 {
             draw_glyph_fallback(target, &mark_format, cell.glyph, icon_style, slot);
         }
-        cursor += slot_px + gap;
-
-        unsafe { draw_run(target, &tag_format, cell.tag, cursor, top, bottom, &tag_brush) };
-        cursor += tag_w + value_gap;
-        unsafe { draw_run(target, &value_format, cell.value, cursor, top, bottom, &text_brush) };
+        if let Some(tag) = layout.tag {
+            unsafe {
+                draw_run(
+                    target,
+                    &tag_format,
+                    cell.tag,
+                    tag.left,
+                    tag.right,
+                    top,
+                    bottom,
+                    &tag_brush,
+                )
+            };
+        }
+        if let Some(value) = layout.value {
+            unsafe {
+                draw_run(
+                    target,
+                    &value_format,
+                    cell.value,
+                    value.left,
+                    value.right,
+                    top,
+                    bottom,
+                    &text_brush,
+                )
+            };
+        }
     }
     unsafe { target.EndDraw(None, None)? };
     Ok(())
@@ -456,30 +733,53 @@ fn draw_glyph_fallback(
     let Some(mark) = glyph else { return };
     let brand = mark.color_rgb;
     let rounded = D2D1_ROUNDED_RECT {
-        rect: D2D_RECT_F { left: slot.left, top: slot.top, right: slot.left + slot.size_px, bottom: slot.top + slot.size_px },
+        rect: D2D_RECT_F {
+            left: slot.left,
+            top: slot.top,
+            right: slot.left + slot.size_px,
+            bottom: slot.top + slot.size_px,
+        },
         radiusX: slot.size_px * 3.0 / 14.0,
         radiusY: slot.size_px * 3.0 / 14.0,
     };
     match style {
         crate::taskbar_icons::IconStyle::Badge => {
-            if let Ok(b) = unsafe { target.CreateSolidColorBrush(&color_of_blend(brand, 0.18), None) } {
+            if let Ok(b) =
+                unsafe { target.CreateSolidColorBrush(&color_of_blend(brand, 0.18), None) }
+            {
                 unsafe { target.FillRoundedRectangle(&rounded, &b) };
             }
-        },
+        }
         crate::taskbar_icons::IconStyle::Solid => {
             if let Ok(b) = unsafe { target.CreateSolidColorBrush(&color_of(brand), None) } {
                 unsafe { target.FillRoundedRectangle(&rounded, &b) };
             }
-        },
-        crate::taskbar_icons::IconStyle::Pure => {},
+        }
+        crate::taskbar_icons::IconStyle::Pure => {}
     }
-    let glyph_rgb = if style == crate::taskbar_icons::IconStyle::Solid { 0xFF_FFFFu32 } else { brand };
+    let glyph_rgb = if style == crate::taskbar_icons::IconStyle::Solid {
+        0xFF_FFFFu32
+    } else {
+        brand
+    };
     let mut buf = [0u16; 2];
     let glyph: Vec<u16> = mark.glyph.encode_utf16(&mut buf).to_vec();
     if let Ok(brush) = unsafe { target.CreateSolidColorBrush(&color_of(glyph_rgb), None) } {
-        let rect = D2D_RECT_F { left: slot.left, top: slot.top, right: slot.left + slot.size_px, bottom: slot.top + slot.size_px };
+        let rect = D2D_RECT_F {
+            left: slot.left,
+            top: slot.top,
+            right: slot.left + slot.size_px,
+            bottom: slot.top + slot.size_px,
+        };
         unsafe {
-            target.DrawText(&glyph, format, &rect, &brush, D2D1_DRAW_TEXT_OPTIONS_NONE, DWRITE_MEASURING_MODE_NATURAL)
+            target.DrawText(
+                &glyph,
+                format,
+                &rect,
+                &brush,
+                D2D1_DRAW_TEXT_OPTIONS_NONE,
+                DWRITE_MEASURING_MODE_NATURAL,
+            )
         };
     }
 }
@@ -489,8 +789,6 @@ fn color_of_blend(rgb: u32, alpha: f32) -> D2D1_COLOR_F {
     c.a = alpha;
     c
 }
-
-
 
 unsafe fn draw_with(
     renderer: &Renderer,
@@ -582,9 +880,20 @@ unsafe fn create_format(
     dwrite: &IDWriteFactory,
     style: &TextStyle<'_>,
 ) -> windows::core::Result<IDWriteTextFormat> {
+    unsafe { create_format_with_trimming(dwrite, style, true) }
+}
+
+unsafe fn create_format_with_trimming(
+    dwrite: &IDWriteFactory,
+    style: &TextStyle<'_>,
+    enable_trimming: bool,
+) -> windows::core::Result<IDWriteTextFormat> {
     let shared = crate::bundled_fonts::shared();
     let (family_name, collection) = crate::bundled_fonts::resolve(shared, style.family);
-    let family: Vec<u16> = family_name.encode_utf16().chain(std::iter::once(0)).collect();
+    let family: Vec<u16> = family_name
+        .encode_utf16()
+        .chain(std::iter::once(0))
+        .collect();
     let locale: Vec<u16> = "en-us".encode_utf16().chain(std::iter::once(0)).collect();
 
     // The static weight passed here is the fallback DirectWrite uses when the
@@ -615,13 +924,15 @@ unsafe fn create_format(
         // strip is only ~130px wide and an entry label can be long, so *some*
         // truncation is inevitable — this makes it legible and obviously
         // truncated instead of looking like the text simply ends there.
-        if let Ok(sign) = dwrite.CreateEllipsisTrimmingSign(&format) {
-            let trimming = DWRITE_TRIMMING {
-                granularity: DWRITE_TRIMMING_GRANULARITY_CHARACTER,
-                delimiter: 0,
-                delimiterCount: 0,
-            };
-            let _ = format.SetTrimming(&trimming, &sign);
+        if enable_trimming {
+            if let Ok(sign) = dwrite.CreateEllipsisTrimmingSign(&format) {
+                let trimming = DWRITE_TRIMMING {
+                    granularity: DWRITE_TRIMMING_GRANULARITY_CHARACTER,
+                    delimiter: 0,
+                    delimiterCount: 0,
+                };
+                let _ = format.SetTrimming(&trimming, &sign);
+            }
         }
     }
 
@@ -872,9 +1183,7 @@ unsafe fn family_traits(
 /// therefore a false positive for Microsoft YaHei and friends. The resource
 /// side reports real axis ranges and the VARIABLE attribute; that is what
 /// separates MiSans-style continuous faces from stepped multi-face families.
-unsafe fn font_has_weight_axis(
-    font: &windows::Win32::Graphics::DirectWrite::IDWriteFont3,
-) -> bool {
+unsafe fn font_has_weight_axis(font: &windows::Win32::Graphics::DirectWrite::IDWriteFont3) -> bool {
     let Ok(face) = (unsafe { font.CreateFontFace() }) else {
         return false;
     };
@@ -918,12 +1227,83 @@ unsafe fn font_has_weight_axis(
 mod tests {
     use super::*;
     use windows::Win32::Graphics::Gdi::{
-        BI_RGB, BITMAPINFO, BITMAPINFOHEADER, CreateCompatibleDC, CreateDIBSection, DIB_RGB_COLORS,
-        DeleteDC, DeleteObject, HBITMAP, SelectObject,
+        CreateCompatibleDC, CreateDIBSection, DeleteDC, DeleteObject, SelectObject, BITMAPINFO,
+        BITMAPINFOHEADER, BI_RGB, DIB_RGB_COLORS, HBITMAP,
     };
 
     const W: i32 = 320;
     const H: i32 = 64;
+
+    fn assert_layout_is_bounded(layout: StripCellLayout, left: f32, right: f32) {
+        assert!(layout.icon_left.is_finite());
+        assert!(layout.icon_size.is_finite());
+        assert!(layout.icon_left >= left - f32::EPSILON);
+        assert!(layout.icon_left + layout.icon_size <= right + f32::EPSILON);
+        for run in [layout.tag, layout.value].into_iter().flatten() {
+            assert!(run.left.is_finite() && run.right.is_finite());
+            assert!(run.left >= left - f32::EPSILON);
+            assert!(run.right <= right + f32::EPSILON);
+            assert!(run.right >= run.left);
+        }
+    }
+
+    #[test]
+    fn strip_layout_bounds_narrow_cells_and_prioritizes_value() {
+        // Four visible entries produce cells of roughly this width on the
+        // default strip. Both strings are intentionally too long for the cell.
+        let layout = layout_strip_cell(0.0, 78.0, 14.0, 5.0, 2.0, 48.0, 48.0, TextAlign::Left);
+        assert_layout_is_bounded(layout, 0.0, 78.0);
+        let value = layout
+            .value
+            .expect("a non-empty value keeps a bounded slot");
+        assert!(
+            value.right > value.left,
+            "value must not disappear when the tag overflows"
+        );
+        let tag = layout
+            .tag
+            .expect("the remaining width still fits part of the tag");
+        assert!(
+            tag.right - tag.left < 48.0,
+            "tag should yield width to the value"
+        );
+        assert!(
+            tag.right <= value.left,
+            "tag and value rectangles must not overlap"
+        );
+    }
+
+    #[test]
+    fn strip_layout_alignment_moves_the_whole_cluster_without_overflow() {
+        let left = layout_strip_cell(10.0, 110.0, 14.0, 5.0, 2.0, 12.0, 24.0, TextAlign::Left);
+        let center = layout_strip_cell(10.0, 110.0, 14.0, 5.0, 2.0, 12.0, 24.0, TextAlign::Center);
+        let right = layout_strip_cell(10.0, 110.0, 14.0, 5.0, 2.0, 12.0, 24.0, TextAlign::Right);
+        for layout in [left, center, right] {
+            assert_layout_is_bounded(layout, 10.0, 110.0);
+        }
+        assert!(left.icon_left < center.icon_left);
+        assert!(center.icon_left < right.icon_left);
+        let left_value = left.value.expect("left value");
+        let right_value = right.value.expect("right value");
+        assert!(left_value.right < right_value.right);
+    }
+
+    #[test]
+    fn strip_layout_handles_tiny_or_non_finite_geometry() {
+        let tiny = layout_strip_cell(
+            5.0,
+            5.5,
+            14.0,
+            5.0,
+            2.0,
+            f32::NAN,
+            f32::INFINITY,
+            TextAlign::Right,
+        );
+        assert_layout_is_bounded(tiny, 5.0, 5.5);
+        assert!(tiny.tag.is_none());
+        assert!(tiny.value.is_none());
+    }
 
     /// Render one line and return how much ink landed on the bitmap.
     ///
@@ -935,7 +1315,12 @@ mod tests {
         let (b, g, r) = render_channels(
             &[TextLine {
                 text: "Codex 59% 周额度",
-                rect: RECT { left: 0, top: 0, right: W, bottom: H },
+                rect: RECT {
+                    left: 0,
+                    top: 0,
+                    right: W,
+                    bottom: H,
+                },
                 mark: None,
             }],
             &TextStyle {
@@ -1091,7 +1476,12 @@ mod tests {
     /// outline, that separates `◈` Claude from `◆` Codex. Pure-red mark beside
     /// pure-blue text, so red on the bitmap can only have come from the mark.
     fn mark_is_drawn_in_its_own_colour(family: &str) {
-        let rect = RECT { left: 0, top: 0, right: W, bottom: H };
+        let rect = RECT {
+            left: 0,
+            top: 0,
+            right: W,
+            bottom: H,
+        };
         let style = TextStyle {
             family,
             weight: 400.0,
@@ -1100,16 +1490,24 @@ mod tests {
             color_rgb: 0x0000_00FF,
         };
 
-        let Some((_, _, red_without)) =
-            render_channels(&[TextLine { text: "5h 12%", rect, mark: None }], &style)
-        else {
+        let Some((_, _, red_without)) = render_channels(
+            &[TextLine {
+                text: "5h 12%",
+                rect,
+                mark: None,
+            }],
+            &style,
+        ) else {
             return;
         };
         let Some((_, _, red_with)) = render_channels(
             &[TextLine {
                 text: "5h 12%",
                 rect,
-                mark: Some(LineMark { glyph: '◆', color_rgb: 0x00FF_0000 }),
+                mark: Some(LineMark {
+                    glyph: '◆',
+                    color_rgb: 0x00FF_0000,
+                }),
             }],
             &style,
         ) else {
@@ -1240,10 +1638,7 @@ mod tests {
             return;
         }
         for name in ["Microsoft YaHei UI", "Microsoft YaHei", "Segoe UI"] {
-            if let Some(info) = families
-                .iter()
-                .find(|f| f.name.eq_ignore_ascii_case(name))
-            {
+            if let Some(info) = families.iter().find(|f| f.name.eq_ignore_ascii_case(name)) {
                 assert!(
                     !info.variable_weight,
                     "{name} was marked variable_weight — the axis-range check \
@@ -1259,9 +1654,20 @@ mod tests {
 
     /// Render a set of strip cells onto an offscreen DIB and return total ink.
     fn cells_ink(cells: &[StripCell<'_>], family: &str, color_rgb: u32) -> Option<u64> {
+        cells_ink_at(cells, family, color_rgb, 400.0)
+    }
+
+    fn cells_ink_at(
+        cells: &[StripCell<'_>],
+        family: &str,
+        color_rgb: u32,
+        weight: f32,
+    ) -> Option<u64> {
         unsafe {
             let dc = CreateCompatibleDC(None);
-            if dc.is_invalid() { return None; }
+            if dc.is_invalid() {
+                return None;
+            }
             let info = BITMAPINFO {
                 bmiHeader: BITMAPINFOHEADER {
                     biSize: size_of::<BITMAPINFOHEADER>() as u32,
@@ -1275,17 +1681,26 @@ mod tests {
                 ..Default::default()
             };
             let mut bits: *mut core::ffi::c_void = std::ptr::null_mut();
-            let bitmap: HBITMAP = match CreateDIBSection(Some(dc), &info, DIB_RGB_COLORS, &mut bits, None, 0) {
-                Ok(bitmap) if !bits.is_null() => bitmap,
-                _ => { let _ = DeleteDC(dc); return None; },
-            };
+            let bitmap: HBITMAP =
+                match CreateDIBSection(Some(dc), &info, DIB_RGB_COLORS, &mut bits, None, 0) {
+                    Ok(bitmap) if !bits.is_null() => bitmap,
+                    _ => {
+                        let _ = DeleteDC(dc);
+                        return None;
+                    }
+                };
             let previous = SelectObject(dc, bitmap.into());
             std::ptr::write_bytes(bits.cast::<u8>(), 0, (W * H * 4) as usize);
-            let bounds = RECT { left: 0, top: 0, right: W, bottom: H };
+            let bounds = RECT {
+                left: 0,
+                top: 0,
+                right: W,
+                bottom: H,
+            };
             reset_renderer();
             let style = TextStyle {
                 family,
-                weight: 400.0,
+                weight,
                 size_px: 24.0,
                 align: TextAlign::Left,
                 color_rgb,
@@ -1303,8 +1718,12 @@ mod tests {
             );
             let ink = if drawn {
                 let pixels = std::slice::from_raw_parts(bits.cast::<u8>(), (W * H * 4) as usize);
-                pixels.chunks_exact(4).fold(0u64, |acc, px| acc + u64::from(px[0]) + u64::from(px[1]) + u64::from(px[2]))
-            } else { 0 };
+                pixels.chunks_exact(4).fold(0u64, |acc, px| {
+                    acc + u64::from(px[0]) + u64::from(px[1]) + u64::from(px[2])
+                })
+            } else {
+                0
+            };
             SelectObject(dc, previous);
             let _ = DeleteObject(bitmap.into());
             let _ = DeleteDC(dc);
@@ -1317,8 +1736,19 @@ mod tests {
     /// second single-threaded factory on another test thread blocks).
     fn run_strip_cell_render_checks(family: &str) {
         // The tag+value cluster draws real ink (not nothing).
-        let rect = RECT { left: 0, top: 0, right: W, bottom: H };
-        let mut c = StripCell { rect, tag: "周", value: "", icon_provider: None, glyph: None };
+        let rect = RECT {
+            left: 0,
+            top: 0,
+            right: W,
+            bottom: H,
+        };
+        let mut c = StripCell {
+            rect,
+            tag: "周",
+            value: "",
+            icon_provider: None,
+            glyph: None,
+        };
         c.value = "54%";
         if let Some(ink) = cells_ink(std::slice::from_ref(&c), family, 0x00FF_FFFF) {
             assert!(ink > 0, "tag+value rendered no ink — the cluster is empty");
@@ -1332,32 +1762,52 @@ mod tests {
         // icon_provider set). A by-value ABI mismatch in the geometry sink once
         // fast-failed the real paint path while the smoke test passed; an icon
         // cell must now produce ink here too, on the same DC target.
-        let icon_cell = StripCell { rect, tag: "周", value: "54%", icon_provider: Some("codex"), glyph: None };
+        let icon_cell = StripCell {
+            rect,
+            tag: "周",
+            value: "54%",
+            icon_provider: Some("codex"),
+            glyph: None,
+        };
         let icon_ink = cells_ink(std::slice::from_ref(&icon_cell), family, 0x00FF_FFFF);
         let icon_ink = match icon_ink {
             Some(ink) => ink,
-            None => { eprintln!("DirectWrite unavailable; skipping icon regression"); return; },
+            None => {
+                eprintln!("DirectWrite unavailable; skipping icon regression");
+                return;
+            }
         };
         assert!(
             icon_ink > 0,
             "SVG icon cell rendered no ink — the official-mark path is dead"
         );
 
-        // The value run is drawn heavier (wght 600) than the tag's base weight.
-        let half = RECT { left: 0, top: 0, right: W / 2, bottom: H };
-        let tag_cell = StripCell { rect: half, tag: "88", value: "", icon_provider: None, glyph: None };
-        let val_cell = StripCell { rect: half, tag: "", value: "88", icon_provider: None, glyph: None };
-        let (Some(tag_ink), Some(val_ink)) = (
-            cells_ink(std::slice::from_ref(&tag_cell), family, 0x00FF_FFFF),
-            cells_ink(std::slice::from_ref(&val_cell), family, 0x00FF_FFFF),
+        // Tag and value share the configured weight. The old VALUE_WEIGHT=600
+        // lock made numbers ignore the slider (YaHei 600 → Bold, tag 400).
+        let half = RECT {
+            left: 0,
+            top: 0,
+            right: W / 2,
+            bottom: H,
+        };
+        let val_cell = StripCell {
+            rect: half,
+            tag: "",
+            value: "88",
+            icon_provider: None,
+            glyph: None,
+        };
+        let (Some(light), Some(heavy)) = (
+            cells_ink_at(std::slice::from_ref(&val_cell), family, 0x00FF_FFFF, 400.0),
+            cells_ink_at(std::slice::from_ref(&val_cell), family, 0x00FF_FFFF, 700.0),
         ) else {
             eprintln!("DirectWrite unavailable; skipping");
             return;
         };
-        assert!(tag_ink > 0, "base-weight tag rendered nothing");
+        assert!(light > 0, "value run at weight 400 rendered nothing");
         assert!(
-            val_ink > tag_ink,
-            "value (wght 600) rendered {val_ink} ink, tag (base) {tag_ink} — expected the value to be heavier"
+            heavy > light,
+            "value at wght 700 rendered {heavy} ink, not more than wght 400's {light} — the slider is not reaching the numbers"
         );
     }
 }

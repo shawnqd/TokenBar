@@ -7,8 +7,8 @@ export const SETTINGS_NAV_IDS = [
   "trayPanel",
   "floatBar",
   "taskbarStatus",
-  "notifications",
   "appearance",
+  "notifications",
   "privacy",
   "advanced",
   "about",
@@ -35,7 +35,7 @@ export function canonicalizeSettingsTab(tab: SettingsTabId): SettingsNavId {
 
 export const SETTINGS_PAGE_COPY: Record<
   SettingsNavId,
-  { titleKey: LocaleKey; descriptionKey?: LocaleKey; eyebrowKey: LocaleKey }
+  { titleKey: LocaleKey; descriptionKey?: LocaleKey; eyebrowKey?: LocaleKey }
 > = {
   general: {
     titleKey: "TabGeneral",
@@ -70,7 +70,7 @@ export const SETTINGS_PAGE_COPY: Record<
   appearance: {
     titleKey: "TabAppearance",
     descriptionKey: "SettingsPageAppearanceDescription",
-    eyebrowKey: "SettingsNavGroupFeedback",
+    eyebrowKey: "SettingsNavGroupSurfaces",
   },
   privacy: {
     titleKey: "TabPrivacy",
@@ -84,6 +84,5 @@ export const SETTINGS_PAGE_COPY: Record<
   },
   about: {
     titleKey: "TabAbout",
-    eyebrowKey: "SettingsNavGroupData",
   },
 };

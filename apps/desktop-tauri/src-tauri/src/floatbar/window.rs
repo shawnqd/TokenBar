@@ -320,13 +320,45 @@ pub fn hide(app: &tauri::AppHandle) -> Result<(), String> {
     Ok(())
 }
 
+static FLYOUT_EXPANDED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+pub fn is_flyout_expanded() -> bool {
+    FLYOUT_EXPANDED.load(std::sync::atomic::Ordering::SeqCst)
+}
+
 /// Capture current position into the geometry store under the floatbar key.
+static LAST_SAVED_GEOMETRY: std::sync::Mutex<Option<geometry_store::StoredGeometry>> =
+    std::sync::Mutex::new(None);
+static PENDING_GEOMETRY_SAVE: std::sync::Mutex<Option<geometry_store::StoredGeometry>> =
+    std::sync::Mutex::new(None);
+static GEOMETRY_FLUSHER_RUNNING: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+/// Flushes any pending debounced geometry synchronously to disk.
+pub fn flush_geometry() {
+    let geom = if let Ok(mut pending) = PENDING_GEOMETRY_SAVE.lock() {
+        pending.take()
+    } else {
+        None
+    };
+    if let Some(geom) = geom {
+        if let Ok(mut last) = LAST_SAVED_GEOMETRY.lock() {
+            *last = Some(geom);
+        }
+        geometry_store::save_entry(FLOATBAR_LABEL, geom);
+    }
+}
+
+/// Remembers the current geometry for the floatbar window.
 ///
 /// Accepts any Tauri window handle (`Window` from event callbacks or
 /// `WebviewWindow` from `get_webview_window`), since `WindowEvent`
 /// callbacks deliver a `&Window` while imperative call sites have a
 /// `&WebviewWindow`.
 pub fn remember_geometry<R: tauri::Runtime, M: WindowGeometry<R>>(window: &M) {
+    if is_flyout_expanded() {
+        return;
+    }
     let Ok(pos) = window.outer_position() else {
         return;
     };
@@ -345,15 +377,49 @@ pub fn remember_geometry<R: tauri::Runtime, M: WindowGeometry<R>>(window: &M) {
         }
     }
     let scale = window.scale_factor().unwrap_or(1.0);
-    geometry_store::save_entry(
-        FLOATBAR_LABEL,
-        geometry_store::StoredGeometry {
-            x: (pos.x as f64 / scale).round() as i32,
-            y: (pos.y as f64 / scale).round() as i32,
-            width: Some((size.width as f64 / scale).round() as u32),
-            height: Some((size.height as f64 / scale).round() as u32),
-        },
-    );
+    let target = geometry_store::StoredGeometry {
+        x: (pos.x as f64 / scale).round() as i32,
+        y: (pos.y as f64 / scale).round() as i32,
+        width: Some((size.width as f64 / scale).round() as u32),
+        height: Some((size.height as f64 / scale).round() as u32),
+    };
+
+    if let Ok(last) = LAST_SAVED_GEOMETRY.lock() {
+        if *last == Some(target) {
+            return;
+        }
+    }
+
+    if let Ok(mut pending) = PENDING_GEOMETRY_SAVE.lock() {
+        *pending = Some(target);
+    }
+
+    // Debounce disk I/O so dragging the window doesn't synchronously write JSON to disk
+    // hundreds of times per second on the UI thread.
+    if !GEOMETRY_FLUSHER_RUNNING.swap(true, std::sync::atomic::Ordering::SeqCst) {
+        std::thread::Builder::new()
+            .name("floatbar-geometry-flush".into())
+            .spawn(|| {
+                loop {
+                    std::thread::sleep(std::time::Duration::from_millis(300));
+                    let geom = if let Ok(mut pending) = PENDING_GEOMETRY_SAVE.lock() {
+                        pending.take()
+                    } else {
+                        None
+                    };
+                    if let Some(geom) = geom {
+                        if let Ok(mut last) = LAST_SAVED_GEOMETRY.lock() {
+                            *last = Some(geom);
+                        }
+                        geometry_store::save_entry(FLOATBAR_LABEL, geom);
+                    } else {
+                        GEOMETRY_FLUSHER_RUNNING.store(false, std::sync::atomic::Ordering::SeqCst);
+                        break;
+                    }
+                }
+            })
+            .ok();
+    }
 }
 
 /// Subset of `tauri::WebviewWindow` / `tauri::Window` used by
@@ -426,6 +492,83 @@ impl<R: tauri::Runtime> WindowGeometry<R> for tauri::Window<R> {
     }
 }
 
+/// Adjust the floatbar geometry (size and optional position) and re-assert the
+/// native interaction invariants in the same step.
+///
+/// When `is_expanded` is true (e.g. flyout open), geometry persistence is suppressed
+/// so that temporary hover expansions do not overwrite stored resting coordinates.
+/// On Windows, if `x` and `y` are provided, this updates both position and dimensions
+/// in a single atomic Win32 `SetWindowPos` call to eliminate visual tearing.
+pub fn adjust_geometry(
+    window: &tauri::WebviewWindow,
+    width: f64,
+    height: f64,
+    x: Option<f64>,
+    y: Option<f64>,
+    is_expanded: bool,
+    click_through: bool,
+) -> Result<(), String> {
+    FLYOUT_EXPANDED.store(is_expanded, std::sync::atomic::Ordering::SeqCst);
+
+    #[cfg(windows)]
+    {
+        use raw_window_handle::HasWindowHandle;
+        if let Ok(handle) = window.window_handle() {
+            if let raw_window_handle::RawWindowHandle::Win32(h) = handle.as_raw() {
+                let scale = window.scale_factor().unwrap_or(1.0);
+                let phys_w = (width * scale).round() as i32;
+                let phys_h = (height * scale).round() as i32;
+
+                unsafe {
+                    const HWND_TOPMOST: isize = -1;
+                    const SWP_NOACTIVATE: u32 = 0x0010;
+                    const SWP_ASYNCWINDOWPOS: u32 = 0x4000;
+                    let (phys_x, phys_y, flags) = if let (Some(x), Some(y)) = (x, y) {
+                        (
+                            (x * scale).round() as i32,
+                            (y * scale).round() as i32,
+                            SWP_NOACTIVATE | SWP_ASYNCWINDOWPOS,
+                        )
+                    } else {
+                        const SWP_NOMOVE: u32 = 0x0002;
+                        (0, 0, SWP_NOMOVE | SWP_NOACTIVATE | SWP_ASYNCWINDOWPOS)
+                    };
+
+                    SetWindowPos(
+                        h.hwnd.get(),
+                        HWND_TOPMOST,
+                        phys_x,
+                        phys_y,
+                        phys_w,
+                        phys_h,
+                        flags,
+                    );
+                }
+                apply_no_activate(window);
+                apply_click_through(window, click_through);
+                if !is_expanded {
+                    remember_geometry(window);
+                }
+                return Ok(());
+            }
+        }
+    }
+
+    if let (Some(x), Some(y)) = (x, y) {
+        let _ = window.set_position(LogicalPosition::new(x, y));
+    }
+    window
+        .set_size(LogicalSize::new(width, height))
+        .map_err(|e| e.to_string())?;
+    apply_no_activate(window);
+    apply_click_through(window, click_through);
+    apply_always_on_top(window);
+    if !is_expanded {
+        remember_geometry(window);
+    }
+    Ok(())
+}
+
 /// Resize the floatbar to the given logical dimensions and re-assert the
 /// native interaction invariants in the same step.
 ///
@@ -440,13 +583,7 @@ pub fn resize(
     height: f64,
     click_through: bool,
 ) -> Result<(), String> {
-    window
-        .set_size(LogicalSize::new(width, height))
-        .map_err(|e| e.to_string())?;
-    apply_no_activate(window);
-    apply_click_through(window, click_through);
-    apply_always_on_top(window);
-    Ok(())
+    adjust_geometry(window, width, height, None, None, false, click_through)
 }
 
 /// Re-assert native topmost ordering without activating the window.
@@ -471,7 +608,11 @@ pub fn apply_always_on_top(window: &tauri::WebviewWindow) {
             const SWP_NOSIZE: u32 = 0x0001;
             const SWP_NOMOVE: u32 = 0x0002;
             const SWP_NOACTIVATE: u32 = 0x0010;
-            let flags = SWP_NOSIZE | SWP_NOMOVE | SWP_NOACTIVATE;
+            // The guard may request this from a worker after probing taskbar
+            // geometry. ASYNCWINDOWPOS prevents SetWindowPos from waiting on
+            // a different GUI thread while preserving the no-activate pass.
+            const SWP_ASYNCWINDOWPOS: u32 = 0x4000;
+            let flags = SWP_NOSIZE | SWP_NOMOVE | SWP_NOACTIVATE | SWP_ASYNCWINDOWPOS;
             if SetWindowPos(h.hwnd.get(), HWND_TOPMOST, 0, 0, 0, 0, flags) == 0 {
                 tracing::warn!(
                     error = %std::io::Error::last_os_error(),
@@ -484,12 +625,16 @@ pub fn apply_always_on_top(window: &tauri::WebviewWindow) {
 
 /// Apply the current opacity setting to an existing floatbar window via
 /// `SetLayeredWindowAttributes`. No-op on non-Windows platforms.
+///
+/// In modern Windows WebView2 with `transparent(true)`, opacity is managed
+/// directly at the DirectComposition / CSS layer by `FloatBar.tsx`. The native
+/// HWND stays at full alpha (255) so that CSS can freely control opacity and
+/// restore to 100% on mouse hover without being hard-clamped by DWM.
 pub fn apply_opacity(window: &tauri::WebviewWindow, opacity: u8) {
     let _ = (window, opacity);
     #[cfg(windows)]
     {
         use raw_window_handle::HasWindowHandle;
-        let alpha = opacity_to_alpha(opacity);
         let Ok(handle) = window.window_handle() else {
             return;
         };
@@ -504,7 +649,7 @@ pub fn apply_opacity(window: &tauri::WebviewWindow, opacity: u8) {
                 set_extended_style(h.hwnd.get(), ex | WS_EX_LAYERED);
             }
             const LWA_ALPHA: u32 = 0x00000002;
-            SetLayeredWindowAttributes(h.hwnd.get(), 0, alpha, LWA_ALPHA);
+            SetLayeredWindowAttributes(h.hwnd.get(), 0, 255, LWA_ALPHA);
         }
     }
 }

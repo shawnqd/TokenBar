@@ -4,6 +4,10 @@
 
 use async_trait::async_trait;
 use chrono::{DateTime, TimeZone, Utc};
+use std::path::PathBuf;
+use std::process::Command;
+use std::io::Read;
+use std::time::Duration;
 use reqwest::Client;
 use serde::Deserialize;
 use serde_json::json;
@@ -659,15 +663,206 @@ impl Provider for DoubaoProvider {
                     "api",
                 ))
             }
-            SourceMode::Web | SourceMode::Cli => {
-                Err(ProviderError::UnsupportedSource(ctx.source_mode))
+            SourceMode::Cli => {
+                let snap = fetch_arkcli_usage()?;
+                Ok(ProviderFetchResult::new(snap, "arkcli"))
             }
+            SourceMode::Web => Err(ProviderError::UnsupportedSource(ctx.source_mode)),
         }
     }
 
     fn available_sources(&self) -> Vec<SourceMode> {
-        vec![SourceMode::Auto, SourceMode::OAuth]
+        vec![SourceMode::Auto, SourceMode::OAuth, SourceMode::Cli]
     }
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default)]
+struct ArkcliUsageResponse {
+    viewer: Option<ArkcliViewer>,
+    items: Vec<ArkcliUsageItem>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct ArkcliViewer {
+    #[serde(default, rename = "auth_method")]
+    auth_method: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ArkcliUsageItem {
+    product: String,
+    #[serde(default)]
+    subscribed: Option<bool>,
+    #[serde(default)]
+    periods: Option<Vec<ArkcliPeriod>>,
+    #[serde(default, rename = "updated_at")]
+    updated_at: Option<f64>,
+    #[serde(default)]
+    error: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ArkcliPeriod {
+    label: String,
+    percent: f64,
+    #[serde(default, rename = "reset_at")]
+    reset_at: Option<String>,
+}
+
+fn resolve_arkcli_binary() -> Option<PathBuf> {
+    if let Ok(path) = std::env::var("ARKCLI_PATH") {
+        let p = PathBuf::from(path.trim());
+        if p.is_file() {
+            return Some(p);
+        }
+    }
+    which::which("arkcli").ok()
+}
+
+fn run_arkcli_usage_plan() -> Result<Vec<u8>, ProviderError> {
+    let bin = resolve_arkcli_binary().ok_or_else(|| {
+        ProviderError::NotInstalled(
+            "arkcli was not found. Install arkcli, run 'arkcli auth login', or configure Doubao API credentials."
+                .into(),
+        )
+    })?;
+    let mut child = Command::new(&bin)
+        .args(["usage", "plan", "--format", "json"])
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .map_err(|e| ProviderError::Other(format!("Failed to launch arkcli: {e}")))?;
+
+    // 15s wall-clock via join timeout isn't available on std Command; kill
+    // after a wait timeout via a simple timed poll loop.
+    let deadline = std::time::Instant::now() + Duration::from_secs(15);
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) => break,
+            Ok(None) if std::time::Instant::now() >= deadline => {
+                let _killed = child.kill();
+                let _reaped = child.wait();
+                return Err(ProviderError::Other(
+                    "arkcli usage timed out. Check arkcli authentication and try again.".into(),
+                ));
+            }
+            Ok(None) => std::thread::sleep(Duration::from_millis(50)),
+            Err(e) => {
+                return Err(ProviderError::Other(format!("arkcli wait failed: {e}")));
+            }
+        }
+    }
+    let mut output = Vec::new();
+    if child.stdout.take().map(|mut out| out.read_to_end(&mut output)).is_none() {
+        return Err(ProviderError::Other("arkcli stdout unavailable".into()));
+    }
+    Ok(output)
+}
+
+fn decode_arkcli_usage(bytes: &[u8]) -> Result<CodingPlanResult, ProviderError> {
+    let response: ArkcliUsageResponse = serde_json::from_slice(bytes)
+        .map_err(|e| ProviderError::Parse(format!("Failed to parse arkcli usage: {e}")))?;
+
+    if let Some(method) = response
+        .viewer
+        .as_ref()
+        .and_then(|v| v.auth_method.as_deref())
+        .map(str::trim)
+    {
+        if method.eq_ignore_ascii_case("none") {
+            return Err(ProviderError::AuthRequired);
+        }
+    }
+
+    let supported = [
+        "agent-plan",
+        "coding-plan",
+        "agent-plan-team",
+        "coding-plan-team",
+    ];
+    for item in &response.items {
+        let product = item.product.to_ascii_lowercase();
+        if !supported.iter().any(|p| *p == product) {
+            continue;
+        }
+        if item.subscribed == Some(false) {
+            continue;
+        }
+        let periods_empty = item.periods.as_ref().map(|p| p.is_empty()).unwrap_or(true);
+        if periods_empty {
+            // Incomplete product entry; keep scanning other products.
+        }
+    }
+
+    let mut quotas = Vec::new();
+    let mut update_ts: Option<f64> = None;
+    let mut status = response
+        .viewer
+        .and_then(|v| v.auth_method)
+        .filter(|s| !s.trim().is_empty());
+
+    for item in response.items {
+        let product = item.product.to_ascii_lowercase();
+        let level_prefix = match product.as_str() {
+            "agent-plan" => "agent_",
+            "coding-plan" => "",
+            "agent-plan-team" => "agent_team_",
+            "coding-plan-team" => "coding_team_",
+            _ => continue,
+        };
+        if item.subscribed == Some(false) {
+            continue;
+        }
+        let periods = item.periods.unwrap_or_default();
+        if !periods.is_empty() {
+            if let Some(updated_at) = item.updated_at.filter(|v| *v > 0.0) {
+                // arkcli may emit ms or seconds; 1e11 is the unit threshold.
+                let seconds = if updated_at >= 1e11 {
+                    updated_at / 1000.0
+                } else {
+                    updated_at
+                };
+                if update_ts.map(|t| seconds > t).unwrap_or(true) {
+                    update_ts = Some(seconds);
+                }
+            }
+        }
+        for period in periods {
+            let level = format!("{level_prefix}{}", period.label);
+            let reset_timestamp = period
+                .reset_at
+                .as_deref()
+                .and_then(|raw| DateTime::parse_from_rfc3339(raw.trim()).ok())
+                .map(|d| d.timestamp() as f64);
+            quotas.push(CodingPlanQuota {
+                level,
+                percent: period.percent,
+                reset_timestamp,
+            });
+        }
+        if status.is_none() {
+            status = Some(product);
+        }
+    }
+
+    if quotas.is_empty() {
+        return Err(ProviderError::Parse(
+            "arkcli returned no active Coding or Agent Plan usage.".into(),
+        ));
+    }
+
+    Ok(CodingPlanResult {
+        status,
+        update_timestamp: update_ts,
+        quota_usage: quotas,
+    })
+}
+
+fn fetch_arkcli_usage() -> Result<UsageSnapshot, ProviderError> {
+    let stdout = run_arkcli_usage_plan()?;
+    let usage = decode_arkcli_usage(&stdout)?;
+    Ok(coding_plan_snapshot(usage))
 }
 
 fn resolve_api_key(

@@ -88,25 +88,17 @@ pub struct Settings {
     #[serde(default)]
     pub menu_bar_shows_highest_usage: bool,
 
-    /// Legacy global "show usage bars as used (true) or remaining (false)".
-    ///
-    /// Superseded by the per-component fields
-    /// [`float_bar_show_as_used`](Settings::float_bar_show_as_used),
-    /// [`dashboard_show_as_used`](Settings::dashboard_show_as_used) and
-    /// [`taskbar_show_as_used`](Settings::taskbar_show_as_used). It is retained
-    /// only so existing `settings.json` files keep loading and can seed those
-    /// fields once; no display surface reads it any more.
+    /// General default: show usage bars as used (`true`) or remaining (`false`).
+    /// Surfaces whose preference is [`QuotaDisplayPreference::Follow`] resolve
+    /// their effective value from this field.
     pub show_as_used: bool,
 
     /// Enable UI animations (chart entrances, transitions)
     pub enable_animations: bool,
 
-    /// Legacy global "show reset times as relative (e.g. "2h 30m") instead of
-    /// absolute ("3:00 PM")".
-    ///
-    /// Superseded by the per-component `*_reset_time_relative` fields and kept
-    /// only as a migration source, exactly like
-    /// [`show_as_used`](Settings::show_as_used).
+    /// General default: show reset times as a countdown (`true`) or an
+    /// absolute local time (`false`). Surfaces whose preference is
+    /// [`ResetDisplayPreference::Follow`] resolve from this field.
     pub reset_time_relative: bool,
 
     /// Menu bar display mode: "minimal", "compact", or "detailed"
@@ -115,7 +107,10 @@ pub struct Settings {
     /// Show recent model output speed in the tray flyout.
     #[serde(default = "default_true")]
     pub output_speed_enabled: bool,
-    /// 设置页可见时是否保留托盘面板(false=维持现状之外的隐藏偏好)。
+    /// Keep the tray flyout open through outside/edge clicks while Settings is
+    /// visible. Default on; turning it off restores normal click-outside
+    /// dismiss even with Settings open.
+    #[serde(default = "default_true")]
     pub keep_tray_panel_on_settings: bool,
 
     /// Which period the panel's local-usage stats lead with: "today", "7d", or "30d".
@@ -337,25 +332,39 @@ pub struct Settings {
 
     // ── Per-component quota presentation ─────────────────────────────
     //
-    // The floating bar, the dashboard surfaces (tray flyout + PopOut panel)
-    // and the Windows taskbar strip each own their own used-vs-remaining and
-    // relative-vs-absolute reset choice. They are seeded once from the legacy
-    // global fields when an older `settings.json` is loaded and are fully
-    // independent afterwards, so changing one surface never silently changes
-    // another.
-    /// Floating bar: show quota as used (`true`) or remaining (`false`).
+    // Each surface stores an explicit preference. `Follow` inherits the
+    // General-page default; the other values are local overrides. The boolean
+    // fields below remain as effective-value compatibility fields for older
+    // bridge/native callers and are kept in sync by the settings boundary.
+    /// Floating bar quota preference (`follow`, `used`, or `remaining`).
+    #[serde(default)]
+    pub float_bar_quota_display: QuotaDisplayPreference,
+
+    /// Floating bar: effective show-used value kept for compatibility.
     #[serde(default = "default_true")]
     pub float_bar_show_as_used: bool,
 
-    /// Floating bar: show reset times as relative (`true`) or absolute (`false`).
+    /// Floating bar reset preference (`follow`, `countdown`, or `absolute`).
+    #[serde(default)]
+    pub float_bar_reset_display: ResetDisplayPreference,
+
+    /// Floating bar: effective countdown value kept for compatibility.
     #[serde(default = "default_true")]
     pub float_bar_reset_time_relative: bool,
 
-    /// Dashboard surfaces: show quota as used (`true`) or remaining (`false`).
+    /// Tray flyout + PopOut quota preference.
+    #[serde(default)]
+    pub dashboard_quota_display: QuotaDisplayPreference,
+
+    /// Tray flyout + PopOut: effective show-used value kept for compatibility.
     #[serde(default = "default_true")]
     pub dashboard_show_as_used: bool,
 
-    /// Dashboard surfaces: relative (`true`) or absolute (`false`) reset times.
+    /// Tray flyout + PopOut reset preference.
+    #[serde(default)]
+    pub dashboard_reset_display: ResetDisplayPreference,
+
+    /// Tray flyout + PopOut: effective countdown value kept for compatibility.
     #[serde(default = "default_true")]
     pub dashboard_reset_time_relative: bool,
 
@@ -371,17 +380,20 @@ pub struct Settings {
     #[serde(default)]
     pub dashboard_quota_windows: Vec<String>,
 
-    /// Windows taskbar strip and notification-area icon: show quota as used
-    /// (`true`) or remaining (`false`). Consumed by
-    /// `tray_bridge::selected_tray_percents`, which feeds both.
-    ///
+    /// Windows taskbar strip and notification-area icon quota preference.
+    #[serde(default)]
+    pub taskbar_quota_display: QuotaDisplayPreference,
+
+    /// Windows taskbar strip and notification-area icon: effective show-used
+    /// value kept for compatibility. Consumed by the native bridge.
     #[serde(default = "default_true")]
     pub taskbar_show_as_used: bool,
 
-    /// Same family as [`taskbar_show_as_used`]: how the strip's and the tray
-    /// icon's surfaces phrase a reset time — `true` for a countdown ("14 小时后"),
-    /// `false` for the moment itself ("08-07 14:30").
-    ///
+    /// Windows taskbar/tray reset preference. `Follow` uses the General-page
+    /// default; the effective boolean is retained for the native context menu.
+    #[serde(default)]
+    pub taskbar_reset_display: ResetDisplayPreference,
+
     /// This field was deliberately absent for most of TASK-021, because nothing
     /// in that family rendered reset text and an inert setting is worse than no
     /// setting. That changed when the self-drawn context menu grew a status row
@@ -774,11 +786,12 @@ fn default_local_usage_period() -> String {
 
 /// Default cookie source value for browser-authenticated providers.
 ///
-/// Browser cookie extraction reads browser profile databases and decrypts
-/// Chromium cookies via Windows DPAPI. This is the CodexBar-compatible default
-/// for web-session providers; `manual` is an explicit advanced/fallback mode.
-/// See docs/COOKIES.md for the source ladder and privacy boundary.
-const DEFAULT_COOKIE_SOURCE: &str = "auto";
+/// Upstream parity (Win-CodexBar main): the default is `manual` — the provider
+/// reads only a session the user supplied on purpose, and browser cookie
+/// extraction is an explicit opt-in. Browser reading decrypts Chromium cookie
+/// databases via Windows DPAPI, which can trip antivirus engines; upstream
+/// keeps it off unless the user selects `auto`. See docs/COOKIES.md.
+const DEFAULT_COOKIE_SOURCE: &str = "manual";
 
 /// Default usage source value for any provider.
 const DEFAULT_PROVIDER_SOURCE: &str = "auto";
@@ -867,13 +880,19 @@ impl Default for Settings {
             taskbar_widget_value_gap_px: default_taskbar_widget_value_gap_px(),
             taskbar_widget_width: default_taskbar_widget_width(),
             taskbar_widget_text_align: default_taskbar_widget_text_align(),
+            float_bar_quota_display: QuotaDisplayPreference::Follow,
             float_bar_show_as_used: true,
+            float_bar_reset_display: ResetDisplayPreference::Follow,
             float_bar_reset_time_relative: true,
+            dashboard_quota_display: QuotaDisplayPreference::Follow,
             dashboard_show_as_used: true,
+            dashboard_reset_display: ResetDisplayPreference::Follow,
             dashboard_reset_time_relative: true,
             dashboard_provider_ids: Vec::new(),
             dashboard_quota_windows: vec!["session".to_string(), "weekly".to_string()],
+            taskbar_quota_display: QuotaDisplayPreference::Follow,
             taskbar_show_as_used: true,
+            taskbar_reset_display: ResetDisplayPreference::Follow,
             taskbar_reset_time_relative: true,
             taskbar_tooltip_entries: Vec::new(),
         }
@@ -881,6 +900,51 @@ impl Default for Settings {
 }
 
 impl Settings {
+    /// Resolve the value that the floating bar should render.
+    pub fn effective_float_bar_show_as_used(&self) -> bool {
+        self.float_bar_quota_display
+            .resolves_to_used(self.show_as_used)
+    }
+
+    /// Resolve the value that the tray flyout/PopOut should render.
+    pub fn effective_dashboard_show_as_used(&self) -> bool {
+        self.dashboard_quota_display
+            .resolves_to_used(self.show_as_used)
+    }
+
+    /// Resolve the value that the Windows taskbar/tray icon should render.
+    pub fn effective_taskbar_show_as_used(&self) -> bool {
+        self.taskbar_quota_display
+            .resolves_to_used(self.show_as_used)
+    }
+
+    pub fn effective_float_bar_reset_time_relative(&self) -> bool {
+        self.float_bar_reset_display
+            .resolves_to_relative(self.reset_time_relative)
+    }
+
+    pub fn effective_dashboard_reset_time_relative(&self) -> bool {
+        self.dashboard_reset_display
+            .resolves_to_relative(self.reset_time_relative)
+    }
+
+    pub fn effective_taskbar_reset_time_relative(&self) -> bool {
+        self.taskbar_reset_display
+            .resolves_to_relative(self.reset_time_relative)
+    }
+
+    /// Keep the legacy/effective booleans synchronized after any global or
+    /// per-surface preference update. Existing native callers can continue to
+    /// read the booleans while new callers use the explicit modes above.
+    pub fn sync_quota_display_effective(&mut self) {
+        self.float_bar_show_as_used = self.effective_float_bar_show_as_used();
+        self.dashboard_show_as_used = self.effective_dashboard_show_as_used();
+        self.taskbar_show_as_used = self.effective_taskbar_show_as_used();
+        self.float_bar_reset_time_relative = self.effective_float_bar_reset_time_relative();
+        self.dashboard_reset_time_relative = self.effective_dashboard_reset_time_relative();
+        self.taskbar_reset_time_relative = self.effective_taskbar_reset_time_relative();
+    }
+
     /// Get the settings file path
     pub fn settings_path() -> Option<PathBuf> {
         dirs::config_dir().map(|p| p.join("CodexBar").join("settings.json"))

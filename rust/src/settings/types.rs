@@ -192,6 +192,88 @@ pub enum MetricPreference {
     Average,
 }
 
+/// How a surface chooses the percentage semantic it renders.
+///
+/// `Follow` deliberately means "follow the General-page default" rather than
+/// a second display semantic. The enum is persisted as a stable lowercase
+/// string and keeps the inheritance rule explicit at the settings boundary.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum QuotaDisplayPreference {
+    #[default]
+    Follow,
+    Used,
+    Remaining,
+}
+
+impl QuotaDisplayPreference {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Follow => "follow",
+            Self::Used => "used",
+            Self::Remaining => "remaining",
+        }
+    }
+
+    /// Parse the persisted/bridge spelling. `remain` and `inherit` are
+    /// accepted as harmless compatibility aliases from early previews.
+    pub fn parse(value: &str) -> Option<Self> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "follow" | "global" | "inherit" => Some(Self::Follow),
+            "used" => Some(Self::Used),
+            "remaining" | "remain" => Some(Self::Remaining),
+            _ => None,
+        }
+    }
+
+    pub fn resolves_to_used(self, global_show_as_used: bool) -> bool {
+        match self {
+            Self::Follow => global_show_as_used,
+            Self::Used => true,
+            Self::Remaining => false,
+        }
+    }
+}
+
+/// How a surface formats a quota reset timestamp.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum ResetDisplayPreference {
+    #[default]
+    Follow,
+    Countdown,
+    Absolute,
+}
+
+impl ResetDisplayPreference {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Follow => "follow",
+            Self::Countdown => "countdown",
+            Self::Absolute => "absolute",
+        }
+    }
+
+    /// Parse the persisted/bridge spelling. `relative` is accepted as the
+    /// legacy name used by the boolean setting and old preview drafts.
+    pub fn parse(value: &str) -> Option<Self> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "follow" | "global" | "inherit" => Some(Self::Follow),
+            "countdown" | "relative" | "rel" => Some(Self::Countdown),
+            "absolute" | "abs" => Some(Self::Absolute),
+            _ => None,
+        }
+    }
+
+    pub fn resolves_to_relative(self, global_relative: bool) -> bool {
+        match self {
+            Self::Follow => global_relative,
+            Self::Countdown => true,
+            Self::Absolute => false,
+        }
+    }
+}
+
 impl MetricPreference {
     /// Get all available metric preferences
     pub fn all() -> &'static [MetricPreference] {

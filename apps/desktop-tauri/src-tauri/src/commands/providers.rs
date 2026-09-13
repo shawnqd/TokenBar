@@ -5,6 +5,28 @@ const MAX_CONCURRENT_PROVIDER_FETCHES: usize = 8;
 
 // ── Provider refresh commands ────────────────────────────────────────
 
+/// Web-session ladder for providers that can read a web usage page
+/// (2026-09-06 source contract, upstream-aligned): the token account wins,
+/// then the session the user saved on purpose, then an automatically read
+/// browser cookie, and with no session at all the fetch falls back to the
+/// provider's own ladder (`fallback`). A resolved session only selects the
+/// Web strategy for this fetch; the user's persisted usage source is never
+/// rewritten by a cookie read.
+pub(crate) fn resolve_web_session(
+    token_cookie: Option<String>,
+    stored_cookie: Option<String>,
+    browser_cookie: Option<String>,
+    fallback: SourceMode,
+) -> (SourceMode, Option<String>) {
+    let cookie_header = token_cookie.or(stored_cookie).or(browser_cookie);
+    let source_mode = if cookie_header.is_some() {
+        SourceMode::Web
+    } else {
+        fallback
+    };
+    (source_mode, cookie_header)
+}
+
 /// Build a `FetchContext` for a provider using persisted cookies/keys.
 pub(crate) fn build_fetch_context(
     id: ProviderId,
@@ -74,29 +96,28 @@ pub(crate) fn build_fetch_context(
             }
             "off" => (SourceMode::Cli, None),
             "manual" => {
-                let cookie_header = active_token_cookie.or(stored_cookie);
+                // A cookie the user supplied on purpose — pasted, imported
+                // from a file, or captured by the in-app login window — is an
+                // instruction to read that web session, so honour it. With no
+                // session saved, hand control back to the provider's own
+                // ladder instead of pinning the fetch to one source (pinning
+                // is what once made a cookie feel mandatory).
+                let (source_mode, cookie_header) =
+                    resolve_web_session(active_token_cookie, stored_cookie, None, usage_source);
                 let source_mode = if has_kimi_code_api_key && usage_source == SourceMode::Auto {
                     SourceMode::Auto
-                } else if cookie_header.is_some() {
-                    // A cookie the user supplied on purpose — pasted, imported
-                    // from a file, or captured by the in-app login window — is
-                    // an instruction to read that web session, so honour it.
-                    SourceMode::Web
                 } else {
-                    // No cookie. Pinning the provider to one source here is
-                    // what made a cookie feel mandatory: a provider holding a
-                    // perfectly good local CLI token or OAuth credential was
-                    // never allowed to try it. Hand control back to the
-                    // provider's own ladder, which reads what is already on
-                    // disk before it reaches for any browser session.
-                    usage_source
+                    source_mode
                 };
                 (source_mode, cookie_header)
             }
-            // `browser` is accepted as a legacy alias from older settings.
-            // 2026-08-30 认证合同:这是默认路径 —— 先读取浏览器 Cookie，
-            // 手动保存的 Cookie 只作高级故障兜底；拿到可用会话才走网页策略，
-            // 全部不可用才回退 provider 自己的 OAuth/CLI/API 阶梯。
+            // `browser`/`web` are legacy aliases from older settings. Auto is
+            // an explicit opt-in (2026-09-06 source contract): token account →
+            // saved session → browser cookie, then the provider's own ladder.
+            // The browser store is never consulted when the user already
+            // supplied a session, and a resolved cookie only picks the Web
+            // strategy for this fetch — the persisted usage source stays
+            // untouched.
             "auto" | "browser" | "web" => {
                 let browser_cookie = provider_cookie_domain(id, settings).and_then(|domain| {
                     match codexbar::browser::cookies::get_cookie_header(domain) {
@@ -113,15 +134,31 @@ pub(crate) fn build_fetch_context(
                         }
                     }
                 });
-                let cookie_header = active_token_cookie.or(browser_cookie).or(stored_cookie);
-                let source_mode = if has_kimi_code_api_key && usage_source == SourceMode::Auto {
-                    SourceMode::Auto
-                } else if cookie_header.is_some() {
-                    SourceMode::Web
+                // Upstream parity: an explicit non-Auto usage-source pin is
+                // honored as-is. The best available session (token account →
+                // saved → browser) still rides along for providers that can
+                // use it, but a pinned Cli/OAuth fetch is never rewritten to
+                // Web just because a session exists. Auto keeps the
+                // acquisition ladder below.
+                if usage_source != SourceMode::Auto {
+                    (
+                        usage_source,
+                        active_token_cookie.or(stored_cookie).or(browser_cookie),
+                    )
                 } else {
-                    usage_source
-                };
-                (source_mode, cookie_header)
+                    let (source_mode, cookie_header) = resolve_web_session(
+                        active_token_cookie,
+                        stored_cookie,
+                        browser_cookie,
+                        usage_source,
+                    );
+                    let source_mode = if has_kimi_code_api_key {
+                        SourceMode::Auto
+                    } else {
+                        source_mode
+                    };
+                    (source_mode, cookie_header)
+                }
             }
             _ => (usage_source, stored_cookie),
         }

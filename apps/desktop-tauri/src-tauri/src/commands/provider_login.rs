@@ -39,21 +39,15 @@ pub struct ProviderLoginTargetBridge {
 /// through `provider_cookie_domain`, so a `cn` account does not get sent to the
 /// international host.
 fn login_target(id: ProviderId, settings: &Settings) -> Result<(String, Url), String> {
-    let domain = provider_cookie_domain(id, settings).ok_or_else(|| {
-        format!(
-            "{} does not sign in with a web session",
-            id.display_name()
-        )
-    })?;
+    let domain = provider_cookie_domain(id, settings)
+        .ok_or_else(|| format!("{} does not sign in with a web session", id.display_name()))?;
     let url = Url::parse(&format!("https://{domain}/"))
         .map_err(|error| format!("Could not build a login URL for {domain}: {error}"))?;
     Ok((domain.to_string(), url))
 }
 
 #[tauri::command]
-pub fn get_provider_login_target(
-    provider_id: String,
-) -> Result<ProviderLoginTargetBridge, String> {
+pub fn get_provider_login_target(provider_id: String) -> Result<ProviderLoginTargetBridge, String> {
     let id = parse_provider_arg(&provider_id)?;
     let settings = Settings::load();
     let (_, url) = login_target(id, &settings)?;
@@ -83,16 +77,12 @@ pub fn open_provider_login(
         existing.show().map_err(|e| e.to_string())?;
         existing.set_focus().map_err(|e| e.to_string())?;
     } else {
-        WebviewWindowBuilder::new(
-            &app,
-            LOGIN_WINDOW_LABEL,
-            WebviewUrl::External(url.clone()),
-        )
-        .title(format!("{} — Sign in", id.display_name()))
-        .inner_size(LOGIN_WINDOW_WIDTH, LOGIN_WINDOW_HEIGHT)
-        .resizable(true)
-        .build()
-        .map_err(|e| e.to_string())?;
+        WebviewWindowBuilder::new(&app, LOGIN_WINDOW_LABEL, WebviewUrl::External(url.clone()))
+            .title(format!("{} — Sign in", id.display_name()))
+            .inner_size(LOGIN_WINDOW_WIDTH, LOGIN_WINDOW_HEIGHT)
+            .resizable(true)
+            .build()
+            .map_err(|e| e.to_string())?;
     }
 
     Ok(ProviderLoginTargetBridge {
@@ -120,9 +110,9 @@ pub async fn capture_provider_login(
         .get_webview_window(LOGIN_WINDOW_LABEL)
         .ok_or_else(|| "The login window is not open".to_string())?;
 
-    let cookies = window.cookies().map_err(|error| {
-        format!("Could not read the login window's session: {error}")
-    })?;
+    let cookies = window
+        .cookies()
+        .map_err(|error| format!("Could not read the login window's session: {error}"))?;
 
     let header = provider_cookie_header(id, &domain, &cookies)?;
     validate_single_line_secret(&header, "Cookie header", MAX_COOKIE_HEADER_LEN)?;
@@ -165,9 +155,7 @@ fn provider_cookie_header(
     let matching = dedupe_exact_cookies(
         collected
             .into_iter()
-            .filter(|cookie: &ImportedCookie| {
-                provider_domain_matches(id, &cookie.domain, domain)
-            })
+            .filter(|cookie: &ImportedCookie| provider_domain_matches(id, &cookie.domain, domain))
             .collect::<Vec<_>>(),
     );
 
@@ -253,8 +241,7 @@ mod tests {
     fn capture_before_signing_in_says_so_instead_of_storing_nothing() {
         let cookies = vec![cookie("accounts.google.com", "SID", "someone-elses")];
 
-        let error =
-            provider_cookie_header(ProviderId::Cursor, "cursor.com", &cookies).unwrap_err();
+        let error = provider_cookie_header(ProviderId::Cursor, "cursor.com", &cookies).unwrap_err();
 
         assert!(error.contains("Finish signing in"));
     }

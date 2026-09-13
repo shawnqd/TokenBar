@@ -80,12 +80,8 @@ unsafe extern "system" {
     fn DestroyIcon(hicon: isize) -> i32;
     fn SystemParametersInfoW(action: u32, ui_param: u32, pv: *mut c_void, win_ini: u32) -> i32;
     fn FindWindowW(class: *const u16, title: *const u16) -> isize;
-    fn DrawAnimatedRects(
-        hwnd: isize,
-        id_ani: i32,
-        from: *const WinRect,
-        to: *const WinRect,
-    ) -> i32;
+    fn DrawAnimatedRects(hwnd: isize, id_ani: i32, from: *const WinRect, to: *const WinRect)
+    -> i32;
     fn IsIconic(hwnd: isize) -> i32;
     fn PrivateExtractIconsW(
         file: *const u16,
@@ -122,7 +118,6 @@ static DARK_BRUSH: std::sync::OnceLock<isize> = std::sync::OnceLock::new();
 static SETTINGS_ROOT: AtomicIsize = AtomicIsize::new(0);
 #[cfg(windows)]
 static MINMAX_ARMED: AtomicBool = AtomicBool::new(false);
-
 
 #[cfg(windows)]
 const WM_NCCALCSIZE: u32 = 0x0083;
@@ -449,7 +444,6 @@ mod tests {
         assert_eq!(layered, appwindow);
         assert_ne!(exstyle_with_layered(layered) & WS_EX_LAYERED, 0);
     }
-
 }
 
 #[cfg(windows)]
@@ -801,7 +795,8 @@ pub fn attach_settings_taskbar_button(win: &tauri::WebviewWindow) {
 
 #[cfg(windows)]
 fn extract_icon_at(px: i32) -> Option<isize> {
-    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../rust/icons/icon.ico");
+    let path =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../rust/icons/icon.ico");
     if !path.is_file() {
         return None;
     }
@@ -812,9 +807,7 @@ fn extract_icon_at(px: i32) -> Option<isize> {
         .collect();
     let mut icon: isize = 0;
     let mut id: u32 = 0;
-    let got = unsafe {
-        PrivateExtractIconsW(wide.as_ptr(), 0, px, px, &mut icon, &mut id, 1, 0)
-    };
+    let got = unsafe { PrivateExtractIconsW(wide.as_ptr(), 0, px, px, &mut icon, &mut id, 1, 0) };
     if got == 1 && icon != 0 {
         Some(icon)
     } else {
@@ -938,8 +931,8 @@ mod taskbar_icon_px_tests {
 
     #[test]
     fn icon_ico_contains_win11_taskbar_sizes() {
-        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../../rust/icons/icon.ico");
+        let path =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../rust/icons/icon.ico");
         let bytes = std::fs::read(&path).expect("icon.ico");
         assert!(bytes.len() >= 6);
         let count = u16::from_le_bytes(bytes[4..6].try_into().unwrap()) as usize;
@@ -950,7 +943,10 @@ mod taskbar_icon_px_tests {
             sizes.push(if w == 0 { 256 } else { w as i32 });
         }
         for need in [16, 20, 24, 30, 32, 36, 40, 48, 256] {
-            assert!(sizes.contains(&need), "icon.ico missing {need}px, have {sizes:?}");
+            assert!(
+                sizes.contains(&need),
+                "icon.ico missing {need}px, have {sizes:?}"
+            );
         }
     }
 }

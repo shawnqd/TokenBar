@@ -463,6 +463,7 @@ export default function TrayPanel({ state }: { state: BootstrapState }) {
         densityMode={densityMode}
         display={display}
         outputSpeed={speedId ? outputSpeed?.[speedId] : null}
+        outputSpeedEnabled={settings.outputSpeedEnabled !== false}
         localUsagePeriod={settings.localUsagePeriod}
         showProviderIcon={settings.switcherShowsIcons}
         chartData={chartByProviderId.get(p.providerId) ?? null}

@@ -73,8 +73,10 @@ fn main() {
         let canon = canonical_display(path);
         out.push_str(&format!("    (\"{id}\", include_str!(r#\"{canon}\"#)),\n"));
     }
-    out.push_str("];
-");
+    out.push_str(
+        "];
+",
+    );
 
     let target = out_dir.join("provider_icon_table.rs");
     fs::write(&target, out).expect("write provider_icon_table.rs");

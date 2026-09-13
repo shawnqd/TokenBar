@@ -1,5 +1,6 @@
 export * from "./actions";
-export * from "./fixtures";
+// `./fixtures` is test-only (bridge snapshot builders) and is deliberately
+// not re-exported from the production barrel; import it directly in tests.
 export * from "./fromBridge";
 export * from "./projection";
 export * from "./snapshot";

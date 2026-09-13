@@ -1,10 +1,12 @@
 import { describe, expect, it } from "vitest";
 import {
-  FIXTURE_BRIDGES,
-  FIXTURE_SNAPSHOTS,
   fromBridge,
   isRealQuotaWindow,
 } from "./index";
+import {
+  FIXTURE_BRIDGES,
+  FIXTURE_SNAPSHOTS,
+} from "./fixtures";
 
 const NOW = Date.parse("2026-08-16T12:05:00.000Z");
 

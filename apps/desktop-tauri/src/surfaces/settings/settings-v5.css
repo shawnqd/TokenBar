@@ -147,6 +147,14 @@
   transform: scale(0.97);
 }
 
+.settings-v5-nav__item--footer {
+  margin-top: auto;
+  border-top: 1px solid var(--flyout-divider);
+  border-radius: 0 0 8px 8px;
+  padding-top: 6px;
+  height: 38px;
+}
+
 .settings-v5-nav__icon {
   display: inline-flex;
   width: 16px;
@@ -492,4 +500,50 @@
 .settings-v5 .provider-detail-actions--toolbar::before,
 .settings-v5 .provider-detail-actions--toolbar::after {
   content: none;
+}
+
+/* 预览三页（托盘面板/悬浮栏/小型状态栏）：页面占满显示高度，
+   左列设置项独立滚动，右侧实时预览是独立区域，不受左列影响。 */
+.settings-v5__workspace--surf {
+  padding: 0;
+  overflow: hidden;
+}
+
+.settings-v5__panel--surf {
+  height: 100%;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  /* 预览页内容与窗口边缘的呼吸留白（左列侧稍大，贴近原工作区边距）。 */
+  padding: 20px 20px 20px 24px;
+}
+
+.settings-v5__panel--surf .settings-page--surf {
+  flex: 1 1 0;
+  min-height: 0;
+  /* 页头块与预览 split 纵向排列：split 吃剩余高度，页头不再把它挤出容器。 */
+  display: flex;
+  flex-direction: column;
+}
+
+.settings-v5__panel--surf .settings-page--surf > .s5-surf-split {
+  flex: 1 1 0;
+  min-height: 0;
+  height: auto;
+}
+
+/* 窄屏：预览页回退文档流滚动 */
+@media (max-width: 760px) {
+  .settings-v5__workspace--surf {
+    padding: 20px 14px 24px 24px;
+    overflow: auto;
+  }
+
+  .settings-v5__panel--surf {
+    height: auto;
+  }
+
+  .settings-v5__panel--surf .settings-page--surf {
+    flex: none;
+  }
 }

@@ -492,15 +492,15 @@ pub(crate) fn friendly_provider_error(id: ProviderId, error: &str) -> String {
     }
 
     if lower.contains("claude oauth credentials not found") {
-        return "Claude sign-in was not found. Run `claude` once to authenticate, then refresh Claude in Win-CodexBar.".to_string();
+        return "Claude sign-in was not found. Run `claude` once to authenticate, then refresh Claude in TokenBar.".to_string();
     }
 
     if lower.contains("oauth token expired") || lower.contains("token invalid or expired") {
-        return "Claude sign-in expired. Run `claude` to refresh your Claude Code login, then refresh Claude in Win-CodexBar.".to_string();
+        return "Claude sign-in expired. Run `claude` to refresh your Claude Code login, then refresh Claude in TokenBar.".to_string();
     }
 
     if trimmed == "Authentication required" {
-        return "Claude needs sign-in before Win-CodexBar can read usage. Run `claude` once, or add Claude cookies in Provider settings.".to_string();
+        return "Claude needs sign-in before TokenBar can read usage. Run `claude` once, or add Claude cookies in Provider settings.".to_string();
     }
 
     if lower.starts_with("claude usage failed from all configured sources.") {
@@ -569,6 +569,7 @@ pub struct SettingsSnapshot {
     reset_time_relative: bool,
     menu_bar_display_mode: String,
     output_speed_enabled: bool,
+    keep_tray_panel_on_settings: bool,
     local_usage_period: String,
     hide_personal_info: bool,
     update_channel: &'static str,
@@ -610,14 +611,19 @@ pub struct SettingsSnapshot {
     taskbar_widget_icon_style: String,
     taskbar_widget_icon_gap_px: u8,
     taskbar_widget_value_gap_px: u8,
-    // Per-component quota presentation. `show_as_used` / `reset_time_relative`
-    // above are legacy migration sources and are no longer read by any surface.
+    // Per-component quota presentation. The mode is the source of truth;
+    // booleans below are effective-value compatibility fields for older
+    // consumers and native integrations.
+    float_bar_quota_display: QuotaDisplayPreference,
     float_bar_show_as_used: bool,
+    float_bar_reset_display: ResetDisplayPreference,
     float_bar_reset_time_relative: bool,
     /// Compat only: dashboard (tray flyout) still carries its own pair, but
     /// dashboard_* filter fields below are not consulted by any renderer —
     /// see `settings.rs` where they are marked `Retained for compat`.
+    dashboard_quota_display: QuotaDisplayPreference,
     dashboard_show_as_used: bool,
+    dashboard_reset_display: ResetDisplayPreference,
     dashboard_reset_time_relative: bool,
     /// Compat only: retained for old settings.json load, not read by any surface
     /// — the tray flyout follows `enabled_providers` directly.
@@ -625,7 +631,9 @@ pub struct SettingsSnapshot {
     /// Compat only: retained for old settings.json load, not read by any surface
     /// — cards render the quota windows returned by each provider.
     dashboard_quota_windows: Vec<String>,
+    taskbar_quota_display: QuotaDisplayPreference,
     taskbar_show_as_used: bool,
+    taskbar_reset_display: ResetDisplayPreference,
     taskbar_reset_time_relative: bool,
     taskbar_tooltip_entries: Vec<TaskbarEntryBridge>,
 }
@@ -653,6 +661,14 @@ pub fn get_settings_snapshot() -> SettingsSnapshot {
 impl From<Settings> for SettingsSnapshot {
     fn from(settings: Settings) -> Self {
         let avoid_keychain_prompts = settings.claude_avoid_keychain_prompts();
+        // Resolve inherited display preferences before moving any owned
+        // settings fields into the snapshot below.
+        let float_bar_show_as_used = settings.effective_float_bar_show_as_used();
+        let float_bar_reset_time_relative = settings.effective_float_bar_reset_time_relative();
+        let dashboard_show_as_used = settings.effective_dashboard_show_as_used();
+        let dashboard_reset_time_relative = settings.effective_dashboard_reset_time_relative();
+        let taskbar_show_as_used = settings.effective_taskbar_show_as_used();
+        let taskbar_reset_time_relative = settings.effective_taskbar_reset_time_relative();
 
         let provider_order = settings.provider_display_order_names();
         let enabled_providers = provider_order
@@ -689,6 +705,7 @@ impl From<Settings> for SettingsSnapshot {
             reset_time_relative: settings.reset_time_relative,
             menu_bar_display_mode: settings.menu_bar_display_mode,
             output_speed_enabled: settings.output_speed_enabled,
+            keep_tray_panel_on_settings: settings.keep_tray_panel_on_settings,
             local_usage_period: settings.local_usage_period,
             hide_personal_info: settings.hide_personal_info,
             update_channel: update_channel_label(settings.update_channel),
@@ -733,19 +750,25 @@ impl From<Settings> for SettingsSnapshot {
             taskbar_widget_font_family: settings.taskbar_widget_font_family.clone(),
             taskbar_widget_font_size: settings.taskbar_widget_font_size,
             taskbar_widget_width: settings.taskbar_widget_width,
-            taskbar_widget_text_align: settings.taskbar_widget_text_align,
+            taskbar_widget_text_align: settings.taskbar_widget_text_align.clone(),
             taskbar_widget_icon_size: settings.taskbar_widget_icon_size,
             taskbar_widget_icon_style: settings.taskbar_widget_icon_style.clone(),
             taskbar_widget_icon_gap_px: settings.taskbar_widget_icon_gap_px,
             taskbar_widget_value_gap_px: settings.taskbar_widget_value_gap_px,
-            float_bar_show_as_used: settings.float_bar_show_as_used,
-            float_bar_reset_time_relative: settings.float_bar_reset_time_relative,
-            dashboard_show_as_used: settings.dashboard_show_as_used,
-            dashboard_reset_time_relative: settings.dashboard_reset_time_relative,
+            float_bar_quota_display: settings.float_bar_quota_display,
+            float_bar_show_as_used,
+            float_bar_reset_display: settings.float_bar_reset_display,
+            float_bar_reset_time_relative,
+            dashboard_quota_display: settings.dashboard_quota_display,
+            dashboard_show_as_used,
+            dashboard_reset_display: settings.dashboard_reset_display,
+            dashboard_reset_time_relative,
             dashboard_provider_ids: settings.dashboard_provider_ids.clone(),
             dashboard_quota_windows: settings.dashboard_quota_windows.clone(),
-            taskbar_show_as_used: settings.taskbar_show_as_used,
-            taskbar_reset_time_relative: settings.taskbar_reset_time_relative,
+            taskbar_quota_display: settings.taskbar_quota_display,
+            taskbar_show_as_used,
+            taskbar_reset_display: settings.taskbar_reset_display,
+            taskbar_reset_time_relative,
             taskbar_tooltip_entries: settings
                 .taskbar_tooltip_entries
                 .iter()
@@ -763,6 +786,9 @@ pub(crate) fn provider_catalog_for(settings: &Settings) -> Vec<ProviderCatalogEn
         // provider. Keep the legacy API-key provider in the core for backward
         // compatibility, but do not expose a duplicate card in this product.
         .filter(|provider| *provider != ProviderId::MiMoApi)
+        // Upstream parity: deprecated providers disappear from settings unless
+        // the user already enabled them, so an existing config keeps working.
+        .filter(|provider| !provider.is_deprecated() || settings.is_provider_enabled(*provider))
         .map(|provider| ProviderCatalogEntry {
             id: provider.cli_name().to_string(),
             display_name: provider.display_name().to_string(),

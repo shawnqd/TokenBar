@@ -44,6 +44,9 @@ pub fn handle_window_event(window: &tauri::Window, event: &tauri::WindowEvent) -
     }
     match event {
         tauri::WindowEvent::Moved(_) | tauri::WindowEvent::Resized(_) => {
+            if window::is_flyout_expanded() {
+                return true;
+            }
             // Probe first (no I/O). Load style only when recovery runs.
             // Always reassert topmost on geometry change; the visibility-scoped
             // topmost_guard timer stays overlap-gated.
@@ -54,14 +57,17 @@ pub fn handle_window_event(window: &tauri::Window, event: &tauri::WindowEvent) -
                 window::remember_geometry(window);
                 false
             };
-            if let Some(floatbar) = window.app_handle().get_webview_window(FLOATBAR_LABEL) {
-                if relocated {
+            if relocated {
+                if let Some(floatbar) = window.app_handle().get_webview_window(FLOATBAR_LABEL) {
                     window::apply_no_activate(&floatbar);
+                    window::apply_always_on_top(&floatbar);
                 }
-                window::apply_always_on_top(&floatbar);
             }
         }
-        tauri::WindowEvent::CloseRequested { .. } => window::remember_geometry(window),
+        tauri::WindowEvent::CloseRequested { .. } => {
+            window::remember_geometry(window);
+            window::flush_geometry();
+        }
         tauri::WindowEvent::Destroyed => {
             topmost_guard::set_active(false);
         }

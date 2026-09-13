@@ -62,10 +62,7 @@ pub fn emit_provider_updated(app: &AppHandle, snapshot: &ProviderUsageSnapshot) 
     let _ = app.emit(PROVIDER_UPDATED, snapshot);
 }
 
-pub fn emit_provider_projection_updated(
-    app: &AppHandle,
-    projection: &VersionedProviderProjection,
-) {
+pub fn emit_provider_projection_updated(app: &AppHandle, projection: &VersionedProviderProjection) {
     let _ = app.emit(PROVIDER_PROJECTION_UPDATED, projection);
 }
 

@@ -694,9 +694,21 @@ impl Provider for AntigravityProvider {
         // official Models screen shows). Old IDE servers answer 404; fall back
         // to GetUserStatus and aggregate by family there.
         match self.fetch_quota_summary(&process_info, api_port).await {
-            Ok(usage) => {
+            Ok(usage) if quota_summary_is_complete(&usage) => {
                 tracing::debug!("Antigravity quota summary accepted");
                 return Ok(ProviderFetchResult::new(usage, "local"));
+            }
+            Ok(_) => {
+                // A language server can answer 200 with only one family while
+                // it is still warming up.  Treat that as an incomplete probe,
+                // not as a valid success: otherwise a Gemini-only snapshot
+                // replaces the previous two-family reading until the next
+                // refresh.  The model-status endpoint is the authoritative
+                // fallback and still exposes both family representatives when
+                // the summary buckets are partial/disabled.
+                tracing::warn!(
+                    "Antigravity quota summary incomplete; falling back to model status"
+                );
             }
             Err(summary_err) => {
                 tracing::debug!(
@@ -855,6 +867,29 @@ fn quota_summary_invalid_code(response: &QuotaSummaryResponse) -> Option<String>
             other => other.to_string(),
         })
     }
+}
+
+/// Whether a quota-summary snapshot contains a known bucket for each model
+/// family exposed by Antigravity's Models screen.
+///
+/// `RetrieveUserQuotaSummary` may transiently return HTTP 200 with only the
+/// Gemini group (or with Claude/GPT buckets disabled / missing a fraction).
+/// Such a response is parseable but not complete enough to publish as the
+/// provider's authoritative snapshot.  The caller must fall back to
+/// `GetUserStatus` in that case so one family cannot disappear intermittently.
+fn quota_summary_is_complete(snapshot: &UsageSnapshot) -> bool {
+    let has_known_family = |prefix: &str| {
+        snapshot.extra_rate_windows.iter().any(|window| {
+            window.usage_known
+                && window
+                    .title
+                    .get(..prefix.len())
+                    .is_some_and(|head| head.eq_ignore_ascii_case(prefix))
+                && window.title.as_bytes().get(prefix.len()) == Some(&b' ')
+        })
+    };
+
+    has_known_family("Gemini") && has_known_family("Claude/GPT")
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -1763,6 +1798,52 @@ mod tests {
         assert!(snap.primary.is_informational);
         assert!((snap.primary.used_percent - 0.0).abs() < 0.1);
         assert!(snap.secondary.is_none());
+    }
+
+    #[test]
+    fn quota_summary_requires_both_model_families_before_publish() {
+        let provider = AntigravityProvider::new();
+        let gemini_only = provider
+            .parse_quota_summary(make_summary_response(
+                vec![
+                    (
+                        "Gemini Models",
+                        vec![make_summary_bucket(
+                            "gemini-models-five-hour-limit",
+                            "Five Hour Limit Remaining",
+                            Some(0.8),
+                            Some("2026-08-14T18:00:00Z"),
+                            false,
+                        )],
+                    ),
+                ],
+                "response",
+            ))
+            .unwrap();
+        assert!(!quota_summary_is_complete(&gemini_only));
+
+        let claude_only = provider
+            .parse_quota_summary(make_summary_response(
+                vec![
+                    (
+                        "Claude and GPT models",
+                        vec![make_summary_bucket(
+                            "claude-gpt-models-weekly-limit",
+                            "Weekly Limit Remaining",
+                            Some(0.8),
+                            Some("2026-08-17T00:00:00Z"),
+                            false,
+                        )],
+                    ),
+                ],
+                "response",
+            ))
+            .unwrap();
+        assert!(!quota_summary_is_complete(&claude_only));
+
+        assert!(quota_summary_is_complete(
+            &provider.parse_quota_summary(four_window_summary()).unwrap()
+        ));
     }
 
     #[test]

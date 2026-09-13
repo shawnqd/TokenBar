@@ -684,7 +684,7 @@ impl CostScanner {
         // turn must not be counted twice.
         let mut seen = HashSet::new();
         let mut handle_file = |path: &Path| {
-            let counted = for_each_grok_turn(path, &cutoff, &mut seen, cancel, |turn| {
+            let counted = for_each_grok_turn(path, &cutoff, &mut seen, cancel, |_timestamp, turn| {
                 add_grok_turn_to_summary(&mut summary, turn);
             });
             if counted > 0 {
@@ -982,7 +982,7 @@ fn for_each_grok_turn<F>(
     mut on_turn: F,
 ) -> u32
 where
-    F: FnMut(&GrokUsage),
+    F: FnMut(Option<i64>, &GrokUsage),
 {
     let Ok(file) = File::open(path) else {
         return 0;
@@ -1009,8 +1009,22 @@ where
         }
         let Some(usage) = update.usage else { continue };
 
-        if let Some(timestamp) = parsed.timestamp
-            && let Some(recorded) = DateTime::from_timestamp(timestamp, 0)
+        let timestamp = parsed.timestamp.or_else(|| {
+            fs::metadata(path)
+                .ok()
+                .and_then(|m| m.modified().ok())
+                .map(|t| {
+                    let dt: DateTime<Utc> = t.into();
+                    dt.timestamp()
+                })
+        });
+
+        if let Some(ts) = timestamp
+            && let Some(recorded) = if ts > 100_000_000_000 {
+                DateTime::from_timestamp_millis(ts)
+            } else {
+                DateTime::from_timestamp(ts, 0)
+            }
             && recorded < *cutoff
         {
             continue;
@@ -1022,11 +1036,36 @@ where
             continue;
         }
 
-        on_turn(&usage);
+        on_turn(timestamp, &usage);
         counted += 1;
     }
 
     counted
+}
+
+fn add_grok_turn_to_daily_costs(
+    daily_costs: &mut HashMap<String, f64>,
+    timestamp: Option<i64>,
+    turn: &GrokUsage,
+) {
+    let Some(ts) = timestamp else {
+        return;
+    };
+    let Some(recorded) = (if ts > 100_000_000_000 {
+        DateTime::from_timestamp_millis(ts)
+    } else {
+        DateTime::from_timestamp(ts, 0)
+    }) else {
+        return;
+    };
+    let date_str = recorded
+        .with_timezone(&Local)
+        .date_naive()
+        .format("%Y-%m-%d")
+        .to_string();
+    if let Some(cost) = daily_costs.get_mut(&date_str) {
+        *cost += turn.cost_usd();
+    }
 }
 
 fn add_grok_turn_to_summary(summary: &mut CostSummary, turn: &GrokUsage) {
@@ -1134,6 +1173,19 @@ pub fn get_daily_cost_history_with_budget(
                     });
                 };
                 scanner.walk_claude_files(&projects_dir, &cutoff, cancel, &mut handle_file);
+            }
+        }
+        "grok" => {
+            let sessions_dir = scanner.get_grok_sessions_dir();
+            if sessions_dir.exists() {
+                let cutoff = Utc::now() - Duration::days(days as i64);
+                let mut seen = HashSet::new();
+                let mut handle_file = |path: &Path| {
+                    for_each_grok_turn(path, &cutoff, &mut seen, cancel, |timestamp, turn| {
+                        add_grok_turn_to_daily_costs(&mut daily_costs, timestamp, turn);
+                    });
+                };
+                scanner.walk_grok_files(&sessions_dir, &cutoff, cancel, &mut handle_file);
             }
         }
         _ => {}
@@ -1483,7 +1535,7 @@ mod tests {
         let cutoff = DateTime::from_timestamp(0, 0).expect("epoch");
         let mut seen = HashSet::new();
         let mut summary = CostSummary::default();
-        let counted = for_each_grok_turn(&path, &cutoff, &mut seen, None, |turn| {
+        let counted = for_each_grok_turn(&path, &cutoff, &mut seen, None, |_, turn| {
             add_grok_turn_to_summary(&mut summary, turn);
         });
 
@@ -1502,7 +1554,7 @@ mod tests {
         // The record's timestamp is fixed, so a cutoff after it must exclude it.
         let cutoff = DateTime::from_timestamp(1_785_573_296, 0).expect("valid");
         let mut seen = HashSet::new();
-        let counted = for_each_grok_turn(&path, &cutoff, &mut seen, None, |_| {});
+        let counted = for_each_grok_turn(&path, &cutoff, &mut seen, None, |_, _| {});
 
         assert_eq!(counted, 0);
         let _ = std::fs::remove_dir_all(&dir);
@@ -1527,9 +1579,38 @@ mod tests {
 
         let cutoff = DateTime::from_timestamp(0, 0).expect("epoch");
         let mut seen = HashSet::new();
-        let counted = for_each_grok_turn(&path, &cutoff, &mut seen, None, |_| {});
+        let counted = for_each_grok_turn(&path, &cutoff, &mut seen, None, |_, _| {});
 
         assert_eq!(counted, 0);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn get_daily_cost_history_includes_grok_turns() {
+        let dir = std::env::temp_dir().join(format!("grok-hist-{}", std::process::id()));
+        let session_dir = dir.join("sessions").join("test-session");
+        std::fs::create_dir_all(&session_dir).expect("temp dir");
+        let path = session_dir.join("updates.jsonl");
+
+        let today_dt = chrono::Local::now();
+        let today_ts = today_dt.timestamp();
+        let today_date_str = today_dt.date_naive().format("%Y-%m-%d").to_string();
+        let turn_line = GROK_TURN.replace("1785573295", &today_ts.to_string());
+        std::fs::write(&path, format!("{turn_line}\n")).expect("write");
+
+        unsafe {
+            std::env::set_var("GROK_HOME", &dir);
+        }
+
+        let (history, stopped) = get_daily_cost_history_with_budget("grok", 7, None, None);
+        assert!(!stopped);
+        let today_entry = history.iter().find(|(date, _)| date == &today_date_str);
+        assert!(today_entry.is_some(), "today entry must exist in grok history");
+        assert!(today_entry.unwrap().1 > 0.0, "today cost must be > 0");
+
+        unsafe {
+            std::env::remove_var("GROK_HOME");
+        }
         let _ = std::fs::remove_dir_all(&dir);
     }
 

@@ -21,7 +21,7 @@ pub const SETTINGS_REVEALED_EVENT: &str = "settings-window-revealed";
 // drop shadow, so the window is larger than the card the user sees. Kept in
 // step with `.settings-surface--full.settings-window-frame`'s padding —
 // widening the gutter alone would shrink the usable area.
-const SETTINGS_GUTTER: f64 = 24.0;
+const SETTINGS_GUTTER: f64 = 12.0;
 const SETTINGS_WIDTH: f64 = 1120.0 + SETTINGS_GUTTER * 2.0;
 const SETTINGS_HEIGHT: f64 = 780.0 + SETTINGS_GUTTER * 2.0;
 // Keep the window usable when the user makes it smaller than the reference
@@ -37,7 +37,7 @@ fn apply_design_size_if_stale(window: &tauri::WebviewWindow) {
     let scale = window.scale_factor().unwrap_or(1.0).max(1.0);
     let logical_w = size.width as f64 / scale;
     let logical_h = size.height as f64 / scale;
-    if (logical_w - SETTINGS_WIDTH).abs() < 48.0 && (logical_h - SETTINGS_HEIGHT).abs() < 48.0 {
+    if (logical_w - SETTINGS_WIDTH).abs() < 24.0 && (logical_h - SETTINGS_HEIGHT).abs() < 24.0 {
         return;
     }
     let _ = window.set_size(tauri::LogicalSize::new(SETTINGS_WIDTH, SETTINGS_HEIGHT));
@@ -52,13 +52,13 @@ fn remembered_size() -> (f64, f64) {
     let width = stored
         .and_then(|geometry| geometry.width)
         .map(|value| value as f64)
-        .filter(|value| (*value - SETTINGS_WIDTH).abs() < 48.0)
+        .filter(|value| (*value - SETTINGS_WIDTH).abs() < 24.0)
         .unwrap_or(SETTINGS_WIDTH)
         .max(SETTINGS_MIN_WIDTH);
     let height = stored
         .and_then(|geometry| geometry.height)
         .map(|value| value as f64)
-        .filter(|value| (*value - SETTINGS_HEIGHT).abs() < 48.0)
+        .filter(|value| (*value - SETTINGS_HEIGHT).abs() < 24.0)
         .unwrap_or(SETTINGS_HEIGHT)
         .max(SETTINGS_MIN_HEIGHT);
     (width, height)
@@ -121,9 +121,10 @@ fn normalize_window_chrome(window: &tauri::WebviewWindow) {
 /// this to stay on screen as a live settings preview while focus moves between
 /// these two companion surfaces.
 pub fn is_visible(app: &tauri::AppHandle) -> bool {
-    app.get_webview_window(SETTINGS_LABEL).is_some_and(|window| {
-        window.is_visible().unwrap_or(false) && !window.is_minimized().unwrap_or(false)
-    })
+    app.get_webview_window(SETTINGS_LABEL)
+        .is_some_and(|window| {
+            window.is_visible().unwrap_or(false) && !window.is_minimized().unwrap_or(false)
+        })
 }
 
 fn build_hidden(app: &tauri::AppHandle, tab: &str) -> Result<(), String> {
@@ -226,8 +227,7 @@ pub fn open_or_focus(app: &tauri::AppHandle, tab: &str) -> Result<(), String> {
         // replaying a fade over a window the user is reading is noise, not
         // polish — so the visibility is sampled BEFORE `show()` makes it true.
         let minimized = window.is_minimized().unwrap_or(false);
-        let was_hidden =
-            minimized || !window.is_visible().unwrap_or(false);
+        let was_hidden = minimized || !window.is_visible().unwrap_or(false);
         if minimized {
             // Native SC_RESTORE: zoom out of the taskbar button and bounce
             // the icon. Do not FRAMECHANGED / strip chrome here — that aborts

@@ -13,22 +13,22 @@ mod geometry_store;
 #[cfg(windows)]
 mod menu_host;
 mod proof_harness;
+mod provider_mark;
+mod quota_cycle;
 mod shell;
 mod shortcut_bridge;
 mod state;
-mod provider_mark;
-mod quota_cycle;
 mod surface;
 mod surface_target;
-mod taskbar_entries;
 #[cfg(windows)]
 mod taskbar_context_menu;
+mod taskbar_entries;
+#[cfg(windows)]
+mod taskbar_icons;
 #[cfg(windows)]
 mod taskbar_menu;
 #[cfg(windows)]
 mod taskbar_text;
-#[cfg(windows)]
-mod taskbar_icons;
 #[cfg(windows)]
 mod taskbar_widget;
 mod tray_bridge;
@@ -51,10 +51,7 @@ struct LaunchBehavior {
 }
 
 fn should_hide_close_request(mode: SurfaceMode) -> bool {
-    matches!(
-        mode,
-        SurfaceMode::TrayPanel | SurfaceMode::Settings
-    )
+    matches!(mode, SurfaceMode::TrayPanel | SurfaceMode::Settings)
 }
 
 fn should_open_primary_window_from_args<I, S>(args: I) -> bool
@@ -212,6 +209,7 @@ fn main() {
             commands::clear_provider_local_usage_cache_command,
             commands::reorder_providers,
             commands::set_provider_cookie_source,
+            commands::set_provider_usage_source,
             commands::get_provider_cookie_source,
             commands::get_provider_cookie_source_options,
             commands::get_provider_auth_capabilities,
@@ -250,6 +248,7 @@ fn main() {
             floatbar::set_float_bar_opacity,
             floatbar::set_float_bar_click_through,
             floatbar::resize_float_bar,
+            floatbar::adjust_float_bar_geometry,
             floatbar::set_float_bar_orientation,
         ])
         .setup(move |app| {

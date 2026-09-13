@@ -13,7 +13,7 @@ use std::ffi::c_void;
 use raw_window_handle::HasWindowHandle;
 use tauri::WebviewWindow;
 
-use crate::shell::popup_chrome::{backdrop_tint, BACKDROP_BLUR_DIP};
+use crate::shell::popup_chrome::{BACKDROP_BLUR_DIP, backdrop_tint};
 use crate::taskbar_widget::taskbar_is_light;
 
 /// 1/4 linear — standard homemade acrylic downsample so the click path
@@ -189,9 +189,7 @@ fn capture_scaled(x: i32, y: i32, sw: i32, sh: i32, dw: i32, dh: i32) -> Option<
         return None;
     }
     let mut bits: *mut c_void = std::ptr::null_mut();
-    let bitmap = unsafe {
-        CreateDIBSection(hdc, &info, DIB_RGB_COLORS, &mut bits, 0, 0)
-    };
+    let bitmap = unsafe { CreateDIBSection(hdc, &info, DIB_RGB_COLORS, &mut bits, 0, 0) };
     if bitmap == 0 || bits.is_null() {
         unsafe {
             DeleteDC(hdc);
@@ -219,11 +217,7 @@ fn capture_scaled(x: i32, y: i32, sw: i32, sh: i32, dw: i32, dh: i32) -> Option<
             }
         }
         let mean = sum / (dw * dh * 3) as f64;
-        if mean < 4.0 {
-            None
-        } else {
-            Some(out)
-        }
+        if mean < 4.0 { None } else { Some(out) }
     };
     unsafe {
         SelectObject(hdc, prev);
@@ -376,7 +370,9 @@ mod tests {
 
     #[test]
     fn bmp_header_is_windows_bitmap() {
-        let pixels = vec![10.0, 20.0, 30.0, 40.0, 50.0, 60.0, 70.0, 80.0, 90.0, 11.0, 22.0, 33.0];
+        let pixels = vec![
+            10.0, 20.0, 30.0, 40.0, 50.0, 60.0, 70.0, 80.0, 90.0, 11.0, 22.0, 33.0,
+        ];
         let bmp = encode_bmp(2, 2, &pixels);
         assert_eq!(&bmp[0..2], b"BM");
         assert_eq!(u32::from_le_bytes(bmp[10..14].try_into().unwrap()), 54);
@@ -387,7 +383,10 @@ mod tests {
     #[test]
     fn base64_roundtrip_alphabet() {
         let s = base64_encode(b"frost");
-        assert!(s.chars().all(|c| c.is_ascii_alphanumeric() || c == '+' || c == '/' || c == '='));
+        assert!(
+            s.chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '+' || c == '/' || c == '=')
+        );
         assert!(!s.is_empty());
     }
 }

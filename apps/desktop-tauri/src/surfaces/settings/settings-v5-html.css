@@ -64,6 +64,7 @@
 
 .settings-v5 .s5-field-copy {
   min-width: 0;
+  overflow: hidden;
 }
 
 .settings-v5 .s5-field-label {
@@ -76,6 +77,11 @@
   color: var(--flyout-muted);
   line-height: 1.4;
   margin-top: 2px;
+  height: 16px;
+  min-height: 16px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .settings-v5 .s5-hint {
@@ -93,6 +99,8 @@
   padding: 2px;
   border-radius: 999px;
   background: rgba(120, 120, 128, 0.12);
+  isolation: isolate;
+  overflow: hidden;
 }
 
 [data-theme="dark"] .settings-v5 .s5-seg {
@@ -112,16 +120,50 @@
   position: relative;
   z-index: 1;
   white-space: nowrap;
+  transition: color 180ms cubic-bezier(0.33, 0, 0.2, 1),
+    transform 120ms ease;
 }
 
 .settings-v5 .s5-seg button.on {
   color: #fff;
+  background: transparent;
+}
+
+.settings-v5 .s5-seg__indicator {
+  position: absolute;
+  z-index: 0;
+  top: 2px;
+  bottom: 2px;
+  left: 2px;
+  width: calc((100% - 4px) / var(--s5-seg-count, 1));
+  border-radius: 999px;
   background: var(--flyout-accent);
+  box-shadow: 0 1px 2px color-mix(in srgb, var(--flyout-accent) 28%, transparent);
+  pointer-events: none;
+  transform: translate3d(calc(var(--s5-seg-index, 0) * 100%), 0, 0);
+  transition: transform 220ms cubic-bezier(0.33, 0, 0.2, 1),
+    background-color 180ms ease;
+}
+
+.settings-v5 .s5-seg button:active:not(:disabled) {
+  transform: scale(0.97);
 }
 
 .settings-v5 .s5-seg button:disabled {
   opacity: 0.5;
   cursor: default;
+}
+
+[data-motion="off"] .settings-v5 .s5-seg button,
+[data-motion="off"] .settings-v5 .s5-seg__indicator {
+  transition: none !important;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .settings-v5 .s5-seg button,
+  .settings-v5 .s5-seg__indicator {
+    transition: none !important;
+  }
 }
 
 .settings-v5 .s5-toggle {
@@ -378,13 +420,19 @@
 .settings-v5 .s5-surf-split {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 352px;
+  /* 行高锁死为容器高度：左列内容再长也不会撑破，
+     滚动发生在列内部。 */
+  grid-template-rows: minmax(0, 1fr);
   gap: 16px;
-  align-items: start;
+  height: 100%;
   min-height: 0;
+  align-items: stretch;
 }
 
 .settings-v5 .s5-surf-fields {
   min-width: 0;
+  min-height: 0;
+  overflow-y: auto;
 }
 
 .settings-v5 .s5-surf-fields > .s5-section:last-child,
@@ -395,12 +443,16 @@
 }
 
 .settings-v5 .s5-stage {
-  position: sticky;
-  top: 0;
-  border: 1px solid var(--flyout-divider);
+  /* 独立预览区域：占满列高（列随面板拉伸到显示高度），
+     不随左列滚动；方框已移除。 */
+  height: 100%;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  border: 0;
   border-radius: 0;
   background: transparent;
-  padding: 0 0 12px;
+  padding: 0;
   overflow: visible;
 }
 
@@ -425,22 +477,22 @@
 }
 
 .settings-v5 .s5-stage-frame--tray {
-  width: 332px;
-  height: 520px;
-  overflow: visible;
+  flex: 1;
+  min-height: 0;
+  width: 100%;
+  overflow: hidden;
+  display: flex;
+  justify-content: center;
+  align-items: stretch;
 }
 
-.settings-v5 .s5-stage-frame--float {
-  width: 280px;
-  height: 156px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
+/* 预览复刻体拉伸到整列高度：预览占满全部高度，无上下空隙。 */
+.settings-v5 .s5-stage-frame--tray .s5-tray-flyout {
+  margin: 0 auto;
+  height: 100%;
 }
 
 .settings-v5 .s5-stage-frame--taskbar {
-  width: 248px;
-  height: 52px;
   display: flex;
   align-items: center;
 }
@@ -606,6 +658,7 @@
   gap: 3px;
   align-items: center;
   min-width: 0;
+  overflow: hidden;
 }
 
 .settings-v5 .s5-mark {
@@ -641,12 +694,17 @@
   font-size: 11px;
   color: var(--flyout-muted);
   overflow: hidden;
-  text-overflow: ellipsis;
+  text-overflow: clip;
+  white-space: nowrap;
 }
 
 .settings-v5 .s5-cell .s5-val {
   font-size: 12px;
   font-weight: 600;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: clip;
+  white-space: nowrap;
 }
 
 .settings-v5 .s5-fbar {
@@ -764,6 +822,7 @@
   flex: 1;
   min-height: 0;
   overflow: auto;
+  scrollbar-gutter: stable;
   padding: 0 8px 12px;
 }
 
@@ -865,6 +924,8 @@
 
 .settings-v5 .s5-pdetail {
   overflow: auto;
+  /* 始终为滚动条保留轨道宽度：内容变长出现滚动条时页面不再横向跳动。 */
+  scrollbar-gutter: stable;
   min-height: 0;
   padding: 16px 12px 28px 20px;
 }
@@ -965,12 +1026,12 @@
 }
 
 .settings-v5 .s5-pd-card {
-  border: 0;
-  border-radius: 0;
-  background: transparent;
-  padding: 0 0 16px;
-  margin-bottom: 16px;
-  border-bottom: 1px solid var(--flyout-divider);
+  border: 1px solid var(--flyout-hairline);
+  border-radius: 12px;
+  background: var(--flyout-zone-bg, rgba(255, 255, 255, 0.65));
+  /* 顶部留白与左右一致：标题不贴卡顶。 */
+  padding: 12px 14px 12px;
+  margin-bottom: 12px;
 }
 
 .settings-v5 .s5-pd-card:last-child {
@@ -1071,12 +1132,129 @@
   align-items: center;
   min-height: 40px;
   padding: 8px 0;
+}
+
+/* 卡片内多行之间才画分隔线；首行不画（卡片描边已分隔）。 */
+.settings-v5 .s5-pd-card .s5-pd-row ~ .s5-pd-row {
   border-top: 1px solid var(--flyout-divider);
 }
 
 .settings-v5 .s5-pd-card > .s5-pd-row:first-child,
-.settings-v5 .s5-pd-card-h + .s5-pd-row {
-  border-top: 0;
+/* Stacked field for tall controls (textarea): the 1fr/auto grid would
+   squeeze them into the narrow trailing column. Label above, control full
+   width below. */
+.settings-v5 .s5-pd-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 0;
+}
+
+.settings-v5 .s5-pd-field .s5-area {
+  width: 100%;
+  min-height: 64px;
+  resize: vertical;
+}
+
+/* Label row of a stacked field: label left, state chip right. */
+/* 令牌账户折叠壳：默认收起，点摘要行展开；V5 风格（无原生三角）。 */
+.settings-v5 .s5-token-disclosure {
+  padding-top: 2px;
+}
+
+.settings-v5 .s5-token-disclosure__summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 0;
+  cursor: pointer;
+  list-style: none;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--flyout-text);
+  user-select: none;
+}
+
+.settings-v5 .s5-token-disclosure__summary::-webkit-details-marker {
+  display: none;
+}
+
+.settings-v5 .s5-token-disclosure__count {
+  margin-left: auto;
+  color: var(--flyout-text-dim, var(--flyout-text));
+  opacity: 0.72;
+  font-weight: 500;
+}
+
+.settings-v5 .s5-token-disclosure__chevron {
+  color: var(--flyout-text-dim, var(--flyout-text));
+  transition: transform 150ms ease;
+}
+
+.settings-v5 .s5-token-disclosure[open] .s5-token-disclosure__chevron {
+  transform: rotate(180deg);
+}
+
+.settings-v5 .s5-token-disclosure__body {
+  padding: 2px 0 8px;
+}
+
+/* 令牌账户（账号卡）列表：行内状态徽标与操作按钮。 */
+.settings-v5 .s5-token-list {
+  display: block;
+}
+
+.settings-v5 .s5-token-list .s5-login-ok {
+  margin-left: 8px;
+}
+
+.settings-v5 .s5-token-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+/* L1 用量读取方式：卡片第一层级，标签加强。 */
+.settings-v5 .s5-pd-l1 .s5-field-label {
+  font-size: 13px;
+  font-weight: 650;
+}
+
+/* L2+ 从属内容：左缩进 + 竖向发丝线，表达“跟随上方选择”。 */
+.settings-v5 .s5-pd-sub {
+  margin: 2px 0 0;
+  padding-left: 12px;
+  border-left: 2px solid var(--flyout-divider);
+}
+
+.settings-v5 .s5-pd-sub .s5-pd-card-h {
+  border-bottom: 0;
+  padding-top: 6px;
+}
+
+.settings-v5 .s5-pd-field-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+/* Filled vs unfilled session-cookie states: an unsaved field gets a dashed
+   outline and a neutral chip; a saved one keeps the solid border with a
+   green tint and the green chip. */
+.settings-v5 .s5-pd-field .s5-area.is-empty {
+  border-style: dashed;
+  opacity: 0.92;
+}
+
+.settings-v5 .s5-pd-field .s5-area.is-saved {
+  border-color: color-mix(in srgb, var(--pace-reserve, #107c10) 38%, var(--flyout-hairline));
+}
+
+.settings-v5 .s5-login-ok.is-missing {
+  color: var(--flyout-text-dim, var(--flyout-text));
+  opacity: 0.72;
+  font-weight: 500;
 }
 
 .settings-v5 .s5-chart-demo {
@@ -1219,8 +1397,12 @@
     grid-template-columns: minmax(0, 1fr);
   }
 
+  .settings-v5 .s5-surf-fields {
+    overflow-y: visible;
+  }
+
   .settings-v5 .s5-stage {
-    position: static;
+    height: auto;
   }
 
   .settings-v5 .s5-prov {

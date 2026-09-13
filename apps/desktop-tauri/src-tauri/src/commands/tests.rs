@@ -65,8 +65,8 @@ fn validate_surface_target_rejects_hidden_mode() {
 #[test]
 fn external_url_validation_allows_only_http_urls() {
     assert_eq!(
-        validate_external_url(" https://github.com/Finesssee/Win-CodexBar ").unwrap(),
-        "https://github.com/Finesssee/Win-CodexBar"
+        validate_external_url(" https://github.com/shawnqd/TokenBar ").unwrap(),
+        "https://github.com/shawnqd/TokenBar"
     );
     assert_eq!(
         validate_external_url("http://codexbar.app").unwrap(),
@@ -872,7 +872,7 @@ fn claude_error_message_explains_missing_sign_in() {
 
     assert_eq!(
         message,
-        "Claude sign-in was not found. Run `claude` once to authenticate, then refresh Claude in Win-CodexBar."
+        "Claude sign-in was not found. Run `claude` once to authenticate, then refresh Claude in TokenBar."
     );
 }
 
@@ -949,11 +949,10 @@ fn chart_data_serde_roundtrip_preserves_fields() {
 
 #[test]
 fn chart_data_for_unknown_provider_is_empty() {
-    let data =
-        super::build_provider_chart_data_without_local_io(
-            "this-provider-definitely-does-not-exist".into(),
-            None,
-        );
+    let data = super::build_provider_chart_data_without_local_io(
+        "this-provider-definitely-does-not-exist".into(),
+        None,
+    );
     assert_eq!(data.provider_id, "this-provider-definitely-does-not-exist");
     assert!(data.credits_history.is_empty());
     assert!(data.usage_breakdown.is_empty());
@@ -1021,9 +1020,20 @@ fn cookie_options_for_cookie_supporting_provider() {
     let opts = super::cookie_source_options_for("codex", Language::English);
     let values: Vec<_> = opts.iter().map(|o| o.value.as_str()).collect();
     assert_eq!(values, vec!["auto", "manual", "off"]);
-    assert!(opts.iter().any(|o| o.label == "Automatic"));
-    assert!(opts.iter().any(|o| o.label == "Manual"));
-    assert!(opts.iter().any(|o| o.label == "Disabled"));
+    // Spec v2.2.2: Cookie 来源 options carry the full names, never a bare
+    // "Automatic" that reads like the usage-source 自动选择.
+    assert!(opts.iter().any(|o| o.label == "Auto-read browser"));
+    assert!(opts.iter().any(|o| o.label == "Use saved cookie"));
+    assert!(opts.iter().any(|o| o.label == "Cookies off"));
+}
+
+#[test]
+fn cookie_options_cover_opencode_go_web_session() {
+    // User-reported: OpenCode Go reads a saved web session but had no
+    // Cookie 来源 options, so auto browser reading could never be opted in.
+    let opts = super::cookie_source_options_for("opencodego", Language::English);
+    let values: Vec<_> = opts.iter().map(|o| o.value.as_str()).collect();
+    assert_eq!(values, vec!["auto", "manual"]);
 }
 
 #[test]
@@ -1047,10 +1057,7 @@ fn zai_region_options_match_upstream_ids() {
     assert_eq!(values, vec!["global", "bigmodel-cn"]);
     assert_eq!(
         labels,
-        vec![
-            "Global (api.z.ai)",
-            "BigModel CN (open.bigmodel.cn)"
-        ]
+        vec!["Global (api.z.ai)", "BigModel CN (open.bigmodel.cn)"]
     );
 }
 
@@ -1124,8 +1131,8 @@ fn open_path_rejects_missing_path() {
 #[test]
 fn external_url_validator_accepts_http_and_https() {
     assert_eq!(
-        super::validate_external_url(" https://github.com/Finesssee/Win-CodexBar "),
-        Ok("https://github.com/Finesssee/Win-CodexBar")
+        super::validate_external_url(" https://github.com/shawnqd/TokenBar "),
+        Ok("https://github.com/shawnqd/TokenBar")
     );
     assert_eq!(
         super::validate_external_url("http://localhost:1420"),
@@ -1145,7 +1152,8 @@ fn external_url_validator_rejects_non_web_and_control_urls() {
 // Build the full bootstrap payload and prove that every user-facing provider
 // variant ends up in the catalog with a non-empty id + display name. The
 // legacy MiMo API-key bridge is intentionally hidden because the MiMo card
-// owns its balance lookup.
+// owns its balance lookup; deprecated providers (upstream parity) are hidden
+// unless the user already enabled them.
 
 #[test]
 fn bootstrap_payload_exposes_every_provider_variant() {
@@ -1166,8 +1174,13 @@ fn bootstrap_payload_exposes_every_provider_variant() {
         );
     }
 
+    let settings = Settings::load();
+    let mut hidden_count = 0usize;
     for provider in ProviderId::all() {
-        if *provider == ProviderId::MiMoApi {
+        if *provider == ProviderId::MiMoApi
+            || (provider.is_deprecated() && !settings.is_provider_enabled(*provider))
+        {
+            hidden_count += 1;
             continue;
         }
         let expected = provider.cli_name().to_string();
@@ -1179,7 +1192,7 @@ fn bootstrap_payload_exposes_every_provider_variant() {
 
     assert_eq!(
         catalog_ids.len(),
-        ProviderId::all().len() - 1,
+        ProviderId::all().len() - hidden_count,
         "bootstrap catalog size drifted from ProviderId::all()"
     );
 
@@ -1256,5 +1269,256 @@ fn taskbar_entries_cross_the_bridge_in_camel_case() {
     assert!(
         !encoded.contains("provider_id"),
         "snake_case must not leak across the bridge; got {encoded}"
+    );
+}
+
+// ── 2026-09-06 source contract: token → saved session → browser cookie ──
+
+#[test]
+fn web_session_ladder_prefers_token_account_over_saved_and_browser() {
+    let (mode, header) = super::resolve_web_session(
+        Some("token=1".to_string()),
+        Some("saved=2".to_string()),
+        Some("browser=3".to_string()),
+        SourceMode::Auto,
+    );
+    assert_eq!(mode, SourceMode::Web);
+    assert_eq!(header.as_deref(), Some("token=1"));
+}
+
+#[test]
+fn web_session_ladder_prefers_saved_session_over_browser() {
+    let (_, header) = super::resolve_web_session(
+        None,
+        Some("saved=2".to_string()),
+        Some("browser=3".to_string()),
+        SourceMode::Auto,
+    );
+    assert_eq!(header.as_deref(), Some("saved=2"));
+}
+
+#[test]
+fn web_session_ladder_uses_browser_only_without_saved_session() {
+    let (mode, header) =
+        super::resolve_web_session(None, None, Some("browser=3".to_string()), SourceMode::Cli);
+    assert_eq!(mode, SourceMode::Web);
+    assert_eq!(header.as_deref(), Some("browser=3"));
+}
+
+#[test]
+fn web_session_ladder_without_any_session_falls_back_to_provider_ladder() {
+    let (mode, header) = super::resolve_web_session(None, None, None, SourceMode::Cli);
+    assert_eq!(mode, SourceMode::Cli);
+    assert!(header.is_none());
+}
+
+/// Auto is an explicit opt-in: a session the user saved on purpose wins over
+/// whatever the browser store exposes, and the cookie read never rewrites the
+/// persisted usage source.
+#[test]
+fn fetch_context_auto_uses_saved_session_before_browser_read() {
+    // Unpinned (usage_source stays "auto"): the acquisition ladder runs —
+    // the saved session wins over a browser read and the fetch runs the web
+    // strategy. Pinning behavior is covered by
+    // `fetch_context_explicit_pin_wins_over_found_session`.
+    let mut settings = Settings::default();
+    settings.set_cookie_source(ProviderId::Cursor, "auto");
+    let mut cookies = ManualCookies::default();
+    cookies.set("cursor", "session=saved-on-purpose");
+    let api_keys = ApiKeys::default();
+    let token_accounts = HashMap::new();
+
+    let ctx = super::build_fetch_context(
+        ProviderId::Cursor,
+        &settings,
+        &cookies,
+        &api_keys,
+        &token_accounts,
+    );
+
+    assert_eq!(ctx.source_mode, SourceMode::Web);
+    assert_eq!(
+        ctx.manual_cookie_header.as_deref(),
+        Some("session=saved-on-purpose")
+    );
+}
+
+/// Manual stays fully offline: no browser store is consulted, and without a
+/// saved session the provider keeps its own ladder instead of being pinned.
+#[test]
+fn fetch_context_manual_without_saved_session_keeps_provider_ladder() {
+    let mut settings = Settings::default();
+    settings.set_cookie_source(ProviderId::Cursor, "manual");
+    settings.set_usage_source(ProviderId::Cursor, "cli");
+    let cookies = ManualCookies::default();
+    let api_keys = ApiKeys::default();
+    let token_accounts = HashMap::new();
+
+    let ctx = super::build_fetch_context(
+        ProviderId::Cursor,
+        &settings,
+        &cookies,
+        &api_keys,
+        &token_accounts,
+    );
+
+    assert_eq!(ctx.source_mode, SourceMode::Cli);
+    assert!(ctx.manual_cookie_header.is_none());
+}
+
+/// Deprecated providers stay in the core but leave the settings catalog
+/// unless the user already enabled them (upstream parity).
+#[test]
+fn provider_catalog_hides_deprecated_providers_unless_enabled() {
+    let mut settings = Settings::default();
+    for provider in ProviderId::all() {
+        settings.disable_provider(*provider);
+    }
+
+    let hidden = super::bridge::provider_catalog_for(&settings);
+    assert!(!hidden.iter().any(|entry| entry.id == "kimik2"));
+    assert!(!hidden.iter().any(|entry| entry.id == "crossmodel"));
+
+    settings.enable_provider(ProviderId::KimiK2);
+    let shown = super::bridge::provider_catalog_for(&settings);
+    assert!(shown.iter().any(|entry| entry.id == "kimik2"));
+    assert!(!shown.iter().any(|entry| entry.id == "crossmodel"));
+}
+
+// ── 2026-09-06 usage-source mode rework (upstream parity) ──────────────
+
+#[test]
+fn usage_source_set_validates_against_runtime_catalog() {
+    let mut settings = Settings::default();
+
+    // Claude advertises [auto, oauth, web, cli] — all four pins persist.
+    for source in ["auto", "oauth", "web", "cli"] {
+        let value =
+            super::provider_usage_source_set(&mut settings, "claude", source.to_string()).unwrap();
+        assert_eq!(value, source);
+    }
+
+    // Cursor advertises [auto, web] — a CLI pin must be rejected outright.
+    let err =
+        super::provider_usage_source_set(&mut settings, "cursor", "cli".to_string()).unwrap_err();
+    assert!(err.contains("unavailable"), "got: {err}");
+
+    // Garbage values never reach settings.
+    let err =
+        super::provider_usage_source_set(&mut settings, "claude", "nope".to_string()).unwrap_err();
+    assert!(err.contains("Invalid usage source"), "got: {err}");
+}
+
+#[test]
+fn usage_source_lookup_roundtrips_persisted_pin() {
+    let mut settings = Settings::default();
+    assert_eq!(
+        super::provider_usage_source_lookup(&settings, "claude").as_deref(),
+        Some("auto"),
+        "settings getter defaults to auto"
+    );
+    super::provider_usage_source_set(&mut settings, "claude", "web".to_string()).unwrap();
+    assert_eq!(
+        super::provider_usage_source_lookup(&settings, "claude").as_deref(),
+        Some("web")
+    );
+    assert_eq!(
+        super::provider_usage_source_lookup(&settings, "nope"),
+        None,
+        "unknown provider id has no lookup"
+    );
+}
+
+/// The capabilities bridge must carry the provider's real runtime source
+/// catalog so the settings picker never offers a source the provider cannot
+/// fetch. Upstream catalog parity — grok's pinned Cli/OAuth fetches were
+/// ported from upstream (auth.json principals), doubao's Cli runs arkcli.
+#[test]
+fn caps_expose_runtime_source_catalog_matching_upstream() {
+    let catalog = |id: &str| {
+        super::get_provider_auth_capabilities(id.to_string())
+            .unwrap()
+            .available_sources
+    };
+    assert_eq!(catalog("claude"), vec!["auto", "oauth", "web", "cli"]);
+    assert_eq!(catalog("codex"), vec!["auto", "oauth", "cli"]);
+    assert_eq!(catalog("factory"), vec!["auto", "oauth", "web"]);
+    assert_eq!(catalog("kimi"), vec!["auto", "web", "oauth"]);
+    assert_eq!(catalog("cursor"), vec!["auto", "web"]);
+    assert_eq!(catalog("gemini"), vec!["auto", "cli"]);
+    assert_eq!(catalog("deepseek"), vec!["auto", "oauth"]);
+    assert_eq!(catalog("amp"), vec!["auto", "web", "cli"]);
+    // Upstream parity: pinned Cli reads the grok CLI principal, pinned OAuth
+    // reads the SuperGrok principal (or an api-key bearer).
+    assert_eq!(catalog("grok"), vec!["auto", "cli", "oauth", "web"]);
+    assert_eq!(catalog("doubao"), vec!["auto", "oauth", "cli"]);
+    // zai keeps the local OAuth capability this fork added (GLM/z.ai
+    // auth surface); upstream's zai stays Auto-only.
+    assert_eq!(catalog("zai"), vec!["auto", "oauth"]);
+}
+
+/// An explicit non-Auto usage-source pin is honored even when a session
+/// exists: a pinned Cli fetch is never rewritten to Web just because a
+/// cookie is available (upstream pass-through semantics).
+#[test]
+fn fetch_context_explicit_pin_wins_over_found_session() {
+    let mut settings = Settings::default();
+    settings.set_cookie_source(ProviderId::Claude, "auto");
+    settings.set_usage_source(ProviderId::Claude, "cli");
+    let mut cookies = ManualCookies::default();
+    cookies.set("claude", "sessionKey=pinned-check");
+    let api_keys = ApiKeys::default();
+    let token_accounts = HashMap::new();
+
+    let ctx = super::build_fetch_context(
+        ProviderId::Claude,
+        &settings,
+        &cookies,
+        &api_keys,
+        &token_accounts,
+    );
+
+    assert_eq!(
+        ctx.source_mode,
+        SourceMode::Cli,
+        "pin must survive a session"
+    );
+    assert_eq!(
+        ctx.manual_cookie_header.as_deref(),
+        Some("sessionKey=pinned-check"),
+        "the session still rides along for providers that can use it"
+    );
+}
+
+#[test]
+fn fetch_context_auto_keeps_acquisition_ladder() {
+    let mut settings = Settings::default();
+    settings.set_cookie_source(ProviderId::Cursor, "auto");
+    let mut cookies = ManualCookies::default();
+    cookies.set("cursor", "session=auto-ladder");
+    let api_keys = ApiKeys::default();
+    let token_accounts = HashMap::new();
+
+    let ctx = super::build_fetch_context(
+        ProviderId::Cursor,
+        &settings,
+        &cookies,
+        &api_keys,
+        &token_accounts,
+    );
+
+    assert_eq!(ctx.source_mode, SourceMode::Web);
+    assert_eq!(
+        ctx.manual_cookie_header.as_deref(),
+        Some("session=auto-ladder")
+    );
+}
+
+#[test]
+fn provider_detail_roundtrips_usage_source() {
+    let detail = super::build_provider_detail("claude").unwrap();
+    assert!(
+        detail.usage_source.is_some(),
+        "usage_source is always present (settings default auto)"
     );
 }

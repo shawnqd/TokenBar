@@ -1,7 +1,7 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 import { createRefreshCoordinator } from "./refreshCoordinator";
 import { createUsageStore, keyFromSnapshot, usageStoreKey, type UsageStoreKey } from "./usageStore";
-import { FIXTURE_SNAPSHOTS, snapshotFromFixture, kimiSessionWeeklyBridge } from "./index";
+import { FIXTURE_SNAPSHOTS, snapshotFromFixture, kimiSessionWeeklyBridge } from "./fixtures";
 import type { ProviderSnapshot } from "./snapshot";
 
 function deferred<T>() {

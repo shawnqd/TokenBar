@@ -1,10 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   createUsageStore,
-  FIXTURE_SNAPSHOTS,
   keyFromSnapshot,
   type ProviderSnapshot,
 } from "./index";
+import {
+  FIXTURE_SNAPSHOTS,
+} from "./fixtures";
 
 function deferred<T>() {
   let resolve!: (value: T) => void;

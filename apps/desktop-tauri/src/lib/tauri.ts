@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import type {
   ApiKeyInfoBridge,
@@ -45,6 +46,17 @@ export function getBootstrapState(): Promise<BootstrapState> {
 
 export function getProviderCatalog(): Promise<ProviderCatalogEntry[]> {
   return invoke<ProviderCatalogEntry[]>("get_provider_catalog");
+}
+
+/** Subscribe to the backend's per-provider `provider-updated` events (same
+ *  shape as the cached snapshot). Consumers re-read authoritative state
+ *  instead of upserting a partial copy — upstream parity. */
+export function onProviderUpdated(
+  handler: (snapshot: ProviderUsageSnapshot) => void,
+): Promise<() => void> {
+  return listen<ProviderUsageSnapshot>("provider-updated", (event) =>
+    handler(event.payload),
+  );
 }
 
 export function reorderProviders(ids: string[]): Promise<ProviderSummary[]> {
@@ -464,6 +476,10 @@ export function getProviderAuthCapabilities(
     "get_provider_auth_capabilities",
     { providerId },
   );
+}
+
+export function getProviderCookieSource(providerId: string): Promise<string | null> {
+  return invoke<string | null>("get_provider_cookie_source", { providerId });
 }
 
 export function setProviderCookieSource(providerId: string, source: string): Promise<void> {

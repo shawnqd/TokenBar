@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { render, waitFor } from "@testing-library/react";
+import { fireEvent, render, waitFor } from "@testing-library/react";
 
 const tauriMocks = vi.hoisted(() => ({
   getLocaleStrings: vi.fn(),
@@ -61,6 +61,14 @@ describe("TrayCard Archetype Template Alignment", () => {
           ProviderSessionLabel: "5 小时额度",
           ProviderWeeklyLabel: "周额度",
           ProviderMonthlyLabel: "月额度",
+          QuotaPaceOnPace: "按节奏",
+          QuotaPaceInReserve: "结余",
+          QuotaPaceInDeficit: "透支",
+          PanelExpected: "预计",
+          ResetsInDaysHours: "{}天{}小时后",
+          ResetsInHoursMinutes: "{}小时{}分钟后",
+          QuotaResetExpiredWaiting: "重置中…",
+          QuotaResetUnknown: "重置时间未知",
         },
         "chinese",
       ),
@@ -102,6 +110,23 @@ describe("TrayCard Archetype Template Alignment", () => {
       expect(container.querySelector(".progress-bar")).toBeNull();
     });
 
+    it("renders Scheme B layout with left label and right soft-badge capsule for balance breakdown", async () => {
+      const withBreakdown: ProviderUsageSnapshot = {
+        ...deepseekSnapshot,
+        updatedAt: new Date().toISOString(),
+      };
+      const { container } = renderCard(withBreakdown, "detailed");
+      await waitFor(() => {
+        expect(container.querySelector(".balance-single-line")).not.toBeNull();
+      });
+      const left = container.querySelector(".balance-single-line__left");
+      expect(left?.textContent).toContain("账户余额");
+      expect(left?.textContent).toContain("¥69.21");
+      const rightBadge = container.querySelector(".balance-single-line__right .soft-badge--reserve");
+      expect(rightBadge).not.toBeNull();
+      expect(rightBadge?.textContent).toBe("赠送 ¥0.00");
+    });
+
     it("renders clean sublabel and balance metric without duplicating name in Minimal mode", async () => {
       const { container } = renderCard(deepseekSnapshot, "minimal");
       await waitFor(() => {
@@ -115,6 +140,30 @@ describe("TrayCard Archetype Template Alignment", () => {
       const metric = container.querySelector(".minimal-streamlined__metric");
       expect(metric?.textContent).toBe("¥69.21");
       expect(container.querySelector(".progress-bar")).toBeNull();
+    });
+
+    it("keeps the error icon and label in the same status wrapper", async () => {
+      const { container } = renderCard(
+        { ...deepseekSnapshot, error: "provider request failed" },
+        "detailed",
+      );
+      await waitFor(() => {
+        expect(container.querySelector(".card-header__updated.is-error")).not.toBeNull();
+      });
+      const status = container.querySelector(".card-header__updated.is-error");
+      expect(status?.querySelector(".card-header__updated-icon")).not.toBeNull();
+      expect(status?.querySelector(".card-header__updated-label")).not.toBeNull();
+    });
+
+    it("shows an error icon in minimal mode when no quota is available", async () => {
+      const { container } = renderCard(
+        { ...deepseekSnapshot, error: "provider request failed" },
+        "minimal",
+      );
+      await waitFor(() => {
+        expect(container.querySelector(".minimal-streamlined__status-badge")).not.toBeNull();
+      });
+      expect(container.querySelector(".minimal-streamlined__status-icon")).not.toBeNull();
     });
   });
 
@@ -144,12 +193,17 @@ describe("TrayCard Archetype Template Alignment", () => {
       fetchDurationMs: null,
     };
 
-    it("renders status block encased in dual-pill-container in Detailed mode", async () => {
+    it("renders status telemetry card encased in dual-pill-container in Detailed mode", async () => {
       const { container } = renderCard(azureSnapshot, "detailed");
       await waitFor(() => {
         expect(container.querySelector(".dual-pill-container")).not.toBeNull();
       });
-      expect(container.querySelector(".status-block")).not.toBeNull();
+      // density-preview.html's Block D shell: the status text splits on "·"
+      // into a readiness title and a soft badge.
+      const card = container.querySelector(".telemetry-card");
+      expect(card).not.toBeNull();
+      expect(card?.querySelector(".telemetry-card__status")?.textContent).toContain("部署运行正常");
+      expect(card?.querySelector(".soft-badge")?.textContent).toBe("按量就绪");
       expect(container.textContent).toContain("部署运行正常");
     });
 
@@ -206,6 +260,8 @@ describe("TrayCard Archetype Template Alignment", () => {
       expect(container.querySelector(".dual-pill-bottom")).not.toBeNull();
       expect(container.querySelector(".dual-pill-top .quota-row")).not.toBeNull();
       expect(container.querySelector(".dual-pill-bottom")?.textContent).toContain("$24.50 USD");
+      expect(container.querySelector(".dual-pill-bottom .balance-single-line__left")?.textContent).toContain("账户余额");
+      expect(container.querySelector(".dual-pill-bottom .soft-badge")).toBeNull();
     });
 
     it("renders quota metric in row 1 and balance in condensedChip in Minimal mode", async () => {
@@ -216,6 +272,18 @@ describe("TrayCard Archetype Template Alignment", () => {
       const metric = container.querySelector(".minimal-streamlined__metric");
       expect(metric?.textContent).toBe("85%");
       expect(container.textContent).toContain("余额 $24.50 USD");
+    });
+
+    it("keeps the stale quota visible while surfacing an error in minimal mode", async () => {
+      const { container } = renderCard(
+        { ...cursorSnapshot, error: "provider request failed" },
+        "minimal",
+      );
+      await waitFor(() => {
+        expect(container.querySelector(".minimal-streamlined__status-badge")).not.toBeNull();
+      });
+      expect(container.querySelector(".minimal-streamlined__metric")?.textContent).toBe("85%");
+      expect(container.querySelector(".minimal-streamlined__status-icon")).not.toBeNull();
     });
   });
 
@@ -270,6 +338,146 @@ describe("TrayCard Archetype Template Alignment", () => {
       expect(container.textContent).toContain("0%");
       expect(container.querySelector(".progress-bar")).not.toBeNull();
       expect(container.querySelector(".balance-single-line")?.textContent).toContain("¥48.45");
+    });
+  });
+
+  describe("Tile hover tip stays minimal", () => {
+    const weeklyWithPace: ProviderUsageSnapshot = {
+      providerId: "claude",
+      displayName: "Claude",
+      primary: rw(82, 300, "session", "2026-09-10T13:00:00Z"),
+      primaryLabel: undefined,
+      secondary: rw(82, 10080, "weekly", "2026-09-12T07:00:00Z"),
+      secondaryLabel: undefined,
+      modelSpecific: null,
+      tertiary: null,
+      extraRateWindows: [],
+      cost: null,
+      planName: null,
+      accountEmail: null,
+      sourceLabel: "auto",
+      updatedAt: "2026-09-10T13:00:00Z",
+      error: null,
+      pace: {
+        stage: "slightly_ahead",
+        deltaPercent: 12.4,
+        willLastToReset: false,
+        etaSeconds: null,
+        expectedUsedPercent: 69.6,
+        actualUsedPercent: 82,
+        speedMultiplierToReset: null,
+      },
+      accountOrganization: null,
+      trayStatusLabel: null,
+      fetchDurationMs: null,
+    };
+
+    it("does not render any tip on unobscured elements (tile, notch, reset, unobscured label)", async () => {
+      const { container } = renderCard(weeklyWithPace, "detailed");
+      await waitFor(() => {
+        expect(container.querySelector(".quota-tile--full")).not.toBeNull();
+      });
+      const tile = container.querySelector(".quota-tile--full")!;
+      expect(tile.textContent).toContain("重置");
+
+      // 1. Hovering the whole tile does NOT trigger noisy popup
+      fireEvent.mouseEnter(tile);
+      await new Promise((resolve) => setTimeout(resolve, 600));
+      expect(document.body.querySelector(".tray-tip")).toBeNull();
+      fireEvent.mouseLeave(tile);
+
+      // 2. Hovering the progress notch does NOT trigger popup (pure visual marker)
+      const notch = tile.querySelector(".progress-notch")!;
+      fireEvent.mouseEnter(notch);
+      await new Promise((resolve) => setTimeout(resolve, 600));
+      expect(document.body.querySelector(".tray-tip")).toBeNull();
+      fireEvent.mouseLeave(notch);
+
+      // 3. Hovering the reset text does NOT trigger popup (already fully visible)
+      const reset = tile.querySelector(".quota-tile__reset")!;
+      fireEvent.mouseEnter(reset);
+      await new Promise((resolve) => setTimeout(resolve, 600));
+      expect(document.body.querySelector(".tray-tip")).toBeNull();
+      fireEvent.mouseLeave(reset);
+
+      // 4. Hovering unobscured label does NOT trigger popup
+      const label = tile.querySelector(".quota-tile__label")!;
+      fireEvent.mouseEnter(label);
+      await new Promise((resolve) => setTimeout(resolve, 600));
+      expect(document.body.querySelector(".tray-tip")).toBeNull();
+      fireEvent.mouseLeave(label);
+    });
+
+    it("triggers tip only when text is truncated (scrollWidth > clientWidth)", async () => {
+      const { container } = renderCard(weeklyWithPace, "detailed");
+      await waitFor(() => {
+        expect(container.querySelector(".quota-tile--full")).not.toBeNull();
+      });
+      const label = container.querySelector(".quota-tile__label")!;
+      expect(label.textContent).toBe("周额度");
+
+      // Simulate overflow truncation: scrollWidth > clientWidth
+      Object.defineProperty(label, "clientWidth", { configurable: true, value: 40 });
+      Object.defineProperty(label, "scrollWidth", { configurable: true, value: 100 });
+
+      fireEvent.mouseEnter(label);
+      await waitFor(
+        () => {
+          const tip = document.body.querySelector(".tray-tip");
+          expect(tip).not.toBeNull();
+          expect(tip?.textContent).toBe("周额度");
+        },
+        { timeout: 1000 },
+      );
+
+      fireEvent.mouseLeave(label);
+      await waitFor(() => {
+        expect(document.body.querySelector(".tray-tip")).toBeNull();
+      });
+    });
+
+    it("renders no tip at all when the window has no pace verdict", async () => {
+      const { container } = renderCard(
+        {
+          ...weeklyWithPace,
+          secondary: null,
+          pace: null,
+          extraRateWindows: [
+            {
+              id: "untimed",
+              title: "额外额度",
+              usageKnown: true,
+              window: rw(40, null, null, null, null),
+            },
+          ],
+        },
+        "detailed",
+      );
+      await waitFor(() => {
+        expect(container.querySelector(".quota-tile--full")).not.toBeNull();
+      });
+      const tile = container.querySelector(".quota-tile--full")!;
+      expect(tile.textContent).toContain("额外额度");
+      fireEvent.mouseEnter(tile);
+      await new Promise((resolve) => setTimeout(resolve, 600));
+      expect(document.body.querySelector(".tray-tip")).toBeNull();
+      fireEvent.mouseLeave(tile);
+    });
+
+    it("HeroRow reset has no tip and stays completely silent", async () => {
+      const heroWithReset: ProviderUsageSnapshot = {
+        ...weeklyWithPace,
+        primary: rw(60, 300, "session", "2026-09-12T15:00:00Z"),
+      };
+      const { container } = renderCard(heroWithReset, "detailed");
+      await waitFor(() => {
+        expect(container.querySelector(".quota-row__reset")).not.toBeNull();
+      });
+      const heroReset = container.querySelector(".quota-row__reset")!;
+      fireEvent.mouseEnter(heroReset);
+      await new Promise((resolve) => setTimeout(resolve, 600));
+      expect(document.body.querySelector(".tray-tip")).toBeNull();
+      fireEvent.mouseLeave(heroReset);
     });
   });
 });

@@ -19,6 +19,7 @@ param(
     [switch]$DryRun,
     [switch]$StopOnly,
     [switch]$Verbose,
+    [switch]$StartVisible,
     [string]$ProofMode
 )
 
@@ -182,6 +183,17 @@ if ($StopOnly) {
 # user-facing dev build suppress blur-dismiss and tray-toggle close actions.
 # Keep proof runs explicit and separate from the normal launcher.
 Remove-Item Env:CODEXBAR_PROOF_MODE -ErrorAction SilentlyContinue
+if ($StartVisible) {
+    # Normal product launches are tray-first. This opt-in is for a human
+    # verification run that must show the real tray panel immediately after
+    # the single development chain starts; it does not change persisted
+    # settings or the installed app's default behaviour.
+    $env:CODEXBAR_START_VISIBLE = "1"
+} else {
+    # Do not let a stale shell variable silently turn a normal launch into a
+    # visible/proof run. The mode must be explicit at the launcher boundary.
+    Remove-Item Env:CODEXBAR_START_VISIBLE -ErrorAction SilentlyContinue
+}
 if (-not [string]::IsNullOrWhiteSpace($ProofMode)) {
     $env:CODEXBAR_PROOF_MODE = $ProofMode.Trim()
 }
@@ -195,7 +207,30 @@ $stdoutLog = Join-Path $logDir "tauri-dev.stdout.log"
 $stderrLog = Join-Path $logDir "tauri-dev.stderr.log"
 
 $arguments = @("--dir", ('"{0}"' -f $FrontendDir), "run", "tauri:dev")
-Write-Host "Starting one hidden Tauri development chain..." -ForegroundColor Green
+
+# Windows PowerShell 5.1 builds the child environment as a case-insensitive
+# dictionary and throws "已添加项。字典中的关键字…" when the parent carries the same
+# name in two casings (http_proxy + HTTP_PROXY). Proxy clients and agent
+# sandboxes both produce that pair, and the launcher is otherwise unusable on
+# those machines. Collapse each pair to a single lowercase entry — the spelling
+# curl/Go/reqwest read first — before spawning, so the child still sees a proxy
+# but the dictionary stays unique.
+foreach ($proxyName in @("http_proxy", "https_proxy", "all_proxy", "no_proxy")) {
+    $upperName = $proxyName.ToUpperInvariant()
+    $lowerValue = [System.Environment]::GetEnvironmentVariable($proxyName)
+    $upperValue = [System.Environment]::GetEnvironmentVariable($upperName)
+    if ($null -eq $lowerValue -and $null -eq $upperValue) { continue }
+    if ($null -eq $lowerValue) { $lowerValue = $upperValue }
+    [System.Environment]::SetEnvironmentVariable($upperName, $null)
+    [System.Environment]::SetEnvironmentVariable($proxyName, $null)
+    [System.Environment]::SetEnvironmentVariable($proxyName, $lowerValue)
+}
+
+if ($StartVisible) {
+    Write-Host "Starting one visible Tauri development chain (tray panel)..." -ForegroundColor Green
+} else {
+    Write-Host "Starting one tray-first Tauri development chain..." -ForegroundColor Green
+}
 Write-Host "Logs: $stdoutLog and $stderrLog" -ForegroundColor DarkGray
 
 $process = Start-Process -FilePath $pnpm.Source `

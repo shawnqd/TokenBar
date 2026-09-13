@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import type React from "react";
 import { createPortal } from "react-dom";
 
@@ -123,11 +123,18 @@ function CheckIcon() {
 }
 
 type DropdownRect = {
-  top: number;
+  top?: number;
+  bottom?: number;
   /** Distance from the viewport's right edge to the trigger's right edge. */
   right: number;
   width: number;
+  placement: "above" | "below";
+  /** Inline max-height only when neither side has enough room. */
+  maxHeight?: number;
 };
+
+const DROPDOWN_GAP = 4;
+const DROPDOWN_VIEWPORT_MARGIN = 8;
 
 /** Shared open/close plumbing for the themed dropdown trigger + portaled panel. */
 function useDropdownPanel() {
@@ -145,13 +152,61 @@ function useDropdownPanel() {
       // translateX). Settings controls sit on the row's right, and an inline
       // transform would fight the open animation's own transform keyframes.
       setRect({
-        top: r.bottom + 4,
+        top: r.bottom + DROPDOWN_GAP,
         right: window.innerWidth - r.right,
         width: r.width,
+        placement: "below",
       });
     }
     setOpen(true);
   }, []);
+
+  // The panel is portaled, so its height is not known until after the first
+  // render. Measure it before paint and flip it above the trigger when the
+  // lower viewport does not have enough room. If neither side fits, constrain
+  // the panel to the side with more space so its own list can scroll instead
+  // of escaping the settings window.
+  const positionPanel = useCallback(() => {
+    const trigger = triggerRef.current?.getBoundingClientRect();
+    const panel = panelRef.current;
+    if (!trigger || !panel) return;
+
+    const viewportHeight = window.innerHeight;
+    // `offsetHeight` is not affected by the opening scale animation; fall
+    // back to the rect for test environments that do not implement layout.
+    const panelHeight = panel.offsetHeight || panel.getBoundingClientRect().height;
+    const belowSpace = Math.max(
+      0,
+      viewportHeight - trigger.bottom - DROPDOWN_GAP - DROPDOWN_VIEWPORT_MARGIN,
+    );
+    const aboveSpace = Math.max(
+      0,
+      trigger.top - DROPDOWN_GAP - DROPDOWN_VIEWPORT_MARGIN,
+    );
+    const placeAbove = panelHeight > belowSpace && aboveSpace > belowSpace;
+    const availableSpace = placeAbove ? aboveSpace : belowSpace;
+    const maxHeight =
+      panelHeight > availableSpace && availableSpace > 0
+        ? Math.floor(availableSpace)
+        : undefined;
+
+    setRect((previous) => {
+      if (!previous) return previous;
+      return {
+        ...previous,
+        placement: placeAbove ? "above" : "below",
+        top: placeAbove ? undefined : trigger.bottom + DROPDOWN_GAP,
+        bottom: placeAbove
+          ? viewportHeight - trigger.top + DROPDOWN_GAP
+          : undefined,
+        maxHeight,
+      };
+    });
+  }, []);
+
+  useLayoutEffect(() => {
+    if (open) positionPanel();
+  }, [open, positionPanel]);
 
   useEffect(() => {
     if (!open) return undefined;
@@ -238,8 +293,16 @@ export function Select({
           <div
             ref={panelRef}
             role="listbox"
-            className="dropdown__panel"
-            style={{ top: rect.top, right: rect.right, minWidth: rect.width }}
+            className={`dropdown__panel${
+              rect.placement === "above" ? " dropdown__panel--above" : ""
+            }`}
+            style={{
+              top: rect.top,
+              bottom: rect.bottom,
+              right: rect.right,
+              minWidth: rect.width,
+              maxHeight: rect.maxHeight,
+            }}
           >
             {options.map((o) => (
               <button
@@ -327,11 +390,15 @@ export function MultiSelect({
             role="listbox"
             aria-multiselectable
             aria-label={ariaLabel}
-            className="dropdown__panel"
+            className={`dropdown__panel${
+              rect.placement === "above" ? " dropdown__panel--above" : ""
+            }`}
             style={{
               top: rect.top,
+              bottom: rect.bottom,
               right: rect.right,
               minWidth: Math.max(rect.width, 160),
+              maxHeight: rect.maxHeight,
             }}
           >
             {options.map((o) => {

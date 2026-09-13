@@ -11,7 +11,7 @@ import codexbarIcon from "../../../assets/codexbar-icon.png";
 const ABOUT_LINKS: { labelKey: LocaleKey; url: string }[] = [
   {
     labelKey: "AboutLinkGithub",
-    url: "https://github.com/Finesssee/Win-CodexBar",
+    url: "https://github.com/shawnqd/TokenBar",
   },
   {
     labelKey: "AboutLinkWebsite",

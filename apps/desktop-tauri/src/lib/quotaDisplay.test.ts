@@ -5,11 +5,13 @@ import {
   formatResetDisplay,
   primaryQuotaState,
   quotaDisplayContext,
+  quotaDisplayPreference,
   quotaForecastDisplay,
   quotaLevel,
   quotaPercentContext,
   quotaPercentDisplay,
   quotaSemanticsLabelKey,
+  resetDisplayPreference,
   resolveProviderStatus,
   STALE_AFTER_MS,
 } from "./quotaDisplay";
@@ -85,11 +87,8 @@ describe("quotaDisplayContext", () => {
     });
   });
 
-  /**
-   * The taskbar renders no reset text, so it has no reset-time setting to read.
-   * `quotaPercentContext` is the only shape it can be asked for, and it must not
-   * carry a reset field that would look configurable.
-   */
+  /** The taskbar strip body renders no reset text; its reset preference is
+   * consumed only by the native tray/context-menu status row. */
   it("gives the taskbar a percentage context with no reset-time mode", () => {
     const ctx = quotaPercentContext(settings, "taskbar");
     expect(ctx).not.toHaveProperty("resetTimeRelative");
@@ -113,6 +112,35 @@ describe("quotaDisplayContext", () => {
       resetTimeRelative: true,
       highUsageThreshold: 70,
       criticalUsageThreshold: 90,
+    });
+  });
+
+  it("resolves Follow from the General defaults while preserving explicit overrides", () => {
+    const settingsWithDefaults = {
+      ...settings,
+      showAsUsed: false,
+      resetTimeRelative: false,
+      floatBarQuotaDisplay: "follow",
+      floatBarResetDisplay: "follow",
+      dashboardQuotaDisplay: "used",
+      dashboardResetDisplay: "countdown",
+      taskbarQuotaDisplay: "follow",
+      taskbarResetDisplay: "follow",
+    } as unknown as SettingsSnapshot;
+
+    expect(quotaDisplayPreference(settingsWithDefaults, "floatBar")).toBe("follow");
+    expect(resetDisplayPreference(settingsWithDefaults, "floatBar")).toBe("follow");
+    expect(quotaDisplayContext(settingsWithDefaults, "floatBar")).toMatchObject({
+      showAsUsed: false,
+      resetTimeRelative: false,
+    });
+    expect(quotaDisplayContext(settingsWithDefaults, "dashboard")).toMatchObject({
+      showAsUsed: true,
+      resetTimeRelative: true,
+    });
+    expect(quotaDisplayContext(settingsWithDefaults, "taskbar")).toMatchObject({
+      showAsUsed: false,
+      resetTimeRelative: false,
     });
   });
 });

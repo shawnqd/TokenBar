@@ -11,7 +11,7 @@ if not defined VERSION (
   exit /b 1
 )
 
-set "ASSETS_DIR=C:\code\Win-CodexBar-release\assets"
+set "ASSETS_DIR=C:\code\TokenBar-release\assets"
 set "MISSING=0"
 
 for %%F in (

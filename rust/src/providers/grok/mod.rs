@@ -18,6 +18,7 @@ use crate::core::{
 };
 
 const BILLING_ENDPOINT: &str = "https://grok.com/grok_api_v2.GrokBuildBilling/GetGrokCreditsConfig";
+const CLI_SETTINGS_ENDPOINT: &str = "https://cli-chat-proxy.grok.com/v1/settings";
 
 pub struct GrokProvider {
     metadata: ProviderMetadata,
@@ -55,29 +56,71 @@ impl GrokProvider {
         dirs::home_dir().map(|home| home.join(".grok").join("auth.json"))
     }
 
-    fn load_credentials() -> Result<GrokCredentials, ProviderError> {
+    fn load_credentials(kind: GrokAuthKind) -> Result<GrokCredentials, ProviderError> {
         let path = Self::auth_file_path()
             .ok_or_else(|| ProviderError::NotInstalled("Grok auth path not found".to_string()))?;
         let text = std::fs::read_to_string(&path).map_err(|_| {
             ProviderError::NotInstalled("Grok auth.json not found. Run `grok login`.".to_string())
         })?;
-        GrokCredentials::parse(&text)
+        GrokCredentials::parse_for_kind(&text, kind)
     }
 
     async fn fetch_with_auth(
         &self,
         credentials: &GrokCredentials,
+        kind: GrokAuthKind,
     ) -> Result<ProviderFetchResult, ProviderError> {
         let billing = self
             .fetch_billing(Some(format!("Bearer {}", credentials.access_token)), None)
             .await?;
+        let plan = if kind == GrokAuthKind::Cli {
+            self.fetch_cli_subscription_tier(credentials).await
+        } else {
+            None
+        }
+        .or_else(|| credentials.login_method());
         Ok(result_from_billing(
             billing,
-            "grok-web",
+            if kind == GrokAuthKind::Cli {
+                "grok-cli"
+            } else {
+                "grok-oauth"
+            },
             credentials.email.clone(),
             credentials.team_id.clone(),
-            credentials.login_method(),
+            plan,
         ))
+    }
+
+    /// CLI principals can report their paid tier through the CLI settings
+    /// endpoint; identity enrichment only, never a replacement for billing.
+    async fn fetch_cli_subscription_tier(
+        &self,
+        credentials: &GrokCredentials,
+    ) -> Option<String> {
+        let response = self
+            .client
+            .get(CLI_SETTINGS_ENDPOINT)
+            .timeout(std::time::Duration::from_secs(2))
+            .header(
+                "Authorization",
+                format!("Bearer {}", credentials.access_token),
+            )
+            .header("x-xai-token-auth", "xai-grok-cli")
+            .header("Accept", "application/json")
+            .header("User-Agent", "CodexBar")
+            .send()
+            .await
+            .ok()?;
+        if !response.status().is_success() {
+            return None;
+        }
+        let value: Value = response.json().await.ok()?;
+        grok_plan_display_name(
+            value
+                .get("subscription_tier_display")
+                .and_then(Value::as_str),
+        )
     }
 
     async fn fetch_with_cookie(
@@ -181,29 +224,61 @@ impl Provider for GrokProvider {
 
     async fn fetch_usage(&self, ctx: &FetchContext) -> Result<ProviderFetchResult, ProviderError> {
         match ctx.source_mode {
-            SourceMode::Auto | SourceMode::Web => {
-                if let Some(ref cookie_header) = ctx.manual_cookie_header {
+            SourceMode::Auto => {
+                if let Some(token) = ctx.api_key.as_deref() {
+                    let credentials = GrokCredentials::from_bearer(token);
+                    return self.fetch_with_auth(&credentials, GrokAuthKind::OAuth).await;
+                }
+                if let Some(cookie_header) = &ctx.manual_cookie_header {
+                    return self.fetch_with_cookie(cookie_header).await;
+                }
+                for kind in [GrokAuthKind::Cli, GrokAuthKind::OAuth] {
+                    if let Ok(credentials) = Self::load_credentials(kind) {
+                        match self.fetch_with_auth(&credentials, kind).await {
+                            Ok(result) => return Ok(result),
+                            Err(ProviderError::AuthRequired) => {}
+                            Err(error) => {
+                                tracing::debug!("Grok login path failed in Auto: {error}")
+                            }
+                        }
+                    }
+                }
+                match crate::providers::browser_cookie_header(&["grok.com"]) {
+                    Ok(cookie_header) => self.fetch_with_cookie(&cookie_header).await,
+                    Err(e) => Err(e),
+                }
+            }
+            SourceMode::Web => {
+                if let Some(cookie_header) = &ctx.manual_cookie_header {
                     return self.fetch_with_cookie(cookie_header).await;
                 }
                 match crate::providers::browser_cookie_header(&["grok.com"]) {
-                    Ok(cookie_header) => match self.fetch_with_cookie(&cookie_header).await {
-                        Ok(result) => return Ok(result),
-                        Err(ProviderError::AuthRequired) => {}
-                        Err(e) => return Err(e),
-                    },
-                    Err(ProviderError::NoCookies) => {}
-                    Err(e) => return Err(e),
+                    Ok(cookie_header) => self.fetch_with_cookie(&cookie_header).await,
+                    Err(e) => Err(e),
                 }
-                let credentials = Self::load_credentials()?;
-                self.fetch_with_auth(&credentials).await
             }
-            SourceMode::Cli => Err(ProviderError::UnsupportedSource(SourceMode::Cli)),
-            SourceMode::OAuth => Err(ProviderError::UnsupportedSource(SourceMode::OAuth)),
+            SourceMode::Cli => {
+                let credentials = Self::load_credentials(GrokAuthKind::Cli)?;
+                self.fetch_with_auth(&credentials, GrokAuthKind::Cli).await
+            }
+            SourceMode::OAuth => {
+                let credentials = if let Some(token) = ctx.api_key.as_deref() {
+                    GrokCredentials::from_bearer(token)
+                } else {
+                    Self::load_credentials(GrokAuthKind::OAuth)?
+                };
+                self.fetch_with_auth(&credentials, GrokAuthKind::OAuth).await
+            }
         }
     }
 
     fn available_sources(&self) -> Vec<SourceMode> {
-        vec![SourceMode::Auto, SourceMode::Web]
+        vec![
+            SourceMode::Auto,
+            SourceMode::Cli,
+            SourceMode::OAuth,
+            SourceMode::Web,
+        ]
     }
 
     fn supports_web(&self) -> bool {
@@ -213,6 +288,15 @@ impl Provider for GrokProvider {
     fn detect_version(&self) -> Option<String> {
         Self::detect_cli_version()
     }
+}
+
+/// Which principal inside auth.json a credential belongs to: the Grok CLI
+/// login or a SuperGrok (OAuth) session. Pinned fetches only use their own
+/// principal; Auto tries both.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum GrokAuthKind {
+    Cli,
+    OAuth,
 }
 
 #[derive(Debug, Clone)]
@@ -225,6 +309,64 @@ struct GrokCredentials {
 }
 
 impl GrokCredentials {
+    fn from_bearer(token: &str) -> Self {
+        Self {
+            access_token: token.trim().to_string(),
+            auth_mode: Some("oidc".into()),
+            email: None,
+            team_id: None,
+            expires_at: None,
+        }
+    }
+
+    fn parse_for_kind(text: &str, kind: GrokAuthKind) -> Result<Self, ProviderError> {
+        let root: Value = serde_json::from_str(text)
+            .map_err(|e| ProviderError::Parse(format!("Failed to decode Grok auth.json: {e}")))?;
+        let map = root
+            .as_object()
+            .ok_or_else(|| ProviderError::Parse("Invalid Grok auth.json".to_string()))?;
+        let selected = map.iter().find(|(scope, entry)| {
+            let has_key = entry
+                .get("key")
+                .and_then(Value::as_str)
+                .is_some_and(|value| !value.is_empty());
+            if !has_key {
+                return false;
+            }
+            let is_oauth = scope.starts_with("https://auth.x.ai::")
+                || entry
+                    .get("auth_mode")
+                    .and_then(Value::as_str)
+                    .is_some_and(|mode| mode.eq_ignore_ascii_case("oidc"));
+            match kind {
+                GrokAuthKind::Cli => !is_oauth,
+                GrokAuthKind::OAuth => is_oauth,
+            }
+        });
+        let (_, entry) = selected.ok_or(ProviderError::AuthRequired)?;
+        let access_token = entry
+            .get("key")
+            .and_then(Value::as_str)
+            .filter(|value| !value.is_empty())
+            .ok_or(ProviderError::AuthRequired)?
+            .to_string();
+        let expires_at = entry
+            .get("expires_at")
+            .and_then(Value::as_str)
+            .and_then(|raw| DateTime::parse_from_rfc3339(raw).ok())
+            .map(|dt| dt.with_timezone(&Utc));
+        if expires_at.is_some_and(|dt| dt <= Utc::now()) {
+            return Err(ProviderError::AuthRequired);
+        }
+        Ok(Self {
+            access_token,
+            auth_mode: text_field(entry, "auth_mode"),
+            email: text_field(entry, "email"),
+            team_id: text_field(entry, "team_id"),
+            expires_at,
+        })
+    }
+
     fn parse(text: &str) -> Result<Self, ProviderError> {
         let root: Value = serde_json::from_str(text)
             .map_err(|e| ProviderError::Parse(format!("Failed to decode Grok auth.json: {e}")))?;
@@ -290,6 +432,23 @@ fn text_field(value: &Value, key: &str) -> Option<String> {
         .map(str::trim)
         .filter(|s| !s.is_empty())
         .map(ToOwned::to_owned)
+}
+
+fn grok_plan_display_name(raw: Option<&str>) -> Option<String> {
+    let trimmed = raw?.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let compact: String = trimmed
+        .to_ascii_lowercase()
+        .chars()
+        .filter(|ch| ch.is_ascii_alphabetic())
+        .collect();
+    Some(match compact.as_str() {
+        "supergrokheavy" | "heavy" => "SuperGrok Heavy".to_string(),
+        "supergrok" => "SuperGrok".to_string(),
+        _ => trimmed.to_string(),
+    })
 }
 
 #[derive(Debug, Clone, Copy)]

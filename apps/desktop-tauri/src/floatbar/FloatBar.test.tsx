@@ -1,4 +1,4 @@
-import { act, render, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const tauriMocks = vi.hoisted(() => ({
@@ -7,6 +7,7 @@ const tauriMocks = vi.hoisted(() => ({
   getProviderLocalUsageSummary: vi.fn(),
   refreshProviders: vi.fn(),
   refreshProvidersIfStale: vi.fn(),
+  invokeSurfaceAction: vi.fn(async () => "ok"),
   getSettingsSnapshot: vi.fn(),
   updateSettings: vi.fn(),
   getLocaleStrings: vi.fn(),
@@ -32,7 +33,7 @@ vi.mock("@tauri-apps/api/event", () => eventMocks);
 vi.mock("@tauri-apps/api/window", () => windowMocks);
 vi.mock("@tauri-apps/api/core", () => coreMocks);
 
-import FloatBar from "./FloatBar";
+import FloatBar, { computeFlyoutPlacement } from "./FloatBar";
 import { LocaleProvider } from "../i18n/LocaleProvider";
 import { buildBundle } from "../test/localeHarness";
 import type {
@@ -225,7 +226,7 @@ describe("FloatBar", () => {
     eventMocks.listen.mockResolvedValue(() => {});
   });
 
-  it("renders a pill per enabled provider, sorted by usage descending", async () => {
+  it("renders a pill per enabled provider in the configured order (spec 2.2)", async () => {
     tauriMocks.getCachedProviders.mockResolvedValue([
       snapshot("claude", "Claude", 20),
       snapshot("codex", "Codex", 75),
@@ -238,11 +239,13 @@ describe("FloatBar", () => {
       expect(pills.length).toBe(2);
     });
 
+    // Spec §2.2: preserve the configured order — the bar must not re-sort by
+    // usage urgency behind the user's back.
     const titles = Array.from(container.querySelectorAll(".floatbar__pill")).map(
       (el) => el.getAttribute("title") ?? "",
     );
-    expect(titles[0]).toMatch(/Codex: 75% used/);
-    expect(titles[1]).toMatch(/Claude: 20% used/);
+    expect(titles[0]).toMatch(/Claude: 20% used/);
+    expect(titles[1]).toMatch(/Codex: 75% used/);
   });
 
   it("loads local cost summaries without using the foreground chart endpoint", async () => {
@@ -440,15 +443,23 @@ describe("FloatBar", () => {
     });
   });
 
-  it("shows an empty state when no providers match", async () => {
+  it("renders unknown pills for configured entries without snapshots (spec §2.2)", async () => {
     tauriMocks.getCachedProviders.mockResolvedValue([]);
     tauriMocks.getSettingsSnapshot.mockResolvedValue(settings());
 
     const { container } = await renderFloatBar(bootstrap());
     await waitFor(() => {
-      expect(container.querySelector(".floatbar__empty")).not.toBeNull();
+      // 配置了条目但服务商暂无快照：渲染明确的未知态胶囊（—），
+      // 不再无声消失（2026-09-06 契约）。
+      expect(
+        container.querySelectorAll(".floatbar__pill--unsupported").length,
+      ).toBeGreaterThan(0);
     });
+    expect(container.querySelector(".floatbar__empty")).toBeNull();
   });
+
+  // 注：resolveFloatBarEntries 在条目与旧 id 都为空时回退默认条目，
+  // 因此悬浮栏实际不存在“零条目空态”；无快照条目按 §2.2 渲染未知态胶囊。
 
   it("applies the light-background class and CSS opacity", async () => {
     tauriMocks.getCachedProviders.mockResolvedValue([]);
@@ -464,6 +475,18 @@ describe("FloatBar", () => {
       const bar = container.querySelector<HTMLElement>(".floatbar");
       expect(bar).not.toBeNull();
       expect(bar?.classList.contains("floatbar--light-bg")).toBe(true);
+      expect(bar?.style.opacity).toBe("0.45");
+
+      // Hovering restores opacity to 1
+      act(() => {
+        fireEvent.mouseEnter(bar!);
+      });
+      expect(bar?.style.opacity).toBe("1");
+
+      // Mouse leave restores opacity back to configured 0.45
+      act(() => {
+        fireEvent.mouseLeave(bar!);
+      });
       expect(bar?.style.opacity).toBe("0.45");
     });
   });
@@ -693,6 +716,285 @@ describe("FloatBar", () => {
       });
       expect(title).toContain("71% used");
       expect(title).toMatch(/Resets in \d+h \d+m/);
+    });
+
+    it("renders a micro ring gauge with computed stroke-dashoffset matching quota percentage", async () => {
+      tauriMocks.getCachedProviders.mockResolvedValue([
+        snapshot("claude", "Claude", 40),
+      ]);
+      tauriMocks.getSettingsSnapshot.mockResolvedValue(settings());
+
+      const { container } = await renderFloatBar(bootstrap());
+      await waitFor(() => {
+        const gauge = container.querySelector(".floatbar__icon-gauge");
+        expect(gauge).not.toBeNull();
+        const fill = container.querySelector(".floatbar__ring-fill");
+        expect(fill).not.toBeNull();
+        expect(fill?.getAttribute("stroke-dasharray")).toBe("50.265");
+        // 40% used -> 50.265 * (1 - 0.40) = 30.159 -> 30.16
+        expect(fill?.getAttribute("stroke-dashoffset")).toBe("30.16");
+      });
+    });
+  });
+
+  it("does not render drag handle element", async () => {
+    tauriMocks.getCachedProviders.mockResolvedValue([
+      snapshot("claude", "Claude", 50),
+    ]);
+    tauriMocks.getSettingsSnapshot.mockResolvedValue(settings());
+
+    const { container } = await renderFloatBar(bootstrap());
+    await waitFor(() => {
+      expect(container.querySelector(".floatbar__pill")).not.toBeNull();
+    });
+    expect(container.querySelector(".floatbar__handle")).toBeNull();
+  });
+
+  it("reveals HoverFlyout when hovering a pill and hides on mouse leave", async () => {
+    tauriMocks.getCachedProviders.mockResolvedValue([
+      snapshot("claude", "Claude", 60),
+    ]);
+    tauriMocks.getSettingsSnapshot.mockResolvedValue(settings());
+
+    const { container } = await renderFloatBar(bootstrap());
+    await waitFor(() => {
+      expect(container.querySelector(".floatbar__pill")).not.toBeNull();
+    });
+
+    const pill = container.querySelector(".floatbar__pill")!;
+    expect(container.querySelector(".floatbar__hover-flyout")).toBeNull();
+
+    // Hover on pill reveals flyout
+    act(() => {
+      fireEvent.mouseEnter(pill);
+    });
+
+    await waitFor(() => {
+      const flyout = container.querySelector(".floatbar__hover-flyout");
+      expect(flyout).not.toBeNull();
+      expect(flyout?.querySelector(".hf-title")?.textContent).toBe("Claude");
+      expect(flyout?.querySelector(".hf-metric__val")?.textContent).toBe("60%");
+    });
+
+    // Mouse leave with timeout hides flyout
+    act(() => {
+      fireEvent.mouseLeave(pill);
+    });
+
+    await waitFor(() => {
+      expect(container.querySelector(".floatbar__hover-flyout")).toBeNull();
+    });
+  });
+
+  describe("computeFlyoutPlacement", () => {
+    const workArea = { top: 0, bottom: 1080, left: 0, right: 1920 };
+
+    it("places flyout at bottom-left when plenty of screen space below and to the right", () => {
+      const result = computeFlyoutPlacement({
+        pillRect: { top: 10, bottom: 38, left: 10, right: 120 },
+        basePos: { x: 500, y: 300 },
+        workArea,
+        orientation: "horizontal",
+      });
+      expect(result).toEqual({
+        placementY: "bottom",
+        placementX: "left",
+        padTop: 0,
+        padLeft: 0,
+      });
+    });
+
+    it("flips flyout upward (placementY: top) with padTop when bottom screen space is insufficient", () => {
+      // FloatBar placed near the taskbar at screen bottom
+      const result = computeFlyoutPlacement({
+        pillRect: { top: 10, bottom: 38, left: 10, right: 120 },
+        basePos: { x: 500, y: 1040 },
+        workArea,
+        orientation: "horizontal",
+      });
+      expect(result.placementY).toBe("top");
+      expect(result.padTop).toBeGreaterThanOrEqual(150);
+    });
+
+    it("flips flyout to the right (placementX: right) and calculates padLeft when right screen space is insufficient", () => {
+      // FloatBar placed near screen right edge
+      const result = computeFlyoutPlacement({
+        pillRect: { top: 10, bottom: 38, left: 10, right: 100 },
+        basePos: { x: 1850, y: 300 },
+        workArea,
+        orientation: "horizontal",
+      });
+      expect(result.placementX).toBe("right");
+      expect(result.padLeft).toBeGreaterThan(0);
+    });
+
+    it("supports vertical bar placement flipping on left/bottom constraints", () => {
+      // Vertical bar placed near screen bottom right
+      const result = computeFlyoutPlacement({
+        pillRect: { top: 10, bottom: 40, left: 10, right: 120 },
+        basePos: { x: 1850, y: 1000 },
+        workArea,
+        orientation: "vertical",
+      });
+      expect(result.placementX).toBe("left");
+      expect(result.placementY).toBe("bottom-aligned");
+      expect(result.padLeft).toBeGreaterThanOrEqual(220);
+    });
+  });
+
+  it("suppresses native title attributes on hovered pill and child reset chips to prevent tooltip collisions", async () => {
+    const futureReset = new Date(Date.now() + 2 * 3600_000 + 30 * 60_000).toISOString();
+    tauriMocks.getCachedProviders.mockResolvedValue([
+      snapshot("claude", "Claude", 45, { resetsAt: futureReset }),
+    ]);
+    tauriMocks.getSettingsSnapshot.mockResolvedValue(
+      settings({
+        floatBarShowResetInline: true,
+        floatBarResetWindows: ["primary"],
+      }),
+    );
+
+    const { container } = await renderFloatBar(
+      bootstrap({
+        floatBarShowResetInline: true,
+        floatBarResetWindows: ["primary"],
+      }),
+    );
+    await waitFor(() => {
+      expect(container.querySelector(".floatbar__pill")).not.toBeNull();
+      expect(container.querySelector(".floatbar__reset")).not.toBeNull();
+    });
+
+    const pill = container.querySelector(".floatbar__pill")!;
+    const chip = container.querySelector(".floatbar__reset")!;
+
+    // Before hover: titles are present
+    expect(pill.getAttribute("title")).toBeTruthy();
+    expect(chip.getAttribute("title")).toBeTruthy();
+
+    // Hover pill
+    act(() => {
+      fireEvent.mouseEnter(pill);
+    });
+
+    await waitFor(() => {
+      expect(container.querySelector(".floatbar__hover-flyout")).not.toBeNull();
+    });
+
+    // While hovered: titles are suppressed (undefined -> null in DOM)
+    expect(pill.getAttribute("title")).toBeNull();
+    expect(chip.getAttribute("title")).toBeNull();
+
+    // Leave pill
+    act(() => {
+      fireEvent.mouseLeave(pill);
+    });
+
+    await waitFor(() => {
+      expect(container.querySelector(".floatbar__hover-flyout")).toBeNull();
+    });
+
+    // After leave: titles are restored
+    expect(pill.getAttribute("title")).toBeTruthy();
+    expect(chip.getAttribute("title")).toBeTruthy();
+  });
+
+  it("adjusts float bar geometry with isExpanded flag when hovering and unhovering", async () => {
+    tauriMocks.getCachedProviders.mockResolvedValue([
+      snapshot("claude", "Claude", 60),
+    ]);
+    tauriMocks.getSettingsSnapshot.mockResolvedValue(settings());
+
+    const { container } = await renderFloatBar(bootstrap());
+    await waitFor(() => {
+      expect(container.querySelector(".floatbar__pill")).not.toBeNull();
+    });
+
+    const pill = container.querySelector(".floatbar__pill")!;
+
+    // Hover pill
+    act(() => {
+      fireEvent.mouseEnter(pill);
+    });
+
+    await waitFor(() => {
+      expect(coreMocks.invoke).toHaveBeenCalledWith(
+        "adjust_float_bar_geometry",
+        expect.objectContaining({ isExpanded: true }),
+      );
+    });
+
+    // Leave pill
+    act(() => {
+      fireEvent.mouseLeave(pill);
+    });
+
+    await waitFor(() => {
+      expect(coreMocks.invoke).toHaveBeenCalledWith(
+        "adjust_float_bar_geometry",
+        expect.objectContaining({ isExpanded: false }),
+      );
+    });
+  });
+
+  describe("right-click context menu", () => {
+    it("opens custom context menu on right click and dismisses on Escape", async () => {
+      const provider = snapshot("codex", "Codex", 45);
+      tauriMocks.getCachedProviders.mockResolvedValue([provider]);
+      const { container } = await renderFloatBar(bootstrap({ enabledProviders: ["codex"] }));
+
+      await waitFor(() => {
+        expect(container.querySelector(".floatbar")).not.toBeNull();
+      });
+
+      const floatbar = container.querySelector(".floatbar")!;
+      expect(container.querySelector(".floatbar__context-menu")).toBeNull();
+
+      // Right-click on the bar
+      act(() => {
+        fireEvent.contextMenu(floatbar);
+      });
+
+      // Context menu should appear with 4 buttons
+      const menu = container.querySelector(".floatbar__context-menu");
+      expect(menu).not.toBeNull();
+      const items = menu!.querySelectorAll(".floatbar__context-item");
+      expect(items.length).toBe(4);
+
+      // Press Escape to dismiss
+      act(() => {
+        fireEvent.keyDown(window, { key: "Escape" });
+      });
+
+      expect(container.querySelector(".floatbar__context-menu")).toBeNull();
+    });
+
+    it("triggers refreshProviders on clicking the refresh item", async () => {
+      const provider = snapshot("codex", "Codex", 45);
+      tauriMocks.getCachedProviders.mockResolvedValue([provider]);
+      const { container } = await renderFloatBar(bootstrap({ enabledProviders: ["codex"] }));
+
+      await waitFor(() => {
+        expect(container.querySelector(".floatbar")).not.toBeNull();
+      });
+
+      const floatbar = container.querySelector(".floatbar")!;
+      act(() => {
+        fireEvent.contextMenu(floatbar);
+      });
+
+      const refreshBtn = container.querySelector(".floatbar__context-item") as HTMLButtonElement;
+      expect(refreshBtn).not.toBeNull();
+
+      act(() => {
+        fireEvent.click(refreshBtn);
+      });
+
+      expect(tauriMocks.invokeSurfaceAction).toHaveBeenCalledWith({
+        type: "refresh",
+        force: true,
+      });
+      expect(container.querySelector(".floatbar__context-menu")).toBeNull();
     });
   });
 });

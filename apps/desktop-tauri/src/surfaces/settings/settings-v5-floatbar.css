@@ -2,11 +2,55 @@
    never leaks into the real floating bar or other surfaces. */
 
 .settings-v5 .s5-stage-frame--float {
-  width: 280px;
-  height: 156px;
+  position: relative;
+  flex: 1;
+  width: 100%;
+  min-height: 156px;
   display: flex;
   align-items: center;
-  justify-content: center;
+  justify-content: flex-start;
+  padding: 20px 12px;
+  border-radius: 12px;
+  /* 悬停详情浮窗需要溢出框外显示，预览框不得裁剪（勿加 overflow: hidden）。 */
+  overflow: visible;
+  background:
+    radial-gradient(circle at 80% 20%, rgba(59, 130, 246, 0.28), transparent 50%),
+    radial-gradient(circle at 20% 80%, rgba(147, 51, 234, 0.22), transparent 50%),
+    radial-gradient(circle at 50% 50%, rgba(16, 185, 129, 0.15), transparent 60%),
+    #0c0d12;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  box-shadow:
+    inset 0 2px 8px rgba(0, 0, 0, 0.5),
+    0 4px 12px rgba(0, 0, 0, 0.15);
+  transition: background 0.3s ease, border-color 0.3s ease;
+}
+
+.settings-v5 .s5-stage-frame--float::before {
+  content: "桌面环境模拟";
+  position: absolute;
+  top: 8px;
+  right: 10px;
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  color: rgba(255, 255, 255, 0.35);
+  pointer-events: none;
+}
+
+.settings-v5 .s5-stage-frame--float:has(.floatbar--light-bg) {
+  background:
+    radial-gradient(circle at 75% 30%, #ffd4e5, transparent 55%),
+    radial-gradient(circle at 20% 60%, #bce6ff, transparent 50%),
+    radial-gradient(circle at 50% 90%, #d4f7dc, transparent 60%),
+    #f5f7fa;
+  border-color: rgba(0, 0, 0, 0.12);
+  box-shadow:
+    inset 0 2px 6px rgba(0, 0, 0, 0.08),
+    0 4px 12px rgba(0, 0, 0, 0.05);
+}
+
+.settings-v5 .s5-stage-frame--float:has(.floatbar--light-bg)::before {
+  color: rgba(0, 0, 0, 0.4);
 }
 
 .settings-v5 .s5-fbar {
@@ -37,4 +81,9 @@
 
 .settings-v5 .s5-fbar b {
   font-variant-numeric: tabular-nums;
+}
+
+/* 悬停详情浮窗在设置预览中可溢出模拟框，层级高于后续卡片。 */
+.settings-v5 .s5-stage-frame--float .floatbar__hover-flyout {
+  z-index: 60;
 }

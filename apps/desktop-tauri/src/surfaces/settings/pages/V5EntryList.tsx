@@ -38,7 +38,7 @@ export function V5EntryList({
   /** Provider-aware window list shared with the native taskbar resolver. */
   windowOptionsFor?: (entry: TaskbarEntry) => TaskbarWindowKind[];
   /** Optional localized labels; V5's current copy defaults to Chinese. */
-  windowLabelFor?: (kind: TaskbarWindowKind) => string;
+  windowLabelFor?: (kind: TaskbarWindowKind, entry: TaskbarEntry) => string;
 }) {
   const replace = (index: number, patch: Partial<TaskbarEntry>) => {
     const next = [...entries];
@@ -70,9 +70,9 @@ export function V5EntryList({
           const windowKinds = windowOptionsFor
             ? windowOptionsFor(entry)
             : CONFIGURABLE_TASKBAR_WINDOWS;
-          // `primary` is an old persisted fallback and is intentionally not a
-          // menu item. While the live map catches up, show the first real
-          // choice instead of leaking the internal literal into the trigger.
+          // Official plans never list `primary` (they already have 5h/周).
+          // One-time grants do, and when the live map offers it the stored
+          // value must stay selected instead of being coerced to 余额.
           const selectedWindow = windowKinds.includes(entry.window)
             ? entry.window
             : windowKinds[0] ?? "";
@@ -100,8 +100,8 @@ export function V5EntryList({
                 options={windowKinds.map((kind) => ({
                   value: kind,
                   label:
-                    windowLabelFor?.(kind) ??
-                    TASKBAR_WINDOW_LABELS_ZH[kind as keyof typeof TASKBAR_WINDOW_LABELS_ZH] ??
+                    windowLabelFor?.(kind, entry) ??
+                    TASKBAR_WINDOW_LABELS_ZH[kind] ??
                     kind,
                 }))}
                 onChange={(value) =>

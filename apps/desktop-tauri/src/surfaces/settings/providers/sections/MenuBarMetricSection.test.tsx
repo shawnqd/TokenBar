@@ -30,6 +30,7 @@ function provider(extra = true): ProviderDetail {
     hasSnapshot: true,
     cookieSource: null,
     region: null,
+    usageSource: "auto",
   };
 }
 

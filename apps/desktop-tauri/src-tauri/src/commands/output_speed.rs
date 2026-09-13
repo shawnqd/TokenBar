@@ -235,7 +235,11 @@ fn recent_matching_files_in_roots(
         });
     }
     candidates.sort_by(|(a, _), (b, _)| b.cmp(a));
-    candidates.into_iter().take(limit).map(|(_, path)| path).collect()
+    candidates
+        .into_iter()
+        .take(limit)
+        .map(|(_, path)| path)
+        .collect()
 }
 
 fn visit_jsonl_files(root: &Path, visit: &mut impl FnMut(&Path, SystemTime)) {

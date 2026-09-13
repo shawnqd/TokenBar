@@ -218,11 +218,9 @@ fn dashboard_url_for_provider(provider_id: &str) -> Option<String> {
     }
     if provider_id == ProviderId::Zai.cli_name() {
         let settings = Settings::load();
-        return Some(
-            codexbar::providers::ZaiProvider::dashboard_url_for_region(Some(
-                settings.api_region(ProviderId::Zai),
-            )),
-        );
+        return Some(codexbar::providers::ZaiProvider::dashboard_url_for_region(
+            Some(settings.api_region(ProviderId::Zai)),
+        ));
     }
 
     if let Some(url) = codexbar::settings::get_api_key_providers()
@@ -276,10 +274,7 @@ pub async fn trigger_provider_login(
 
 const PROVIDER_LOGIN_TIMEOUT_SECS: u64 = 300;
 
-async fn run_cli_login_for_provider(
-    app: &tauri::AppHandle,
-    id: ProviderId,
-) -> Result<(), String> {
+async fn run_cli_login_for_provider(app: &tauri::AppHandle, id: ProviderId) -> Result<(), String> {
     let result = match id {
         ProviderId::Codex => {
             let app = app.clone();
@@ -322,9 +317,7 @@ fn login_result_to_command_result(id: ProviderId, result: LoginResult) -> Result
             "未找到 {id} 的本机登录命令，请先安装对应 CLI 或在终端完成登录"
         )),
         LoginOutcome::TimedOut => Err(format!("{id} 登录等待超时，请重试")),
-        LoginOutcome::Failed { status } => {
-            Err(format!("{id} 登录命令失败（退出码 {status}）"))
-        }
+        LoginOutcome::Failed { status } => Err(format!("{id} 登录命令失败（退出码 {status}）")),
         LoginOutcome::LaunchFailed(_) => Err(format!("无法启动 {id} 登录命令，请检查本机 CLI")),
     }
 }

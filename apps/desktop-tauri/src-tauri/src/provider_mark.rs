@@ -126,7 +126,10 @@ mod tests {
         for (id, glyph, color) in MARKS {
             assert_eq!(
                 provider_mark(id),
-                Some(ProviderMark { glyph: *glyph, color_rgb: *color }),
+                Some(ProviderMark {
+                    glyph: *glyph,
+                    color_rgb: *color
+                }),
                 "{id}"
             );
         }

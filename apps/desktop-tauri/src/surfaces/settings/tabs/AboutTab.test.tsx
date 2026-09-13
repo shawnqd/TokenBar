@@ -119,7 +119,7 @@ describe("AboutTab", () => {
     expect(tauriMocks.invokeSurfaceAction).toHaveBeenNthCalledWith(1, {
       type: "openExternalUrl",
       target: { kind: "app" },
-      url: "https://github.com/Finesssee/Win-CodexBar",
+      url: "https://github.com/shawnqd/TokenBar",
     });
     expect(tauriMocks.invokeSurfaceAction).toHaveBeenNthCalledWith(2, {
       type: "openExternalUrl",

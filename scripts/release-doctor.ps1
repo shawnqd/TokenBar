@@ -1,17 +1,20 @@
 #Requires -Version 5.1
 <#
 .SYNOPSIS
-    Check whether a Win-CodexBar release is ready or complete.
+    Check whether a TokenBar release is ready or complete.
 
 .DESCRIPTION
     Verifies version-file consistency, changelog presence, optional local
     Windows assets, asset SHA-256 sidecars, Git tag presence, and GitHub release
-    asset presence when gh is authenticated.
+    asset presence when gh is authenticated. A release candidate must come from
+    a clean checkout; the local tag must exist and point at the approved
+    commit, and all required local assets must be present and hashed.
 #>
 
 param(
     [string]$Version = "",
-    [string]$AssetsDir = "C:\code\Win-CodexBar-release\assets",
+    [string]$AssetsDir = "C:\code\TokenBar-release\assets",
+    [string]$ApprovedCommit = "",
     [switch]$SkipGitHub
 )
 
@@ -87,6 +90,10 @@ function Test-AssetHash {
     }
 
     $expected = ((Get-Content $shaPath | Select-Object -First 1) -split '\s+')[0].ToLowerInvariant()
+    if ($expected -notmatch '^[0-9a-f]{64}$') {
+        Write-Fail "$(Split-Path $AssetPath -Leaf) has an invalid SHA-256 sidecar"
+        return
+    }
     $actual = (Get-FileHash -Algorithm SHA256 -LiteralPath $AssetPath).Hash.ToLowerInvariant()
     if ($actual -eq $expected) {
         Write-Ok "$(Split-Path $AssetPath -Leaf) hash matches sidecar"
@@ -104,7 +111,7 @@ if (-not $Version) {
 }
 
 $tag = "v$Version"
-Write-Host "Release doctor: Win-CodexBar $Version"
+Write-Host "Release doctor: TokenBar $Version"
 Write-Host ""
 
 Assert-Version "rust/Cargo.toml" $rustVersion $Version
@@ -123,31 +130,58 @@ $git = Get-Command git -ErrorAction SilentlyContinue
 if ($git) {
     Push-Location $RepoRoot
     try {
-        & $git.Source rev-parse --verify --quiet "$tag^{commit}" *> $null
-        if ($LASTEXITCODE -eq 0) {
-            Write-Ok "Git tag exists: $tag"
+        $status = @(& $git.Source status --porcelain --untracked-files=all)
+        if ($status.Count -eq 0) {
+            Write-Ok "Git worktree is clean"
         } else {
-            Write-Warn "Git tag not found locally: $tag"
+            Write-Fail "Git worktree is dirty; commit or remove all tracked and untracked changes before release"
+        }
+
+        $head = (& $git.Source rev-parse --verify HEAD).Trim()
+        if (-not $ApprovedCommit) {
+            $ApprovedCommit = $head
+        } else {
+            $resolvedApprovedCommit = (& $git.Source rev-parse --verify --quiet "$ApprovedCommit^{commit}" 2>$null | Select-Object -First 1)
+            if ($resolvedApprovedCommit) {
+                $ApprovedCommit = $resolvedApprovedCommit.Trim()
+            } else {
+                Write-Fail "Approved commit cannot be resolved: $ApprovedCommit"
+                $ApprovedCommit = ""
+            }
+        }
+
+        $tagCommit = (& $git.Source rev-parse --verify --quiet "$tag^{commit}" 2>$null | Select-Object -First 1)
+        if ($tagCommit) {
+            $tagCommit = $tagCommit.Trim()
+        }
+        if ($tagCommit) {
+            if ($ApprovedCommit -and $tagCommit -eq $ApprovedCommit) {
+                Write-Ok "Git tag $tag points to approved commit $ApprovedCommit"
+            } else {
+                Write-Fail "Git tag $tag points to $tagCommit, expected approved commit $ApprovedCommit"
+            }
+        } else {
+            Write-Fail "Git tag $tag is missing locally; create it only after the approved commit is finalized"
         }
     } finally {
         Pop-Location
     }
 } else {
-    Write-Warn "git not found; skipped local tag check"
+    Write-Fail "git not found; cannot verify clean worktree or release tag"
 }
 
 $changelogPath = Join-Path $RepoRoot "CHANGELOG.md"
 if ((Test-Path $changelogPath) -and (Select-String -Path $changelogPath -Pattern ([regex]::Escape($Version)) -Quiet)) {
     Write-Ok "CHANGELOG.md mentions $Version"
 } else {
-    Write-Warn "CHANGELOG.md does not mention $Version"
+    Write-Fail "CHANGELOG.md does not mention $Version"
 }
 
 if (Test-Path $AssetsDir) {
     Test-AssetHash (Join-Path $AssetsDir "CodexBar-$Version-Setup.exe")
     Test-AssetHash (Join-Path $AssetsDir "CodexBar-$Version-portable.exe")
 } else {
-    Write-Warn "local assets directory not found: $AssetsDir"
+    Write-Fail "local assets directory not found: $AssetsDir"
 }
 
 if (-not $SkipGitHub) {
@@ -155,8 +189,8 @@ if (-not $SkipGitHub) {
     if ($gh) {
         Push-Location $RepoRoot
         try {
-            $ghJsonPath = Join-Path $env:TEMP "win-codexbar-release-doctor-gh.json"
-            $ghErrPath = Join-Path $env:TEMP "win-codexbar-release-doctor-gh.err"
+            $ghJsonPath = Join-Path $env:TEMP "tokenbar-release-doctor-gh.json"
+            $ghErrPath = Join-Path $env:TEMP "tokenbar-release-doctor-gh.err"
             & $gh.Source release view $tag --json assets,url 1>$ghJsonPath 2>$ghErrPath
             if ($LASTEXITCODE -eq 0) {
                 $release = Get-Content -Raw $ghJsonPath | ConvertFrom-Json
@@ -187,7 +221,7 @@ if (-not $SkipGitHub) {
 }
 
 Write-Host ""
-Write-Host "Winget reminder: after GitHub assets are stable, copy the previous manifest folder and update PackageVersion, InstallerUrl, InstallerSha256, DisplayVersion, ReleaseNotes, and ReleaseNotesUrl."
+Write-Host "Winget reminder: after TokenBar GitHub assets are stable, copy the previous manifest folder and update PackageVersion, InstallerUrl, InstallerSha256, DisplayVersion, ReleaseNotes, and ReleaseNotesUrl."
 
 if ($Failures.Count -gt 0) {
     Write-Host ""

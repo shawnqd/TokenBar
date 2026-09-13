@@ -13,6 +13,7 @@ function rateWindow(
     windowMinutes?: number | null;
     resetDescription?: string | null;
     resetsAt?: string | null;
+    isInformational?: boolean;
   } = {},
 ): RateWindowSnapshot {
   return {
@@ -23,6 +24,7 @@ function rateWindow(
     resetsAt: opts.resetsAt ?? null,
     resetDescription: opts.resetDescription ?? null,
     isExhausted: false,
+    isInformational: opts.isInformational,
     reservePercent: null,
     reserveDescription: null,
   };
@@ -58,7 +60,7 @@ function baseSnapshot(
     planName: null,
     accountEmail: null,
     sourceLabel: "auto",
-    updatedAt: "2026-05-24T00:00:00Z",
+    updatedAt: new Date().toISOString(),
     error: null,
     pace: null,
     accountOrganization: null,
@@ -86,11 +88,13 @@ export function catalogPreviewSnapshots(): ProviderUsageSnapshot[] {
         kind: "session",
         windowMinutes: 5 * 60,
         resetDescription: "3h 57m",
+        resetsAt: new Date(Date.now() + (3 * 3600 + 57 * 60) * 1000).toISOString(),
       }),
       secondary: rateWindow(52, {
         kind: "weekly",
         windowMinutes: 7 * 24 * 60,
-        resetsAt: "2026-05-30T00:00:00Z",
+        resetDescription: "5d 0h",
+        resetsAt: new Date(Date.now() + 5 * 86400000).toISOString(),
       }),
       pace: {
         stage: "ahead",
@@ -114,17 +118,40 @@ export function catalogPreviewSnapshots(): ProviderUsageSnapshot[] {
       primary: rateWindow(85, {
         kind: "monthly",
         windowMinutes: 30 * 24 * 60,
+        resetDescription: "14d 0h",
+        resetsAt: new Date(Date.now() + 14 * 86400000).toISOString(),
       }),
       secondary: undefined,
       secondaryLabel: undefined,
+      cost: {
+        used: 5.0,
+        limit: 20.0,
+        remaining: 15.0,
+        currencyCode: "USD",
+        period: "monthly",
+        resetsAt: new Date(Date.now() + 14 * 86400000).toISOString(),
+        formattedUsed: "$15.00",
+        formattedLimit: "$20.00",
+      },
     }),
     baseSnapshot("deepseek", deepseekName, {
       primary: rateWindow(0, {
         resetDescription: "¥69.21 (Paid: ¥69.21 / Granted: ¥0.00)",
+        isInformational: true,
       }),
       primaryLabel: "Balance",
       secondary: undefined,
       secondaryLabel: undefined,
+      cost: {
+        used: 69.21,
+        limit: null,
+        remaining: 69.21,
+        currencyCode: "CNY",
+        period: "",
+        resetsAt: null,
+        formattedUsed: "¥69.21",
+        formattedLimit: null,
+      },
     }),
   ];
 }

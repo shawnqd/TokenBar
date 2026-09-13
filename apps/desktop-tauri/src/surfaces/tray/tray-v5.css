@@ -22,6 +22,7 @@
    TrayCard rendered outside the flyout (e.g. the Settings tray-panel preview)
    is fully self-styling. */
 .tray-panel-reveal,
+.s5-tray-flyout,
 .tray-card,
 .minimal-streamlined {
   font-family: "MiSans VF", "Segoe UI Variable Text", "Segoe UI", "Microsoft YaHei UI", -apple-system, sans-serif;
@@ -84,12 +85,10 @@
   --tile-bg: rgba(128, 128, 128, 0.05);
   --tile-border: rgba(128, 128, 128, 0.09);
   --tile-shadow: none;
-
-  --btn-secondary-bg: #28282e;
-  --btn-secondary-border: rgba(255, 255, 255, 0.1);
 }
 
 [data-theme="light"] .tray-panel-reveal,
+[data-theme="light"] .s5-tray-flyout,
 [data-theme="light"] .tray-card,
 [data-theme="light"] .minimal-streamlined {
   --flyout-bg: #f8f8fb;
@@ -118,9 +117,6 @@
   --pace-onpace: #5c5c64;
   --pace-onpace-bg: rgba(92, 92, 100, 0.08);
   --pace-onpace-border: rgba(92, 92, 100, 0.15);
-
-  --btn-secondary-bg: #ffffff;
-  --btn-secondary-border: rgba(0, 0, 0, 0.12);
 }
 
 /* ── Flyout chrome ────────────────────────────────────────────────────── */
@@ -142,7 +138,8 @@
   height: 100%;
 }
 
-.tray-panel-reveal .tray-panel {
+.tray-panel-reveal .tray-panel,
+.s5-tray-flyout .tray-panel {
   --flyout-inset-x: 14px;
   --flyout-inset-y: 12px;
   position: relative;
@@ -168,7 +165,8 @@
   box-shadow: 0 3px 3px rgba(0, 0, 0, 0.32);
 }
 
-[data-theme="light"] .tray-panel-reveal .tray-panel {
+[data-theme="light"] .tray-panel-reveal .tray-panel,
+[data-theme="light"] .s5-tray-flyout .tray-panel {
   background-color: #f7f7fa;
   background-image: linear-gradient(rgba(255, 255, 255, 0.88), rgba(255, 255, 255, 0.88)), var(--tray-frost, none);
   border-color: rgba(0, 0, 0, 0.08);
@@ -228,27 +226,30 @@
   font-weight: var(--w-body, 400);
   line-height: 1.45;
   white-space: pre-line;
-  max-width: calc(100vw - 24px);
+  max-width: min(calc(100vw - 24px), 280px);
   word-break: break-word;
   pointer-events: none;
 }
 
 /* ── Provider grid (re-styles the existing ProviderGrid component) ────── */
 
-.tray-panel-reveal .provider-grid {
+.tray-panel-reveal .provider-grid,
+.s5-tray-flyout .provider-grid {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 8px 12px;
+  gap: 6px;
+  padding: 9px 12px;
   border-bottom: 1px solid var(--flyout-divider);
   overflow-x: auto;
   scrollbar-width: none;
   background: transparent;
   flex-shrink: 0;
 }
-.tray-panel-reveal .provider-grid::-webkit-scrollbar { display: none; }
+.tray-panel-reveal .provider-grid::-webkit-scrollbar,
+.s5-tray-flyout .provider-grid::-webkit-scrollbar { display: none; }
 
-.tray-panel-reveal .provider-grid__item {
+.tray-panel-reveal .provider-grid__item,
+.s5-tray-flyout .provider-grid__item {
   width: 34px;
   height: 34px;
   min-width: 34px;
@@ -276,31 +277,39 @@
   flex: 0 0 auto;
   overflow: hidden;
 }
-.tray-panel-reveal .provider-grid__item:hover {
+.tray-panel-reveal .provider-grid__item:hover,
+.s5-tray-flyout .provider-grid__item:hover {
   background: rgba(128, 128, 128, 0.1);
   color: var(--flyout-text);
   box-shadow: none;
 }
 .tray-panel-reveal .provider-grid__item--active,
-[data-theme="light"] .tray-panel-reveal .provider-grid__item--active {
+[data-theme="light"] .tray-panel-reveal .provider-grid__item--active,
+.s5-tray-flyout .provider-grid__item--active,
+[data-theme="light"] .s5-tray-flyout .provider-grid__item--active {
   background: rgba(0, 120, 212, 0.12);
   border-color: rgba(0, 120, 212, 0.3);
   color: var(--accent);
   box-shadow: none;
 }
 .tray-panel-reveal .provider-grid__item--dragging,
-.tray-panel-reveal .provider-grid__item--drop-target {
+.tray-panel-reveal .provider-grid__item--drop-target,
+.s5-tray-flyout .provider-grid__item--dragging,
+.s5-tray-flyout .provider-grid__item--drop-target {
   opacity: 0.6;
 }
 
 /* Icon-only grid: hide the text label while icons are shown. */
-.tray-panel-reveal .provider-grid:not(.provider-grid--no-icons) .provider-grid__label {
+.tray-panel-reveal .provider-grid:not(.provider-grid--no-icons) .provider-grid__label,
+.s5-tray-flyout .provider-grid:not(.provider-grid--no-icons) .provider-grid__label {
   display: none;
 }
-.tray-panel-reveal .provider-grid:not(.provider-grid--no-icons) .provider-grid__icon-overview {
+.tray-panel-reveal .provider-grid:not(.provider-grid--no-icons) .provider-grid__icon-overview,
+.s5-tray-flyout .provider-grid:not(.provider-grid--no-icons) .provider-grid__icon-overview {
   display: inline-flex;
 }
-.tray-panel-reveal .provider-grid__icon-overview {
+.tray-panel-reveal .provider-grid__icon-overview,
+.s5-tray-flyout .provider-grid__icon-overview {
   font-size: 15px;
   line-height: 20px;
   text-align: center;
@@ -309,7 +318,11 @@
 .tray-panel-reveal .provider-grid__item .provider-icon,
 .tray-panel-reveal .provider-grid__item .provider-grid__icon-overview,
 .tray-panel-reveal .provider-grid__item .provider-grid__icon-overview svg,
-.tray-panel-reveal .provider-grid__item .provider-grid__icon-overview img {
+.tray-panel-reveal .provider-grid__item .provider-grid__icon-overview img,
+.s5-tray-flyout .provider-grid__item .provider-icon,
+.s5-tray-flyout .provider-grid__item .provider-grid__icon-overview,
+.s5-tray-flyout .provider-grid__item .provider-grid__icon-overview svg,
+.s5-tray-flyout .provider-grid__item .provider-grid__icon-overview img {
   width: 20px !important;
   height: 20px !important;
   min-width: 20px;
@@ -319,13 +332,15 @@
   border-radius: 0 !important;
   opacity: 1;
 }
-.tray-panel-reveal .provider-grid__item .provider-icon svg {
+.tray-panel-reveal .provider-grid__item .provider-icon svg,
+.s5-tray-flyout .provider-grid__item .provider-icon svg {
   width: 100% !important;
   height: 100% !important;
 }
 
 /* No-icons mode: fall back to labelled buttons, wider to fit text. */
-.tray-panel-reveal .provider-grid--no-icons .provider-grid__item {
+.tray-panel-reveal .provider-grid--no-icons .provider-grid__item,
+.s5-tray-flyout .provider-grid--no-icons .provider-grid__item {
   width: auto;
   min-width: 34px;
   max-width: none;
@@ -335,7 +350,8 @@
   padding: 0 6px;
   color: var(--flyout-text);
 }
-.tray-panel-reveal .provider-grid--no-icons .provider-grid__label {
+.tray-panel-reveal .provider-grid--no-icons .provider-grid__label,
+.s5-tray-flyout .provider-grid--no-icons .provider-grid__label {
   display: inline;
   font-size: 12px;
   font-weight: 600;
@@ -344,7 +360,8 @@
 
 /* ── Flyout body ──────────────────────────────────────────────────────── */
 
-.tray-panel-reveal .flyout-body {
+.tray-panel-reveal .flyout-body,
+.s5-tray-flyout .flyout-body {
   flex: 1 1 0;
   min-height: 0;
   padding: 12px 14px;
@@ -355,11 +372,13 @@
   overflow-x: hidden;
   scrollbar-width: none;
 }
-.tray-panel-reveal .flyout-body::-webkit-scrollbar { display: none; }
+.tray-panel-reveal .flyout-body::-webkit-scrollbar,
+.s5-tray-flyout .flyout-body::-webkit-scrollbar { display: none; }
 
 /* Card stack divider (1px between cards in the overview). HTML pulls the
    hairline 6px into the body padding so it sits closer to the stroke. */
-.tray-panel-reveal .provider-stack-divider {
+.tray-panel-reveal .provider-stack-divider,
+.s5-tray-flyout .provider-stack-divider {
   height: 1px;
   background: var(--flyout-divider);
   margin: 12px -6px;
@@ -384,10 +403,10 @@
 .card-zone {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 10px;
 }
 .card-zone--compact {
-  gap: 6px;
+  gap: 8px;
 }
 
 /* [Scheme 3: Dual-Track Pill Container (内部药丸卡片框)] */
@@ -467,18 +486,25 @@
 .card-header {
   display: flex;
   justify-content: space-between;
-  align-items: baseline;
+  align-items: center;
   gap: 8px;
   margin-bottom: 12px;
   padding-bottom: 8px;
   border-bottom: 1px solid var(--flyout-divider);
 }
-.card-header__left { display: flex; align-items: baseline; gap: 7px; min-width: 0; flex: 1; }
-.card-header__icon { flex-shrink: 0; align-self: center; }
+.card-header__left { display: flex; align-items: center; gap: 7px; min-width: 0; flex: 1; }
+.card-header__icon {
+  width: 20px;
+  height: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
 .card-header__name {
   font-size: var(--type-name);
   font-weight: var(--w-strong);
-  letter-spacing: -0.04em;
+  letter-spacing: -0.03em;
   color: var(--flyout-text);
   overflow: hidden;
   white-space: nowrap;
@@ -494,7 +520,21 @@
   line-height: 1.2;
   margin-left: 2px;
   display: inline-flex;
-  align-items: baseline;
+  /* Status icons are flex items. Baseline alignment uses an SVG's bottom
+     edge as its baseline in WebView2, which makes the icon sit off the text
+     when the error/refresh label is smaller than the provider name. */
+  align-items: center;
+}
+.card-header__updated-icon {
+  display: block;
+  flex: 0 0 auto;
+  width: 10px;
+  height: 10px;
+}
+.card-header__updated-label {
+  display: inline-flex;
+  align-items: center;
+  line-height: 1.2;
 }
 .card-header__updated.is-refreshing {
   color: var(--accent);
@@ -506,6 +546,12 @@
   font-weight: 500;
   gap: 3px;
   cursor: help;
+  margin-left: 0;
+}
+/* 「（错误）」的全角开括号自带约半角宽的左侧留白；负 margin 抵消它，
+   让 ⚠ 与文字的视觉间距回到和名称间距同一节奏。调整松紧改这里的 -2px。 */
+.card-header__updated.is-error .card-header__updated-label {
+  margin-left: -2px;
 }
 
 /* Modular section blocks — bordered after the first block. */
@@ -539,7 +585,12 @@
   align-items: baseline;
   gap: 8px;
 }
-.quota-row__label,
+.quota-row__label {
+  font-size: var(--type-meta);
+  font-weight: var(--w-body);
+  color: var(--flyout-text-sub);
+  letter-spacing: 0.03em;
+}
 .quota-tile__label {
   font-size: var(--quota-title-size);
   font-weight: var(--quota-title-weight);
@@ -556,8 +607,15 @@
   font-size: var(--quota-reset-size);
   font-weight: var(--quota-reset-weight);
   color: var(--flyout-text-muted);
+  cursor: default;
 }
-.quota-row__reset { flex-shrink: 0; white-space: nowrap; }
+.quota-row__reset {
+  /* HTML keeps the hero reset on the 12px meta scale; only the tile reset
+     drops to the 10px reset scale. */
+  font-size: var(--type-meta);
+  flex-shrink: 0;
+  white-space: nowrap;
+}
 .quota-row__hero-line {
   display: flex;
   justify-content: space-between;
@@ -570,12 +628,15 @@
   letter-spacing: -0.06em;
   line-height: 1;
   margin: 0;
-  color: var(--accent);
+  /* density-preview.html keeps the hero number in body text; the accent only
+     carries the bar fill and the pace badge. */
+  color: var(--flyout-text);
   font-variant-numeric: tabular-nums;
 }
+.card-zone--compact .quota-row__hero-pct { font-size: 24px; margin: 0; }
 .quota-row__hero-pct[data-tone="deficit"] { color: var(--pace-deficit); }
 
-/* ── Progress bars & pace notches ─────────────────────────────────────── */
+/* ── Progress bars & pace notches (Remaining Quota Model) ──────────────── */
 
 .progress-bar {
   width: 100%;
@@ -583,30 +644,150 @@
   background: var(--track-bg);
   border-radius: 999px;
   position: relative;
-  overflow: hidden;
+  overflow: visible;
+  margin: 4px 0 2px;
 }
 .progress-bar--compact { height: 4.5px; }
+.progress-bar--tile {
+  margin-top: 4px;
+  height: 4px;
+}
+.progress-track-inner {
+  width: 100%;
+  height: 100%;
+  border-radius: 999px;
+  position: relative;
+  overflow: hidden;
+}
+.bar-segment {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  transition: width 0.3s ease, left 0.3s ease;
+}
+.bar-segment--remaining,
 .progress-fill {
+  left: 0;
   height: 100%;
   background: var(--track-fill);
   border-radius: 999px;
   transition: width 0.3s ease;
 }
+/* 结余多出段（当剩余 > 时间基准时，越过推钮的高出部分，健康绿色） */
+.bar-segment--reserve-surplus {
+  background: var(--pace-reserve, #107c10);
+  border-top-right-radius: 999px;
+  border-bottom-right-radius: 999px;
+}
+:is(body.dark, .dark) .bar-segment--reserve-surplus {
+  background: var(--pace-reserve, #38c172);
+}
+/* 透支缺口段（当剩余 < 时间基准时，更淡柔和的红色斜纹亏空缺口） */
+.bar-segment--deficit-gap {
+  background-color: rgba(209, 52, 56, 0.08);
+  background-image: repeating-linear-gradient(
+    -45deg,
+    rgba(209, 52, 56, 0.38),
+    rgba(209, 52, 56, 0.38) 3.5px,
+    rgba(209, 52, 56, 0.12) 3.5px,
+    rgba(209, 52, 56, 0.12) 7px
+  );
+  border-radius: 2px;
+}
+:is(body.dark, .dark) .bar-segment--deficit-gap {
+  background-color: rgba(248, 113, 113, 0.10);
+  background-image: repeating-linear-gradient(
+    -45deg,
+    rgba(248, 113, 113, 0.42),
+    rgba(248, 113, 113, 0.42) 3.5px,
+    rgba(248, 113, 113, 0.15) 3.5px,
+    rgba(248, 113, 113, 0.15) 7px
+  );
+}
+
+/* 实体立体推钮滑块 (Bevel Tactile Slider Thumb) */
 .progress-notch {
   position: absolute;
-  top: 0;
-  bottom: 0;
-  width: 2.5px;
-  z-index: 2;
+  top: -3px;
+  bottom: -3px;
+  width: 6px;
+  z-index: 3;
+  border-radius: 3px;
+  background: linear-gradient(180deg, #ffffff 0%, #f1f3f6 100%);
+  box-shadow: 0 1.5px 4.5px color-mix(in srgb, var(--track-fill, #0078d4) 24%, transparent),
+              0 0.5px 1px rgba(0, 0, 0, 0.06),
+              inset 0 1px 0.5px #ffffff;
+  border: 0.5px solid rgba(0, 0, 0, 0.12);
+  box-sizing: border-box;
+  transform: translateX(-50%);
+  transition: left 0.3s ease;
+  pointer-events: auto;
+  cursor: default;
+}
+.progress-notch::before {
+  content: '';
+  position: absolute;
+  top: -4px;
+  bottom: -4px;
+  left: -4px;
+  right: -4px;
+}
+.progress-notch::after {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: 1.2px;
+  height: 5px;
+  background: rgba(0, 0, 0, 0.14);
   border-radius: 1px;
 }
-.progress-notch--deficit {
-  background: var(--pace-deficit);
-  box-shadow: 0 0 3px rgba(209, 52, 56, 0.6);
+.progress-bar--compact .progress-notch {
+  top: -2.5px;
+  bottom: -2.5px;
+  width: 5px;
+  border-radius: 2.5px;
 }
-.progress-notch--reserve {
-  background: #ffffff;
-  box-shadow: 0 0 3px rgba(0, 0, 0, 0.4);
+.progress-bar--compact .progress-notch::after {
+  height: 4px;
+}
+.progress-bar--tile .progress-notch,
+.minimal-streamlined__bar-wrap .progress-notch {
+  top: -2px;
+  bottom: -2px;
+  width: 4px;
+  border-radius: 2px;
+}
+.progress-bar--tile .progress-notch::after,
+.minimal-streamlined__bar-wrap .progress-notch::after {
+  width: 0.8px;
+  height: 3px;
+}
+:is(body.dark, .dark) .progress-notch {
+  background: linear-gradient(180deg, #ffffff 0%, #d8dbe2 100%);
+  box-shadow: 0 2px 6px color-mix(in srgb, var(--track-fill, #2b88d8) 32%, transparent),
+              0 0.5px 2px rgba(0, 0, 0, 0.25),
+              inset 0 1px 0.5px #ffffff;
+  border: 0.5px solid rgba(255, 255, 255, 0.26);
+}
+:is(body.dark, .dark) .progress-notch::after {
+  background: rgba(0, 0, 0, 0.35);
+}
+
+.progress-notch.is-deficit,
+.progress-notch--deficit {
+  border-color: rgba(209, 52, 56, 0.28);
+  box-shadow: 0 1px 3.5px rgba(209, 52, 56, 0.18),
+              0 0.5px 1px rgba(0, 0, 0, 0.06),
+              inset 0 1px 0.5px #ffffff;
+}
+:is(body.dark, .dark) .progress-notch.is-deficit,
+:is(body.dark, .dark) .progress-notch--deficit {
+  border-color: rgba(248, 113, 113, 0.32);
+  box-shadow: 0 1.5px 4.5px rgba(248, 113, 113, 0.22),
+              0 0.5px 2px rgba(0, 0, 0, 0.25),
+              inset 0 1px 0.5px #ffffff;
 }
 
 /* ── Soft (low-saturation) badge pills ────────────────────────────────── */
@@ -649,64 +830,125 @@
   box-sizing: border-box;
   overflow: hidden;
   transition: border-color 0.15s ease, box-shadow 0.15s ease;
+  cursor: default;
 }
 .quota-tile:hover {
-  border-color: rgba(128, 128, 128, 0.22);
+  border-color: rgba(128, 128, 128, 0.18);
 }
 .quota-tile--full {
   grid-column: 1 / -1;
   width: 100%;
   padding: 8px 10px;
 }
-/* Tile head is an explicit 3-column grid — label | reset | pct — each column
-   sized to its content and the left pair tightly packed at 4px. This is the
-   layout, not a stack of flex workarounds: the reset can never be pushed away
-   from the cycle label by a greedy flexible column. */
+/* 内部次级磁贴平铺流：在双轨容器内彻底去掉嵌套的灰色小方框 (matches density-preview.html) */
+.dual-pill-top .quota-tile--full {
+  background: transparent !important;
+  border: none !important;
+  border-top: 1px solid var(--flyout-divider) !important;
+  border-radius: 0 !important;
+  padding: 8px 2px 2px 2px !important;
+  margin-top: 8px !important;
+  box-shadow: none !important;
+}
+/* Tile head is the HTML's clean 2-end row: `label + reset` on the left, the
+   percentage on the right. Escape/status detail lives on the hover tip and on
+   the pace notch, never as a third row. */
 .quota-tile__head {
-  display: grid;
-  grid-template-columns: auto auto 1fr;
+  display: flex;
+  justify-content: space-between;
   align-items: baseline;
-  column-gap: 4px;
-  font-size: var(--type-body);
+  font-size: var(--quota-title-size);
   color: var(--flyout-text-sub);
   font-weight: var(--w-body);
-  letter-spacing: 0.02em;
-  line-height: 1.3;
+  line-height: 1.25;
   min-width: 0;
 }
+/* The label + reset pair is one flex item at the head's left end, exactly as
+   density-preview.html's inline `display:flex; gap:4px` wrapper does. */
 .quota-tile__title,
 .quota-tile--full .quota-tile__title {
-  display: contents;
+  display: flex;
+  align-items: baseline;
+  gap: 4px;
+  min-width: 0;
+  overflow: hidden;
 }
 .quota-tile__label {
+  font-weight: 500;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  min-width: 0;
+  color: var(--flyout-text);
+}
+.quota-tile__val {
+  font-weight: var(--w-strong);
+  font-size: var(--type-value);
+  letter-spacing: -0.02em;
+  font-variant-numeric: tabular-nums;
+  color: var(--flyout-text);
+  flex-shrink: 0;
+  margin-left: 4px;
+}
+/* Bottom row of a 2-column tile. Those tiles are ~140px wide, so an inline
+   reset squeezes the label into an ellipsis ("Cl…"); the reset lives here
+   instead and the head keeps `label … pct` to itself. The full-width secondary
+   tile has the room and keeps the reset on its head row. */
+.quota-tile__sub {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 4px;
+  margin-top: 1px;
+  font-size: 10px;
+  line-height: 1.2;
   min-width: 0;
 }
 .quota-tile__reset {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  /* One step smaller than the 12px meta label so "周 · 8/24 7:59" reads as
-     secondary metadata instead of competing with the cycle name. */
   font-size: 10px;
-}
-.quota-tile__val {
-  grid-column: 3;
-  justify-self: end;
-  font-weight: var(--w-strong);
-  font-size: var(--type-value);
-  letter-spacing: -0.02em;
+  color: var(--flyout-text-muted);
   font-variant-numeric: tabular-nums;
-  /* HTML tints the full-width secondary's percent with a pace colour, but real
-     snapshots carry no per-window pace signal; the fill bar already conveys
-     quota level, so the number stays neutral. */
-  color: var(--flyout-text);
+  flex-shrink: 0;
+}
+.quota-tile__badge {
+  font-size: 9.5px;
+  font-weight: 500;
+  padding: 0.5px 5px;
+  border-radius: 8px;
+  line-height: 1.2;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+.quota-tile__badge--reserve {
+  background: var(--pace-reserve-bg);
+  color: var(--pace-reserve);
+  border: 0.5px solid var(--pace-reserve-border);
+}
+.quota-tile__badge--deficit {
+  background: var(--pace-deficit-bg);
+  color: var(--pace-deficit);
+  border: 0.5px solid var(--pace-deficit-border);
+}
+.quota-tile__badge--neutral {
+  background: rgba(128, 128, 128, 0.08);
+  color: var(--flyout-text-sub);
+  border: 0.5px solid rgba(128, 128, 128, 0.12);
 }
 .quota-tile .progress-bar--tile {
   margin-top: 4px;
   height: 4px;
+}
+
+/* density-preview.html has NO `.font-mono` rule — the class is inert there and
+   numbers align because the components set `font-variant-numeric: tabular-nums`
+   (`--font-mono` is only used by the footer shortcut). Keeping a monospace
+   family here changed the digits' shape AND pushed CJK like 「（含赠送 …）」
+   onto a fallback font, so the class now only carries the numeric alignment. */
+.font-mono {
+  font-variant-numeric: tabular-nums;
 }
 
 /* ── Balance block (Block C) ──────────────────────────────────────────── */
@@ -725,33 +967,71 @@
 .balance-single-line__left,
 .balance-block__head {
   display: flex;
-  align-items: baseline;
+  /* Keep the wallet icon and its label/value on one optical line as well;
+     the old baseline + align-self mix had the same SVG drift as the header. */
+  align-items: center;
   gap: 6px;
   min-width: 0;
   flex: 1;
+}
+/* density-preview.html sets the single-line wallet row on the baseline so the
+   icon, label and amount sit on one optical line, and gives the whole left
+   group the 11.5px / 400 / sub-colour it passes down to the bare `<span>`
+   label. Declared after the shared `.balance-block__head` rule so the
+   single-line variant wins. */
+.balance-single-line__left {
+  align-items: baseline;
+  font-size: 11.5px;
+  font-weight: 400;
+  color: var(--flyout-text-sub);
+  white-space: nowrap;
+}
+.balance-single-line__left span {
+  white-space: nowrap;
+  flex-shrink: 0;
 }
 .balance-single-line__icon,
 .balance-block__label svg {
   color: var(--flyout-text-muted);
   flex-shrink: 0;
   align-self: center;
+  display: block;
+}
+.balance-single-line__right {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+.dual-pill-bottom .balance-single-line__right {
+  align-items: baseline;
 }
 .balance-single-line__label,
 .balance-block__label {
   display: inline-flex;
   align-items: center;
   gap: 5px;
-  font-size: var(--type-meta);
   color: var(--flyout-text-sub);
   font-weight: 400;
   white-space: nowrap;
 }
+/* The reference's single-line label is a bare `<span>` inheriting the group's
+   11.5px; only the compact strip keeps the 12px meta size. */
+.balance-single-line__label { font-size: 11.5px; }
 .balance-single-line__amount,
 .balance-block__amount {
   font-size: 15px;
   font-weight: 600;
   color: var(--flyout-text);
   letter-spacing: -0.02em;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.balance-single-line__cny {
+  font-size: 11px;
+  font-weight: 400;
+  color: var(--flyout-text-muted);
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
@@ -787,6 +1067,7 @@
   min-width: 0;
 }
 .balance-compact-row__label {
+  font-size: var(--type-meta);
   color: var(--flyout-text-sub);
   white-space: nowrap;
 }
@@ -804,17 +1085,87 @@
   white-space: nowrap;
 }
 
-/* ── Status block (Block D) ───────────────────────────────────────────── */
-
-.status-block { display: flex; flex-direction: column; gap: 8px; }
-.status-headline {
+/* ── Status & telemetry card (Block D) ────────────────────────────────────
+   Ported from density-preview.html's `.telemetry-card`: the same bordered
+   pill-framed shell as the dual-track container, with a head that pairs the
+   readiness dot + status title with a soft badge. The grid of deployment
+   tiles the sandbox draws next to it has no runtime data source yet (the
+   telemetry projection exposes no model/region/latency fields), so only the
+   tiles the data supports would be drawn — never a fabricated one. */
+.telemetry-card {
+  border: 1px solid var(--flyout-zone-border);
+  border-radius: 8px;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  background: var(--flyout-zone-bg);
+  box-shadow: var(--flyout-zone-shadow);
+  padding: 10px 11px;
+  gap: 9px;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+.telemetry-card:hover {
+  border-color: rgba(128, 128, 128, 0.22);
+}
+.telemetry-card__head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+.telemetry-card__status {
   display: flex;
   align-items: center;
-  gap: 8px;
-  font-size: var(--type-body);
+  gap: 6px;
+  font-size: 12.5px;
   font-weight: 500;
   color: var(--flyout-text);
 }
+.telemetry-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+.telemetry-tile {
+  background: var(--flyout-well);
+  border: 1px solid var(--flyout-divider);
+  border-radius: 6px;
+  padding: 6px 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.telemetry-tile__label {
+  font-size: 10.5px;
+  font-weight: 400;
+  color: var(--flyout-text-muted);
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.telemetry-tile__value {
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--flyout-text);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 4px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.telemetry-latency-chip {
+  font-size: 10px;
+  font-weight: 400;
+  color: var(--pace-reserve);
+  background: var(--pace-reserve-bg);
+  border: 1px solid var(--pace-reserve-border);
+  border-radius: 4px;
+  padding: 1px 4px;
+  line-height: 1.1;
+  flex-shrink: 0;
+}
+/* Readiness dot shared by the telemetry head. */
 .status-indicator-dot {
   width: 7px;
   height: 7px;
@@ -823,16 +1174,6 @@
   box-shadow: 0 0 6px color-mix(in srgb, var(--pace-reserve) 40%, transparent);
   flex-shrink: 0;
 }
-.status-chips-row { display: flex; gap: 6px; flex-wrap: wrap; }
-.status-chip {
-  background: rgba(128, 128, 128, 0.05);
-  border: 1px solid rgba(128, 128, 128, 0.08);
-  border-radius: 4px;
-  padding: 4px 8px;
-  font-size: var(--type-body);
-  color: var(--flyout-text-sub);
-}
-.status-chip strong { color: var(--flyout-text); font-weight: 500; margin-left: 3px; }
 
 /* ── Unified insight footer (Block E) ─────────────────────────────────── */
 
@@ -926,7 +1267,7 @@
   gap: 4px;
   background: rgba(128, 128, 128, 0.05);
   border: 1px solid rgba(128, 128, 128, 0.08);
-  border-radius: 5px;
+  border-radius: 12px;
   padding: 4px 8px;
   font-size: var(--type-body);
   color: var(--flyout-text-sub);
@@ -936,7 +1277,7 @@
 .compact-chip strong {
   color: var(--flyout-text);
   font-variant-numeric: tabular-nums;
-  font-weight: var(--w-strong);
+  font-weight: 500;
   overflow: hidden;
   text-overflow: ellipsis;
 }
@@ -971,7 +1312,7 @@
 }
 .minimal-streamlined__title {
   font-size: var(--type-value);
-  font-weight: var(--w-strong);
+  font-weight: 500;
   display: flex;
   align-items: center;
   gap: 6px;
@@ -1020,6 +1361,9 @@
   font-variant-numeric: tabular-nums;
   flex-shrink: 0;
   color: var(--flyout-text);
+  display: flex;
+  align-items: center;
+  gap: 2px;
 }
 .minimal-streamlined__metric[data-tone="deficit"] { color: var(--pace-deficit); }
 .minimal-streamlined__bar-wrap {
@@ -1028,7 +1372,7 @@
   background: var(--track-bg);
   border-radius: 999px;
   position: relative;
-  overflow: hidden;
+  overflow: visible;
 }
 .minimal-streamlined__row2 {
   display: flex;
@@ -1047,6 +1391,17 @@
   min-width: 0;
 }
 .minimal-streamlined__badges .soft-badge { white-space: nowrap; }
+.minimal-streamlined__status-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.minimal-streamlined__status-icon {
+  display: block;
+  flex: 0 0 auto;
+  width: 10px;
+  height: 10px;
+}
 .minimal-streamlined__speed {
   font-size: var(--type-body);
   color: var(--flyout-text-muted);
@@ -1056,36 +1411,39 @@
 
 /* ── Context action buttons (detail only) ─────────────────────────────── */
 
-/* The global styles.css defines `.context-actions { display: flex }`; this
-   tray card needs an even 1fr/1fr grid so both buttons tile the row instead
-   of hugging the left edge at natural width (flex would need per-button
-   flex-grow). Higher specificity keeps the tray's grid even though the global
-   sheet loads after this one. */
-.tray-card .context-actions {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 8px;
-  margin-top: 12px;
-}
-.tray-card .context-actions--single { grid-template-columns: 1fr; }
-.tray-card .context-btn {
-  background: var(--btn-secondary-bg);
-  border: 1px solid var(--btn-secondary-border);
-  border-radius: 999px;
-  padding: 8px 12px;
-  color: var(--flyout-text);
-  font-size: var(--type-body);
-  font-weight: var(--w-medium);
-  font-family: inherit;
+/* Context actions (card-header__actions) — density-preview.html renders the
+   console / status shortcuts as 22px icon buttons at the header's right end.
+   They stay gated to the detail view (spec §3.4 "总览不画"). */
+.card-header__right {
   display: flex;
   align-items: center;
-  justify-content: center;
   gap: 6px;
-  cursor: pointer;
-  transition: all 0.15s ease;
+  flex-shrink: 0;
 }
-.context-btn:hover { background: rgba(128, 128, 128, 0.08); border-color: rgba(128, 128, 128, 0.25); }
-.context-btn svg { width: 12px; height: 12px; opacity: 0.85; }
+.card-header__actions {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+}
+.card-header-btn {
+  width: 22px;
+  height: 22px;
+  border-radius: 8px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--flyout-text-muted);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  padding: 0;
+  transition: all 0.12s;
+}
+.card-header-btn:hover {
+  background: rgba(128, 128, 128, 0.1);
+  color: var(--flyout-text);
+  border-color: var(--flyout-divider);
+}
 
 /* ── Flyout footer ────────────────────────────────────────────────────── */
 
@@ -1109,7 +1467,7 @@
   appearance: none;
   -webkit-appearance: none;
   box-sizing: border-box;
-  border-radius: 5px;
+  border-radius: 8px;
   display: flex;
   align-items: center;
   justify-content: space-between;

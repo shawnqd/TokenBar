@@ -1,11 +1,15 @@
 import { describe, expect, it } from "vitest";
 import {
-  FIXTURE_BRIDGES,
-  FIXTURE_SNAPSHOTS,
   fromBridge,
   projectSurface,
   type SurfaceProjection,
 } from "./index";
+import {
+  FIXTURE_BRIDGES,
+  FIXTURE_SNAPSHOTS,
+  bridgeRateWindow,
+  bridgeSnapshot,
+} from "./fixtures";
 
 function values(projection: SurfaceProjection): string[] {
   return projection.taskbarCells.map((cell) => cell.value);
@@ -149,6 +153,41 @@ describe("projectSurface", () => {
     expect(failed.displayState).toBe("error");
     expect(failed.primary?.usedPercent).toBe(44);
     expect(failed.error).toBe("upstream 500");
+  });
+
+  it("pins a GLM Start Plan extra as an unnamed primary cell tagged 体", () => {
+    const snapshot = fromBridge(
+      bridgeSnapshot({
+        providerId: "zai",
+        displayName: "GLM",
+        updatedAt: new Date().toISOString(),
+        primary: bridgeRateWindow({
+          usedPercent: 0,
+          remainingPercent: 100,
+          isInformational: true,
+        }),
+        extraRateWindows: [
+          {
+            id: "zai-zcode-0",
+            title: "体验套餐 · GLM-5.3-Flash",
+            usageKnown: true,
+            window: bridgeRateWindow({
+              usedPercent: 0,
+              remainingPercent: 100,
+              resetDescription: "剩余 300000000",
+            }),
+          },
+        ],
+      }),
+    );
+    const projection = projectSurface(snapshot, {
+      taskbarEntries: [{ providerId: "zai", window: "primary" }],
+    });
+    expect(projection.taskbarCells[0]).toMatchObject({
+      window: "primary",
+      tag: "体",
+      value: "0%",
+    });
   });
 
   it("emits left-packed taskbar cells, not glyph+sentence text", () => {

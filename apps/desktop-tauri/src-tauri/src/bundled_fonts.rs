@@ -12,10 +12,10 @@ use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
 use windows::Win32::Graphics::DirectWrite::{
-    DWriteCreateFactory, DWRITE_FACTORY_TYPE_SHARED, IDWriteFactory, IDWriteFactory5,
+    DWRITE_FACTORY_TYPE_SHARED, DWriteCreateFactory, IDWriteFactory, IDWriteFactory5,
     IDWriteFontCollection, IDWriteFontCollection1, IDWriteFontSetBuilder1,
 };
-use windows::core::{Interface, HSTRING};
+use windows::core::{HSTRING, Interface};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct BundledFace {
@@ -55,8 +55,7 @@ pub fn shared() -> &'static SharedDwrite {
 }
 
 fn load() -> windows::core::Result<SharedDwrite> {
-    let factory: IDWriteFactory =
-        unsafe { DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED)? };
+    let factory: IDWriteFactory = unsafe { DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED)? };
     let collection = match font_dir() {
         Some(dir) => match unsafe { create_collection(&factory, &dir) } {
             Ok(collection) => Some(collection),
@@ -91,9 +90,8 @@ unsafe fn create_collection(
             tracing::warn!(file = face.file_name, "bundled fonts: missing file");
             continue;
         }
-        let file = unsafe {
-            factory.CreateFontFileReference(&HSTRING::from(path.as_os_str()), None)?
-        };
+        let file =
+            unsafe { factory.CreateFontFileReference(&HSTRING::from(path.as_os_str()), None)? };
         unsafe { builder.AddFontFile(&file)? };
     }
     let set = unsafe { builder.CreateFontSet()? };
@@ -105,7 +103,9 @@ unsafe fn create_collection(
 /// Directory that contains `MiSansVF.ttf`, if it exists.
 pub fn font_dir() -> Option<PathBuf> {
     let mut candidates = Vec::new();
-    if let Some(exe) = std::env::current_exe().ok().and_then(|p| p.parent().map(Path::to_path_buf))
+    if let Some(exe) = std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(Path::to_path_buf))
     {
         candidates.push(exe.join("fonts"));
         candidates.push(exe.join("resources").join("fonts"));
@@ -115,7 +115,9 @@ pub fn font_dir() -> Option<PathBuf> {
         candidates.push(PathBuf::from(manifest).join("resources/fonts"));
     }
     candidates.push(PathBuf::from("public/fonts"));
-    candidates.into_iter().find(|dir| dir.join("MiSansVF.ttf").is_file())
+    candidates
+        .into_iter()
+        .find(|dir| dir.join("MiSansVF.ttf").is_file())
 }
 
 pub fn files_present() -> bool {

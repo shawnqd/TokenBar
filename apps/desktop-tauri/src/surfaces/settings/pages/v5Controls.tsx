@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import type { CSSProperties, ReactNode } from "react";
 import { Select } from "../../../components/FormControls";
 
 export function V5Section({
@@ -52,7 +52,11 @@ export function V5Field({
     <div className={`s5-field${off ? " is-off" : ""}`}>
       <div className="s5-field-copy">
         <div className="s5-field-label">{label}</div>
-        {help ? <div className="s5-field-help">{help}</div> : null}
+        {help ? (
+          <div className="s5-field-help" title={help}>
+            {help}
+          </div>
+        ) : null}
       </div>
       {children}
     </div>
@@ -93,8 +97,18 @@ export function V5Seg({
   onChange: (value: string) => void;
   disabled?: boolean;
 }) {
+  const selectedIndex = Math.max(
+    0,
+    options.findIndex((option) => option.value === value),
+  );
+  const segStyle = {
+    "--s5-seg-count": options.length,
+    "--s5-seg-index": selectedIndex,
+  } as CSSProperties;
+
   return (
-    <div className="s5-seg" role="radiogroup">
+    <div className="s5-seg" role="radiogroup" style={segStyle}>
+      <span className="s5-seg__indicator" aria-hidden="true" />
       {options.map((option) => (
         <button
           key={option.value}

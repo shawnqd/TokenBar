@@ -49,6 +49,7 @@ export function routeAction(action: SurfaceAction): string {
     case "setActiveTokenAccount":
     case "revokeCredentials":
     case "setCookieSource":
+    case "setUsageSource":
     case "setRegion":
     case "setWorkspaceId":
     case "setGatewayUrl":

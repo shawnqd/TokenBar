@@ -171,7 +171,7 @@ describe("TrayCard reset credits companion line", () => {
     expect(badge?.textContent).toContain("2次重置");
   });
 
-  it("displays all credits and reset times in a tooltip when hovering over .quota-inventory-line", async () => {
+  it("lists each credit's own expiry in the tooltip without repeating what the card already shows", async () => {
     const bridge = codexBridgeWithResetCredits();
     const core = fromBridge(bridge);
     const { container } = renderCard(core, "detailed");
@@ -182,17 +182,28 @@ describe("TrayCard reset credits companion line", () => {
 
     const line = container.querySelector(".quota-inventory-line");
     expect(line).not.toBeNull();
+    // The companion line already carries the title and the count badge, so the
+    // tip is only allowed to add the per-credit expiries.
+    expect(line?.textContent).toContain("额外重置");
+    expect(line?.textContent).toContain("剩余 2 次");
 
     fireEvent.mouseEnter(line!);
-    const tip = document.body.querySelector(".tray-tip");
-    expect(tip).not.toBeNull();
-    expect(tip?.textContent).toContain("额外重置次数 (剩余 2 次)");
-    expect(tip?.textContent).toContain("第 1 次");
-    expect(tip?.textContent).toContain("第 2 次");
-    expect(tip?.textContent).toMatch(/到期/);
+    await waitFor(
+      () => {
+        const tip = document.body.querySelector(".tray-tip");
+        expect(tip).not.toBeNull();
+        expect(tip?.textContent).toContain("第 1 次");
+        expect(tip?.textContent).toContain("第 2 次");
+        expect(tip?.textContent).toMatch(/到期/);
+        expect(tip?.textContent).not.toContain("额外重置次数");
+      },
+      { timeout: 1000 },
+    );
 
     fireEvent.mouseLeave(line!);
-    expect(document.body.querySelector(".tray-tip")).toBeNull();
+    await waitFor(() => {
+      expect(document.body.querySelector(".tray-tip")).toBeNull();
+    });
   });
 
   it("omits the .quota-inventory-line when provider has no reset credits", async () => {
@@ -242,12 +253,19 @@ describe("TrayCard reset credits companion line", () => {
     Object.defineProperty(note, "clientWidth", { configurable: true, value: 260 });
 
     fireEvent.mouseEnter(note!);
-    const tip = document.body.querySelector(".tray-tip");
-    expect(tip).not.toBeNull();
-    expect(tip?.textContent).toContain("$239.64");
-    expect(tip?.textContent).toContain("grok-4.0-super-long-model-name-overflowing");
+    await waitFor(
+      () => {
+        const tip = document.body.querySelector(".tray-tip");
+        expect(tip).not.toBeNull();
+        expect(tip?.textContent).toContain("$239.64");
+        expect(tip?.textContent).toContain("grok-4.0-super-long-model-name-overflowing");
+      },
+      { timeout: 1000 },
+    );
 
     fireEvent.mouseLeave(note!);
-    expect(document.body.querySelector(".tray-tip")).toBeNull();
+    await waitFor(() => {
+      expect(document.body.querySelector(".tray-tip")).toBeNull();
+    });
   });
 });

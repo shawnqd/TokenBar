@@ -6,6 +6,8 @@ import { SETTINGS_NAV_ORDER } from "./settings/SettingsNav";
 const settingsMocks = vi.hoisted(() => ({
   update: vi.fn(),
   settings: {} as SettingsSnapshot,
+  saving: false,
+  error: null as string | null,
 }));
 
 const tauriWindowMocks = vi.hoisted(() => ({
@@ -17,10 +19,11 @@ vi.mock("../hooks/useLocale", () => ({
 }));
 
 vi.mock("../hooks/useSettings", () => ({
+  SAVE_TIMEOUT_ERROR: "__save_timeout__",
   useSettings: () => ({
     settings: settingsMocks.settings,
-    saving: false,
-    error: null,
+    saving: settingsMocks.saving,
+    error: settingsMocks.error,
     update: settingsMocks.update,
   }),
 }));
@@ -168,11 +171,13 @@ const state = {
 describe("Settings V5 shell", () => {
   beforeEach(() => {
     settingsMocks.settings = snapshot;
+    settingsMocks.saving = false;
+    settingsMocks.error = null;
     settingsMocks.update.mockReset();
     tauriWindowMocks.minimizeSettingsWindow.mockReset();
   });
 
-  it("renders ten nav items in the locked order and never says Dashboard", () => {
+  it("renders ten nav items in the user-facing order and never says Dashboard", () => {
     render(<Settings state={state} />);
     const nav = screen.getByRole("navigation");
     const items = nav.querySelectorAll(".settings-v5-nav__item");
@@ -182,8 +187,8 @@ describe("Settings V5 shell", () => {
       "TabTrayPanel",
       "TabFloatBar",
       "TabTaskbarStatus",
-      "SectionNotifications",
       "TabAppearance",
+      "SectionNotifications",
       "TabPrivacy",
       "TabAdvanced",
       "TabAbout",
@@ -194,8 +199,8 @@ describe("Settings V5 shell", () => {
       "trayPanel",
       "floatBar",
       "taskbarStatus",
-      "notifications",
       "appearance",
+      "notifications",
       "privacy",
       "advanced",
       "about",
@@ -249,5 +254,21 @@ describe("Settings V5 shell", () => {
     expect(document.querySelector("[data-slide]")).toBeNull();
     expect(screen.queryByText("GlobalShortcutFieldLabel")).not.toBeInTheDocument();
     expect(screen.queryByText("HidePersonalInfo")).not.toBeInTheDocument();
+  });
+
+  it("hides a saving toast when the save completes without a success event", () => {
+    const props = { state, initialTab: "taskbarStatus" };
+    const view = render(<Settings {...props} />);
+
+    settingsMocks.saving = true;
+    view.rerender(<Settings {...props} />);
+    expect(screen.getByText("SettingsStatusSaving")).toBeInTheDocument();
+
+    // The Rust event can supersede the local response, so the success event
+    // is not guaranteed. The completed `saving=false` transition must still
+    // remove the transient pill.
+    settingsMocks.saving = false;
+    view.rerender(<Settings {...props} />);
+    expect(screen.queryByText("SettingsStatusSaving")).not.toBeInTheDocument();
   });
 });

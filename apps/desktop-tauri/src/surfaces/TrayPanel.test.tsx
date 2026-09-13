@@ -1,6 +1,7 @@
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { FIXTURE_SNAPSHOTS, fromBridge, type ProviderSnapshot, type UsageStoreKey } from "../core";
+import { fromBridge, type ProviderSnapshot, type UsageStoreKey } from "../core";
+import { FIXTURE_SNAPSHOTS } from "../core/fixtures";
 import { trayCoreStore } from "./tray/trayCoreStore";
 import { resetTrayCoreForTest } from "./tray/trayCoreStore.testSupport";
 import { disposeAppRuntime } from "../appRuntime";

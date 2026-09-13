@@ -3,6 +3,8 @@ import type {
   PaceSnapshot,
   ProviderUsageSnapshot,
   RateWindowSnapshot,
+  QuotaDisplayPreference,
+  ResetDisplayPreference,
   SettingsSnapshot,
 } from "../types/bridge";
 import { getProviderBalance } from "./providerBalance";
@@ -44,16 +46,15 @@ import { getPaceChartSnapshot, getPaceEstimate } from "./paceBudget";
 export type QuotaComponent = "floatBar" | "dashboard" | "taskbar";
 
 /** Components that render reset times and therefore own a reset-time mode. */
-export type ResetAwareComponent = Extract<QuotaComponent, "floatBar" | "dashboard">;
+export type ResetAwareComponent = QuotaComponent;
 
 /**
  * What a component needs to render a percentage.
  *
- * Split out from the full context because the Windows taskbar strip has a
- * used-versus-remaining choice but no reset-time mode — its native renderer
- * shows no reset text, and TASK-018 item H does not list one for the Taskbar
- * page. Keeping the two shapes distinct makes that a type error rather than a
- * setting nobody consumes.
+ * Split out from the full context because the taskbar strip's body does not
+ * print reset text. The taskbar reset preference is still resolved here for
+ * the native tray/context-menu status row, so all three surfaces share the
+ * same inheritance contract.
  */
 export interface QuotaPercentContext {
   /** `true` → the number and bar mean "used"; `false` → "remaining". */
@@ -76,10 +77,44 @@ const USED_KEYS = {
   taskbar: "taskbarShowAsUsed",
 } as const satisfies Record<QuotaComponent, keyof SettingsSnapshot>;
 
+const USAGE_MODE_KEYS = {
+  floatBar: "floatBarQuotaDisplay",
+  dashboard: "dashboardQuotaDisplay",
+  taskbar: "taskbarQuotaDisplay",
+} as const satisfies Record<QuotaComponent, keyof SettingsSnapshot>;
+
 const RESET_KEYS = {
   floatBar: "floatBarResetTimeRelative",
   dashboard: "dashboardResetTimeRelative",
+  taskbar: "taskbarResetTimeRelative",
 } as const satisfies Record<ResetAwareComponent, keyof SettingsSnapshot>;
+
+const RESET_MODE_KEYS = {
+  floatBar: "floatBarResetDisplay",
+  dashboard: "dashboardResetDisplay",
+  taskbar: "taskbarResetDisplay",
+} as const satisfies Record<ResetAwareComponent, keyof SettingsSnapshot>;
+
+/** Return the persisted surface preference, defaulting old snapshots to a
+ * concrete override so they keep their pre-inheritance behavior. */
+export function quotaDisplayPreference(
+  settings: SettingsSnapshot,
+  component: QuotaComponent,
+): QuotaDisplayPreference {
+  const mode = settings[USAGE_MODE_KEYS[component]];
+  if (mode === "follow" || mode === "used" || mode === "remaining") return mode;
+  return settings[USED_KEYS[component]] === false ? "remaining" : "used";
+}
+
+/** Return the persisted reset preference, with the same old-snapshot fallback. */
+export function resetDisplayPreference(
+  settings: SettingsSnapshot,
+  component: ResetAwareComponent,
+): ResetDisplayPreference {
+  const mode = settings[RESET_MODE_KEYS[component]];
+  if (mode === "follow" || mode === "countdown" || mode === "absolute") return mode;
+  return settings[RESET_KEYS[component]] === false ? "absolute" : "countdown";
+}
 
 /**
  * Read one component's percentage context out of the settings snapshot.
@@ -92,10 +127,12 @@ export function quotaPercentContext(
   settings: SettingsSnapshot,
   component: QuotaComponent,
 ): QuotaPercentContext {
+  const preference = quotaDisplayPreference(settings, component);
   return {
-    // `?? true` guards a snapshot from an older backend that predates the
-    // split; the Rust side already seeds these, so this is belt-and-braces.
-    showAsUsed: settings[USED_KEYS[component]] ?? true,
+    showAsUsed:
+      preference === "follow"
+        ? settings.showAsUsed ?? true
+        : preference === "used",
     highUsageThreshold: normalizeThreshold(settings.highUsageThreshold, 70),
     criticalUsageThreshold: normalizeThreshold(settings.criticalUsageThreshold, 90),
   };
@@ -106,9 +143,13 @@ export function quotaDisplayContext(
   settings: SettingsSnapshot,
   component: ResetAwareComponent,
 ): QuotaDisplayContext {
+  const preference = resetDisplayPreference(settings, component);
   return {
     ...quotaPercentContext(settings, component),
-    resetTimeRelative: settings[RESET_KEYS[component]] ?? true,
+    resetTimeRelative:
+      preference === "follow"
+        ? settings.resetTimeRelative ?? true
+        : preference === "countdown",
   };
 }
 

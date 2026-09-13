@@ -13,10 +13,11 @@
     build caches between releases without reusing a dirty source checkout.
 
 .PARAMETER Ref
-    Git ref to build. Use a tag such as v0.27.4 for release artifacts.
+    Git ref to build. Use a tag such as v0.57.0 for release artifacts.
 
 .PARAMETER RepoUrl
-    Git repository URL used when the managed checkout does not exist.
+    TokenBar Git repository URL. The script rejects other repositories so a
+    release build cannot silently package the historical Win-CodexBar source.
 
 .PARAMETER WorkRoot
     Root directory for the managed source checkout, cache, and output assets.
@@ -38,20 +39,21 @@
     installer and uninstall it again.
 
 .PARAMETER UploadRelease
-    GitHub release tag to upload assets to after packaging, for example v0.27.5.
+    GitHub release tag to upload assets to after packaging, for example v0.57.0.
     Requires the GitHub CLI to be installed and authenticated.
 
 .EXAMPLE
-    .\scripts\windows-release-build.ps1 -Ref v0.27.4
+    .\scripts\windows-release-build.ps1 -Ref v0.57.0
 
 .EXAMPLE
-    .\scripts\windows-release-build.ps1 -Ref v0.27.5 -SmokeInstall -UploadRelease v0.27.5
+    .\scripts\windows-release-build.ps1 -Ref v0.57.0 -SmokeInstall -UploadRelease v0.57.0
 #>
 
 param(
-    [string]$Ref = "HEAD",
-    [string]$RepoUrl = "https://github.com/Finesssee/Win-CodexBar.git",
-    [string]$WorkRoot = "C:\code\Win-CodexBar-release",
+    [Parameter(Mandatory = $true)]
+    [string]$Ref,
+    [string]$RepoUrl = "https://github.com/shawnqd/TokenBar.git",
+    [string]$WorkRoot = "C:\code\TokenBar-release",
     [switch]$RefreshInstallerDependencies,
     [switch]$WarmCacheOnly,
     [switch]$WarmCliCache,
@@ -76,6 +78,15 @@ $InstallerDepsDir = Join-Path $CacheDir "installer-deps"
 $AssetsDir = Join-Path $WorkRoot "assets"
 $DesktopCargoTargetDir = Join-Path $CacheDir "cargo-target"
 $CliCargoTargetDir = Join-Path $CacheDir "cargo-target-cli"
+
+$ExpectedRepoUrl = "https://github.com/shawnqd/TokenBar.git"
+$normalizedRepoUrl = $RepoUrl.TrimEnd('/')
+if ($normalizedRepoUrl.EndsWith('.git', [System.StringComparison]::OrdinalIgnoreCase) -eq $false) {
+    $normalizedRepoUrl = "$normalizedRepoUrl.git"
+}
+if ($normalizedRepoUrl -ne $ExpectedRepoUrl) {
+    throw "Release builds are restricted to $ExpectedRepoUrl. Refusing repository: $RepoUrl"
+}
 
 $UserCargoBin = Join-Path $env:USERPROFILE ".cargo\bin"
 if (Test-Path $UserCargoBin) {
@@ -203,6 +214,13 @@ if (-not (Test-Path (Join-Path $SourceDir ".git"))) {
 
 Push-Location $SourceDir
 try {
+    $originUrl = (& $git.Source remote get-url origin).TrimEnd('/')
+    if ($originUrl.EndsWith('.git', [System.StringComparison]::OrdinalIgnoreCase) -eq $false) {
+        $originUrl = "$originUrl.git"
+    }
+    if ($originUrl -ne $ExpectedRepoUrl) {
+        throw "Managed checkout origin is not the TokenBar repository. Expected $ExpectedRepoUrl but found $originUrl"
+    }
     Invoke-Native $git.Source @("fetch", "--quiet", "--tags", "--prune", "origin")
     Invoke-Native $git.Source @("-c", "advice.detachedHead=false", "checkout", "--quiet", "--force", $Ref)
     Invoke-Native $git.Source @("reset", "--quiet", "--hard", "HEAD")
@@ -232,7 +250,7 @@ try {
     }
     $env:PNPM_HOME = if ($env:PNPM_HOME) { $env:PNPM_HOME } else { Join-Path $CacheDir "pnpm-home" }
 
-    Write-Host "Building Win-CodexBar $version from $commit"
+    Write-Host "Building TokenBar $version from $commit"
     Write-Host "Source: $SourceDir"
     Write-Host "Cargo target cache: $DesktopCargoTargetDir"
     Write-Host "pnpm store cache: $PnpmStoreDir"

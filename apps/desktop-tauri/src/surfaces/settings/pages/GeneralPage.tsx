@@ -6,7 +6,7 @@ import { invokeSurfaceAction } from "../../../lib/tauri";
 import type { Language, LanguageOption } from "../../../types/bridge";
 import type { LocaleKey } from "../../../i18n/keys";
 import type { SettingsPageProps } from "./pageTypes";
-import { V5Field, V5Section, V5Select, V5Toggle } from "./v5Controls";
+import { V5Field, V5Section, V5Seg, V5Select, V5Toggle } from "./v5Controls";
 
 const FALLBACK_LANGUAGE_OPTIONS: LanguageOption[] = [
   { value: "english", display: "English" },
@@ -143,6 +143,40 @@ export default function GeneralPage({
             disabled={saving}
             onChange={(v) => set({ refreshAllProvidersOnMenuOpen: v })}
             label={t("RefreshAllProvidersOnMenuOpen")}
+          />
+        </V5Field>
+      </V5Section>
+
+      <V5Section
+        title={t("QuotaDisplayDefaults")}
+        hint={t("QuotaDisplayDefaultsHelper")}
+      >
+        <V5Field
+          label={t("UsageDisplay")}
+          help={t("ShowUsageAsUsedHelper")}
+        >
+          <V5Seg
+            value={settings.showAsUsed ? "used" : "remaining"}
+            disabled={saving}
+            options={[
+              { value: "used", label: t("QuotaShowUsedOption") },
+              { value: "remaining", label: t("QuotaShowRemainingOption") },
+            ]}
+            onChange={(value) => set({ showAsUsed: value === "used" })}
+          />
+        </V5Field>
+        <V5Field
+          label={t("ResetTimeRelative")}
+          help={t("ResetTimeRelativeHelper")}
+        >
+          <V5Seg
+            value={settings.resetTimeRelative ? "countdown" : "absolute"}
+            disabled={saving}
+            options={[
+              { value: "countdown", label: t("ResetTimeCountdownOption") },
+              { value: "absolute", label: t("ResetTimeAbsoluteOption") },
+            ]}
+            onChange={(value) => set({ resetTimeRelative: value === "countdown" })}
           />
         </V5Field>
       </V5Section>

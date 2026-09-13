@@ -198,6 +198,17 @@ function AppInner() {
     };
   }, [state?.settings.taskbarWidgetEnabled]);
 
+  // Detached floating-bar window — render FloatBar directly, or null while booting.
+  // Never render the heavy `.shell` placeholder in the transparent widget window.
+  if (isFloatBarWindow()) {
+    if (!state) return null;
+    return (
+      <Suspense fallback={<SurfaceFallback />}>
+        <FloatBar state={state} />
+      </Suspense>
+    );
+  }
+
   if (error) {
     return (
       <main className="shell">
@@ -223,15 +234,6 @@ function AppInner() {
   // Detached settings window — render Settings directly, skip SurfaceRouter.
   if (isSettingsWindow()) {
     return <DetachedSettingsApp state={state} coreStore={core?.store ?? null} dispatcher={core?.dispatcher ?? null} />;
-  }
-
-  // Detached floating-bar window — render the FloatBar surface directly.
-  if (isFloatBarWindow()) {
-    return (
-      <Suspense fallback={<SurfaceFallback />}>
-        <FloatBar state={state} />
-      </Suspense>
-    );
   }
 
   // Detached "Open Tray Panel" window — render TrayPanel directly.

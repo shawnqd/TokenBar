@@ -7,7 +7,12 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::sync::watch;
 
-const GITHUB_REPO: &str = "Finesssee/Win-CodexBar";
+// TokenBar currently has no public GitHub release feed. Keep the updater
+// pointed at this repository and disabled until a TokenBar release channel is
+// intentionally published. In particular, never fall back to the historical
+// Win-CodexBar repository, which would install an unrelated application.
+const GITHUB_REPO: &str = "shawnqd/TokenBar";
+const UPDATES_ENABLED: bool = false;
 const CURRENT_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// State of the update download process
@@ -89,6 +94,14 @@ pub async fn check_for_updates() -> Option<UpdateInfo> {
 /// When `channel` is `UpdateChannel::Beta`, includes pre-release versions.
 /// When `channel` is `UpdateChannel::Stable`, only considers stable releases.
 pub async fn check_for_updates_with_channel(channel: UpdateChannel) -> Option<UpdateInfo> {
+    if !UPDATES_ENABLED {
+        tracing::debug!(
+            repository = GITHUB_REPO,
+            "automatic updates are disabled until a TokenBar release feed is published"
+        );
+        return None;
+    }
+
     let client = update_client()?;
     let response = client.get(release_url(channel)).send().await.ok()?;
     let release = parse_release_response(response, channel).await?;
@@ -693,7 +706,7 @@ mod tests {
     fn prefers_installer_asset_for_auto_update() {
         let release = GitHubRelease {
             tag_name: "v1.2.6".to_string(),
-            html_url: "https://github.com/Finesssee/Win-CodexBar/releases/tag/v1.2.6".to_string(),
+            html_url: "https://github.com/shawnqd/TokenBar/releases/tag/v1.2.6".to_string(),
             body: None,
             assets: vec![
                 GitHubAsset {
@@ -729,7 +742,7 @@ mod tests {
     fn falls_back_to_manual_release_when_only_portable_exe_exists() {
         let release = GitHubRelease {
             tag_name: "v1.2.6".to_string(),
-            html_url: "https://github.com/Finesssee/Win-CodexBar/releases/tag/v1.2.6".to_string(),
+            html_url: "https://github.com/shawnqd/TokenBar/releases/tag/v1.2.6".to_string(),
             body: None,
             assets: vec![GitHubAsset {
                 name: "codexbar.exe".to_string(),
@@ -744,7 +757,7 @@ mod tests {
 
         assert_eq!(
             update.download_url,
-            "https://github.com/Finesssee/Win-CodexBar/releases/tag/v1.2.6"
+            "https://github.com/shawnqd/TokenBar/releases/tag/v1.2.6"
         );
         assert!(!update.supports_auto_apply());
     }

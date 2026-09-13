@@ -1,10 +1,11 @@
+import type { ReactNode } from "react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import type {
   BootstrapState,
   SettingsTabId,
   SettingsUpdate,
 } from "../types/bridge";
-import { useSettings } from "../hooks/useSettings";
+import { useSettings, SAVE_TIMEOUT_ERROR } from "../hooks/useSettings";
 import { useSurfaceTarget } from "../hooks/useSurfaceMode";
 import { useLocale } from "../hooks/useLocale";
 import { useDispatchAction } from "../core/useCoreBridge";
@@ -82,6 +83,7 @@ export default function Settings({
   const activeTabRef = useRef<SettingsNavId>(resolvedInitial);
   const panelRef = useRef<HTMLDivElement>(null);
   const savedTimerRef = useRef<number | null>(null);
+  const errorTimerRef = useRef<number | null>(null);
   const fadeSourceRef = useRef<"pointer" | "keyboard" | "external">("external");
   const [toast, setToast] = useState<SaveToastState>("hidden");
 
@@ -132,17 +134,59 @@ export default function Settings({
 
   useEffect(() => {
     if (error) {
+      if (savedTimerRef.current !== null) {
+        window.clearTimeout(savedTimerRef.current);
+        savedTimerRef.current = null;
+      }
       setToast("error");
+      // An error pill must inform, not occupy: auto-dismiss like "saved",
+      // just with a longer read time. The `error` state itself clears on the
+      // next update attempt.
+      if (errorTimerRef.current !== null) {
+        window.clearTimeout(errorTimerRef.current);
+      }
+      errorTimerRef.current = window.setTimeout(() => {
+        errorTimerRef.current = null;
+        setToast((current) => (current === "error" ? "hidden" : current));
+      }, 6000);
       return;
     }
-    if (saving) setToast("saving");
+
+    if (saving) {
+      if (savedTimerRef.current !== null) {
+        window.clearTimeout(savedTimerRef.current);
+        savedTimerRef.current = null;
+      }
+      if (errorTimerRef.current !== null) {
+        window.clearTimeout(errorTimerRef.current);
+        errorTimerRef.current = null;
+      }
+      setToast("saving");
+      return;
+    }
+
+    // A successful save normally emits `codexbar:settings-updated`, but a
+    // cross-window settings event can supersede that response. In that case
+    // `saving` is still the authoritative completion signal; never leave the
+    // transient "saving" pill mounted just because the success event was
+    // skipped.
+    setToast((current) =>
+      current === "saving" || current === "error" ? "hidden" : current,
+    );
   }, [saving, error]);
 
   useEffect(() => {
     const onSaved = () => {
+      if (errorTimerRef.current !== null) {
+        window.clearTimeout(errorTimerRef.current);
+        errorTimerRef.current = null;
+      }
       setToast("saved");
-      if (savedTimerRef.current) window.clearTimeout(savedTimerRef.current);
+      if (savedTimerRef.current !== null) {
+        window.clearTimeout(savedTimerRef.current);
+      }
       savedTimerRef.current = window.setTimeout(() => {
+        savedTimerRef.current = null;
         setToast((current) => (current === "saved" ? "hidden" : current));
       }, 1400);
     };
@@ -154,7 +198,8 @@ export default function Settings({
 
   useEffect(() => {
     return () => {
-      if (savedTimerRef.current) window.clearTimeout(savedTimerRef.current);
+      if (savedTimerRef.current !== null) window.clearTimeout(savedTimerRef.current);
+      if (errorTimerRef.current !== null) window.clearTimeout(errorTimerRef.current);
     };
   }, []);
 
@@ -179,9 +224,31 @@ export default function Settings({
   );
 
   const copy = SETTINGS_PAGE_COPY[activeTab];
-  const tabProps: TabProps = { settings, set, saving, coreStore, dispatcher };
   const isProviders = activeTab === "providers";
+  // 带实时预览的三个页面：预览列是独立滚动区域，页面本体占满显示高度。
+  const isSurfPreview =
+    activeTab === "trayPanel" ||
+    activeTab === "floatBar" ||
+    activeTab === "taskbarStatus";
 
+  // 预览三页：页头放进左列顶部（预览列从页面顶端开始，右侧不再空一截）。
+  const surfHead = isSurfPreview ? (
+    <SettingsPageHead
+      eyebrow={copy.eyebrowKey ? t(copy.eyebrowKey) : undefined}
+      title={t(copy.titleKey)}
+      description={
+        copy.descriptionKey ? t(copy.descriptionKey) : undefined
+      }
+    />
+  ) : null;
+  const tabProps: TabProps = {
+    settings,
+    set,
+    saving,
+    coreStore,
+    dispatcher,
+    head: surfHead,
+  };
   return (
     <div
       className={`settings settings-v5${
@@ -224,26 +291,41 @@ export default function Settings({
 
         <div
           className={`settings-v5__workspace${
-            isProviders ? " settings-v5__workspace--providers" : ""
+            isProviders
+              ? " settings-v5__workspace--providers"
+              : isSurfPreview
+                ? " settings-v5__workspace--surf"
+                : ""
           }`}
         >
-          <SaveToast state={toast} error={error} />
+          <SaveToast
+            state={toast}
+            error={error === SAVE_TIMEOUT_ERROR ? t("SettingsStatusSaveTimeout") : error}
+          />
           <div
             ref={panelRef}
             className={`settings-v5__panel${
-              isProviders ? " settings-v5__panel--providers" : ""
+              isProviders
+                ? " settings-v5__panel--providers"
+                : isSurfPreview
+                  ? " settings-v5__panel--surf"
+                  : ""
             }${initialPanelRef.current ? " settings-v5__panel--initial" : ""}`}
           >
             <div
               className={`settings-page${
-                isProviders ? " settings-page--providers" : ""
+                isProviders
+                  ? " settings-page--providers"
+                  : isSurfPreview
+                    ? " settings-page--surf"
+                    : ""
               }`}
               data-settings-page={activeTab}
               data-settings-tab-content={activeTab}
             >
-              {!isProviders && (
+              {!isProviders && !isSurfPreview && (
                 <SettingsPageHead
-                  eyebrow={t(copy.eyebrowKey)}
+                  eyebrow={copy.eyebrowKey ? t(copy.eyebrowKey) : undefined}
                   title={t(copy.titleKey)}
                   description={
                     copy.descriptionKey ? t(copy.descriptionKey) : undefined
@@ -255,9 +337,11 @@ export default function Settings({
                 <ProvidersPage {...tabProps} catalog={state.providers} />
               )}
               {activeTab === "trayPanel" && <TrayPanelPage {...tabProps} />}
-              {activeTab === "floatBar" && <FloatBarPage {...tabProps} />}
+              {activeTab === "floatBar" && (
+                <FloatBarPage {...tabProps} catalog={state.providers} />
+              )}
               {activeTab === "taskbarStatus" && (
-                <TaskbarStatusPage {...tabProps} />
+                <TaskbarStatusPage {...tabProps} catalog={state.providers} />
               )}
               {activeTab === "notifications" && (
                 <NotificationsPage {...tabProps} />
@@ -275,6 +359,8 @@ export default function Settings({
 }
 
 export interface TabProps {
+  /** 预览三页：由 Settings 下发的页头节点，放进左列顶部。 */
+  head?: ReactNode;
   settings: BootstrapState["settings"];
   set: (p: SettingsUpdate) => void;
   saving: boolean;

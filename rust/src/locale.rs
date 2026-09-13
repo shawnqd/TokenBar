@@ -685,8 +685,14 @@ locale_keys! {
     ContextMenuFontWeightHelper,
     QuotaShowUsedOption,
     QuotaShowRemainingOption,
+    QuotaFollowOption,
+    QuotaDisplayDefaults,
+    QuotaDisplayDefaultsHelper,
+    QuotaFollowHelper,
+    QuotaOverrideHelper,
     ResetTimeCountdownOption,
     ResetTimeAbsoluteOption,
+    TaskbarResetDisplayHelper,
     TrayProviderHighestOption,
     TrayProviderFirstOption,
     TaskbarTooltipSection,
@@ -767,6 +773,7 @@ locale_keys! {
 
     // Tauri desktop shell — settings status / common
     SettingsStatusSaving,
+    SettingsStatusSaveTimeout,
     ApiKeysTabHint,
 
     // Tauri desktop shell — tray / popout
@@ -901,7 +908,14 @@ locale_keys! {
     ProviderIssueSignInRequired,
     ProviderIssueCopy,
     ProviderIssueUnsupportedSourceModePrefix,
+    ProviderIssueParseFailed,
+    ProviderIssueNoCookies,
+    ProviderIssueNotInstalled,
     ProviderCookieAutoHelp,
+    ProviderCookieManualHelp,
+    CookieSourceAutoLabel,
+    CookieSourceManualLabel,
+    CookieSourceOffLabel,
     ProviderCookieDisabledHelp,
     CredentialStorageTitle,
     CredentialRevokeStored,
