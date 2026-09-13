@@ -44,8 +44,11 @@ UninstallDisplayIcon={app}\codexbar.exe
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 
+[Languages]
+Name: "chinesesimp"; MessagesFile: "ChineseSimplified.isl"
+
 [Tasks]
-Name: "desktopicon"; Description: "Create a desktop shortcut"; Flags: unchecked
+Name: "desktopicon"; Description: "创建桌面快捷方式"; Flags: unchecked
 
 [Files]
 Source: "{#TargetBinDir}\codexbar.exe"; DestDir: "{app}"; Flags: ignoreversion
@@ -60,7 +63,7 @@ Name: "{autoprograms}\CodexBar"; Filename: "{app}\codexbar.exe"; Parameters: "me
 Name: "{autodesktop}\CodexBar"; Filename: "{app}\codexbar.exe"; Parameters: "menubar"; WorkingDir: "{app}"; Tasks: desktopicon; IconFilename: "{app}\icon.ico"
 
 [Run]
-Filename: "{app}\codexbar.exe"; Parameters: "menubar"; Description: "Launch CodexBar"; Flags: nowait postinstall skipifsilent; Check: CanLaunchCodexBar
+Filename: "{app}\codexbar.exe"; Parameters: "menubar"; Description: "启动 CodexBar"; Flags: nowait postinstall skipifsilent; Check: CanLaunchCodexBar
 
 [Code]
 var
@@ -98,7 +101,7 @@ begin
 
   ExtractTemporaryFile('MicrosoftEdgeWebview2Setup.exe');
 
-  WizardForm.StatusLabel.Caption := 'Installing Microsoft Edge WebView2 Runtime...';
+  WizardForm.StatusLabel.Caption := '正在安装 Microsoft Edge WebView2 运行时...';
   WizardForm.ProgressGauge.Style := npbstMarquee;
   try
     if not Exec(
@@ -109,13 +112,13 @@ begin
       ewWaitUntilTerminated,
       ResultCode
     ) then
-      RaiseException('Failed to start the Microsoft Edge WebView2 Runtime installer.');
+      RaiseException('无法启动 Microsoft Edge WebView2 运行时安装程序。');
 
     if (ResultCode <> 0) and (ResultCode <> 1638) and (ResultCode <> 3010) then
       RaiseException(
-        'Microsoft Edge WebView2 Runtime installation failed with exit code ' +
+        'Microsoft Edge WebView2 运行时安装失败，错误代码：' +
         IntToStr(ResultCode) +
-        '.'
+        '。'
       );
 
     if ResultCode = 3010 then
@@ -155,7 +158,7 @@ begin
 
   ExtractTemporaryFile('vc_redist.x64.exe');
 
-  WizardForm.StatusLabel.Caption := 'Installing Microsoft Visual C++ Runtime...';
+  WizardForm.StatusLabel.Caption := '正在安装 Microsoft Visual C++ 运行库...';
   WizardForm.ProgressGauge.Style := npbstMarquee;
   try
     if not Exec(
@@ -166,13 +169,13 @@ begin
       ewWaitUntilTerminated,
       ResultCode
     ) then
-      RaiseException('Failed to start the Microsoft Visual C++ Runtime installer.');
+      RaiseException('无法启动 Microsoft Visual C++ 运行库安装程序。');
 
     if (ResultCode <> 0) and (ResultCode <> 1638) and (ResultCode <> 3010) then
       RaiseException(
-        'Microsoft Visual C++ Runtime installation failed with exit code ' +
+        'Microsoft Visual C++ 运行库安装失败，错误代码：' +
         IntToStr(ResultCode) +
-        '.'
+        '。'
       );
 
     if ResultCode = 3010 then

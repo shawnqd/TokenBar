@@ -13,7 +13,7 @@
     build caches between releases without reusing a dirty source checkout.
 
 .PARAMETER Ref
-    Git ref to build. Use a tag such as v0.57.0 for release artifacts.
+    Git ref to build. Use a tag such as v0.57.1 for release artifacts.
 
 .PARAMETER RepoUrl
     TokenBar Git repository URL. The script rejects other repositories so a
@@ -39,14 +39,14 @@
     installer and uninstall it again.
 
 .PARAMETER UploadRelease
-    GitHub release tag to upload assets to after packaging, for example v0.57.0.
+    GitHub release tag to upload assets to after packaging, for example v0.57.1.
     Requires the GitHub CLI to be installed and authenticated.
 
 .EXAMPLE
-    .\scripts\windows-release-build.ps1 -Ref v0.57.0
+    .\scripts\windows-release-build.ps1 -Ref v0.57.1
 
 .EXAMPLE
-    .\scripts\windows-release-build.ps1 -Ref v0.57.0 -SmokeInstall -UploadRelease v0.57.0
+    .\scripts\windows-release-build.ps1 -Ref v0.57.1 -SmokeInstall -UploadRelease v0.57.1
 #>
 
 param(
