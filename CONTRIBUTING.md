@@ -1,6 +1,7 @@
 # Contributing
 
-Thanks for helping improve Win-CodexBar. This repo is the Windows/Tauri port, so prefer the active Tauri and Rust codepaths over historical upstream macOS material.
+Thanks for helping improve TokenBar. This repository contains the Windows/Tauri
+application and its shared Rust code.
 
 ## Active project layout
 
@@ -9,7 +10,7 @@ Thanks for helping improve Win-CodexBar. This repo is the Windows/Tauri port, so
 - `apps\desktop-tauri\src-tauri\src\` contains the Tauri shell, tray bridge, commands, and desktop integration.
 - `rust\src\` contains shared backend/domain logic and the standalone `codexbar` CLI.
 - `rust\src\providers\` contains provider-specific fetch, auth, and parsing logic.
-- `docs\` may include upstream or historical macOS notes. Do not treat those as authoritative for Windows/Tauri work unless the issue is explicitly about upstream parity.
+- `docs\` contains user-facing Windows build and usage notes.
 
 ## Before filing an issue
 

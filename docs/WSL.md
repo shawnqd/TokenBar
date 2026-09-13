@@ -1,19 +1,20 @@
-# WSL Support
+# WSL support
 
-CodexBar runs natively inside WSL. The CLI works out of the box; the desktop shell
-requires [WSLg](https://github.com/microsoft/wslg) (Windows 11, build 22000+).
+TokenBar's CLI can run inside WSL. The desktop shell requires
+[WSLg](https://github.com/microsoft/wslg) (Windows 11, build 22000+) and is
+usually easiest to run from a native Windows checkout.
 
 ## Quick Start
 
 ```bash
-git clone https://github.com/Finesssee/Win-CodexBar.git
-cd Win-CodexBar
+git clone https://github.com/shawnqd/TokenBar.git
+cd TokenBar
 ./scripts/dev.sh
 ```
 
-This will:
+The script will:
 1. Detect your WSL environment
-2. Build CodexBar Desktop through Tauri's no-bundle workflow
+2. Build the TokenBar desktop shell through Tauri's no-bundle workflow
 3. Launch the desktop shell (WSLg) or CLI (no display server detected)
 
 CLI-only mode (no display server needed):
@@ -30,7 +31,7 @@ When running inside WSL, CodexBar:
   Chromium cookies encrypted with DPAPI cannot be decrypted from WSL automatically.
   Use manual cookies (Settings → provider detail → Browser Cookies) or CLI-based provider auth instead.
 - **Provider CLIs**: Works with `codex`, `claude`, `gemini` etc. installed inside WSL natively.
-- **Desktop shell**: Requires WSLg (Windows 11) or an X server. Falls back to CLI mode automatically.
+- **Desktop shell**: Requires WSLg (Windows 11) or an X server. Falls back to CLI mode when no display is available.
 - **Notifications**: Uses `notify-send` in WSL. Falls back to logging if unavailable.
 
 ## Authentication Tips

@@ -1,6 +1,8 @@
-# CodexBar for Windows
+# TokenBar Rust core
 
-A Windows port of [CodexBar](https://github.com/steipete/CodexBar) - a system tray application for monitoring AI provider usage limits.
+The shared Rust library and CLI used by the Windows TokenBar application. The
+project follows the provider and usage ideas of
+[CodexBar](https://github.com/steipete/CodexBar).
 
 ![CodexBar Windows](screenshots/tray-icon.png)
 
@@ -23,7 +25,8 @@ A Windows port of [CodexBar](https://github.com/steipete/CodexBar) - a system tr
 
 ### From Release
 
-Download the latest release from the [Releases](https://github.com/Finesssee/Win-CodexBar/releases) page.
+Download the latest release from the
+[TokenBar Releases](https://github.com/shawnqd/TokenBar/releases) page.
 
 - Recommended: `CodexBar-<version>-Setup.exe`
   - This installer now installs the required Microsoft Visual C++ runtime and Microsoft Edge WebView2 Runtime on clean Windows machines before launching CodexBar.
@@ -42,8 +45,8 @@ Requirements:
 
 ```powershell
 # Clone the repository
-git clone https://github.com/Finesssee/Win-CodexBar.git
-cd Win-CodexBar/rust
+git clone https://github.com/shawnqd/TokenBar.git
+cd TokenBar/rust
 
 # Build release version
 cargo build --release

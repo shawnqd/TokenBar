@@ -1,6 +1,6 @@
 # Versioning Policy
 
-Win-CodexBar follows [Semantic Versioning 2.0.0](https://semver.org/).
+TokenBar follows [Semantic Versioning 2.0.0](https://semver.org/).
 
 ## Version Format
 

@@ -4,8 +4,8 @@ Only **MiSans VF** ships with TokenBar (`MiSansVF.ttf`, ~19 MB).
 License: Xiaomi font IP license, see `NOTICE-MiSans.txt`.
 Source: https://hyperos.mi.com/font/zh/
 
-The other DESIGN_SYSTEM.md §2 families stay in the picker but are
-install-guided. Selecting an uninstalled row opens the official download:
+The other supported families stay in the picker but are install-guided.
+Selecting an uninstalled row opens the official download:
 
 | Picker name | Install file | Official page |
 | --- | --- | --- |
