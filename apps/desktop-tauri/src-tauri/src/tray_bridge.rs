@@ -197,6 +197,8 @@ enum MenuAction {
     /// Open (or focus) the dedicated flyout ("Open Tray Panel") window.
     OpenFlyout,
     Refresh,
+    /// Check the TokenBar release feed without opening Settings.
+    CheckForUpdates,
     /// Toggle the enabled/disabled state of the provider with the given CLI name.
     ToggleProvider(String),
     /// Toggle the floating bar window on/off.
@@ -207,6 +209,7 @@ enum MenuAction {
 fn resolve_menu_action(id: &str) -> Option<MenuAction> {
     match id {
         "refresh" => Some(MenuAction::Refresh),
+        "check_for_updates" => Some(MenuAction::CheckForUpdates),
         "quit" => Some(MenuAction::Quit),
         "settings" => Some(MenuAction::OpenSettings("general".into())),
         "about" => Some(MenuAction::OpenSettings("about".into())),
@@ -386,6 +389,12 @@ fn handle_menu_event(app: &AppHandle, id: &str) {
             let handle = app.clone();
             tauri::async_runtime::spawn(async move {
                 let _ = crate::commands::do_refresh_providers(&handle).await;
+            });
+        }
+        Some(MenuAction::CheckForUpdates) => {
+            let handle = app.clone();
+            tauri::async_runtime::spawn(async move {
+                crate::commands::check_for_updates_in_background(handle).await;
             });
         }
         Some(MenuAction::ToggleProvider(provider_id)) => {
@@ -879,7 +888,9 @@ fn automatic_metric_percent(
         Some(ProviderId::Cursor) => max_metric_percent([
             Some(snapshot.primary.used_percent),
             snapshot.secondary.as_ref().map(|w| w.used_percent),
+            snapshot.model_specific.as_ref().map(|w| w.used_percent),
             snapshot.tertiary.as_ref().map(|w| w.used_percent),
+            cursor_grok_bot_percent(snapshot),
         ]),
         Some(ProviderId::Zai) => max_metric_percent([
             Some(snapshot.primary.used_percent),
@@ -902,6 +913,22 @@ fn automatic_metric_percent(
         Some(ProviderId::Antigravity) => Some(most_restricted_known_window(snapshot).used_percent),
         _ => Some(snapshot.primary.used_percent),
     }
+}
+
+/// Cursor's Grok Bot allowance is a named extra rather than one of the
+/// primary/secondary slots. Include only that known allowance in Automatic;
+/// other extras (for example balances) must not accidentally become the
+/// headline metric.
+fn cursor_grok_bot_percent(
+    snapshot: &crate::commands::ProviderUsageSnapshot,
+) -> Option<f64> {
+    snapshot
+        .extra_rate_windows
+        .iter()
+        .find(|extra| {
+            extra.id == "cursor-grok-bot" && extra.usage_known && !extra.window.is_informational
+        })
+        .map(|extra| extra.window.used_percent)
 }
 
 fn average_metric_percent(snapshot: &crate::commands::ProviderUsageSnapshot) -> Option<f64> {
@@ -1147,6 +1174,12 @@ mod tests {
     }
 
     #[test]
+    fn check_for_updates_routes_to_shared_update_check() {
+        let action = resolve_menu_action("check_for_updates").expect("update action");
+        assert!(matches!(action, MenuAction::CheckForUpdates));
+    }
+
+    #[test]
     fn settings_menu_routes_to_open_settings_action() {
         let action = resolve_menu_action("about").expect("about action");
         match action {
@@ -1258,6 +1291,89 @@ mod tests {
         assert!(
             anchor.is_none(),
             "without a click monitor the anchor must be skipped"
+        );
+    }
+
+    fn metric_window(used_percent: f64) -> crate::commands::RateWindowSnapshot {
+        crate::commands::RateWindowSnapshot {
+            used_percent,
+            remaining_percent: 100.0 - used_percent,
+            kind: Some("weekly"),
+            window_minutes: Some(10_080),
+            resets_at: None,
+            reset_description: None,
+            is_exhausted: false,
+            is_informational: false,
+            reserve_percent: None,
+            reserve_description: None,
+            reserve_will_last_to_reset: false,
+            reserve_eta_seconds: None,
+        }
+    }
+
+    fn cursor_metric_snapshot() -> crate::commands::ProviderUsageSnapshot {
+        crate::commands::ProviderUsageSnapshot {
+            provider_id: "cursor".into(),
+            display_name: "Cursor".into(),
+            primary: metric_window(12.0),
+            primary_label: Some("5h".into()),
+            secondary: Some(metric_window(18.0)),
+            secondary_label: Some("weekly".into()),
+            model_specific: Some(metric_window(24.0)),
+            tertiary: Some(metric_window(30.0)),
+            extra_rate_windows: Vec::new(),
+            cost: None,
+            plan_name: Some("Pro".into()),
+            account_email: Some("cursor@example.com".into()),
+            source_label: "test".into(),
+            updated_at: "2026-09-17T00:00:00Z".into(),
+            error: None,
+            stale: false,
+            stale_reason: None,
+            pace: None,
+            account_organization: None,
+            tray_status_label: None,
+            fetch_duration_ms: None,
+            wayfinder_usage: None,
+            capabilities: codexbar::core::ProviderCapabilities {
+                output_speed: false,
+                local_usage: false,
+                provider_dashboard: false,
+                status_page: false,
+                login: true,
+            },
+        }
+    }
+
+    #[test]
+    fn cursor_automatic_includes_known_grok_bot_and_ignores_other_extras() {
+        let mut snapshot = cursor_metric_snapshot();
+        snapshot.extra_rate_windows = vec![
+            crate::commands::NamedRateWindowSnapshot {
+                id: "cursor-grok-bot".into(),
+                title: "Grok Bot".into(),
+                window: metric_window(76.0),
+                usage_known: true,
+                inventory_expires_at: Vec::new(),
+            },
+            crate::commands::NamedRateWindowSnapshot {
+                id: "cursor-account-balance".into(),
+                title: "Account balance".into(),
+                window: metric_window(99.0),
+                usage_known: true,
+                inventory_expires_at: Vec::new(),
+            },
+        ];
+
+        assert_eq!(
+            automatic_metric_percent(&snapshot, Some(ProviderId::Cursor)),
+            Some(76.0)
+        );
+
+        snapshot.extra_rate_windows[0].window.is_informational = true;
+        assert_eq!(
+            automatic_metric_percent(&snapshot, Some(ProviderId::Cursor)),
+            Some(30.0)
         );
     }
 }

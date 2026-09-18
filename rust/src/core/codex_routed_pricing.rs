@@ -58,13 +58,18 @@ mod tests {
         assert!(counts_toward_codex_subscription("gpt-5.6-sol"));
         assert!(counts_toward_codex_subscription("openai/gpt-5.6-sol"));
         assert!(!counts_toward_codex_subscription("deepseek/deepseek-chat"));
-        assert!(!counts_toward_codex_subscription("opencode-go-qwen/qwen3.7-plus"));
+        assert!(!counts_toward_codex_subscription(
+            "opencode-go-qwen/qwen3.7-plus"
+        ));
         assert!(!counts_toward_codex_subscription("codex-auto-review"));
     }
 
     #[test]
     fn known_route_provider_is_not_guessed_for_unknown_prefix() {
-        assert_eq!(codex_routed_provider("deepseek/deepseek-chat"), Some("deepseek"));
+        assert_eq!(
+            codex_routed_provider("deepseek/deepseek-chat"),
+            Some("deepseek")
+        );
         assert_eq!(codex_routed_provider("opencode/foo"), Some("opencode"));
         assert_eq!(codex_routed_provider("vendor/model"), None);
         assert_eq!(strip_route_prefix("opencode/foo"), "foo");

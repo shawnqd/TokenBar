@@ -3,7 +3,7 @@
 //! Returns raw RGBA bytes so callers (egui tray manager, Tauri shell, tests)
 //! can adapt the result to their own icon type without pulling in extra deps.
 
-use image::{imageops, load_from_memory, RgbaImage};
+use image::{RgbaImage, imageops, load_from_memory};
 use std::sync::OnceLock;
 
 /// Side length of the tray icon fed to the shell (Windows ~16 logical px slot).
@@ -40,8 +40,8 @@ fn desaturate_premultiplied(rgba: &[u8]) -> Vec<u8> {
 
 fn product_icon_tray_rgba() -> &'static [u8] {
     TRAY_RGBA.get_or_init(|| {
-        let dyn_img = load_from_memory(PRODUCT_ICON_PNG)
-            .expect("embedded product icon PNG must decode");
+        let dyn_img =
+            load_from_memory(PRODUCT_ICON_PNG).expect("embedded product icon PNG must decode");
         let rgba = dyn_img.to_rgba8();
         let resized: RgbaImage = imageops::resize(
             &rgba,
@@ -145,6 +145,9 @@ mod tests {
                 break;
             }
         }
-        assert!(found, "expected at least one chromatic pixel in the product mark");
+        assert!(
+            found,
+            "expected at least one chromatic pixel in the product mark"
+        );
     }
 }

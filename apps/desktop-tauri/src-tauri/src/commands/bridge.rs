@@ -168,6 +168,11 @@ pub struct ProviderUsageSnapshot {
     pub source_label: String,
     pub updated_at: String,
     pub error: Option<String>,
+    /// True when the last successful snapshot is being shown because the
+    /// latest refresh failed transiently. The old `updated_at` is retained so
+    /// age and freshness remain truthful on every surface.
+    pub stale: bool,
+    pub stale_reason: Option<String>,
     pub pace: Option<PaceSnapshot>,
     pub account_organization: Option<String>,
     pub tray_status_label: Option<String>,
@@ -312,6 +317,8 @@ impl ProviderUsageSnapshot {
             source_label: result.source_label.clone(),
             updated_at: usage.updated_at.to_rfc3339(),
             error: None,
+            stale: false,
+            stale_reason: None,
             pace,
             account_organization: usage.account_organization.clone(),
             tray_status_label: None,
@@ -358,6 +365,8 @@ impl ProviderUsageSnapshot {
             source_label: String::new(),
             updated_at: chrono::Utc::now().to_rfc3339(),
             error: Some(error),
+            stale: false,
+            stale_reason: None,
             pace: None,
             account_organization: None,
             tray_status_label: None,

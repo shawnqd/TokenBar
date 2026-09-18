@@ -6293,18 +6293,21 @@ body:has(.settings-window-frame) #root {
 .taskbar-preview__strip {
   /* Layout only: CSS grid mirrors `taskbar_widget::cell_rects` (column-major,
      ≤2×2). A lone 3rd entry sits top-right, not flex-centred in the full height.
-     Chrome (border / radius / light fill) stays the original settings-card look. */
+     The native surface is transparent, so the preview does not add a second
+     card-like background or border. */
   display: grid;
-  column-gap: 8px;
+  column-gap: var(--taskbar-preview-column-gap, 6px);
   row-gap: 0;
   align-items: stretch;
-  min-height: 42px;
+  height: 36px;
+  min-height: 36px;
   max-width: 240px;
-  padding: 4px 8px;
+  padding: 0 6px;
+  box-sizing: border-box;
   overflow: hidden;
-  border: 1px solid color-mix(in srgb, var(--accent) 22%, var(--panel-border));
-  border-radius: 7px;
-  background: color-mix(in srgb, var(--text-primary) 8%, var(--surface-elevated));
+  border: 0;
+  border-radius: 0;
+  background: transparent;
   color: var(--text-primary);
   line-height: 1.35;
   font-family: "Microsoft YaHei UI", "Segoe UI Variable Text", sans-serif;
@@ -6314,9 +6317,6 @@ body:has(.settings-window-frame) #root {
     width 150ms ease,
     opacity 150ms ease;
 }
-[data-theme="light"] .taskbar-preview__strip {
-  background: #edf0f2;
-}
 .taskbar-preview__strip.is-disabled {
   opacity: 0.42;
 }
@@ -6325,7 +6325,7 @@ body:has(.settings-window-frame) #root {
   align-items: center; /* paragraph-centre within the cell, same as DirectWrite */
   min-width: 0;
   overflow: hidden;
-  text-overflow: ellipsis;
+  text-overflow: clip;
 }
 /* The renderer draws the mark in its own colour in a fixed-width column ahead
    of the text, so every line's text starts at the same x. Reproduced here with
@@ -7864,7 +7864,8 @@ body:has(.tray-panel-reveal) #root {
      RECTANGLE and ignores `SetWindowRgn`, so the only way to round it is
      `DWMWA_WINDOW_CORNER_PREFERENCE` — a fixed ~8px that cannot be
      configured. Keeping a frosted backdrop therefore meant giving up the
-     corner radius entirely. See AGENT_HANDOFF.md for the measurements. */
+     corner radius entirely. The measurements stay documented with the native
+     popup recipe so both rendering paths remain aligned. */
   border-radius: var(--flyout-radius);
   clip-path: inset(0 round var(--flyout-radius));
   background: #161618;

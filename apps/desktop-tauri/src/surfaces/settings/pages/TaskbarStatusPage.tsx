@@ -25,6 +25,7 @@ import type { ProviderSnapshot } from "../../../core/snapshot";
 import { projectSurface } from "../../../core/projection";
 import type { UsageStore } from "../../../core/usageStore";
 import { quotaPercentContext, quotaDisplayPreference, resetDisplayPreference } from "../../../lib/quotaDisplay";
+import { getTaskbarPreviewLines } from "../../../lib/tauri";
 
 const DEFAULT_ENTRIES: TaskbarEntry[] = [
   { providerId: TASKBAR_PROVIDER_AUTO, window: "session" },
@@ -85,6 +86,23 @@ function deriveTaskbarCellsFromSnapshots(
   return cells;
 }
 
+function isTaskbarStripCell(value: unknown): value is TaskbarStripCell {
+  if (value == null || typeof value !== "object") return false;
+  const cell = value as Partial<TaskbarStripCell>;
+  return (
+    typeof cell.providerId === "string" &&
+    typeof cell.tag === "string" &&
+    typeof cell.value === "string" &&
+    typeof cell.state === "string"
+  );
+}
+
+function normalizeNativeTaskbarCells(value: unknown): TaskbarStripCell[] {
+  return Array.isArray(value)
+    ? value.filter(isTaskbarStripCell).slice(0, 4)
+    : [];
+}
+
 export default function TaskbarStatusPage({
   settings,
   set,
@@ -138,10 +156,39 @@ export default function TaskbarStatusPage({
     () => (hasCoreInjection ? deriveTaskbarCellsFromSnapshots(coreSnapshots, entries, quotaPercentContext(settings, "taskbar").showAsUsed) : []),
     [hasCoreInjection, coreSnapshots, entries, settings],
   );
-  // A preview is valid only when it is derived from the injected process
-  // projection. The old no-store native preview made Settings a second
-  // production read path and could display data from a different refresh.
-  const previewLines = hasCoreInjection ? coreCells : [];
+  const [nativePreviewCells, setNativePreviewCells] = useState<
+    TaskbarStripCell[] | null
+  >(null);
+
+  // The native renderer owns provider selection, window fallback, lifecycle
+  // state, and localized text. Read its current line buffer so Settings cannot
+  // drift from the strip beside it. An empty buffer is expected before the
+  // first native paint (and while the widget is off), so the unified Core
+  // projection remains a useful bootstrap fallback in that one case.
+  useEffect(() => {
+    let disposed = false;
+    const refreshNativePreview = () => {
+      void getTaskbarPreviewLines()
+        .then((cells) => {
+          if (!disposed) setNativePreviewCells(normalizeNativeTaskbarCells(cells));
+        })
+        .catch(() => {
+          if (!disposed) setNativePreviewCells(null);
+        });
+    };
+
+    refreshNativePreview();
+    window.addEventListener("codexbar:settings-updated", refreshNativePreview);
+    return () => {
+      disposed = true;
+      window.removeEventListener("codexbar:settings-updated", refreshNativePreview);
+    };
+  }, [coreCells]);
+
+  const previewLines =
+    nativePreviewCells && nativePreviewCells.length > 0
+      ? nativePreviewCells
+      : coreCells;
 
   useEffect(() => {
     setWeightDraft(settings.taskbarWidgetFontWeight ?? 400);
@@ -428,15 +475,17 @@ export default function TaskbarStatusPage({
         <TaskbarStripPreview
           enabled={enabled}
           cells={previewLines}
-            entries={entries}
-            fontSize={settings.taskbarWidgetFontSize ?? 12}
-            fontWeight={settings.taskbarWidgetFontWeight ?? 400}
-            fontFamily={settings.taskbarWidgetFontFamily}
-            textAlign={settings.taskbarWidgetTextAlign ?? "left"}
+          entries={entries}
+          fontSize={settings.taskbarWidgetFontSize ?? 12}
+          fontWeight={settings.taskbarWidgetFontWeight ?? 400}
+          fontFamily={settings.taskbarWidgetFontFamily}
+          textAlign={settings.taskbarWidgetTextAlign ?? "left"}
           width={width}
           iconSize={iconSize}
           iconStyle={iconStyle}
-            label="实时预览"
+          iconGap={settings.taskbarWidgetIconGapPx ?? 5}
+          valueGap={settings.taskbarWidgetValueGapPx ?? 2}
+          label="实时预览"
         />
       </SurfacePreviewFrame>
     </div>

@@ -75,9 +75,15 @@ export function useUpdateState(): UseUpdateStateResult {
   useEffect(() => {
     let cancelled = false;
 
-    getUpdateState().then((s) => {
-      if (!cancelled) setUpdateState(s);
-    });
+    getUpdateState()
+      .then((s) => {
+        if (!cancelled) setUpdateState(s);
+      })
+      .catch(() => {
+        // A detached WebView can mount before the Tauri command bridge is
+        // ready. Keep the local idle state and rely on the event subscription
+        // or the next manual check instead of creating an unhandled rejection.
+      });
 
     const unlisten = listen<UpdateStatePayload>(
       "update-state-changed",
@@ -88,7 +94,7 @@ export function useUpdateState(): UseUpdateStateResult {
 
     return () => {
       cancelled = true;
-      unlisten.then((fn) => fn());
+      unlisten.then((fn) => fn()).catch(() => {});
     };
   }, []);
 

@@ -72,8 +72,7 @@ pub(crate) fn apply_codex_turns_to_summary(
     }) {
         let tokens = CodexTokenCounts::from_bucket(turn.input, turn.cached, turn.output);
         let pricing_day = CostUsageDayRange::parse_day_key(&turn.day);
-        if let Some(cost) = add_codex_tokens_to_summary(summary, &turn.model, tokens, pricing_day)
-        {
+        if let Some(cost) = add_codex_tokens_to_summary(summary, &turn.model, tokens, pricing_day) {
             total_cost += cost;
             turn_count += 1;
         }
@@ -219,12 +218,7 @@ fn add_codex_tokens_to_summary(
             )
         })
         .or_else(|| {
-            CostUsagePricing::codex_cost_usd(
-                &model_key,
-                tokens.input,
-                tokens.cached,
-                tokens.output,
-            )
+            CostUsagePricing::codex_cost_usd(&model_key, tokens.input, tokens.cached, tokens.output)
         })
         .is_none();
     let cost = codex_cost_usd_for_day(
@@ -236,9 +230,7 @@ fn add_codex_tokens_to_summary(
     );
     if uses_fallback_pricing {
         summary.unknown_models.insert(model_key.clone());
-        summary
-            .model_pricing_completeness
-            .mark_partial(&model_key);
+        summary.model_pricing_completeness.mark_partial(&model_key);
     }
 
     summary.input_tokens += tokens.input;
@@ -320,7 +312,6 @@ fn codex_cost_usd_for_day(
 
     input_cost + cached_cost + output_cost
 }
-
 
 #[cfg(test)]
 mod tests {

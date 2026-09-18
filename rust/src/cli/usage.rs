@@ -442,7 +442,11 @@ fn append_window_line(lines: &mut Vec<String>, label: &str, window: &RateWindow,
     // An informational window has no real quotient: painting a 0% bar would
     // fabricate a reading. Show the provider's wording instead, or nothing.
     if window.is_informational {
-        let description = window.reset_description.as_deref().unwrap_or_default().trim();
+        let description = window
+            .reset_description
+            .as_deref()
+            .unwrap_or_default()
+            .trim();
         if !description.is_empty() {
             lines.push(format!("  {:<8} {}", format!("{}:", label), description));
         }

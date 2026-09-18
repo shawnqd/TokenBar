@@ -57,7 +57,10 @@ impl ResetCreditEvidence {
     /// value and re-arms the evidence for a future backfill.
     fn record(&mut self, available_count: u32) {
         if self.available_count == available_count {
-            self.samples = self.samples.saturating_add(1).min(RESET_CREDIT_DOUBLE_SAMPLE);
+            self.samples = self
+                .samples
+                .saturating_add(1)
+                .min(RESET_CREDIT_DOUBLE_SAMPLE);
             self.backfilled = false;
         } else {
             *self = Self::new(available_count);
@@ -94,7 +97,11 @@ fn record_reset_credit_sample(available_count: u32) {
 
 /// Attempt the once-only reset-credit backfill; returns the count to show.
 fn try_backfill_reset_credit() -> Option<u32> {
-    let Some(mut guard) = RESET_CREDIT_EVIDENCE.get_or_init(|| Mutex::new(None)).lock().ok() else {
+    let Some(mut guard) = RESET_CREDIT_EVIDENCE
+        .get_or_init(|| Mutex::new(None))
+        .lock()
+        .ok()
+    else {
         return None;
     };
     guard.as_mut().and_then(ResetCreditEvidence::try_backfill)
@@ -191,11 +198,11 @@ impl CodexApi {
                 tracing::debug!(
                     "Codex reset credits temporarily unavailable ({error}); considering double-sample backfill"
                 );
-                if let Some(available_count) = try_backfill_reset_credit().filter(|&count| count > 0) {
-                    usage = usage.with_named_rate_window(reset_credits_named(
-                        available_count,
-                        Vec::new(),
-                    ));
+                if let Some(available_count) =
+                    try_backfill_reset_credit().filter(|&count| count > 0)
+                {
+                    usage = usage
+                        .with_named_rate_window(reset_credits_named(available_count, Vec::new()));
                 }
             }
         }
@@ -466,7 +473,9 @@ impl CodexApi {
         if let Some(rate_limits) = json.get("rate_limits").and_then(|v| v.as_array())
             && let Some(first) = rate_limits.first()
         {
-            let primary = self.parse_window_if_present(first).unwrap_or_else(no_active_session_window);
+            let primary = self
+                .parse_window_if_present(first)
+                .unwrap_or_else(no_active_session_window);
             let secondary = rate_limits
                 .get(1)
                 .and_then(|w| self.parse_window_if_present(w));
@@ -858,7 +867,12 @@ fn parse_credit_expiry(raw: Option<&str>) -> Option<DateTime<Utc>> {
 /// the slot, while `is_informational` stops any surface from reading the 0% as
 /// a real quota (UP-W-015: weekly-only plans must not show a fake 5-hour row).
 fn no_active_session_window() -> RateWindow {
-    let mut window = RateWindow::with_details(0.0, Some(5 * 60), None, Some("No active 5h session".to_string()));
+    let mut window = RateWindow::with_details(
+        0.0,
+        Some(5 * 60),
+        None,
+        Some("No active 5h session".to_string()),
+    );
     window.is_informational = true;
     window
 }
@@ -1110,13 +1124,26 @@ mod tests {
         .expect("reset credits");
         let expiries = credits.available_expiries();
         assert_eq!(expiries.len(), 2);
-        assert_eq!(expiries[0], DateTime::parse_from_rfc3339("2026-07-12T01:33:14Z").unwrap().with_timezone(&Utc));
-        assert_eq!(expiries[1], DateTime::parse_from_rfc3339("2026-07-18T02:39:26Z").unwrap().with_timezone(&Utc));
+        assert_eq!(
+            expiries[0],
+            DateTime::parse_from_rfc3339("2026-07-12T01:33:14Z")
+                .unwrap()
+                .with_timezone(&Utc)
+        );
+        assert_eq!(
+            expiries[1],
+            DateTime::parse_from_rfc3339("2026-07-18T02:39:26Z")
+                .unwrap()
+                .with_timezone(&Utc)
+        );
         let named = reset_credits_named(credits.available_count, expiries);
         let encoded = serde_json::to_string(&named).expect("named");
         assert!(!encoded.contains("RateLimitResetCredit"));
         assert_eq!(named.inventory_expires_at.len(), 2);
-        assert_eq!(named.window.resets_at, named.inventory_expires_at.first().copied());
+        assert_eq!(
+            named.window.resets_at,
+            named.inventory_expires_at.first().copied()
+        );
     }
 
     #[test]

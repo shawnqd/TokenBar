@@ -25,6 +25,24 @@ pub async fn check_for_updates(
     app: tauri::AppHandle,
     state: tauri::State<'_, Mutex<AppState>>,
 ) -> Result<UpdateStatePayload, String> {
+    check_for_updates_impl(&app, state.inner()).await
+}
+
+/// Run the same guarded update check from a native menu callback. The tray
+/// callback does not have a Tauri `State` parameter, so it resolves the
+/// managed state from the app handle and deliberately shares this one path
+/// with the frontend command.
+pub(crate) async fn check_for_updates_in_background(app: tauri::AppHandle) {
+    let state = app.state::<Mutex<AppState>>();
+    if let Err(error) = check_for_updates_impl(&app, state.inner()).await {
+        tracing::warn!(%error, "background update check failed");
+    }
+}
+
+async fn check_for_updates_impl(
+    app: &tauri::AppHandle,
+    state: &Mutex<AppState>,
+) -> Result<UpdateStatePayload, String> {
     // Guard: skip if already checking or downloading.
     {
         let mut guard = state.lock().map_err(|e| e.to_string())?;
@@ -43,19 +61,20 @@ pub async fn check_for_updates(
         let guard = state.lock().map_err(|e| e.to_string())?;
         guard.update_payload()
     };
-    events::emit_update_state_changed(&app, &checking_payload);
+    events::emit_update_state_changed(app, &checking_payload);
 
     let settings = codexbar::settings::Settings::load();
 
     let result = tokio::time::timeout(
         std::time::Duration::from_secs(15),
-        codexbar::updater::check_for_updates_with_channel(settings.update_channel),
+        codexbar::updater::check_for_updates_with_channel_result(settings.update_channel),
     )
     .await;
 
     let (new_state, new_info) = match result {
-        Ok(Some(info)) => (UpdateState::Available(info.version.clone()), Some(info)),
-        Ok(None) => (UpdateState::Idle, None),
+        Ok(Ok(Some(info))) => (UpdateState::Available(info.version.clone()), Some(info)),
+        Ok(Ok(None)) => (UpdateState::Idle, None),
+        Ok(Err(error)) => (UpdateState::Error(error), None),
         Err(_) => (
             UpdateState::Error("Update check timed out".to_string()),
             None,
@@ -69,7 +88,7 @@ pub async fn check_for_updates(
         guard.last_update_check_ms = Some(chrono::Utc::now().timestamp_millis());
         guard.update_payload()
     };
-    events::emit_update_state_changed(&app, &payload);
+    events::emit_update_state_changed(app, &payload);
 
     Ok(payload)
 }

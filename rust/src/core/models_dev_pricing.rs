@@ -77,7 +77,10 @@ mod tests {
     /// fetch does, and must still be a URL afterwards.
     #[test]
     fn every_pricing_source_url_is_well_formed() {
-        assert!(!PRICING_SOURCES.is_empty(), "a fallback list of one is not a fallback");
+        assert!(
+            !PRICING_SOURCES.is_empty(),
+            "a fallback list of one is not a fallback"
+        );
         for source in PRICING_SOURCES {
             let url: String = source.url.split_whitespace().collect();
             assert!(url.starts_with("https://"), "{}: {url}", source.name);

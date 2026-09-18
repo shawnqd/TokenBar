@@ -120,7 +120,7 @@
   display: flex;
   justify-content: flex-start;
   align-items: center;
-  gap: 3px;
+  gap: 0;
   min-width: 0;
   overflow: hidden;
 }
@@ -130,6 +130,7 @@
   display: grid;
   place-items: center;
   overflow: hidden;
+  margin-inline-end: var(--taskbar-preview-icon-gap, 5px);
 }
 
 .settings-v5 .settings-taskbar-preview .taskbar-preview__mark svg {
@@ -171,6 +172,7 @@
   white-space: nowrap;
   color: var(--text-muted);
   font-weight: inherit;
+  margin-inline-end: var(--taskbar-preview-value-gap, 2px);
 }
 
 .settings-v5 .settings-taskbar-preview .taskbar-preview__val {

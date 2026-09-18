@@ -44,6 +44,10 @@ vi.mock("@tauri-apps/api/core", () => ({
   invoke: vi.fn().mockResolvedValue([]),
 }));
 
+vi.mock("@tauri-apps/api/event", () => ({
+  listen: vi.fn().mockResolvedValue(() => {}),
+}));
+
 vi.mock("../lib/tauri", () => ({
   closeSettingsWindow: vi.fn(),
   minimizeSettingsWindow: tauriWindowMocks.minimizeSettingsWindow,
@@ -75,6 +79,30 @@ vi.mock("../lib/tauri", () => ({
   revokeProviderCredentials: vi.fn(),
   getProviderChartData: vi.fn().mockResolvedValue(null),
   getSettingsSnapshot: vi.fn().mockResolvedValue({ enableAnimations: false }),
+  getUpdateState: vi.fn().mockResolvedValue({
+    status: "idle",
+    version: null,
+    error: null,
+    progress: null,
+    releaseUrl: null,
+    canDownload: false,
+    canApply: false,
+    lastCheckedAt: null,
+  }),
+  checkForUpdates: vi.fn().mockResolvedValue({
+    status: "idle",
+    version: null,
+    error: null,
+    progress: null,
+    releaseUrl: null,
+    canDownload: false,
+    canApply: false,
+    lastCheckedAt: Date.now(),
+  }),
+  downloadUpdate: vi.fn(),
+  applyUpdate: vi.fn(),
+  dismissUpdate: vi.fn(),
+  openReleasePage: vi.fn(),
   getSafeDiagnostics: vi.fn().mockResolvedValue({
     appVersion: "0.0.0-test",
     platform: "test",
@@ -251,6 +279,7 @@ describe("Settings V5 shell", () => {
     render(<Settings state={state} />);
     fireEvent.click(screen.getByRole("button", { name: /TabAdvanced/ }));
     expect(screen.getByText("UpdatesTitle")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "TrayCheckForUpdates" })).toBeInTheDocument();
     expect(document.querySelector("[data-slide]")).toBeNull();
     expect(screen.queryByText("GlobalShortcutFieldLabel")).not.toBeInTheDocument();
     expect(screen.queryByText("HidePersonalInfo")).not.toBeInTheDocument();

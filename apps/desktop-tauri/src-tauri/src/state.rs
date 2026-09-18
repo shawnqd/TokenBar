@@ -33,6 +33,7 @@ pub struct UpdateStatePayload {
     pub can_apply: bool,
     /// Unix-ms timestamp of the last completed update check (success or failure).
     /// `None` means the app has never checked for updates during this session.
+    #[serde(rename = "lastCheckedAt")]
     pub last_checked_at_ms: Option<i64>,
 }
 

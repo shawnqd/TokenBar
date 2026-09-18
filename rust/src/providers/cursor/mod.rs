@@ -113,14 +113,19 @@ impl Provider for CursorProvider {
         tracing::debug!("Fetching Cursor usage via web API");
 
         match self.fetch_usage_parts(ctx).await {
-            Ok((primary, secondary, model_specific, cost, email, plan_type)) => {
-                let usage = Self::build_usage_snapshot(
+            Ok((primary, secondary, model_specific, cost, email, plan_type, grok_bot)) => {
+                let mut usage = Self::build_usage_snapshot(
                     primary,
                     secondary,
                     model_specific,
                     email,
                     plan_type,
                 );
+                if let Some(named) = grok_bot
+                    && !named.window.is_informational
+                {
+                    usage = usage.with_named_rate_window(named);
+                }
                 Ok(Self::build_fetch_result(usage, cost))
             }
             Err(e) => {

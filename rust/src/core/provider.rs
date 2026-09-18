@@ -506,7 +506,10 @@ pub struct ProviderCapabilities {
 impl ProviderCapabilities {
     /// Providers whose CLI session logs we parse for output speed.
     fn has_output_speed_parser(id: ProviderId) -> bool {
-        matches!(id, ProviderId::Codex | ProviderId::Claude | ProviderId::Grok)
+        matches!(
+            id,
+            ProviderId::Codex | ProviderId::Claude | ProviderId::Grok
+        )
     }
 
     /// Providers whose local session logs we scan for recent usage, plus the
@@ -554,7 +557,7 @@ pub struct ProviderMetadata {
 /// connection reset, TLS rejected — is in the `source()` chain and is never
 /// printed. So an intermittent failure surfaced to the user as a bare URL and
 /// nothing else, which is exactly the case where the reason is the only useful
-/// part: a timeout says "retry", a DNS error says "check the network", a 
+/// part: a timeout says "retry", a DNS error says "check the network", a
 /// certificate error says something is intercepting the connection.
 ///
 /// A leading classifier is emitted for the two cases worth acting on, so the

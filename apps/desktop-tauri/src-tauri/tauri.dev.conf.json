@@ -1,0 +1,5 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "identifier": "com.codexbar.desktop.dev",
+  "productName": "CodexBar Desktop Dev"
+}

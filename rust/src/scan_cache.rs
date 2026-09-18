@@ -41,8 +41,7 @@ pub struct CachedTurn {
 /// Cache layout version combined with the parser semantics version: either
 /// changing invalidates every persisted entry, so a parser fix can never be
 /// silently masked by buckets produced under the old parsing rules.
-const VERSION: u32 =
-    CACHE_LAYOUT_VERSION * 1000 + crate::core::CODEX_PARSE_SEMANTICS_VERSION;
+const VERSION: u32 = CACHE_LAYOUT_VERSION * 1000 + crate::core::CODEX_PARSE_SEMANTICS_VERSION;
 
 /// Bump when the persisted shape changes (fields, keying, bucket schema).
 const CACHE_LAYOUT_VERSION: u32 = 4;
@@ -104,7 +103,9 @@ fn cache_slot() -> &'static Mutex<Option<PersistedCache>> {
 }
 
 fn loaded() -> std::sync::MutexGuard<'static, Option<PersistedCache>> {
-    let mut guard = cache_slot().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    let mut guard = cache_slot()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     if guard.is_none() {
         *guard = Some(load_from_disk());
     }

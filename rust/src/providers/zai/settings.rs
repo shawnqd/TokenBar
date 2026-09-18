@@ -153,10 +153,7 @@ impl ZaiSettingsReader {
 
     /// `Z_AI_BALANCE_URL` if set. Global has no product endpoint; a valid
     /// override is still honored so a relay can surface CN wallet data.
-    pub fn balance_url(
-        env: &EnvMap,
-        region: ZaiRegion,
-    ) -> Result<Option<Url>, ZaiSettingsError> {
+    pub fn balance_url(env: &EnvMap, region: ZaiRegion) -> Result<Option<Url>, ZaiSettingsError> {
         if let Some(url) = Self::balance_url_override(env)? {
             return Ok(Some(url));
         }
@@ -167,14 +164,18 @@ impl ZaiSettingsReader {
         env_get(env, ZAI_BALANCE_URL_ENV)
             .and_then(cleaned)
             .map(|raw| {
-                normalized_https_url(&raw)
-                    .ok_or(ZaiSettingsError::InvalidEndpointOverride(ZAI_BALANCE_URL_ENV))
+                normalized_https_url(&raw).ok_or(ZaiSettingsError::InvalidEndpointOverride(
+                    ZAI_BALANCE_URL_ENV,
+                ))
             })
             .transpose()
     }
 
     pub fn validate_balance_endpoint_override(env: &EnvMap) -> Result<(), ZaiSettingsError> {
-        if env_get(env, ZAI_BALANCE_URL_ENV).and_then(cleaned).is_some() {
+        if env_get(env, ZAI_BALANCE_URL_ENV)
+            .and_then(cleaned)
+            .is_some()
+        {
             let _ = Self::balance_url_override(env)?.ok_or(
                 ZaiSettingsError::InvalidEndpointOverride(ZAI_BALANCE_URL_ENV),
             )?;

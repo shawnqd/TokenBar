@@ -92,7 +92,7 @@ describe("TaskbarTab", () => {
       ).toHaveTextContent("¥38.38"),
     );
     const preview = screen.getByLabelText("TaskbarWidgetPreviewLabel");
-    expect(preview).toHaveTextContent("周 18%");
+    expect(preview).toHaveTextContent("周18%");
     expect(preview).not.toHaveTextContent("TaskbarEntryUnsupported");
 
     // The mark keeps the renderer's colour: shapes repeat across providers, so

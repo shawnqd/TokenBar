@@ -182,10 +182,7 @@ pub(super) fn parse_start_plan_windows(body: &Value) -> Vec<NamedRateWindow> {
     let Ok(envelope) = serde_json::from_value::<BillingEnvelope>(body.clone()) else {
         return Vec::new();
     };
-    if envelope
-        .code
-        .is_some_and(|code| code != 0 && code != 200)
-    {
+    if envelope.code.is_some_and(|code| code != 0 && code != 200) {
         return Vec::new();
     }
     let data = envelope.data.unwrap_or_default();
@@ -238,10 +235,11 @@ fn balance_window(
     balance: &BillingBalance,
     plan: Option<&BillingPlan>,
 ) -> Option<NamedRateWindow> {
-    let total = finite_nonnegative(balance.total_units.as_ref())
-        .or_else(|| finite_nonnegative(balance.available_units.as_ref()).and_then(|available| {
+    let total = finite_nonnegative(balance.total_units.as_ref()).or_else(|| {
+        finite_nonnegative(balance.available_units.as_ref()).and_then(|available| {
             finite_nonnegative(balance.used_units.as_ref()).map(|used| used + available)
-        }))?;
+        })
+    })?;
     if total <= 0.0 {
         return None;
     }
@@ -278,7 +276,12 @@ fn balance_window(
     Some(NamedRateWindow::new(
         format!("zai-zcode-{index}"),
         title,
-        RateWindow::with_details(used_percent, window_minutes, resets_at, Some(parts.join(" · "))),
+        RateWindow::with_details(
+            used_percent,
+            window_minutes,
+            resets_at,
+            Some(parts.join(" · ")),
+        ),
     ))
 }
 
@@ -477,10 +480,13 @@ fn decode_b64url(raw: &str) -> Result<Vec<u8>, ()> {
 }
 
 fn billing_balance_url(env: &EnvMap) -> String {
-    let mut url = env_cleaned(env, BILLING_URL_ENV).unwrap_or_else(|| DEFAULT_BILLING_URL.to_string());
+    let mut url =
+        env_cleaned(env, BILLING_URL_ENV).unwrap_or_else(|| DEFAULT_BILLING_URL.to_string());
     let version = app_version(env);
     if let Ok(mut parsed) = reqwest::Url::parse(&url) {
-        parsed.query_pairs_mut().append_pair("app_version", &version);
+        parsed
+            .query_pairs_mut()
+            .append_pair("app_version", &version);
         url = parsed.to_string();
     }
     url
@@ -665,7 +671,10 @@ mod tests {
 
     #[test]
     fn error_codes_and_missing_data_are_empty() {
-        assert!(parse_start_plan_windows(&serde_json::json!({"code": 3012, "msg": "blocked"})).is_empty());
+        assert!(
+            parse_start_plan_windows(&serde_json::json!({"code": 3012, "msg": "blocked"}))
+                .is_empty()
+        );
         assert!(parse_start_plan_windows(&serde_json::json!({"code": 0})).is_empty());
     }
 
@@ -683,10 +692,7 @@ mod tests {
     #[test]
     fn encrypted_blob_is_not_used_as_bearer() {
         let mut env = EnvMap::new();
-        env.insert(
-            JWT_ENV.to_string(),
-            "enc:v1:aaaa.bbbb.cccc".to_string(),
-        );
+        env.insert(JWT_ENV.to_string(), "enc:v1:aaaa.bbbb.cccc".to_string());
         assert!(resolve_zcode_jwt(&env).is_none());
     }
 
@@ -694,21 +700,31 @@ mod tests {
     fn plaintext_env_jwt_wins() {
         let mut env = EnvMap::new();
         env.insert(JWT_ENV.to_string(), "  eyJhbGciOi.plain.jwt  ".to_string());
-        assert_eq!(resolve_zcode_jwt(&env).as_deref(), Some("eyJhbGciOi.plain.jwt"));
+        assert_eq!(
+            resolve_zcode_jwt(&env).as_deref(),
+            Some("eyJhbGciOi.plain.jwt")
+        );
     }
 
     #[test]
     fn merge_keeps_titled_extra_on_informational_primary() {
         let windows = parse_start_plan_windows(&weekend_fixture());
         let usage = merge_start_plan(
-            UsageSnapshot::new(RateWindow::informational("无生效套餐")).with_login_method("智谱 GLM"),
+            UsageSnapshot::new(RateWindow::informational("无生效套餐"))
+                .with_login_method("智谱 GLM"),
             windows,
         );
         assert!(usage.primary.is_informational);
         assert_eq!(usage.login_method.as_deref(), Some("体验套餐"));
-        assert_eq!(usage.extra_rate_windows[0].title, "体验套餐 · GLM-5.3-Flash");
         assert_eq!(
-            usage.extra_rate_windows[0].window.reset_description.as_deref(),
+            usage.extra_rate_windows[0].title,
+            "体验套餐 · GLM-5.3-Flash"
+        );
+        assert_eq!(
+            usage.extra_rate_windows[0]
+                .window
+                .reset_description
+                .as_deref(),
             Some("剩余 3.00亿")
         );
     }
@@ -719,15 +735,17 @@ mod tests {
         let path = dir.path().join("credentials.json");
         let secret = "unit-test-secret";
         let enc = encrypt_enc_v1("eyJ-test.jwt.token", secret, &[3u8; 12]);
-        std::fs::write(
-            &path,
-            serde_json::json!({ JWT_KEY: enc }).to_string(),
-        )
-        .expect("write");
+        std::fs::write(&path, serde_json::json!({ JWT_KEY: enc }).to_string()).expect("write");
         let mut env = EnvMap::new();
-        env.insert(CREDENTIALS_PATH_ENV.to_string(), path.to_string_lossy().into_owned());
+        env.insert(
+            CREDENTIALS_PATH_ENV.to_string(),
+            path.to_string_lossy().into_owned(),
+        );
         env.insert(SECRET_ENV.to_string(), secret.to_string());
-        assert_eq!(resolve_zcode_jwt(&env).as_deref(), Some("eyJ-test.jwt.token"));
+        assert_eq!(
+            resolve_zcode_jwt(&env).as_deref(),
+            Some("eyJ-test.jwt.token")
+        );
     }
 
     #[test]

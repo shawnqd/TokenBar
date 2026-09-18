@@ -644,6 +644,10 @@ export interface ProviderUsageSnapshot {
   sourceLabel: string;
   updatedAt: string;
   error: string | null;
+  /** True when this is last-known-good data retained after a transient fetch failure. */
+  stale?: boolean;
+  /** Sanitized reason for the failed refresh, when stale data is retained. */
+  staleReason?: string | null;
   pace: PaceSnapshot | null;
   accountOrganization: string | null;
   trayStatusLabel: string | null;
@@ -842,6 +846,16 @@ export interface ProviderLocalUsageSummary {
   sevenDayTopModel: string | null;
   thirtyDayTopModel: string | null;
   estimateNote: string;
+  /** Whether the requested local history window was fully inspected. */
+  historyCoverageEstablished?: boolean;
+  /** True only when a completed scan verified that the period had no usage. */
+  knownZero?: boolean;
+  /** False when one or more model prices used a fallback/are unknown. */
+  pricingComplete?: boolean;
+  /** Model IDs whose pricing was not resolved canonically. */
+  unpricedModels?: string[];
+  /** RFC3339 time at which this local summary was measured. */
+  measuredAt?: string;
 }
 
 export interface ProviderChartData {

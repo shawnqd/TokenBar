@@ -1,9 +1,8 @@
-import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type AnimationEvent, type MouseEvent as ReactMouseEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type AnimationEvent, type MouseEvent as ReactMouseEvent } from "react";
 import { listen } from "@tauri-apps/api/event";
 import type {
   BootstrapState,
   MenuBarDisplayMode,
-  ProviderUsageSnapshot,
 } from "../types/bridge";
 import type { ProviderSnapshot, UsageStoreKey } from "../core";
 import {
@@ -13,29 +12,22 @@ import {
 } from "../lib/tauri";
 import { useDispatchAction } from "../core/useCoreBridge";
 import { useSettings } from "../hooks/useSettings";
-import { useLocale } from "../hooks/useLocale";
 import { useTrayPanelLayout } from "../hooks/useTrayPanelLayout";
 import { useOutputSpeedSnapshot } from "../hooks/useOutputSpeedSnapshot";
-import TrayCard from "./tray/TrayCard";
 import { MenuEmpty } from "../components/MenuSurface";
-import ProviderGrid, { prioritizeProviders } from "../components/ProviderGrid";
 import { orderProviderSnapshots } from "../lib/providerOrder";
 import { quotaDisplayContext } from "../lib/quotaDisplay";
-import { outputSpeedProviderId } from "../lib/outputSpeed";
-import {
-  coreSnapshotToBridge,
-  hydrateProviderSlots,
-  orderedEnabledProviderSlots,
-} from "../lib/trayProviders";
+import { coreSnapshotToBridge, resolveTrayProviderView } from "../lib/trayProviders";
 import {
   trayCoreStore,
   useTrayCoreRecords,
   useTrayCoreState,
   useTrayRefreshAllCommand,
 } from "./tray/trayCoreStore";
+import TrayPanelContent from "./tray/TrayPanelContent";
+import TrayPanelFooter from "./tray/TrayPanelFooter";
 
 const TRAY_INITIAL_REFRESH_DELAY_MS = 250;
-const DENSE_OVERVIEW_THRESHOLD = 32;
 /** Matches shell::flyout_window's retained-window lifecycle events. */
 const TRAY_PANEL_REVEALED_EVENT = "tray-panel-revealed";
 const TRAY_PANEL_CLOSING_EVENT = "tray-panel-closing";
@@ -45,26 +37,7 @@ const TRAY_PANEL_FROST_EVENT = "tray-panel-frost";
 /** The eight resize directions, matching shell::flyout_window::begin_resize. */
 const RESIZE_DIRECTIONS = ["n", "s", "e", "w", "ne", "nw", "se", "sw"] as const;
 
-/** Stroke-width / cap / join shared by every footer action glyph. */
-const footerIconProps = {
-  width: 12,
-  height: 12,
-  viewBox: "0 0 24 24",
-  fill: "none",
-  stroke: "currentColor",
-  strokeWidth: 1.85,
-  strokeLinecap: "round" as const,
-  strokeLinejoin: "round" as const,
-  "aria-hidden": true,
-};
-const RefreshIcon = () => (
-  <svg {...footerIconProps}>
-    <path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8" />
-    <path d="M21 3v5h-5" />
-    <path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16" />
-    <path d="M3 21v-5h5" />
-  </svg>
-);
+/* Footer icons now live in TrayPanelFooter.tsx.
 const GearIcon = () => (
   <svg {...footerIconProps}>
     <circle cx="12" cy="12" r="3" />
@@ -77,12 +50,13 @@ const PowerIcon = () => (
     <line x1="12" y1="2" x2="12" y2="12" />
   </svg>
 );
+*/
 
 /**
  * Tray popover surface — native 328 DIP flyout with three density tiers
  * (overview obeys the setting; a single provider's detail view is always
  * detailed). The card stack is driven by TrayCard (the unified modular port
- * of design/density-preview.html); the footer holds the four actions as
+ * of design/density-preview.html); the shared footer holds the three actions as
  * stroke-icon rows.
  *
  * Data comes from the unified core read model (trayCoreStore), never from
@@ -93,7 +67,6 @@ const PowerIcon = () => (
  */
 export default function TrayPanel({ state }: { state: BootstrapState }) {
   const { settings } = useSettings(state.settings);
-  const { t } = useLocale();
   const trayState = useTrayCoreState();
   const records = useTrayCoreRecords();
   const outputSpeed = useOutputSpeedSnapshot(
@@ -158,20 +131,6 @@ export default function TrayPanel({ state }: { state: BootstrapState }) {
       state.providers,
     ],
   );
-  const denseProviderSlots = useMemo(
-    () =>
-      orderedEnabledProviderSlots(
-        state.providers,
-        shownProviderIds,
-        sorted,
-        settings.providerOrder,
-      ),
-    [shownProviderIds, settings.providerOrder, sorted, state.providers],
-  );
-  const providersById = useMemo(
-    () => new Map(sorted.map((provider) => [provider.providerId, provider])),
-    [sorted],
-  );
   // Selection is local to the retained flyout WebView.
   const [selectedProviderId, setSelectedProviderId] = useState<string | null>(null);
 
@@ -203,26 +162,30 @@ export default function TrayPanel({ state }: { state: BootstrapState }) {
    *  forever and keep the whole tree on a composited layer — the source of
    *  the blurry-while-scrolling text. --settled drops it (styles.css). */
   const [revealSettled, setRevealSettled] = useState(false);
-  const expectsDenseOverview =
-    selectedProviderId === null &&
-    !gridExpanded &&
-    shownProviderIds.length + 1 > DENSE_OVERVIEW_THRESHOLD;
-  const denseTrayProviders = useMemo(() => {
-    if (!expectsDenseOverview) return sorted;
-    return hydrateProviderSlots(denseProviderSlots, providersById);
-  }, [denseProviderSlots, expectsDenseOverview, providersById, sorted]);
-
-  const visibleProviders = useMemo(() => {
-    if (selectedProviderId === null) {
-      if (sorted.length + 1 > DENSE_OVERVIEW_THRESHOLD && !gridExpanded) {
-        return prioritizeProviders(denseTrayProviders, null).slice(0, 4);
-      }
-      return sorted;
-    }
-    const match = sorted.find((p) => p.providerId === selectedProviderId);
-    if (!match) return sorted;
-    return [match];
-  }, [denseTrayProviders, sorted, selectedProviderId, gridExpanded]);
+  const providerView = useMemo(
+    () =>
+      resolveTrayProviderView(
+        sorted,
+        state.providers,
+        shownProviderIds,
+        settings.providerOrder,
+        selectedProviderId,
+        gridExpanded,
+      ),
+    [
+      gridExpanded,
+      selectedProviderId,
+      settings.providerOrder,
+      shownProviderIds,
+      sorted,
+      state.providers,
+    ],
+  );
+  const {
+    gridProviders,
+    visibleProviders,
+    expectsDenseOverview,
+  } = providerView;
 
   // Detail is an explicit "show me everything" action → always detailed.
   const densityMode: MenuBarDisplayMode =
@@ -451,39 +414,6 @@ export default function TrayPanel({ state }: { state: BootstrapState }) {
     };
   }, []);
 
-  const renderProviderCard = (p: ProviderUsageSnapshot) => {
-    const speedId = outputSpeedProviderId(p.providerId);
-    const coreSnapshot = coreById.get(p.providerId) ?? null;
-    const providerForCard: ProviderSnapshot | ProviderUsageSnapshot =
-      coreSnapshot ?? p;
-    return (
-      <TrayCard
-        key={p.providerId}
-        provider={providerForCard}
-        densityMode={densityMode}
-        display={display}
-        outputSpeed={speedId ? outputSpeed?.[speedId] : null}
-        outputSpeedEnabled={settings.outputSpeedEnabled !== false}
-        localUsagePeriod={settings.localUsagePeriod}
-        showProviderIcon={settings.switcherShowsIcons}
-        chartData={chartByProviderId.get(p.providerId) ?? null}
-        detail={isDetailView}
-        onOpenExternalUsage={(providerId) => {
-          void dispatchAction({
-            type: "openExternalUsage",
-            target: { kind: "provider", providerId },
-          }).catch(() => {});
-        }}
-        onOpenExternalStatus={(providerId) => {
-          void dispatchAction({
-            type: "openExternalStatus",
-            target: { kind: "provider", providerId },
-          }).catch(() => {});
-        }}
-      />
-    );
-  };
-
   useEffect(() => {
     // A density-mode switch (in the overview) must always reveal the top of
     // the card stack, rather than preserving a scroll offset that belonged to
@@ -494,47 +424,6 @@ export default function TrayPanel({ state }: { state: BootstrapState }) {
     );
     if (body) body.scrollTop = 0;
   }, [densityMode, isDetailView]);
-
-  const grid = (
-    <ProviderGrid
-      providers={expectsDenseOverview ? denseTrayProviders : sorted}
-      selectedProviderId={selectedProviderId}
-      display={display}
-      showProviderIcons={settings.switcherShowsIcons}
-      expanded={gridExpanded}
-      onExpandedChange={setGridExpanded}
-      onSelect={handleGridClick}
-      onReorder={handleReorder}
-      onGestureStart={handleGestureStart}
-      onGestureEnd={handleGestureEnd}
-    />
-  );
-
-  const footer = (
-    <footer className="flyout-footer" aria-label={t("PanelMenu")}>
-      <button type="button" className="footer-row" onClick={() => void handleRefresh()}>
-        <span className="footer-row__left">
-          <span className={`footer-row__icon${isRefreshing ? " is-spinning" : ""}`}><RefreshIcon /></span>
-          <span className="footer-row__label">{t("ActionRefresh")}</span>
-        </span>
-        <span className="footer-row__shortcut">Ctrl+R</span>
-      </button>
-      <button type="button" className="footer-row" onClick={openSettings}>
-        <span className="footer-row__left">
-          <span className="footer-row__icon"><GearIcon /></span>
-          <span className="footer-row__label">{t("MenuSettings")}</span>
-        </span>
-        <span className="footer-row__shortcut">Ctrl+,</span>
-      </button>
-      <button type="button" className="footer-row" onClick={requestQuit}>
-        <span className="footer-row__left">
-          <span className="footer-row__icon"><PowerIcon /></span>
-          <span className="footer-row__label">{t("MenuQuit")}</span>
-        </span>
-        <span className="footer-row__shortcut">Ctrl+Q</span>
-      </button>
-    </footer>
-  );
 
   // Native resize affordance. WebView2 covers the whole client HWND, so the
   // card's visible edges never reach WM_NCHITTEST; these strips sit on the
@@ -569,29 +458,6 @@ export default function TrayPanel({ state }: { state: BootstrapState }) {
     </div>
   );
 
-  if (sorted.length === 0) {
-    return (
-      <div
-        ref={revealRef}
-        className={revealClassName}
-        style={{ margin: 0, boxSizing: "border-box" }}
-        onAnimationEnd={handleRevealAnimationEnd}
-      >
-        <div className="tray-panel">
-          {grid}
-          <div className="flyout-body">
-            <MenuEmpty
-              isLoading={isRefreshing && !hasCachedData}
-              onSettings={openSettings}
-            />
-          </div>
-          {footer}
-          {resizeHandles}
-        </div>
-      </div>
-    );
-  }
-
   return (
     <div
       ref={revealRef}
@@ -599,19 +465,53 @@ export default function TrayPanel({ state }: { state: BootstrapState }) {
       style={{ margin: 0, boxSizing: "border-box" }}
       onAnimationEnd={handleRevealAnimationEnd}
     >
-      <div className="tray-panel">
-        {grid}
-        <div className="flyout-body">
-          {visibleProviders.map((p, idx) => (
-            <Fragment key={p.providerId}>
-              {idx > 0 && <div className="provider-stack-divider" />}
-              {renderProviderCard(p)}
-            </Fragment>
-          ))}
-        </div>
-        {footer}
-        {resizeHandles}
-      </div>
+      <TrayPanelContent
+        gridProviders={gridProviders}
+        visibleProviders={visibleProviders}
+        selectedProviderId={selectedProviderId}
+        display={display}
+        densityMode={densityMode}
+        showProviderIcons={settings.switcherShowsIcons}
+        expanded={gridExpanded}
+        onExpandedChange={setGridExpanded}
+        outputSpeed={outputSpeed}
+        outputSpeedEnabled={settings.outputSpeedEnabled !== false}
+        localUsagePeriod={settings.localUsagePeriod}
+        chartByProviderId={chartByProviderId}
+        coreById={coreById}
+        detail={isDetailView}
+        onSelect={handleGridClick}
+        onReorder={handleReorder}
+        onGestureStart={handleGestureStart}
+        onGestureEnd={handleGestureEnd}
+        onOpenExternalUsage={(providerId) => {
+          void dispatchAction({
+            type: "openExternalUsage",
+            target: { kind: "provider", providerId },
+          }).catch(() => {});
+        }}
+        onOpenExternalStatus={(providerId) => {
+          void dispatchAction({
+            type: "openExternalStatus",
+            target: { kind: "provider", providerId },
+          }).catch(() => {});
+        }}
+        emptyState={
+          <MenuEmpty
+            isLoading={isRefreshing && !hasCachedData}
+            onSettings={openSettings}
+          />
+        }
+        footer={
+          <TrayPanelFooter
+            isRefreshing={isRefreshing}
+            onRefresh={() => void handleRefresh()}
+            onOpenSettings={openSettings}
+            onQuit={requestQuit}
+          />
+        }
+        resizeHandles={resizeHandles}
+      />
     </div>
   );
 }

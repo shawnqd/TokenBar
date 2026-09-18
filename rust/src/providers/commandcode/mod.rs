@@ -359,7 +359,10 @@ mod tests {
     #[test]
     fn command_code_result_missing_credits_object_degraded() {
         let result = result_from_payloads(&json!({}), None);
-        assert!(result.is_ok(), "missing credits object should degrade, not error");
+        assert!(
+            result.is_ok(),
+            "missing credits object should degrade, not error"
+        );
         let fetch_result = result.unwrap();
         assert_eq!(fetch_result.usage.primary.used_percent, 0.0);
     }

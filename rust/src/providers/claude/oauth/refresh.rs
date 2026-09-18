@@ -53,10 +53,7 @@ struct OAuthErrorResponse {
 ///
 /// Transient: any other error (network timeout, 5xx, 400/401 without
 /// `invalid_grant`, 429). These are temporary and should be retried.
-pub(super) fn classify_refresh_error(
-    status: reqwest::StatusCode,
-    body: &str,
-) -> ProviderError {
+pub(super) fn classify_refresh_error(status: reqwest::StatusCode, body: &str) -> ProviderError {
     let status_code = status.as_u16();
     let oauth_err: Option<OAuthErrorResponse> = serde_json::from_str(body).ok();
 
@@ -167,8 +164,8 @@ pub(super) async fn refresh_access_token(
 
 #[cfg(test)]
 mod tests {
-    use super::classify_refresh_error;
     use super::RefreshTokenResponse;
+    use super::classify_refresh_error;
     use reqwest::StatusCode;
 
     #[test]
@@ -260,10 +257,7 @@ mod tests {
 
     #[test]
     fn classifies_invalid_grant_case_insensitive() {
-        let err = classify_refresh_error(
-            StatusCode::BAD_REQUEST,
-            r#"{"error":"Invalid_Grant"}"#,
-        );
+        let err = classify_refresh_error(StatusCode::BAD_REQUEST, r#"{"error":"Invalid_Grant"}"#);
         let msg = err.to_string();
         assert!(msg.contains("terminal"), "terminal error: {msg}");
     }

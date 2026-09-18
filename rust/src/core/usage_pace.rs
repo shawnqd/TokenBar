@@ -307,7 +307,12 @@ mod tests {
     #[test]
     fn speed_multiplier_reports_real_headroom() {
         let now = Utc::now();
-        let window = RateWindow::with_details(25.0, Some(10080), Some(now + Duration::days(3) + Duration::hours(12)), None);
+        let window = RateWindow::with_details(
+            25.0,
+            Some(10080),
+            Some(now + Duration::days(3) + Duration::hours(12)),
+            None,
+        );
         let pace = UsagePace::weekly(&window, Some(now), 10080).expect("pace");
         let multiplier = pace.speed_multiplier_to_reset.expect("headroom");
         assert!(
@@ -321,7 +326,8 @@ mod tests {
     #[test]
     fn speed_multiplier_is_absent_when_nothing_remains() {
         let now = Utc::now();
-        let window = RateWindow::with_details(100.0, Some(10080), Some(now + Duration::days(3)), None);
+        let window =
+            RateWindow::with_details(100.0, Some(10080), Some(now + Duration::days(3)), None);
         let pace = UsagePace::weekly(&window, Some(now), 10080).expect("pace");
         assert_eq!(pace.speed_multiplier_to_reset, None);
     }
@@ -331,7 +337,8 @@ mod tests {
     #[test]
     fn speed_multiplier_is_absent_before_any_usage() {
         let now = Utc::now();
-        let window = RateWindow::with_details(0.0, Some(10080), Some(now + Duration::days(3)), None);
+        let window =
+            RateWindow::with_details(0.0, Some(10080), Some(now + Duration::days(3)), None);
         let pace = UsagePace::weekly(&window, Some(now), 10080).expect("pace");
         assert_eq!(pace.speed_multiplier_to_reset, None);
     }

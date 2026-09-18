@@ -385,7 +385,16 @@ impl OpenCodeGoProvider {
 
     fn parse_window_object(obj: &str) -> Option<WindowCandidate> {
         // Accept both JSON and loose JS object literals.
-        let used = Self::object_number(obj, &["usagePercent", "usedPercent", "percentUsed", "usage_percent", "used_percent"]);
+        let used = Self::object_number(
+            obj,
+            &[
+                "usagePercent",
+                "usedPercent",
+                "percentUsed",
+                "usage_percent",
+                "used_percent",
+            ],
+        );
         let remaining = Self::object_number(
             obj,
             &[
@@ -435,9 +444,8 @@ impl OpenCodeGoProvider {
         for key in keys {
             // Key as whole word: no leading letter/underscore so we never match
             // inside remaining_percent when looking for a bare percent key.
-            let pattern = format!(
-                r#"(?i)(?:^|[{{,\s])"?{key}"?\s*[:=]\s*"?([0-9]+(?:\.[0-9]+)?)"?"#
-            );
+            let pattern =
+                format!(r#"(?i)(?:^|[{{,\s])"?{key}"?\s*[:=]\s*"?([0-9]+(?:\.[0-9]+)?)"?"#);
             if let Some(v) = Self::extract_number(&pattern, obj) {
                 return Some(v);
             }

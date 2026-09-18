@@ -245,7 +245,14 @@ async fn run_claude_pty_probe(
             .with_script_char_delay(probe.script_char_delay_secs)
             .with_script_line_delay(probe.script_line_delay_secs)
             .with_working_directory(working_directory)
-            .with_extra_args(vec!["--setting-sources".to_string(), "user".to_string()]);
+            .with_extra_args(vec![
+                "--setting-sources".to_string(),
+                "user".to_string(),
+                "--allowed-tools".to_string(),
+                String::new(),
+                "--settings".to_string(),
+                r#"{"remoteControlAtStartup":false}"#.to_string(),
+            ]);
         if let Some(idle) = probe.idle_timeout_secs {
             options = options.with_idle_timeout(idle);
         }

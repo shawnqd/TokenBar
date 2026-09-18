@@ -338,6 +338,11 @@ function resolveDisplayState(
 ): DisplayState {
   if (model.displayState) return model.displayState;
 
+  // A transport failure can retain the last successful window so the tray
+  // does not flicker to an invented 0%. The backend marks that projection
+  // explicitly; do not let its old timestamp make it look fresh.
+  if (model.stale) return "stale";
+
   const error = model.error?.trim() ?? "";
   if (error) {
     if (/not configured|not enabled|no provider configured/i.test(error)) {

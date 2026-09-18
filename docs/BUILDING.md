@@ -19,6 +19,12 @@ pnpm --dir apps/desktop-tauri install
 pnpm --dir apps/desktop-tauri tauri:dev
 ```
 
+Development uses `src-tauri/tauri.dev.conf.json` with the isolated
+`com.codexbar.desktop.dev` identifier and WebView profile. The installed
+stable build keeps `com.codexbar.desktop`, so both can run during local
+verification without sharing single-instance state. Release installers use
+the stable configuration only.
+
 The helper scripts in `scripts/` can be used when a repeatable Windows launch
 or a CLI-only workflow is preferred.
 

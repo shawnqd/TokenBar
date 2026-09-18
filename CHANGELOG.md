@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.57.3 — 2026-09-18
+
+- Separated the development and stable Windows app identities so a running
+  development build no longer intercepts stable startup or upgrades.
+- Kept the stable installer identity and install directory unchanged so
+  existing installations upgrade in place.
+
 ## 0.57.1
 
 - Localized the Windows installer flow.

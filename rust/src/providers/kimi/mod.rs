@@ -34,9 +34,49 @@ const KIMI_CODE_CREDENTIAL_MIN_TTL_SECS: f64 = 60.0;
 
 #[derive(Debug, Deserialize)]
 struct KimiCodeApiUsageResponse {
-    usage: KimiUsageDetail,
+    /// Legacy count-based weekly usage. Current Code API responses may omit it
+    /// in favor of `usages` ratio pools.
+    #[serde(default)]
+    usage: Option<KimiUsageDetail>,
+    /// Current Code API ratio pools. `limit_month_code` is intentionally not
+    /// modeled: the displayed monthly lane is the shared total pool.
+    #[serde(default)]
+    usages: Option<KimiCodeUsagePools>,
     #[serde(default)]
     limits: Option<Vec<KimiRateLimit>>,
+}
+
+#[derive(Debug, Deserialize)]
+struct KimiCodeUsagePools {
+    #[serde(rename = "limit_5h")]
+    session: Option<KimiRatioPool>,
+    #[serde(rename = "limit_7d")]
+    weekly: Option<KimiRatioPool>,
+    #[serde(rename = "limit_month_total")]
+    monthly: Option<KimiRatioPool>,
+}
+
+#[derive(Debug, Deserialize)]
+struct KimiRatioPool {
+    #[serde(default)]
+    used_ratio: Option<serde_json::Value>,
+    #[serde(default)]
+    reset_time: Option<serde_json::Value>,
+}
+
+impl KimiRatioPool {
+    fn rate_window(&self, window_minutes: u32) -> Option<RateWindow> {
+        let ratio = value_as_f64(self.used_ratio.as_ref())?;
+        if !ratio.is_finite() || ratio < 0.0 {
+            return None;
+        }
+        Some(RateWindow::with_details(
+            ratio * 100.0,
+            Some(window_minutes),
+            self.reset_time.as_ref().and_then(parse_kimi_timestamp),
+            None,
+        ))
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -365,13 +405,63 @@ impl KimiProvider {
     fn snapshot_from_code_api_response(
         response: KimiCodeApiUsageResponse,
     ) -> Result<UsageSnapshot, ProviderError> {
-        let primary = Self::rate_window_from_usage_detail(&response.usage, None)?;
-        let mut usage = UsageSnapshot::new(primary).with_login_method("Code API");
+        const SESSION_WINDOW_MINUTES: u32 = 5 * 60;
+        const WEEKLY_WINDOW_MINUTES: u32 = 7 * 24 * 60;
+        const MONTHLY_WINDOW_MINUTES: u32 = 30 * 24 * 60;
 
-        if let Some(limit) = response.limits.unwrap_or_default().into_iter().next() {
-            let window_minutes = limit.window.as_ref().and_then(kimi_window_minutes);
-            let rate_limit = Self::rate_window_from_usage_detail(&limit.detail, window_minutes)?;
-            usage = usage.with_secondary(rate_limit);
+        let ratio_weekly = response
+            .usages
+            .as_ref()
+            .and_then(|pools| pools.weekly.as_ref())
+            .and_then(|pool| pool.rate_window(WEEKLY_WINDOW_MINUTES));
+        let ratio_session = response
+            .usages
+            .as_ref()
+            .and_then(|pools| pools.session.as_ref())
+            .and_then(|pool| pool.rate_window(SESSION_WINDOW_MINUTES));
+        let monthly = response
+            .usages
+            .as_ref()
+            .and_then(|pools| pools.monthly.as_ref())
+            .and_then(|pool| pool.rate_window(MONTHLY_WINDOW_MINUTES));
+
+        // Ratio pools are authoritative when valid. Unsupported or malformed
+        // ratio values fall back to the legacy count fields instead of
+        // suppressing a usable weekly/session reading.
+        let legacy_weekly = response
+            .usage
+            .as_ref()
+            .map(|detail| Self::rate_window_from_usage_detail(detail, Some(WEEKLY_WINDOW_MINUTES)))
+            .transpose()?;
+        let legacy_session = response
+            .limits
+            .as_deref()
+            .and_then(|limits| limits.first())
+            .map(|limit| {
+                let window_minutes = limit.window.as_ref().and_then(kimi_window_minutes);
+                Self::rate_window_from_usage_detail(&limit.detail, window_minutes)
+            })
+            .transpose()?;
+
+        let primary = ratio_weekly
+            .or(legacy_weekly)
+            .unwrap_or_else(|| RateWindow::informational("No weekly quota"));
+        let secondary = ratio_session.or(legacy_session);
+        let mut usage = UsageSnapshot::new(primary).with_login_method("Code API");
+        if let Some(session) = secondary {
+            usage = usage.with_secondary(session);
+        }
+        if let Some(monthly) = monthly {
+            usage = usage.with_extra_rate_window("kimi-monthly", "Total usage", monthly);
+        }
+
+        if usage.primary.is_informational
+            && usage.secondary.is_none()
+            && usage.extra_rate_windows.is_empty()
+        {
+            return Err(ProviderError::Parse(
+                "Kimi Code API response contains no supported quota windows".to_string(),
+            ));
         }
 
         Ok(usage)
@@ -381,7 +471,11 @@ impl KimiProvider {
         response: KimiWebUsageResponse,
         subscription: Option<KimiSubscriptionStatsResponse>,
     ) -> Result<UsageSnapshot, ProviderError> {
-        let coding = match response.usages.into_iter().find(|usage| usage.scope == "FEATURE_CODING") {
+        let coding = match response
+            .usages
+            .into_iter()
+            .find(|usage| usage.scope == "FEATURE_CODING")
+        {
             Some(coding) => coding,
             None => {
                 tracing::warn!("Kimi FEATURE_CODING usage missing; returning empty snapshot");
@@ -443,7 +537,12 @@ impl KimiProvider {
             None => {
                 tracing::warn!("Kimi usage limit missing or zero; degrading to 0.0");
                 let reset_at = detail.reset_time.as_ref().and_then(parse_kimi_timestamp);
-                return Ok(RateWindow::with_details(0.0, window_minutes, reset_at, None));
+                return Ok(RateWindow::with_details(
+                    0.0,
+                    window_minutes,
+                    reset_at,
+                    None,
+                ));
             }
         };
         let used = match (
@@ -943,6 +1042,94 @@ mod tests {
     }
 
     #[test]
+    fn parses_code_api_ratio_pools_with_shared_monthly_total() {
+        let response: KimiCodeApiUsageResponse = serde_json::from_value(json!({
+            "usages": {
+                "limit_7d": {
+                    "used_ratio": 0.125,
+                    "reset_time": "2026-09-20T00:00:00Z"
+                },
+                "limit_5h": {
+                    "used_ratio": 0.625,
+                    "reset_time": "2026-09-17T05:00:00Z"
+                },
+                "limit_month_total": {
+                    "used_ratio": 0.42,
+                    "reset_time": "2026-10-01T00:00:00Z"
+                },
+                "limit_month_code": {
+                    "used_ratio": 0.99
+                }
+            }
+        }))
+        .unwrap();
+
+        let snapshot = KimiProvider::snapshot_from_code_api_response(response).unwrap();
+        assert!((snapshot.primary.used_percent - 12.5).abs() < f64::EPSILON);
+        assert_eq!(snapshot.primary.window_minutes, Some(10080));
+
+        let session = snapshot.secondary.expect("5h ratio pool");
+        assert!((session.used_percent - 62.5).abs() < f64::EPSILON);
+        assert_eq!(session.window_minutes, Some(300));
+
+        let monthly = snapshot
+            .extra_rate_windows
+            .iter()
+            .find(|window| window.id == "kimi-monthly")
+            .expect("shared monthly ratio pool");
+        assert_eq!(monthly.title, "Total usage");
+        assert!((monthly.window.used_percent - 42.0).abs() < f64::EPSILON);
+        assert_eq!(monthly.window.window_minutes, Some(30 * 24 * 60));
+        assert_eq!(
+            monthly.window.resets_at,
+            Some("2026-10-01T00:00:00Z".parse().unwrap())
+        );
+    }
+
+    #[test]
+    fn code_api_ratio_pools_preserve_missing_weekly_state() {
+        let response: KimiCodeApiUsageResponse = serde_json::from_value(json!({
+            "usages": {
+                "limit_5h": { "used_ratio": 0.10 },
+                "limit_month_total": { "used_ratio": 0.20 }
+            }
+        }))
+        .unwrap();
+
+        let snapshot = KimiProvider::snapshot_from_code_api_response(response).unwrap();
+        assert!(snapshot.primary.is_informational);
+        assert_eq!(
+            snapshot.primary.reset_description.as_deref(),
+            Some("No weekly quota")
+        );
+        assert_eq!(snapshot.secondary.unwrap().used_percent, 10.0);
+        assert_eq!(snapshot.extra_rate_windows.len(), 1);
+    }
+
+    #[test]
+    fn invalid_code_api_ratio_falls_back_to_legacy_counts() {
+        let response: KimiCodeApiUsageResponse = serde_json::from_value(json!({
+            "usage": { "limit": "100", "used": "25" },
+            "usages": { "limit_7d": { "used_ratio": -0.5 } }
+        }))
+        .unwrap();
+
+        let snapshot = KimiProvider::snapshot_from_code_api_response(response).unwrap();
+        assert_eq!(snapshot.primary.used_percent, 25.0);
+        assert_eq!(
+            snapshot.primary.reset_description.as_deref(),
+            Some("25/100 credits")
+        );
+    }
+
+    #[test]
+    fn empty_code_api_response_is_not_treated_as_zero_usage() {
+        let response: KimiCodeApiUsageResponse = serde_json::from_value(json!({})).unwrap();
+        let error = KimiProvider::snapshot_from_code_api_response(response).unwrap_err();
+        assert!(error.to_string().contains("no supported quota windows"));
+    }
+
+    #[test]
     fn parses_web_usage_with_subscription_windows() {
         let usage: KimiWebUsageResponse = serde_json::from_value(json!({
             "usages": [{
@@ -1094,7 +1281,9 @@ mod tests {
     fn rate_window_from_usage_detail_missing_limit_degraded() {
         let detail = KimiUsageDetail {
             limit: None,
-            used: Some(serde_json::Value::Number(serde_json::Number::from_f64(10.0).unwrap())),
+            used: Some(serde_json::Value::Number(
+                serde_json::Number::from_f64(10.0).unwrap(),
+            )),
             remaining: None,
             reset_time: None,
         };
@@ -1107,24 +1296,30 @@ mod tests {
     #[test]
     fn rate_window_from_usage_detail_missing_used_and_remaining_degraded() {
         let detail = KimiUsageDetail {
-            limit: Some(serde_json::Value::Number(serde_json::Number::from_f64(100.0).unwrap())),
+            limit: Some(serde_json::Value::Number(
+                serde_json::Number::from_f64(100.0).unwrap(),
+            )),
             used: None,
             remaining: None,
             reset_time: None,
         };
         let result = KimiProvider::rate_window_from_usage_detail(&detail, Some(10080));
-        assert!(result.is_ok(), "missing used/remaining should degrade, not error");
+        assert!(
+            result.is_ok(),
+            "missing used/remaining should degrade, not error"
+        );
         let window = result.unwrap();
         assert_eq!(window.used_percent, 0.0);
     }
 
     #[test]
     fn snapshot_from_web_usage_response_missing_feature_coding_degraded() {
-        let response = KimiWebUsageResponse {
-            usages: vec![],
-        };
+        let response = KimiWebUsageResponse { usages: vec![] };
         let result = KimiProvider::snapshot_from_web_usage_response(response, None);
-        assert!(result.is_ok(), "missing FEATURE_CODING should degrade, not error");
+        assert!(
+            result.is_ok(),
+            "missing FEATURE_CODING should degrade, not error"
+        );
         let snapshot = result.unwrap();
         assert_eq!(snapshot.primary.used_percent, 0.0);
         assert_eq!(snapshot.login_method.as_deref(), Some("Kimi"));

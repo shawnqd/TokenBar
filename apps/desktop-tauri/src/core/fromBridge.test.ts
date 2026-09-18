@@ -78,6 +78,19 @@ describe("fromBridge", () => {
     expect(fromBridge(FIXTURE_BRIDGES.stale, NOW).displayState).toBe("stale");
   });
 
+  it("keeps explicitly retained last-good data stale even with a recent old timestamp", () => {
+    const snapshot = fromBridge(
+      {
+        ...FIXTURE_BRIDGES.kimiSessionWeekly,
+        updatedAt: new Date(NOW).toISOString(),
+        stale: true,
+        staleReason: "Timeout",
+      },
+      NOW,
+    );
+    expect(snapshot.displayState).toBe("stale");
+  });
+
   it("maps auth failures to authRequired without a provider-name switch", () => {
     const snapshot = fromBridge(
       {

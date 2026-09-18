@@ -221,14 +221,14 @@ impl ClaudeOAuthFetcher {
             Err(err) => {
                 // Terminal errors (invalid_grant) are propagated immediately.
                 // Transient errors fall back to the original credentials.
-                let is_terminal = err
-                    .to_string()
-                    .contains("terminal");
+                let is_terminal = err.to_string().contains("terminal");
                 if is_terminal {
                     tracing::warn!("Claude OAuth token refresh failed (terminal): {err}");
                     return Err(err);
                 }
-                tracing::debug!("Claude OAuth token refresh failed (transient, using stale credentials): {err}");
+                tracing::debug!(
+                    "Claude OAuth token refresh failed (transient, using stale credentials): {err}"
+                );
                 Ok(credentials)
             }
         }
@@ -376,7 +376,7 @@ impl ClaudeOAuthFetcher {
             .five_hour
             .as_ref()
             .and_then(|w| Self::to_rate_window(w, Some(300)))
-            .unwrap_or_else(|| RateWindow::new(0.0));
+            .unwrap_or_else(RateWindow::no_active_session);
 
         let mut usage = UsageSnapshot::new(primary);
 

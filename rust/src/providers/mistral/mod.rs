@@ -170,11 +170,11 @@ impl MistralProvider {
         let billing: BillingResponse = serde_json::from_str(&body)
             .map_err(|e| ProviderError::Parse(format!("Failed to parse Mistral usage: {e}")))?;
 
-        let summary = Self::summarize_billing(billing);
+        let summary = Self::summarize_billing(billing)?;
         Ok(Self::build_result(summary))
     }
 
-    fn summarize_billing(billing: BillingResponse) -> MistralUsageSummary {
+    fn summarize_billing(billing: BillingResponse) -> Result<MistralUsageSummary, ProviderError> {
         let prices = Self::build_price_index(billing.prices.unwrap_or_default());
         let mut total_cost = 0.0;
         let mut total_input_tokens = 0;
@@ -185,11 +185,11 @@ impl MistralProvider {
         if let Some(models) = billing.completion.and_then(|c| c.models) {
             model_count += models.len();
             for data in models.values() {
-                let (input, output, cached, cost) = Self::aggregate_model(data, &prices);
-                total_input_tokens += input;
-                total_output_tokens += output;
-                total_cached_tokens += cached;
-                total_cost += cost;
+                let (input, output, cached, cost) = Self::aggregate_model(data, &prices, true)?;
+                total_input_tokens = checked_add_tokens(total_input_tokens, input)?;
+                total_output_tokens = checked_add_tokens(total_output_tokens, output)?;
+                total_cached_tokens = checked_add_tokens(total_cached_tokens, cached)?;
+                add_finite_cost(&mut total_cost, cost);
             }
         }
 
@@ -199,17 +199,26 @@ impl MistralProvider {
         {
             if let Some(models) = category.models {
                 for data in models.values() {
-                    total_cost += Self::aggregate_model(data, &prices).3;
+                    let cost = Self::aggregate_model(data, &prices, false)?.3;
+                    add_finite_cost(&mut total_cost, cost);
                 }
             }
         }
 
         if let Some(libraries) = billing.libraries_api {
-            for category in [libraries.pages, libraries.tokens].into_iter().flatten() {
-                if let Some(models) = category.models {
-                    for data in models.values() {
-                        total_cost += Self::aggregate_model(data, &prices).3;
-                    }
+            if let Some(models) = libraries.pages.and_then(|category| category.models) {
+                for data in models.values() {
+                    let cost = Self::aggregate_model(data, &prices, false)?.3;
+                    add_finite_cost(&mut total_cost, cost);
+                }
+            }
+            if let Some(models) = libraries.tokens.and_then(|category| category.models) {
+                for data in models.values() {
+                    let (input, output, cached, cost) = Self::aggregate_model(data, &prices, true)?;
+                    total_input_tokens = checked_add_tokens(total_input_tokens, input)?;
+                    total_output_tokens = checked_add_tokens(total_output_tokens, output)?;
+                    total_cached_tokens = checked_add_tokens(total_cached_tokens, cached)?;
+                    add_finite_cost(&mut total_cost, cost);
                 }
             }
         }
@@ -220,14 +229,17 @@ impl MistralProvider {
                 .flatten()
             {
                 for data in models.values() {
-                    total_cost += Self::aggregate_model(data, &prices).3;
+                    let cost = Self::aggregate_model(data, &prices, false)?.3;
+                    add_finite_cost(&mut total_cost, cost);
                 }
             }
         }
 
+        checked_total_tokens(total_input_tokens, total_cached_tokens, total_output_tokens)?;
+
         let _ = billing.start_date;
 
-        MistralUsageSummary {
+        Ok(MistralUsageSummary {
             total_cost,
             currency: billing.currency.unwrap_or_else(|| "EUR".to_string()),
             currency_symbol: billing.currency_symbol.unwrap_or_else(|| "€".to_string()),
@@ -236,7 +248,7 @@ impl MistralProvider {
             total_cached_tokens,
             model_count,
             end_date: billing.end_date.as_deref().and_then(Self::parse_date),
-        }
+        })
     }
 
     fn build_result(summary: MistralUsageSummary) -> ProviderFetchResult {
@@ -292,36 +304,40 @@ impl MistralProvider {
     fn aggregate_model(
         data: &ModelUsageData,
         prices: &HashMap<String, f64>,
-    ) -> (i64, i64, i64, f64) {
-        let (input, input_cost) = Self::aggregate_entries(data.input.as_deref(), prices);
-        let (output, output_cost) = Self::aggregate_entries(data.output.as_deref(), prices);
-        let (cached, cached_cost) = Self::aggregate_entries(data.cached.as_deref(), prices);
-        (
-            input,
-            output,
-            cached,
-            input_cost + output_cost + cached_cost,
-        )
+        count_tokens: bool,
+    ) -> Result<(i64, i64, i64, f64), ProviderError> {
+        let (input, input_cost) =
+            Self::aggregate_entries(data.input.as_deref(), prices, count_tokens)?;
+        let (output, output_cost) =
+            Self::aggregate_entries(data.output.as_deref(), prices, count_tokens)?;
+        let (cached, cached_cost) =
+            Self::aggregate_entries(data.cached.as_deref(), prices, count_tokens)?;
+        let mut cost = 0.0;
+        add_finite_cost(&mut cost, input_cost);
+        add_finite_cost(&mut cost, output_cost);
+        add_finite_cost(&mut cost, cached_cost);
+        Ok((input, output, cached, cost))
     }
 
     fn aggregate_entries(
         entries: Option<&[UsageEntry]>,
         prices: &HashMap<String, f64>,
-    ) -> (i64, f64) {
+        count_tokens: bool,
+    ) -> Result<(i64, f64), ProviderError> {
         let mut tokens = 0;
         let mut cost = 0.0;
         for entry in entries.unwrap_or_default() {
             let paid = entry.value_paid.or(entry.value).unwrap_or(0);
-            tokens += paid;
+            if count_tokens {
+                tokens = checked_add_tokens(tokens, paid)?;
+            }
             if let (Some(metric), Some(group)) = (&entry.billing_metric, &entry.billing_group) {
                 let entry_cost =
                     (paid as f64) * prices.get(&format!("{metric}::{group}")).unwrap_or(&0.0);
-                if entry_cost.is_finite() {
-                    cost += entry_cost;
-                }
+                add_finite_cost(&mut cost, entry_cost);
             }
         }
-        (tokens, cost)
+        Ok((tokens, cost))
     }
 
     fn parse_date(value: &str) -> Option<DateTime<Utc>> {
@@ -334,6 +350,28 @@ impl MistralProvider {
                     .and_then(|date| date.and_hms_opt(0, 0, 0))
                     .map(|naive| Utc.from_utc_datetime(&naive))
             })
+    }
+}
+
+fn checked_add_tokens(total: i64, value: i64) -> Result<i64, ProviderError> {
+    total.checked_add(value).ok_or_else(|| {
+        ProviderError::Parse("Mistral billing token count exceeds supported range".to_string())
+    })
+}
+
+fn checked_total_tokens(input: i64, cached: i64, output: i64) -> Result<i64, ProviderError> {
+    let mut lanes = [input, cached, output];
+    lanes.sort_unstable();
+    checked_add_tokens(checked_add_tokens(lanes[0], lanes[2])?, lanes[1])
+}
+
+fn add_finite_cost(total: &mut f64, value: f64) {
+    if !value.is_finite() {
+        return;
+    }
+    let next = *total + value;
+    if next.is_finite() {
+        *total = next;
     }
 }
 
@@ -415,7 +453,7 @@ mod tests {
         }))
         .unwrap();
 
-        let summary = MistralProvider::summarize_billing(billing);
+        let summary = MistralProvider::summarize_billing(billing).unwrap();
         assert!((summary.total_cost - 0.005).abs() < 0.000001);
         assert_eq!(summary.model_count, 1);
 
@@ -461,8 +499,113 @@ mod tests {
         }))
         .unwrap();
 
-        let summary = MistralProvider::summarize_billing(billing);
+        let summary = MistralProvider::summarize_billing(billing).unwrap();
 
         assert_eq!(summary.total_cost, 0.0);
+    }
+
+    #[test]
+    fn includes_library_token_usage_but_not_library_pages_in_token_totals() {
+        let billing: BillingResponse = serde_json::from_value(serde_json::json!({
+            "prices": [],
+            "libraries_api": {
+                "pages": {
+                    "models": {
+                        "pages": { "input": [{ "value": 100 }] }
+                    }
+                },
+                "tokens": {
+                    "models": {
+                        "tokens": {
+                            "input": [{ "value": 7 }],
+                            "cached": [{ "value": 3 }],
+                            "output": [{ "value": 5 }]
+                        }
+                    }
+                }
+            }
+        }))
+        .unwrap();
+
+        let summary = MistralProvider::summarize_billing(billing).unwrap();
+        assert_eq!(summary.total_input_tokens, 7);
+        assert_eq!(summary.total_cached_tokens, 3);
+        assert_eq!(summary.total_output_tokens, 5);
+    }
+
+    #[test]
+    fn preserves_signed_token_lanes_when_the_final_total_is_representable() {
+        let billing: BillingResponse = serde_json::from_value(serde_json::json!({
+            "completion": {
+                "models": {
+                    "fixture": {
+                        "input": [{ "value": 9223372036854775807i64 }],
+                        "cached": [{ "value": -1 }],
+                        "output": [{ "value": 1 }]
+                    }
+                }
+            }
+        }))
+        .unwrap();
+
+        let summary = MistralProvider::summarize_billing(billing).unwrap();
+        assert_eq!(summary.total_input_tokens, i64::MAX);
+        assert_eq!(summary.total_cached_tokens, -1);
+        assert_eq!(summary.total_output_tokens, 1);
+    }
+
+    #[test]
+    fn rejects_token_total_overflow_instead_of_panicking_or_wrapping() {
+        let billing: BillingResponse = serde_json::from_value(serde_json::json!({
+            "completion": {
+                "models": {
+                    "fixture": {
+                        "input": [{ "value": 9223372036854775807i64 }],
+                        "cached": [{ "value": 1 }]
+                    }
+                }
+            }
+        }))
+        .unwrap();
+
+        let error = MistralProvider::summarize_billing(billing).unwrap_err();
+        assert!(error.to_string().contains("token count exceeds"));
+    }
+
+    #[test]
+    fn cost_only_categories_do_not_trigger_token_overflow() {
+        let billing: BillingResponse = serde_json::from_value(serde_json::json!({
+            "ocr": {
+                "models": {
+                    "fixture": { "input": [{ "value": 9223372036854775807i64 }, { "value": 1 }] }
+                }
+            },
+            "completion": {
+                "models": {
+                    "fixture": { "input": [{ "value": 9223372036854775807i64 }] }
+                }
+            }
+        }))
+        .unwrap();
+
+        let summary = MistralProvider::summarize_billing(billing).unwrap();
+        assert_eq!(summary.total_input_tokens, i64::MAX);
+    }
+
+    #[test]
+    fn rejects_same_lane_overflow_without_wrapping() {
+        let billing: BillingResponse = serde_json::from_value(serde_json::json!({
+            "completion": {
+                "models": {
+                    "fixture": {
+                        "input": [{ "value": 9223372036854775807i64 }, { "value": 1 }]
+                    }
+                }
+            }
+        }))
+        .unwrap();
+
+        let error = MistralProvider::summarize_billing(billing).unwrap_err();
+        assert!(error.to_string().contains("token count exceeds"));
     }
 }

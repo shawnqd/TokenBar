@@ -503,7 +503,7 @@ interface LocalUsageLead {
   topModel: string | null;
 }
 
-function resolveLocalUsageLead(
+function resolveLocalUsageGuide(
   period: LocalUsagePeriod,
   summary: ProviderLocalUsageSummary,
 ): LocalUsageLead {
@@ -531,6 +531,25 @@ function resolveLocalUsageLead(
   };
 }
 
+/** Window upgrade rule: when the Settings-chosen window carries no local
+ * usage (empty or zero), the tray widens to the widest window that has real
+ * readings instead of rendering an empty slot. The label follows the window
+ * actually shown, so the rare 7d-empty / 30d-real case reads as the 30d
+ * window it came from. Only a truly empty window upgrades; exact-window
+ * reads stay untouched. */
+function resolveLocalUsageLead(
+  period: LocalUsagePeriod,
+  summary: ProviderLocalUsageSummary,
+): LocalUsageLead {
+  const lead = resolveLocalUsageGuide(period, summary);
+  const has = lead.tokens != null || lead.cost != null;
+  if (has || period === "30d" || period === "today") {
+    return lead;
+  }
+  const wider = resolveLocalUsageGuide("30d", summary);
+  const widerHas = wider.tokens != null || wider.cost != null;
+  return widerHas ? wider : lead;
+}
 /* ── SVG icon set (single open-stroked 24×24 family) ──────────────────── */
 
 const iconCommon = {
@@ -1319,8 +1338,14 @@ export default function TrayCard({
     }));
   }, [views, pairExtras]);
 
-  const localUsage = core.error ? null : chartData?.localUsage ?? null;
+  // Local usage comes from the local log scanner, an independent data source
+  // from the quota fetch. A failed quota read (expired credentials, network)
+  // must not also blank out usage we actually measured: the card shows the real
+  // local reading next to the quota error instead of going silent.
+  const localUsage = chartData?.localUsage ?? null;
   const usageLead = localUsage ? resolveLocalUsageLead(localUsagePeriod, localUsage) : null;
+  // The label that follows the *actually shown* window after an upgrade.
+  const shownPeriodLabel = usageLead?.labelKey ?? null;
   const hasLocalUsageTokens = Boolean(
     hasLocalUsage && usageLead && usageLead.tokens != null && usageLead.tokens > 0,
   );
@@ -1329,6 +1354,11 @@ export default function TrayCard({
   // the card says so instead of silently rendering a header-only shell. The
   // reason text is the shared provider-error localization; unknown text falls
   // through verbatim so a new backend category is never hidden.
+  // G8 honesty: when the quota read failed and no window survived (no hero),
+  // the card says so instead of silently rendering a header-only shell. The
+  // reason text is the shared provider-error localization; unknown text falls
+  // through verbatim, so a new backend category is never hidden. The local
+  // usage row above stays visible regardless — it is measured locally.
   const quotaUnavailableText =
     !hero && core.error != null && core.error.trim() !== ""
       ? localizeProviderError(core.error, t)

@@ -457,8 +457,12 @@ fn default_taskbar_widget_icon_size() -> u8 {
     14
 }
 
-fn default_taskbar_widget_icon_gap_px() -> u8 { 5 }
-fn default_taskbar_widget_value_gap_px() -> u8 { 2 }
+fn default_taskbar_widget_icon_gap_px() -> u8 {
+    5
+}
+fn default_taskbar_widget_value_gap_px() -> u8 {
+    2
+}
 fn default_taskbar_widget_icon_style() -> String {
     "pure".to_string()
 }

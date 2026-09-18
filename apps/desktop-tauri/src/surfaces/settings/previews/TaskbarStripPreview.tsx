@@ -35,6 +35,9 @@ interface Props {
   textAlign: TaskbarWidgetTextAlign;
   iconSize: number;
   iconStyle: TaskbarIconStyle;
+  /** Native `taskbar_widget` spacing, in DIP at 100% scale. */
+  iconGap?: number;
+  valueGap?: number;
   label: string;
 }
 
@@ -133,6 +136,8 @@ export default function TaskbarStripPreview({
   textAlign,
   iconSize,
   iconStyle,
+  iconGap = 5,
+  valueGap = 2,
 }: Props) {
   const normalized = cells ?? (lines ?? []).map((line, idx) =>
     normalizeLegacyLine(line, entries[idx]),
@@ -143,6 +148,12 @@ export default function TaskbarStripPreview({
   const rows = count === 0 ? 1 : Math.max(1, Math.ceil(count / columns));
   const clusterAlign =
     textAlign === "center" ? "center" : textAlign === "right" ? "flex-end" : "flex-start";
+  const resolvedIconGap = Number.isFinite(iconGap)
+    ? Math.max(0, Math.min(12, iconGap))
+    : 5;
+  const resolvedValueGap = Number.isFinite(valueGap)
+    ? Math.max(0, Math.min(8, valueGap))
+    : 2;
 
   return (
     <div className="settings-taskbar-preview taskbar-preview">
@@ -150,7 +161,6 @@ export default function TaskbarStripPreview({
         className={`taskbar-preview__strip${enabled ? "" : " is-disabled"}`}
         data-icon-style={iconStyle}
         style={{
-          width: `${Math.max(96, Math.min(240, width))}px`,
           maxWidth: "100%",
           fontSize: `${fontSize}px`,
           fontWeight,
@@ -158,7 +168,16 @@ export default function TaskbarStripPreview({
           fontFamily,
           gridTemplateColumns: `repeat(${columns}, minmax(0, 1fr))`,
           gridTemplateRows: `repeat(${rows}, 1fr)`,
-        }}
+          columnGap: columns > 1 ? "6px" : "0px",
+          rowGap: "0px",
+          width: `${Math.max(96, Math.min(240, width))}px`,
+          height: "36px",
+          minHeight: "36px",
+          padding: "0 6px",
+          boxSizing: "border-box",
+          ["--taskbar-preview-icon-gap" as string]: `${resolvedIconGap}px`,
+          ["--taskbar-preview-value-gap" as string]: `${resolvedValueGap}px`,
+        } as CSSProperties}
       >
         {visible.map((cell, index) => {
           const column = Math.floor(index / rows) + 1;
@@ -208,7 +227,7 @@ export default function TaskbarStripPreview({
                     (cell.icon?.fallbackGlyph ?? cell.glyph)
                   )}
                 </span>
-                {tag ? <span className="taskbar-preview__tag">{tag} </span> : null}
+                {tag ? <span className="taskbar-preview__tag">{tag}</span> : null}
                 <span className="taskbar-preview__val">{val}</span>
               </span>
             </span>

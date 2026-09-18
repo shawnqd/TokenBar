@@ -7,12 +7,12 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::sync::watch;
 
-// TokenBar currently has no public GitHub release feed. Keep the updater
-// pointed at this repository and disabled until a TokenBar release channel is
-// intentionally published. In particular, never fall back to the historical
-// Win-CodexBar repository, which would install an unrelated application.
+// The updater reads only TokenBar's own GitHub release feed. The feed must be
+// publicly readable because installed copies do not carry a GitHub credential;
+// never fall back to the historical Win-CodexBar repository, which would
+// install an unrelated application.
 const GITHUB_REPO: &str = "shawnqd/TokenBar";
-const UPDATES_ENABLED: bool = false;
+const UPDATES_ENABLED: bool = true;
 const CURRENT_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// State of the update download process
@@ -94,23 +94,43 @@ pub async fn check_for_updates() -> Option<UpdateInfo> {
 /// When `channel` is `UpdateChannel::Beta`, includes pre-release versions.
 /// When `channel` is `UpdateChannel::Stable`, only considers stable releases.
 pub async fn check_for_updates_with_channel(channel: UpdateChannel) -> Option<UpdateInfo> {
+    check_for_updates_with_channel_result(channel)
+        .await
+        .ok()
+        .flatten()
+}
+
+/// Check the TokenBar release feed while preserving the reason a check failed.
+///
+/// The legacy [`check_for_updates_with_channel`] wrapper intentionally keeps
+/// its `Option` return type for callers that only need a yes/no answer. The
+/// desktop command uses this result-bearing variant so private repositories,
+/// rate limits and malformed release responses are visible in the UI instead
+/// of looking like “no update”.
+pub async fn check_for_updates_with_channel_result(
+    channel: UpdateChannel,
+) -> Result<Option<UpdateInfo>, String> {
     if !UPDATES_ENABLED {
-        tracing::debug!(
-            repository = GITHUB_REPO,
-            "automatic updates are disabled until a TokenBar release feed is published"
-        );
-        return None;
+        tracing::debug!(repository = GITHUB_REPO, "automatic updates are disabled");
+        return Ok(None);
     }
 
-    let client = update_client()?;
-    let response = client.get(release_url(channel)).send().await.ok()?;
-    let release = parse_release_response(response, channel).await?;
+    let client = update_client().map_err(|error| format!("无法创建更新网络连接：{error}"))?;
+    let response = client
+        .get(release_url(channel))
+        .send()
+        .await
+        .map_err(|error| format!("无法连接 GitHub 更新源：{error}"))?;
+    let release = parse_release_response_result(response, channel).await?;
+    let Some(release) = release else {
+        return Ok(None);
+    };
     let remote_version = remote_version_from_tag(&release.tag_name);
 
     if is_newer_version(remote_version, CURRENT_VERSION) {
-        select_release_target(&release)
+        Ok(select_release_target(&release))
     } else {
-        None
+        Ok(None)
     }
 }
 
@@ -126,28 +146,48 @@ fn release_url(channel: UpdateChannel) -> String {
     }
 }
 
-fn update_client() -> Option<reqwest::Client> {
+fn update_client() -> Result<reqwest::Client, String> {
     reqwest::Client::builder()
         .user_agent("CodexBar")
         .build()
-        .ok()
+        .map_err(|error| error.to_string())
 }
 
-async fn parse_release_response(
+async fn parse_release_response_result(
     response: reqwest::Response,
     channel: UpdateChannel,
-) -> Option<GitHubRelease> {
+) -> Result<Option<GitHubRelease>, String> {
     if !response.status().is_success() {
-        tracing::debug!("GitHub API returned status: {}", response.status());
-        return None;
+        let status = response.status();
+        tracing::warn!(repository = GITHUB_REPO, %status, "GitHub update feed returned an error");
+        return Err(update_feed_status_error(status));
     }
 
     match channel {
         UpdateChannel::Beta => {
-            let releases: Vec<GitHubRelease> = response.json().await.ok()?;
-            releases.into_iter().find(|r| !r.draft)
+            let releases: Vec<GitHubRelease> = response
+                .json()
+                .await
+                .map_err(|error| format!("GitHub 更新源返回了无法解析的版本列表：{error}"))?;
+            Ok(releases.into_iter().find(|r| !r.draft))
         }
-        UpdateChannel::Stable => response.json().await.ok(),
+        UpdateChannel::Stable => response
+            .json()
+            .await
+            .map(Some)
+            .map_err(|error| format!("GitHub 更新源返回了无法解析的版本信息：{error}")),
+    }
+}
+
+fn update_feed_status_error(status: reqwest::StatusCode) -> String {
+    match status {
+        reqwest::StatusCode::NOT_FOUND => format!(
+            "GitHub 更新源不可用（HTTP 404）。请确认 {GITHUB_REPO} 的 Releases 对已安装用户公开可读。"
+        ),
+        reqwest::StatusCode::UNAUTHORIZED | reqwest::StatusCode::FORBIDDEN => format!(
+            "GitHub 更新源拒绝访问（HTTP {status}）。已安装应用不会携带仓库登录凭据，请使用公开的发布仓库。"
+        ),
+        _ => format!("GitHub 更新源返回 HTTP {status}。"),
     }
 }
 
@@ -700,6 +740,21 @@ mod tests {
         assert!(!is_newer_version("1.0.0", "1.0.0"));
         assert!(!is_newer_version("0.9.0", "1.0.0"));
         assert!(is_newer_version("1.0.0", "0.1.0"));
+    }
+
+    #[test]
+    fn explains_private_release_feed_instead_of_reporting_no_update() {
+        let error = update_feed_status_error(reqwest::StatusCode::NOT_FOUND);
+        assert!(error.contains("HTTP 404"));
+        assert!(error.contains(GITHUB_REPO));
+        assert!(error.contains("公开可读"));
+    }
+
+    #[test]
+    fn explains_authenticated_release_feed_errors_without_requesting_credentials() {
+        let error = update_feed_status_error(reqwest::StatusCode::FORBIDDEN);
+        assert!(error.contains("HTTP 403"));
+        assert!(error.contains("不会携带仓库登录凭据"));
     }
 
     #[test]

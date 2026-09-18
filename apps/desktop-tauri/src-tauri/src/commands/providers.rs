@@ -482,6 +482,7 @@ async fn refresh_provider(
     timeout_recovery_enabled: bool,
 ) {
     let fetch = fetch_provider_snapshot(id, ctx, timeout_recovery_enabled).await;
+    let transient_failure = fetch.transient_failure;
     let snapshot = fetch.snapshot;
 
     let state = app.state::<Mutex<AppState>>();
@@ -506,7 +507,12 @@ async fn refresh_provider(
             // old timeout pause blocking future automatic refreshes.
             guard.timeout_paused_providers.remove(&id);
         }
-        let snapshot = preserve_last_good_transient_failure(&mut guard, id, snapshot);
+        let snapshot = preserve_last_good_transient_failure_with_transport(
+            &mut guard,
+            id,
+            snapshot,
+            transient_failure,
+        );
         upsert_provider_cache(&mut guard.provider_cache, snapshot.clone());
         guard.provider_projection_version = guard.provider_projection_version.wrapping_add(1);
         let projection = VersionedProviderProjection {
@@ -526,12 +532,28 @@ pub(super) fn preserve_last_good_transient_failure(
     id: ProviderId,
     snapshot: ProviderUsageSnapshot,
 ) -> ProviderUsageSnapshot {
+    preserve_last_good_transient_failure_with_transport(guard, id, snapshot, false)
+}
+
+/// Keep the last successful provider snapshot for the first transport failure
+/// so a single flaky request cannot replace a real quota with a synthetic
+/// 0/100 error state. The retained snapshot is explicitly stale and carries
+/// the sanitized failure reason; the second consecutive failure is surfaced so
+/// a persistent outage is never hidden indefinitely.
+pub(super) fn preserve_last_good_transient_failure_with_transport(
+    guard: &mut AppState,
+    id: ProviderId,
+    snapshot: ProviderUsageSnapshot,
+    transport_failure: bool,
+) -> ProviderUsageSnapshot {
     if snapshot.error.is_none() {
         guard.transient_provider_failure_counts.remove(&id);
         return snapshot;
     }
 
-    if id != ProviderId::Claude || !is_transient_claude_auth_error(snapshot.error.as_deref()) {
+    let claude_auth_failure =
+        id == ProviderId::Claude && is_transient_claude_auth_error(snapshot.error.as_deref());
+    if !transport_failure && !claude_auth_failure {
         guard.transient_provider_failure_counts.remove(&id);
         return snapshot;
     }
@@ -539,7 +561,9 @@ pub(super) fn preserve_last_good_transient_failure(
     let Some(previous) = guard
         .provider_cache
         .iter()
-        .find(|cached| cached.provider_id == id.cli_name() && cached.error.is_none())
+        .find(|cached| {
+            cached.provider_id == id.cli_name() && cached.error.is_none() && !cached.stale
+        })
         .cloned()
     else {
         return snapshot;
@@ -553,9 +577,16 @@ pub(super) fn preserve_last_good_transient_failure(
         *count = 1;
         tracing::warn!(
             provider = id.cli_name(),
-            "preserving last good provider snapshot after transient auth failure"
+            transport_failure,
+            "preserving last good provider snapshot after transient failure"
         );
-        previous
+        let mut reused = previous;
+        reused.stale = true;
+        reused.stale_reason = snapshot.error.clone();
+        // Keep the last-good data timestamp, but expose the latest fetch
+        // duration for diagnostics instead of retaining an old measurement.
+        reused.fetch_duration_ms = snapshot.fetch_duration_ms;
+        reused
     } else {
         *count = count.saturating_add(1);
         snapshot
@@ -576,6 +607,7 @@ fn is_transient_claude_auth_error(error: Option<&str>) -> bool {
 struct ProviderFetchAttempt {
     snapshot: ProviderUsageSnapshot,
     timeout_retries_exhausted: bool,
+    transient_failure: bool,
 }
 
 pub(crate) fn provider_error_is_timeout(error: &codexbar::core::ProviderError) -> bool {
@@ -594,6 +626,39 @@ pub(crate) fn provider_error_is_timeout(error: &codexbar::core::ProviderError) -
     }
 }
 
+/// Errors that are safe to bridge as a stale last-known-good snapshot for one
+/// refresh. Authentication/configuration/parse errors stay visible because
+/// retaining old data would make a real configuration problem look healthy.
+pub(crate) fn provider_error_is_transient(error: &codexbar::core::ProviderError) -> bool {
+    match error {
+        codexbar::core::ProviderError::Timeout => true,
+        codexbar::core::ProviderError::Network(error) => {
+            error.is_timeout()
+                || error.is_connect()
+                || error
+                    .status()
+                    .is_some_and(|status| status.is_server_error())
+        }
+        codexbar::core::ProviderError::Other(message) => {
+            let lower = message.to_ascii_lowercase();
+            lower.contains("timeout")
+                || lower.contains("timed out")
+                || lower.contains("connection")
+                || lower.contains("connect:")
+                || lower.contains("dns")
+                || lower.contains("network")
+                || lower.contains("unreachable")
+                || lower.contains("temporarily unavailable")
+                || lower.contains("service unavailable")
+                || lower.contains("bad gateway")
+                || lower.contains("502")
+                || lower.contains("503")
+                || lower.contains("504")
+        }
+        _ => false,
+    }
+}
+
 async fn fetch_provider_snapshot(
     id: ProviderId,
     ctx: FetchContext,
@@ -605,7 +670,7 @@ async fn fetch_provider_snapshot(
 
     let mut retries = 0;
     loop {
-        let (mut snapshot, timed_out) = match tokio::time::timeout(
+        let (mut snapshot, timed_out, transient_failure) = match tokio::time::timeout(
             provider_fetch_timeout(id, &ctx),
             provider.fetch_usage(&ctx),
         )
@@ -614,9 +679,11 @@ async fn fetch_provider_snapshot(
             Ok(Ok(result)) => (
                 ProviderUsageSnapshot::from_fetch_result(id, &metadata, &result),
                 false,
+                false,
             ),
             Ok(Err(error)) => {
                 let timed_out = provider_error_is_timeout(&error);
+                let transient_failure = provider_error_is_transient(&error);
                 (
                     ProviderUsageSnapshot::from_error(
                         id,
@@ -624,10 +691,12 @@ async fn fetch_provider_snapshot(
                         codexbar::logging::safe_error_message(error),
                     ),
                     timed_out,
+                    transient_failure,
                 )
             }
             Err(_) => (
                 ProviderUsageSnapshot::from_error(id, &metadata, "Timeout".to_string()),
+                true,
                 true,
             ),
         };
@@ -655,6 +724,7 @@ async fn fetch_provider_snapshot(
         return ProviderFetchAttempt {
             snapshot,
             timeout_retries_exhausted: timeout_recovery_enabled && timed_out,
+            transient_failure,
         };
     }
 }
@@ -694,7 +764,7 @@ fn finish_provider_refresh(
     Ok(guard
         .provider_cache
         .iter()
-        .filter(|s| s.error.is_some())
+        .filter(|s| s.error.is_some() || s.stale)
         .count())
 }
 
@@ -722,8 +792,29 @@ fn notify_usage_thresholds(
     if let Ok(mut guard) = state.lock() {
         for snapshot in cached {
             if snapshot.error.is_none()
+                && !snapshot.stale
                 && let Some(&provider) = cli_map.get(snapshot.provider_id.as_str())
             {
+                // A Claude OAuth snapshot can legitimately have no active 5h
+                // session while still carrying a real weekly lane. Keep
+                // threshold notifications on that weekly lane, but do not
+                // feed the informational placeholder into session-transition
+                // state or emit a synthetic 0% session event.
+                if snapshot.primary.is_informational {
+                    if provider == ProviderId::Claude
+                        && let Some(weekly) = snapshot
+                            .secondary
+                            .as_ref()
+                            .filter(|window| !window.is_informational)
+                    {
+                        guard.notification_manager.check_and_notify(
+                            provider,
+                            weekly.used_percent,
+                            settings,
+                        );
+                    }
+                    continue;
+                }
                 guard.notification_manager.check_and_notify(
                     provider,
                     snapshot.primary.used_percent,

@@ -26,6 +26,19 @@ export interface TrayProviderSlot {
   displayName: string;
 }
 
+/**
+ * The real flyout and the Settings preview must make the same visibility
+ * decision after sorting.  Keep the dense-overview threshold and the selected
+ * provider rule here instead of reimplementing them in two surfaces.
+ */
+export const DENSE_OVERVIEW_THRESHOLD = 32;
+
+export interface TrayProviderView {
+  gridProviders: ProviderUsageSnapshot[];
+  visibleProviders: ProviderUsageSnapshot[];
+  expectsDenseOverview: boolean;
+}
+
 const EMPTY_RATE_WINDOW: RateWindowSnapshot = {
   usedPercent: 0,
   remainingPercent: 100,
@@ -113,6 +126,51 @@ export function hydrateProviderSlots(
   return slots.map((slot) =>
     providersById.get(slot.id) ?? providerPlaceholder(slot.id, slot.displayName),
   );
+}
+
+export function resolveTrayProviderView(
+  sorted: ProviderUsageSnapshot[],
+  catalog: ProviderCatalogEntry[],
+  enabledProviderIds: string[],
+  providerOrder: string[] | undefined,
+  selectedProviderId: string | null,
+  gridExpanded: boolean,
+): TrayProviderView {
+  const expectsDenseOverview =
+    selectedProviderId === null &&
+    !gridExpanded &&
+    enabledProviderIds.length + 1 > DENSE_OVERVIEW_THRESHOLD;
+  const denseProviderSlots = orderedEnabledProviderSlots(
+    catalog,
+    enabledProviderIds,
+    sorted,
+    providerOrder,
+  );
+  const providersById = new Map(
+    sorted.map((provider) => [provider.providerId, provider]),
+  );
+  const denseProviders = expectsDenseOverview
+    ? hydrateProviderSlots(denseProviderSlots, providersById)
+    : sorted;
+
+  let visibleProviders: ProviderUsageSnapshot[];
+  if (selectedProviderId === null) {
+    visibleProviders =
+      sorted.length + 1 > DENSE_OVERVIEW_THRESHOLD && !gridExpanded
+        ? denseProviders.slice(0, 4)
+        : sorted;
+  } else {
+    const selected = sorted.find(
+      (provider) => provider.providerId === selectedProviderId,
+    );
+    visibleProviders = selected ? [selected] : sorted;
+  }
+
+  return {
+    gridProviders: expectsDenseOverview ? denseProviders : sorted,
+    visibleProviders,
+    expectsDenseOverview,
+  };
 }
 
 /* ── Core → bridge compatibility view ────────────────────────────────── */

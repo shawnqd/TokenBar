@@ -6,6 +6,8 @@ import type { UpdateChannel } from "../../../types/bridge";
 import type { SettingsPageProps } from "./pageTypes";
 import { ConfirmDialog, V5Field, V5Section, V5Seg, V5Toggle } from "./v5Controls";
 import { useAdvancedDiagnostics } from "../AdvancedDiagnostics";
+import { useUpdateState } from "../../../hooks/useUpdateState";
+import UpdateBanner from "../../../components/UpdateBanner";
 
 export default function AdvancedPage({
   settings,
@@ -17,6 +19,17 @@ export default function AdvancedPage({
   const [confirmReset, setConfirmReset] = useState(false);
   const [note, setNote] = useState<string | null>(null);
   const diagnostics = useAdvancedDiagnostics();
+  const updater = useUpdateState();
+  const updateCheckBusy =
+    updater.updateState.status === "checking" ||
+    updater.updateState.status === "downloading";
+  const updateStatus =
+    updater.updateState.status === "checking"
+      ? t("BannerCheckingForUpdates")
+      : updater.updateState.status === "idle" &&
+          updater.updateState.lastCheckedAt !== null
+        ? t("AboutUpToDate")
+        : undefined;
 
   return (
     <>
@@ -40,6 +53,31 @@ export default function AdvancedPage({
             label={t("AutoDownloadUpdates")}
           />
         </V5Field>
+        <V5Field
+          label={t("TrayCheckForUpdates")}
+        >
+          <div className="s5-update-check">
+            <button
+              type="button"
+              className="s5-ghost"
+              onClick={updater.checkNow}
+              disabled={saving || updateCheckBusy}
+            >
+              {updateCheckBusy
+                ? t("BannerCheckingForUpdates")
+                : t("TrayCheckForUpdates")}
+            </button>
+            {updateStatus ? <span className="s5-unit">{updateStatus}</span> : null}
+          </div>
+        </V5Field>
+        <UpdateBanner
+          updateState={updater.updateState}
+          onCheck={updater.checkNow}
+          onDownload={updater.download}
+          onApply={updater.apply}
+          onDismiss={updater.dismiss}
+          onOpenRelease={updater.openRelease}
+        />
         {/* 退出时安装更新：退出链路当前直接退出、未实现安装，
             死开关暂时下架（2026-09-06 复核），实现后恢复。 */}
       </V5Section>

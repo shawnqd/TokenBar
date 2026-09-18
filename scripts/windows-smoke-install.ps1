@@ -6,7 +6,9 @@ param(
 
     [string]$InstallDir = "$env:LOCALAPPDATA\Programs\CodexBar",
 
-    [switch]$LeaveInstalled
+    [switch]$LeaveInstalled,
+
+    [switch]$KeepRunningProcesses
 )
 
 $ErrorActionPreference = "Stop"
@@ -49,8 +51,12 @@ if ($signature.Status -eq "Valid") {
     Write-Step "installer signature: $($signature.Status)"
 }
 
-foreach ($name in @("codexbar", "codexbar-desktop", "codexbar-desktop-tauri")) {
-    Get-Process -Name $name -ErrorAction SilentlyContinue | Stop-Process -Force
+if (-not $KeepRunningProcesses) {
+    foreach ($name in @("codexbar", "codexbar-desktop", "codexbar-desktop-tauri")) {
+        Get-Process -Name $name -ErrorAction SilentlyContinue | Stop-Process -Force
+    }
+} else {
+    Write-Step "preserving running TokenBar processes for upgrade coverage"
 }
 
 $logDir = Join-Path $env:TEMP "codexbar-installer-smoke"

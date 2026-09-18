@@ -326,6 +326,19 @@
   color: var(--flyout-muted);
 }
 
+.settings-v5 .s5-update-check {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  min-height: 30px;
+  min-width: 0;
+}
+
+.settings-v5 .s5-update-check .s5-unit {
+  white-space: nowrap;
+}
+
 .settings-v5 .s5-weight-scale {
   display: flex;
   justify-content: space-between;

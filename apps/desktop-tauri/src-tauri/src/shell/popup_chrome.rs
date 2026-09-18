@@ -18,7 +18,7 @@
 //!
 //! This is the deliberate boundary of the hybrid approach: one window recipe,
 //! two rendering pipelines. Going further (drawing panel content natively)
-//! was evaluated and rejected for now; see AGENT_HANDOFF.md's hybrid notes.
+//! was evaluated and rejected for now; the hybrid boundary stays intentional.
 
 // ── Corner radius ───────────────────────────────────────────────────────────
 

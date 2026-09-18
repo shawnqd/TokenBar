@@ -306,7 +306,31 @@ describe("L3c core wiring — Settings side reads unified core store", () => {
     expect(preview.textContent).not.toContain("99%");
   });
 
-  it("TaskbarStatusPage — strip cells indexed via same projection as TaskbarTab", async () => {
+  it("TaskbarStatusPage — falls back to Core while the native line buffer is empty", async () => {
+    const store = createUsageStore();
+    const snap = fromBridge(
+      providerBridge({
+        providerId: "claude",
+        displayName: "Claude",
+        primary: bridgeRateWindow({ kind: "session", windowMinutes: 300, usedPercent: 44, remainingPercent: 56 }),
+      }),
+    );
+    store.upsert(snap);
+    tauriMocks.getTaskbarPreviewLines.mockResolvedValue([]);
+
+    render(<TaskbarStatusPage settings={settings as unknown as SettingsSnapshot} set={() => {}} saving={false} coreStore={store} />);
+
+    // The native command is empty before the first paint; the Core projection
+    // keeps the settings preview useful during that short bootstrap window.
+    await waitFor(() => {
+      const previews = document.querySelectorAll(".taskbar-preview__val");
+      expect(previews.length).toBeGreaterThan(0);
+    });
+    const vals = Array.from(document.querySelectorAll(".taskbar-preview__val")).map((el) => el.textContent);
+    expect(vals.join(" ")).toContain("44%");
+  });
+
+  it("TaskbarStatusPage — prefers the native line buffer once it has painted", async () => {
     const store = createUsageStore();
     const snap = fromBridge(
       providerBridge({
@@ -317,19 +341,34 @@ describe("L3c core wiring — Settings side reads unified core store", () => {
     );
     store.upsert(snap);
     tauriMocks.getTaskbarPreviewLines.mockResolvedValue([
-      { glyph: "X", color: "#000", text: "WRONG 1%" },
+      {
+        providerId: "claude",
+        window: "session",
+        tag: "5h",
+        value: "99%",
+        state: "ready",
+        reason: null,
+        icon: {
+          providerId: "claude",
+          assetId: "claude",
+          brandColor: "#d97757",
+          fallbackGlyph: null,
+        },
+        glyph: null,
+        color: "#d97757",
+        text: "5h 99%",
+      },
     ]);
 
     render(<TaskbarStatusPage settings={settings as unknown as SettingsSnapshot} set={() => {}} saving={false} coreStore={store} />);
 
-    // The page renders a TaskbarStripPreview with cells — check that preview contains 44% not WRONG
     await waitFor(() => {
       const previews = document.querySelectorAll(".taskbar-preview__val");
       expect(previews.length).toBeGreaterThan(0);
     });
     const vals = Array.from(document.querySelectorAll(".taskbar-preview__val")).map((el) => el.textContent);
-    expect(vals.join(" ")).toContain("44%");
-    expect(vals.join(" ")).not.toContain("WRONG");
+    expect(vals.join(" ")).toContain("99%");
+    expect(vals.join(" ")).not.toContain("44%");
   });
 
   it("ProvidersTab — sidebar metric and selection come from core store (empty store shows loading, not fake)", async () => {

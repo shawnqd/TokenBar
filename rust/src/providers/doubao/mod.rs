@@ -4,14 +4,14 @@
 
 use async_trait::async_trait;
 use chrono::{DateTime, TimeZone, Utc};
-use std::path::PathBuf;
-use std::process::Command;
-use std::io::Read;
-use std::time::Duration;
 use reqwest::Client;
 use serde::Deserialize;
 use serde_json::json;
 use sha2::{Digest, Sha256};
+use std::io::Read;
+use std::path::PathBuf;
+use std::process::Command;
+use std::time::Duration;
 
 use crate::core::{
     FetchContext, Provider, ProviderError, ProviderFetchResult, ProviderId, ProviderMetadata,
@@ -754,7 +754,12 @@ fn run_arkcli_usage_plan() -> Result<Vec<u8>, ProviderError> {
         }
     }
     let mut output = Vec::new();
-    if child.stdout.take().map(|mut out| out.read_to_end(&mut output)).is_none() {
+    if child
+        .stdout
+        .take()
+        .map(|mut out| out.read_to_end(&mut output))
+        .is_none()
+    {
         return Err(ProviderError::Other("arkcli stdout unavailable".into()));
     }
     Ok(output)

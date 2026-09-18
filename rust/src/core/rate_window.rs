@@ -26,6 +26,9 @@ pub struct RateWindow {
     pub is_informational: bool,
 }
 
+/// Number of minutes in a 5-hour Claude session window.
+const SESSION_WINDOW_MINUTES: u32 = 5 * 60;
+
 impl RateWindow {
     /// Create a new rate window
     pub fn new(used_percent: f64) -> Self {
@@ -47,7 +50,20 @@ impl RateWindow {
         }
     }
 
-    /// Create a rate window with full details
+    /// Informational placeholder for an absent 5-hour session lane.
+    ///
+    /// Weekly-only plans (Codex, Claude web) occasionally report no active
+    /// session window. Informational primaries are omitted from quota math
+    /// and rendered as unavailable, so one canonical shape keeps providers
+    /// and downstream surfaces from diverging.
+    pub fn no_active_session() -> Self {
+        Self {
+            window_minutes: Some(SESSION_WINDOW_MINUTES),
+            ..Self::informational("No active 5h session")
+        }
+    }
+
+    /// Create a rate window with full info
     pub fn with_details(
         used_percent: f64,
         window_minutes: Option<u32>,
@@ -152,5 +168,26 @@ mod tests {
         );
 
         assert_eq!(window.format_countdown().as_deref(), Some("1m"));
+    }
+
+    #[test]
+    fn no_active_session_is_informational_five_hour_placeholder() {
+        let window = RateWindow::no_active_session();
+
+        assert!(window.is_informational);
+        assert_eq!(window.window_minutes, Some(SESSION_WINDOW_MINUTES));
+        assert_eq!(
+            window.reset_description.as_deref(),
+            Some("No active 5h session")
+        );
+        assert_eq!(window.used_percent, 0.0);
+    }
+
+    #[test]
+    fn informational_placeholder_is_not_a_real_quota() {
+        let window = RateWindow::informational("custom fallback data");
+        assert!(window.is_informational);
+        assert!(!window.is_exhausted());
+        assert_eq!(window.used_percent, 0.0);
     }
 }

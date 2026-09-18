@@ -283,7 +283,8 @@ describe("V5 settings pages from HTML", () => {
     expect(document.querySelector(".s5-tray-flyout")).not.toBeNull();
     expect(document.querySelector(".tray-panel")).not.toBeNull();
     expect(document.querySelector(".provider-grid")).not.toBeNull();
-    expect(document.querySelector(".flyout-footer")).toBeNull();
+    expect(document.querySelectorAll(".flyout-footer .footer-row")).toHaveLength(3);
+    expect(document.querySelector('.flyout-footer .footer-row[aria-disabled="true"]')).not.toBeNull();
     expect(document.querySelector(".menu-card")).toBeNull();
     expect(document.querySelector(".settings-surf-page")).toBeNull();
   });

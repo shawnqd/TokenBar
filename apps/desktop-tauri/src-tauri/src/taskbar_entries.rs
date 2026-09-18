@@ -432,55 +432,138 @@ pub fn resolve_entries(
                 // so the strip reads "◆ 周 12%" rather than the useless word
                 // "primary" — and stays unlabelled ("◆ 12%") only when neither
                 // the length nor the provider's own slot name states a cycle.
-                Some(window) if entry.window == "primary" => ResolvedEntry {
-                    provider_id: snapshot.provider_id.clone(),
-                    provider_label: snapshot.display_name.clone(),
-                    window: match window.kind {
-                        Some("session") => {
-                            session_cycle_tag(window).unwrap_or_else(|| window_label("session"))
-                        }
-                        Some(kind) => window_label(kind),
-                        None => unnamed_quota_tag(snapshot, window),
-                    },
-                    window_kind: "primary".to_string(),
-                    amount: None,
-                    percent: Some(if settings.effective_taskbar_show_as_used() {
-                        window.used_percent
-                    } else {
-                        (100.0 - window.used_percent).clamp(0.0, 100.0)
-                    }),
-                    unavailable: None,
-                },
-                Some(window) => {
-                    let tag = if entry.window == "session" {
-                        session_cycle_tag(window).unwrap_or_else(|| label.clone())
-                    } else {
-                        label.clone()
-                    };
-                    ResolvedEntry {
-                        provider_id: snapshot.provider_id.clone(),
-                        provider_label: snapshot.display_name.clone(),
-                        window: tag,
-                        window_kind: entry.window.clone(),
-                        amount: None,
-                        percent: Some(if settings.effective_taskbar_show_as_used() {
-                            window.used_percent
-                        } else {
-                            (100.0 - window.used_percent).clamp(0.0, 100.0)
-                        }),
-                        unavailable: None,
-                    }
+                Some(window) if entry.window == "primary" => {
+                    // The entry labels itself from the window's real cycle via
+                    // the same helper the fallback uses, so direct and fallback
+                    // resolutions cannot drift.
+                    let _ = &label;
+                    primary_entry(snapshot, window, settings, &window_label)
                 }
-                None => ResolvedEntry::unavailable(
-                    snapshot.provider_id.clone(),
-                    snapshot.display_name.clone(),
-                    label,
-                    entry.window.clone(),
-                    EntryUnavailable::WindowUnsupported,
-                ),
+                Some(window) => {
+                    named_entry(snapshot, window, settings, label.clone(), &entry.window)
+                }
+                None => fallback_for_window(snapshot, &entry.window, settings, &window_label)
+                    .unwrap_or_else(|| {
+                        ResolvedEntry::unavailable(
+                            snapshot.provider_id.clone(),
+                            snapshot.display_name.clone(),
+                            label,
+                            entry.window.clone(),
+                            EntryUnavailable::WindowUnsupported,
+                        )
+                    }),
             }
         })
         .collect()
+}
+
+/// Resolve a taskbar entry through another real window when the configured one
+/// no longer publishes data - an expired trial grant (GLM's start plan), an
+/// account that switched grant types. The strip would print the unsupported
+/// reason while a balance or another quota window still holds real numbers;
+/// the rule is to show the data that exists, tagged with the window it came
+/// from.
+///
+/// Falls back in order: the prepaid balance (unless the entry is itself a
+/// balance entry), the provider's main quota window, then the named cycles
+/// (session, daily, weekly, monthly - skipping the requested kind). Returns
+/// `None` only when the provider has no other real window at all.
+fn fallback_for_window(
+    snapshot: &ProviderUsageSnapshot,
+    requested: &str,
+    settings: &Settings,
+    window_label: &dyn Fn(&str) -> String,
+) -> Option<ResolvedEntry> {
+    let provider_id = snapshot.provider_id.clone();
+    let provider_label = snapshot.display_name.clone();
+    let label = window_label(requested);
+
+    if requested != "balance" {
+        if let Some(amount) = balance_amount(snapshot) {
+            return Some(ResolvedEntry {
+                provider_id,
+                provider_label,
+                window: window_label("balance"),
+                window_kind: "balance".to_string(),
+                percent: None,
+                amount: Some(amount),
+                unavailable: None,
+            });
+        }
+    }
+
+    if requested != "primary" {
+        if let Some(window) = primary_window(snapshot) {
+            return Some(primary_entry(snapshot, window, settings, window_label));
+        }
+    }
+
+    for kind in ["session", "daily", "weekly", "monthly"] {
+        if kind == requested {
+            continue;
+        }
+        if let Some(window) = window_by_kind(snapshot, kind) {
+            return Some(named_entry(snapshot, window, settings, window_label(kind), kind));
+        }
+    }
+
+    None
+}
+
+/// The `primary`-style entry, given the already-matched window.
+fn primary_entry(
+    snapshot: &ProviderUsageSnapshot,
+    window: &RateWindowSnapshot,
+    settings: &Settings,
+    window_label: &dyn Fn(&str) -> String,
+) -> ResolvedEntry {
+    ResolvedEntry {
+        provider_id: snapshot.provider_id.clone(),
+        provider_label: snapshot.display_name.clone(),
+        window: match window.kind.as_deref() {
+            Some("session") => session_cycle_tag(window).unwrap_or_else(|| window_label("session")),
+            Some(kind) => window_label(kind),
+            None => unnamed_quota_tag(snapshot, window),
+        },
+        window_kind: "primary".to_string(),
+        amount: None,
+        percent: Some(window_percent(window, settings)),
+        unavailable: None,
+    }
+}
+
+/// The named-cycle (session/daily/weekly/monthly) resolution, shared by the
+/// direct path and the fallback so both print the same tag.
+fn named_entry(
+    snapshot: &ProviderUsageSnapshot,
+    window: &RateWindowSnapshot,
+    settings: &Settings,
+    fallback_label: String,
+    kind: &str,
+) -> ResolvedEntry {
+    let tag = if kind == "session" {
+        session_cycle_tag(window).unwrap_or_else(|| fallback_label.clone())
+    } else {
+        fallback_label
+    };
+    ResolvedEntry {
+        provider_id: snapshot.provider_id.clone(),
+        provider_label: snapshot.display_name.clone(),
+        window: tag,
+        window_kind: kind.to_string(),
+        amount: None,
+        percent: Some(window_percent(window, settings)),
+        unavailable: None,
+    }
+}
+
+/// The used-vs-remaining reading, shared by every percent entry.
+fn window_percent(window: &RateWindowSnapshot, settings: &Settings) -> f64 {
+    if settings.effective_taskbar_show_as_used() {
+        window.used_percent
+    } else {
+        (100.0 - window.used_percent).clamp(0.0, 100.0)
+    }
 }
 
 #[cfg(test)]
@@ -577,6 +660,8 @@ mod tests {
             source_label: "auto".into(),
             updated_at: "2026-07-31T00:00:00Z".into(),
             error: None,
+            stale: false,
+            stale_reason: None,
             pace: None,
             account_organization: None,
             tray_status_label: None,
@@ -626,19 +711,68 @@ mod tests {
         );
     }
 
-    /// The whole point of the reason codes: a provider that does not publish the
-    /// requested window must say so rather than render a convincing 0%.
+    /// The whole point of the reason codes: a provider whose requested window
+    /// does not exist AND has no other real window anywhere must say so rather
+    /// than render a convincing 0%. The fallback rule only borrows a *real*
+    /// window; with nothing real to borrow, the reason stays.
     #[test]
-    fn unsupported_window_is_reported_not_zeroed() {
+    fn unsupported_window_is_reported_not_zero() {
+        // codex publishes a 5h and a weekly window but no monthly. The
+        // fallback rule is active: the entry borrows the weekly window.
         let snaps = vec![snapshot("codex", "Codex")];
         let settings = settings_with(vec![("codex", "monthly")]);
         let out = resolve_entries(&settings, &snaps, None, &label, &no_speed);
+        assert_eq!(out[0].percent, Some(10.0), "fallback reads the main window");
+        assert_eq!(out[0].window, "5h", "tag follows the real window");
+        assert_eq!(out[0].window_kind, "primary");
+        assert_eq!(out[0].unavailable, None);
+    }
 
+    /// Nothing real to fall back to: an informational-only snapshot must keep
+    /// reporting the reason instead of inventing a number.
+    #[test]
+    fn unsupported_window_with_no_real_fallback_stays_unsupported() {
+        let mut snap = snapshot("codex", "Codex");
+        snap.primary.is_informational = true;
+        snap.secondary = None;
+        snap.extra_rate_windows = Vec::new();
+        let settings = settings_with(vec![("codex", "monthly")]);
+        let out = resolve_entries(&settings, &[snap], None, &label, &no_speed);
         assert_eq!(out[0].percent, None);
         assert_eq!(
             out[0].unavailable,
             Some(EntryUnavailable::WindowUnsupported)
         );
+    }
+
+    /// GLM's 体验套餐 (ZCode Start Plan) expired: the trial window is gone and
+    /// the prepaid balance remains. The strip must auto-switch to the balance
+    /// entry the provider still carries instead of printing 不支持.
+    #[test]
+    fn expired_trial_window_falls_back_to_the_balance() {
+        let mut snap = snapshot("zai", "GLM");
+        snap.primary = window(0.0, None);
+        snap.primary.is_informational = true;
+        snap.secondary = None;
+        snap.model_specific = None;
+        snap.tertiary = None;
+        // No 体验套餐 extra window left; only the account balance survives.
+        let mut wallet = window(0.0, None);
+        wallet.reset_description = Some("\u{a5}12.50 available".into());
+        wallet.is_informational = true;
+        snap.extra_rate_windows = vec![crate::commands::NamedRateWindowSnapshot {
+            id: "zai-account-balance".into(),
+            title: "Account balance".into(),
+            window: wallet,
+            usage_known: false,
+            inventory_expires_at: Vec::new(),
+        }];
+
+        let out = resolve_one(snap, "primary");
+        assert_eq!(out.amount.as_deref(), Some("\u{a5}12.50"));
+        assert_eq!(out.window_kind, "balance", "tag follows the real window");
+        assert_eq!(out.window, "balance", "label follows the real window");
+        assert_eq!(out.unavailable, None);
     }
 
     #[test]
@@ -877,14 +1011,17 @@ mod tests {
     /// stored entry, which is why the first half is still asserted for it.
     #[test]
     fn every_offered_window_actually_resolves() {
-        let providers = [
-            snapshot("codex", "Codex"),
-            balance_snapshot(
+        let snaps = [
+            (snapshot("codex", "Codex"), "codex"),
+            (
+                balance_snapshot(
+                    "deepseek",
+                    "\u{a5}38.88 (Paid: \u{a5}38.88 / Granted: \u{a5}0.00)",
+                ),
                 "deepseek",
-                "\u{a5}38.88 (Paid: \u{a5}38.88 / Granted: \u{a5}0.00)",
             ),
         ];
-        for snap in &providers {
+        for (snap, _name) in &snaps {
             for kind in [
                 "primary", "session", "daily", "weekly", "monthly", "balance",
             ] {
@@ -909,10 +1046,14 @@ mod tests {
                         "{} / {kind}: offered by the menu but does not resolve",
                         snap.provider_id
                     );
-                } else if kind != "primary" {
-                    assert!(
-                        !resolved,
-                        "{} / {kind}: resolves but the menu never offers it",
+                } else if !resolved {
+                    // Not offered and nothing real existed to fall back to: the
+                    // honest reason must be WindowUnsupported, never a
+                    // fabricated number and never a silently different window.
+                    assert_eq!(
+                        out[0].unavailable,
+                        Some(EntryUnavailable::WindowUnsupported),
+                        "{} / {kind}: reason was not the honest unsupported",
                         snap.provider_id
                     );
                 }
@@ -1081,6 +1222,38 @@ mod tests {
     /// percent / a balance amount / an unavailable reason all carry their
     /// distinct payload for the renderer's tag+value mapping.
     #[test]
+    /// Fallback entries must read the *localized* label of the window they
+    /// resolved to, never the raw kind token (weekly would print English where
+    /// the user expects 周额度). Regression for the label fix that passed a
+    /// raw kind into named_entry.
+    #[test]
+    fn fallback_labels_are_localized_not_raw_kinds() {
+        let localized = |kind: &str| match kind {
+            "weekly" => "周额度".to_string(),
+            "session" => "会话".to_string(),
+            "monthly" => "月".to_string(),
+            "daily" => "日".to_string(),
+            "balance" => "余额".to_string(),
+            "primary" => "主".to_string(),
+            _ => kind.to_string(),
+        };
+        let snaps = vec![snapshot("codex", "Codex")];
+        let settings = settings_with(vec![("codex", "weekly")]);
+        let out = resolve_entries(&settings, &snaps, None, &localized, &no_speed);
+        assert_eq!(out[0].window, "周额度", "direct path keeps the localized label");
+
+        // Main window informational-only (expired trial): the primary
+        // resolver moves onto the surviving real window (weekly), and its
+        // label must be the localized 周额度, never a raw kind token.
+        let mut snapped = snapshot("nodel", "Nodel");
+        snapped.primary = window(0.0, None);
+        snapped.primary.is_informational = true;
+        let settings = settings_with(vec![("nodel", "primary")]);
+        let out = resolve_entries(&settings, &[snapped], None, &localized, &no_speed);
+        assert_eq!(out[0].window_kind, "primary");
+        assert_eq!(out[0].window, "周额度", "localized on the travelled window");
+    }
+
     fn resolved_entries_carry_the_split_cell_payload() {
         // percent + kind = session
         let snaps = vec![snapshot("codex", "Codex")];

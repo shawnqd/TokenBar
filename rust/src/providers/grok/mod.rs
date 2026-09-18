@@ -94,10 +94,7 @@ impl GrokProvider {
 
     /// CLI principals can report their paid tier through the CLI settings
     /// endpoint; identity enrichment only, never a replacement for billing.
-    async fn fetch_cli_subscription_tier(
-        &self,
-        credentials: &GrokCredentials,
-    ) -> Option<String> {
+    async fn fetch_cli_subscription_tier(&self, credentials: &GrokCredentials) -> Option<String> {
         let response = self
             .client
             .get(CLI_SETTINGS_ENDPOINT)
@@ -227,7 +224,9 @@ impl Provider for GrokProvider {
             SourceMode::Auto => {
                 if let Some(token) = ctx.api_key.as_deref() {
                     let credentials = GrokCredentials::from_bearer(token);
-                    return self.fetch_with_auth(&credentials, GrokAuthKind::OAuth).await;
+                    return self
+                        .fetch_with_auth(&credentials, GrokAuthKind::OAuth)
+                        .await;
                 }
                 if let Some(cookie_header) = &ctx.manual_cookie_header {
                     return self.fetch_with_cookie(cookie_header).await;
@@ -267,7 +266,8 @@ impl Provider for GrokProvider {
                 } else {
                     Self::load_credentials(GrokAuthKind::OAuth)?
                 };
-                self.fetch_with_auth(&credentials, GrokAuthKind::OAuth).await
+                self.fetch_with_auth(&credentials, GrokAuthKind::OAuth)
+                    .await
             }
         }
     }

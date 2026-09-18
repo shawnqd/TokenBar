@@ -277,7 +277,8 @@ impl CodexParserState {
             return;
         };
 
-        if obj.get("type").and_then(|v| v.as_str()) == Some("session_meta") && self.thread.is_none() {
+        if obj.get("type").and_then(|v| v.as_str()) == Some("session_meta") && self.thread.is_none()
+        {
             // Lineage identity: forked sessions carry forked_from_id /
             // parent_thread_id pointing at their thread root, plus the fork
             // creation timestamp. Fork files re-emit their whole ancestor
@@ -461,8 +462,11 @@ impl CodexParserState {
         }
 
         let direct = read_token_totals(payload);
-        (direct.input != 0 || direct.cached != 0 || direct.output != 0)
-            .then_some((direct.input, direct.cached, direct.output))
+        (direct.input != 0 || direct.cached != 0 || direct.output != 0).then_some((
+            direct.input,
+            direct.cached,
+            direct.output,
+        ))
     }
 
     fn fast_token_deltas(&mut self, payload: &CodexFastPayload<'_>) -> Option<(u64, u64, u64)> {
@@ -479,8 +483,11 @@ impl CodexParserState {
         }
 
         let direct = fast_totals_from_payload(payload);
-        (direct.input != 0 || direct.cached != 0 || direct.output != 0)
-            .then_some((direct.input, direct.cached, direct.output))
+        (direct.input != 0 || direct.cached != 0 || direct.output != 0).then_some((
+            direct.input,
+            direct.cached,
+            direct.output,
+        ))
     }
 
     fn total_usage_delta(&mut self, total: &Value) -> (u64, u64, u64) {
@@ -506,8 +513,12 @@ impl CodexParserState {
             let previous = self.previous_totals.as_ref();
             CodexTotals {
                 input: totals.input.saturating_sub(previous.map_or(0, |t| t.input)),
-                cached: totals.cached.saturating_sub(previous.map_or(0, |t| t.cached)),
-                output: totals.output.saturating_sub(previous.map_or(0, |t| t.output)),
+                cached: totals
+                    .cached
+                    .saturating_sub(previous.map_or(0, |t| t.cached)),
+                output: totals
+                    .output
+                    .saturating_sub(previous.map_or(0, |t| t.output)),
             }
         };
 
@@ -782,7 +793,11 @@ fn fast_totals_from_payload(value: &CodexFastPayload<'_>) -> CodexTotals {
 fn token_u64(value: &Value, key: &str) -> u64 {
     value
         .get(key)
-        .and_then(|value| value.as_u64().or_else(|| value.as_i64().and_then(|n| u64::try_from(n).ok())))
+        .and_then(|value| {
+            value
+                .as_u64()
+                .or_else(|| value.as_i64().and_then(|n| u64::try_from(n).ok()))
+        })
         .unwrap_or(0)
 }
 

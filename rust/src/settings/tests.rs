@@ -863,12 +863,30 @@ fn per_component_display_settings_seed_from_legacy_globals() {
     let settings: Settings =
         serde_json::from_str(r#"{"show_as_used":false,"reset_time_relative":false}"#).unwrap();
 
-    assert_eq!(settings.float_bar_quota_display, QuotaDisplayPreference::Follow);
-    assert_eq!(settings.dashboard_quota_display, QuotaDisplayPreference::Follow);
-    assert_eq!(settings.taskbar_quota_display, QuotaDisplayPreference::Follow);
-    assert_eq!(settings.float_bar_reset_display, ResetDisplayPreference::Follow);
-    assert_eq!(settings.dashboard_reset_display, ResetDisplayPreference::Follow);
-    assert_eq!(settings.taskbar_reset_display, ResetDisplayPreference::Follow);
+    assert_eq!(
+        settings.float_bar_quota_display,
+        QuotaDisplayPreference::Follow
+    );
+    assert_eq!(
+        settings.dashboard_quota_display,
+        QuotaDisplayPreference::Follow
+    );
+    assert_eq!(
+        settings.taskbar_quota_display,
+        QuotaDisplayPreference::Follow
+    );
+    assert_eq!(
+        settings.float_bar_reset_display,
+        ResetDisplayPreference::Follow
+    );
+    assert_eq!(
+        settings.dashboard_reset_display,
+        ResetDisplayPreference::Follow
+    );
+    assert_eq!(
+        settings.taskbar_reset_display,
+        ResetDisplayPreference::Follow
+    );
     assert!(!settings.float_bar_show_as_used);
     assert!(!settings.dashboard_show_as_used);
     assert!(!settings.taskbar_show_as_used);
@@ -902,12 +920,30 @@ fn per_component_display_settings_keep_explicit_values_over_legacy_globals() {
     assert!(settings.dashboard_show_as_used);
     assert!(settings.float_bar_reset_time_relative);
     assert!(settings.dashboard_reset_time_relative);
-    assert_eq!(settings.float_bar_quota_display, QuotaDisplayPreference::Remaining);
-    assert_eq!(settings.taskbar_quota_display, QuotaDisplayPreference::Remaining);
-    assert_eq!(settings.dashboard_quota_display, QuotaDisplayPreference::Follow);
-    assert_eq!(settings.float_bar_reset_display, ResetDisplayPreference::Follow);
-    assert_eq!(settings.dashboard_reset_display, ResetDisplayPreference::Follow);
-    assert_eq!(settings.taskbar_reset_display, ResetDisplayPreference::Follow);
+    assert_eq!(
+        settings.float_bar_quota_display,
+        QuotaDisplayPreference::Remaining
+    );
+    assert_eq!(
+        settings.taskbar_quota_display,
+        QuotaDisplayPreference::Remaining
+    );
+    assert_eq!(
+        settings.dashboard_quota_display,
+        QuotaDisplayPreference::Follow
+    );
+    assert_eq!(
+        settings.float_bar_reset_display,
+        ResetDisplayPreference::Follow
+    );
+    assert_eq!(
+        settings.dashboard_reset_display,
+        ResetDisplayPreference::Follow
+    );
+    assert_eq!(
+        settings.taskbar_reset_display,
+        ResetDisplayPreference::Follow
+    );
 }
 
 /// Components are independent after the seed: a file that stores different
@@ -932,12 +968,30 @@ fn per_component_display_settings_round_trip_independently() {
     assert!(restored.float_bar_reset_time_relative);
     assert!(!restored.dashboard_reset_time_relative);
     assert!(!restored.taskbar_reset_time_relative);
-    assert_eq!(restored.float_bar_quota_display, QuotaDisplayPreference::Remaining);
-    assert_eq!(restored.dashboard_quota_display, QuotaDisplayPreference::Used);
-    assert_eq!(restored.taskbar_quota_display, QuotaDisplayPreference::Remaining);
-    assert_eq!(restored.float_bar_reset_display, ResetDisplayPreference::Countdown);
-    assert_eq!(restored.dashboard_reset_display, ResetDisplayPreference::Absolute);
-    assert_eq!(restored.taskbar_reset_display, ResetDisplayPreference::Absolute);
+    assert_eq!(
+        restored.float_bar_quota_display,
+        QuotaDisplayPreference::Remaining
+    );
+    assert_eq!(
+        restored.dashboard_quota_display,
+        QuotaDisplayPreference::Used
+    );
+    assert_eq!(
+        restored.taskbar_quota_display,
+        QuotaDisplayPreference::Remaining
+    );
+    assert_eq!(
+        restored.float_bar_reset_display,
+        ResetDisplayPreference::Countdown
+    );
+    assert_eq!(
+        restored.dashboard_reset_display,
+        ResetDisplayPreference::Absolute
+    );
+    assert_eq!(
+        restored.taskbar_reset_display,
+        ResetDisplayPreference::Absolute
+    );
 }
 
 /// This used to assert the taskbar had **no** reset-time mode, on the grounds
@@ -963,7 +1017,10 @@ fn taskbar_reset_time_mode_round_trips() {
     let json = serde_json::to_string(&settings).unwrap();
     let restored: Settings = serde_json::from_str(&json).unwrap();
     assert!(!restored.taskbar_reset_time_relative);
-    assert_eq!(restored.taskbar_reset_display, ResetDisplayPreference::Absolute);
+    assert_eq!(
+        restored.taskbar_reset_display,
+        ResetDisplayPreference::Absolute
+    );
 
     // Independent of the other components, like every other key in this family.
     assert!(restored.dashboard_reset_time_relative);
@@ -1017,12 +1074,30 @@ fn dashboard_provider_filter_absent_from_older_files_means_all() {
 #[test]
 fn per_component_display_settings_default_to_used_and_relative() {
     let settings = Settings::default();
-    assert_eq!(settings.float_bar_quota_display, QuotaDisplayPreference::Follow);
-    assert_eq!(settings.dashboard_quota_display, QuotaDisplayPreference::Follow);
-    assert_eq!(settings.taskbar_quota_display, QuotaDisplayPreference::Follow);
-    assert_eq!(settings.float_bar_reset_display, ResetDisplayPreference::Follow);
-    assert_eq!(settings.dashboard_reset_display, ResetDisplayPreference::Follow);
-    assert_eq!(settings.taskbar_reset_display, ResetDisplayPreference::Follow);
+    assert_eq!(
+        settings.float_bar_quota_display,
+        QuotaDisplayPreference::Follow
+    );
+    assert_eq!(
+        settings.dashboard_quota_display,
+        QuotaDisplayPreference::Follow
+    );
+    assert_eq!(
+        settings.taskbar_quota_display,
+        QuotaDisplayPreference::Follow
+    );
+    assert_eq!(
+        settings.float_bar_reset_display,
+        ResetDisplayPreference::Follow
+    );
+    assert_eq!(
+        settings.dashboard_reset_display,
+        ResetDisplayPreference::Follow
+    );
+    assert_eq!(
+        settings.taskbar_reset_display,
+        ResetDisplayPreference::Follow
+    );
     assert!(settings.float_bar_show_as_used);
     assert!(settings.dashboard_show_as_used);
     assert!(settings.taskbar_show_as_used);
@@ -1095,8 +1170,14 @@ fn float_bar_legacy_provider_ids_migrate_to_entries() {
     assert_eq!(
         s.float_bar_entries,
         vec![
-            TaskbarEntry { provider_id: "codex".into(), window: "primary".into() },
-            TaskbarEntry { provider_id: "claude".into(), window: "primary".into() },
+            TaskbarEntry {
+                provider_id: "codex".into(),
+                window: "primary".into()
+            },
+            TaskbarEntry {
+                provider_id: "claude".into(),
+                window: "primary".into()
+            },
         ]
     );
     // Round-trip preserves entries; provider_ids retained for compat.
@@ -1116,7 +1197,10 @@ fn float_bar_entries_take_precedence_over_legacy_ids() {
     // Explicit entries win; legacy ids ignored.
     assert_eq!(
         s.float_bar_entries,
-        vec![TaskbarEntry { provider_id: "claude".into(), window: "weekly".into() }]
+        vec![TaskbarEntry {
+            provider_id: "claude".into(),
+            window: "weekly".into()
+        }]
     );
 }
 
@@ -1131,7 +1215,10 @@ fn float_bar_legacy_ids_migrate_when_entries_empty() {
     let s: Settings = serde_json::from_str(json).expect("parse");
     assert_eq!(
         s.float_bar_entries,
-        vec![TaskbarEntry { provider_id: "gemini".into(), window: "primary".into() }]
+        vec![TaskbarEntry {
+            provider_id: "gemini".into(),
+            window: "primary".into()
+        }]
     );
 }
 
@@ -1147,9 +1234,15 @@ fn taskbar_legacy_content_migrates_to_entries() {
         let s: Settings = serde_json::from_str(&json).expect("parse");
         let expected_entries: Vec<TaskbarEntry> = expected
             .into_iter()
-            .map(|(p, w)| TaskbarEntry { provider_id: p.into(), window: w.into() })
+            .map(|(p, w)| TaskbarEntry {
+                provider_id: p.into(),
+                window: w.into(),
+            })
             .collect();
-        assert_eq!(s.taskbar_widget_entries, expected_entries, "content={content}");
+        assert_eq!(
+            s.taskbar_widget_entries, expected_entries,
+            "content={content}"
+        );
     }
 }
 
@@ -1163,7 +1256,10 @@ fn taskbar_legacy_content_is_seed_only_when_entries_absent() {
     let s: Settings = serde_json::from_str(json).expect("parse");
     assert_eq!(
         s.taskbar_widget_entries,
-        vec![TaskbarEntry { provider_id: "codex".into(), window: "weekly".into() }]
+        vec![TaskbarEntry {
+            provider_id: "codex".into(),
+            window: "weekly".into()
+        }]
     );
 }
 
@@ -1171,8 +1267,14 @@ fn taskbar_legacy_content_is_seed_only_when_entries_absent() {
 fn taskbar_entries_round_trip_via_raw() {
     let s = Settings {
         taskbar_widget_entries: vec![
-            TaskbarEntry { provider_id: "codex".into(), window: "session".into() },
-            TaskbarEntry { provider_id: "claude".into(), window: "weekly".into() },
+            TaskbarEntry {
+                provider_id: "codex".into(),
+                window: "session".into(),
+            },
+            TaskbarEntry {
+                provider_id: "claude".into(),
+                window: "weekly".into(),
+            },
         ],
         ..Settings::default()
     };

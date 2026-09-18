@@ -250,13 +250,15 @@ fn migrate_quota_display_mode(
     legacy_show_as_used: Option<bool>,
 ) -> QuotaDisplayPreference {
     mode.and_then(QuotaDisplayPreference::parse)
-        .or_else(|| legacy_show_as_used.map(|used| {
-            if used {
-                QuotaDisplayPreference::Used
-            } else {
-                QuotaDisplayPreference::Remaining
-            }
-        }))
+        .or_else(|| {
+            legacy_show_as_used.map(|used| {
+                if used {
+                    QuotaDisplayPreference::Used
+                } else {
+                    QuotaDisplayPreference::Remaining
+                }
+            })
+        })
         .unwrap_or_default()
 }
 
@@ -265,13 +267,15 @@ fn migrate_reset_display_mode(
     legacy_relative: Option<bool>,
 ) -> ResetDisplayPreference {
     mode.and_then(ResetDisplayPreference::parse)
-        .or_else(|| legacy_relative.map(|relative| {
-            if relative {
-                ResetDisplayPreference::Countdown
-            } else {
-                ResetDisplayPreference::Absolute
-            }
-        }))
+        .or_else(|| {
+            legacy_relative.map(|relative| {
+                if relative {
+                    ResetDisplayPreference::Countdown
+                } else {
+                    ResetDisplayPreference::Absolute
+                }
+            })
+        })
         .unwrap_or_default()
 }
 
@@ -321,8 +325,12 @@ fn default_taskbar_widget_icon_size() -> u8 {
     14
 }
 
-fn default_taskbar_widget_icon_gap_px() -> u8 { 5 }
-fn default_taskbar_widget_value_gap_px() -> u8 { 2 }
+fn default_taskbar_widget_icon_gap_px() -> u8 {
+    5
+}
+fn default_taskbar_widget_value_gap_px() -> u8 {
+    2
+}
 fn default_taskbar_widget_icon_style() -> String {
     "pure".to_string()
 }
@@ -779,14 +787,12 @@ impl From<RawSettings> for Settings {
                 _ => "pure".to_string(),
             },
             float_bar_quota_display,
-            float_bar_show_as_used: float_bar_quota_display
-                .resolves_to_used(raw.show_as_used),
+            float_bar_show_as_used: float_bar_quota_display.resolves_to_used(raw.show_as_used),
             float_bar_reset_display,
             float_bar_reset_time_relative: float_bar_reset_display
                 .resolves_to_relative(raw.reset_time_relative),
             dashboard_quota_display,
-            dashboard_show_as_used: dashboard_quota_display
-                .resolves_to_used(raw.show_as_used),
+            dashboard_show_as_used: dashboard_quota_display.resolves_to_used(raw.show_as_used),
             dashboard_reset_display,
             dashboard_reset_time_relative: dashboard_reset_display
                 .resolves_to_relative(raw.reset_time_relative),
@@ -797,8 +803,7 @@ impl From<RawSettings> for Settings {
                 &raw.dashboard_quota_windows,
             ),
             taskbar_quota_display,
-            taskbar_show_as_used: taskbar_quota_display
-                .resolves_to_used(raw.show_as_used),
+            taskbar_show_as_used: taskbar_quota_display.resolves_to_used(raw.show_as_used),
             taskbar_reset_display,
             taskbar_reset_time_relative: taskbar_reset_display
                 .resolves_to_relative(raw.reset_time_relative),

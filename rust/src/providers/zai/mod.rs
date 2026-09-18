@@ -300,9 +300,7 @@ impl ZaiProvider {
             serde_json::from_slice(&resp_bytes).map_err(|e| ProviderError::Parse(e.to_string()))?;
 
         let cn_balance = match ZaiSettingsReader::balance_url(&env, region) {
-            Ok(Some(url)) => {
-                balance::fetch_cn_account_balance(&client, &authorization, &url).await
-            }
+            Ok(Some(url)) => balance::fetch_cn_account_balance(&client, &authorization, &url).await,
             Ok(None) => None,
             Err(err) => return Err(ProviderError::Other(err.to_string())),
         };
@@ -570,7 +568,9 @@ fn quota_remaining_label(l: &ZaiLimit) -> Option<String> {
     if matches!(l.limit_type.as_deref(), Some("TIME_LIMIT") | Some("mcp")) {
         return None;
     }
-    let remaining = l.remaining.filter(|value| value.is_finite() && *value >= 0.0)?;
+    let remaining = l
+        .remaining
+        .filter(|value| value.is_finite() && *value >= 0.0)?;
     Some(format!("剩余 {}", format_quota_amount(remaining)))
 }
 
@@ -1170,8 +1170,3 @@ mod tests {
         assert!(error.to_string().contains("当前用户不存在coding plan"));
     }
 }
-
-
-
-
-

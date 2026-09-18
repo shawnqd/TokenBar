@@ -114,16 +114,20 @@ function AppInner() {
       });
 
     // Fire-and-forget update checks after the first paint so startup/tray open
-    // is not competing with network work.
-    const updateTimer = window.setTimeout(() => {
-      Promise.all([checkForUpdates(), getSettingsSnapshot()])
-        .then(([update, settings]) => {
-          if (settings.autoDownloadUpdates && update.canDownload) {
-            void downloadUpdate().catch(() => {});
-          }
-        })
-        .catch(() => {});
-    }, 2_000);
+    // is not competing with network work. Every detached surface has its own
+    // WebView, so only the hidden main host owns the periodic check; otherwise
+    // opening Settings/Flyout would fan out duplicate GitHub requests.
+    const updateTimer = currentSurfaceKind() === null
+      ? window.setTimeout(() => {
+          Promise.all([checkForUpdates(), getSettingsSnapshot()])
+            .then(([update, settings]) => {
+              if (settings.autoDownloadUpdates && update.canDownload) {
+                void downloadUpdate().catch(() => {});
+              }
+            })
+            .catch(() => {});
+        }, 2_000)
+      : null;
 
     // Listen for user-registered global shortcut events from the
     // `register_global_shortcut` command. The persistent shortcut (bound via
@@ -185,7 +189,7 @@ function AppInner() {
         .then((unlisten) => unlisten?.())
         .catch(() => {});
       void unlistenThemeSyncPromise.then((unlisten) => unlisten()).catch(() => {});
-      window.clearTimeout(updateTimer);
+      if (updateTimer !== null) window.clearTimeout(updateTimer);
       window.removeEventListener("codexbar:settings-updated", onSettingsUpdated);
     };
   }, [reloadBootstrapState]);

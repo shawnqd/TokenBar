@@ -127,7 +127,7 @@ pub(crate) fn build_tray_menu_with(
     // Grouped by what an entry *does*, not by how it is implemented. Four
     // groups after the status readouts:
     //
-    //   1. act now       — refresh, open a surface
+    //   1. act now       — refresh, check updates, open a surface
     //   2. show / hide   — the surface visibility toggles
     //   3. configure     — providers, settings, about
     //   4. leave         — quit, alone, as every desktop menu does
@@ -141,6 +141,10 @@ pub(crate) fn build_tray_menu_with(
     menu.push(TrayMenuEntry::item(
         "refresh",
         text(LocaleKey::TrayRefreshAll),
+    ));
+    menu.push(TrayMenuEntry::item(
+        "check_for_updates",
+        text(LocaleKey::TrayCheckForUpdates),
     ));
     // Legacy menu id `pop_out` (historical PopOut dashboard) now opens the
     // dedicated tray flyout window. Id retained for compat with persisted
@@ -303,6 +307,7 @@ mod tests {
             items,
             vec![
                 "Refresh All",
+                "Check for Updates",
                 "Open Tray Panel",
                 "Show Floating Bar",
                 "Providers",
@@ -337,9 +342,9 @@ mod tests {
     }
 
     #[test]
-    fn check_for_updates_item_is_hidden_for_the_custom_build() {
+    fn check_for_updates_item_is_available_in_the_custom_build() {
         let menu = build_tray_menu(&sample_provider_catalog(), &[], &both_enabled());
-        assert!(!menu_contains(&menu, "check_for_updates"));
+        assert!(menu_contains(&menu, "check_for_updates"));
     }
 
     #[test]

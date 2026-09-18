@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useLocale } from "../../../hooks/useLocale";
 import type {
   LocalUsagePeriod,
@@ -8,25 +8,29 @@ import type {
   TrayIconMode,
 } from "../../../types/bridge";
 import type { SettingsPageProps } from "./pageTypes";
-import TrayCard from "../../../surfaces/tray/TrayCard";
-import ProviderGrid from "../../../components/ProviderGrid";
 import { SurfacePreviewFrame } from "./HtmlSurfacePreviews";
 import { catalogPreviewSnapshots } from "../previews/catalogFixtures";
+import { fromBridge, type ProviderSnapshot } from "../../../core";
 import {
   quotaDisplayContext,
   quotaDisplayPreference,
   resetDisplayPreference,
 } from "../../../lib/quotaDisplay";
 import { V5Field, V5Num, V5Section, V5Seg, V5Toggle } from "./v5Controls";
-import { useTrayCoreRecords, trayCoreStore } from "../../../surfaces/tray/trayCoreStore";
+import {
+  useTrayCoreRecords,
+  useTrayCoreState,
+  trayCoreStore,
+} from "../../../surfaces/tray/trayCoreStore";
 import { useOutputSpeedSnapshot } from "../../../hooks/useOutputSpeedSnapshot";
-import { outputSpeedProviderId } from "../../../lib/outputSpeed";
-import { coreSnapshotToBridge } from "../../../lib/trayProviders";
+import { coreSnapshotToBridge, resolveTrayProviderView } from "../../../lib/trayProviders";
 import { orderProviderSnapshots } from "../../../lib/providerOrder";
+import TrayPanelContent from "../../../surfaces/tray/TrayPanelContent";
+import TrayPanelFooter from "../../../surfaces/tray/TrayPanelFooter";
 
 const TRAY_DEFAULTS = {
   menuBarDisplayMode: "detailed" as MenuBarDisplayMode,
-  localUsagePeriod: "today" as LocalUsagePeriod,
+  localUsagePeriod: "7d" as LocalUsagePeriod,
   dashboardQuotaDisplay: "follow" as const,
   dashboardResetDisplay: "follow" as const,
   showAllTokenAccountsInMenu: false,
@@ -89,20 +93,55 @@ export default function TrayPanelPage({
   const [selectedProviderId, setSelectedProviderId] = useState<string | null>(
     null,
   );
+  const [gridExpanded, setGridExpanded] = useState(false);
+  const trayState = useTrayCoreState();
   const records = useTrayCoreRecords();
   const outputSpeedEnabled = settings.outputSpeedEnabled !== false;
   const liveSpeed = useOutputSpeedSnapshot(outputSpeedEnabled);
 
+  // Keep the settings preview on the same enrichment path as the real tray.
+  // The chart runner is read-only: it scans the already-owned local cache and
+  // commits the result to this WebView's tray core store. Without this trigger
+  // the preview fell back to a hard-coded Claude usage row while the live tray
+  // showed its measured 7-day usage.
+  const chartCapableSignature = useMemo(
+    () =>
+      trayCoreStore
+        .chartCapableKeys()
+        .map((key) => `${key.providerId}:${key.accountKey}:${key.sourceKey}`)
+        .join("|"),
+    [trayState.version],
+  );
+  useEffect(() => {
+    const keys = trayCoreStore.chartCapableKeys();
+    for (const key of keys) {
+      void trayCoreStore
+        .triggerEnrichment("chart", key, { manual: false })
+        .catch(() => {});
+    }
+  }, [chartCapableSignature]);
+
   const shownProviderIds = settings.enabledProviders ?? [];
-  const enabledSnapshots = useMemo(() => {
-    return records
-      .filter(
+  const liveRecords = useMemo(
+    () =>
+      records.filter(
         (record) =>
           record.snapshot != null &&
           shownProviderIds.includes(record.snapshot.providerId),
-      )
-      .map((record) => coreSnapshotToBridge(record.snapshot!));
-  }, [records, shownProviderIds]);
+      ),
+    [records, shownProviderIds],
+  );
+  const enabledSnapshots = useMemo(
+    () => liveRecords.map((record) => coreSnapshotToBridge(record.snapshot!)),
+    [liveRecords],
+  );
+  const previewFallback = useMemo(
+    () =>
+      catalogPreviewSnapshots().filter((row) =>
+        PREVIEW_PROVIDERS.includes(row.providerId),
+      ),
+    [],
+  );
 
   const preview = useMemo(() => {
     const rawRows =
@@ -113,9 +152,7 @@ export default function TrayPanelPage({
             shownProviderIds,
             settings.providerOrder,
           )
-        : catalogPreviewSnapshots().filter((row) =>
-            PREVIEW_PROVIDERS.includes(row.providerId),
-          );
+        : previewFallback;
 
     if (!settings.menuBarShowsHighestUsage) return rawRows;
     return [...rawRows].sort(
@@ -124,10 +161,70 @@ export default function TrayPanelPage({
   }, [
     enabledSnapshots,
     catalog,
+    previewFallback,
     shownProviderIds,
     settings.providerOrder,
     settings.menuBarShowsHighestUsage,
   ]);
+  const coreById = useMemo(() => {
+    const map = new Map<string, ProviderSnapshot>();
+    if (enabledSnapshots.length > 0) {
+      for (const record of liveRecords) {
+        if (record.snapshot) map.set(record.snapshot.providerId, record.snapshot);
+      }
+      return map;
+    }
+    for (const snapshot of previewFallback) {
+      map.set(snapshot.providerId, fromBridge(snapshot));
+    }
+    return map;
+  }, [enabledSnapshots.length, liveRecords, previewFallback]);
+  const chartByProviderId = useMemo(() => {
+    const map = new Map<string, ProviderChartData>();
+    if (enabledSnapshots.length > 0) {
+      for (const record of liveRecords) {
+        const chart = trayCoreStore.getChartData(record.key);
+        if (chart) map.set(record.snapshot!.providerId, chart);
+      }
+      return map;
+    }
+    for (const snapshot of previewFallback) {
+      const chart = PREVIEW_CHART_DATA[snapshot.providerId];
+      if (chart) map.set(snapshot.providerId, chart);
+    }
+    return map;
+  }, [enabledSnapshots.length, liveRecords, previewFallback, trayState.version]);
+  const speedByProviderId = useMemo(() => {
+    const map = new Map<string, ProviderOutputSpeed>();
+    if (liveSpeed) {
+      for (const [providerId, speed] of Object.entries(liveSpeed)) {
+        if (speed) map.set(providerId, speed);
+      }
+    }
+    if (enabledSnapshots.length === 0 && !map.has("claude")) {
+      map.set("claude", PREVIEW_CLAUDE_SPEED);
+    }
+    return map;
+  }, [enabledSnapshots.length, liveSpeed]);
+  const providerView = useMemo(
+    () =>
+      resolveTrayProviderView(
+        preview,
+        catalog ?? [],
+        shownProviderIds,
+        settings.providerOrder,
+        selectedProviderId,
+        gridExpanded,
+      ),
+    [
+      catalog,
+      gridExpanded,
+      preview,
+      selectedProviderId,
+      shownProviderIds,
+      settings.providerOrder,
+    ],
+  );
   const display = quotaDisplayContext(settings, "dashboard");
   const quotaMode = quotaDisplayPreference(settings, "dashboard");
   const resetMode = resetDisplayPreference(settings, "dashboard");
@@ -151,9 +248,7 @@ export default function TrayPanelPage({
   );
   const isDetail = selectedProviderId !== null;
   const density = isDetail ? "detailed" : settings.menuBarDisplayMode;
-  const visible = isDetail
-    ? preview.filter((row) => row.providerId === selectedProviderId)
-    : preview;
+  const { gridProviders, visibleProviders } = providerView;
   const scaleRatio = Math.max(1, Math.min(2, scale / 100));
   const previewScale = Math.min(1.04, Math.round(0.85 * scaleRatio * 100) / 100);
 
@@ -217,7 +312,7 @@ export default function TrayPanelPage({
           </V5Field>
           <V5Field label="本地用量周期">
             <V5Seg
-              value={settings.localUsagePeriod ?? "today"}
+              value={settings.localUsagePeriod ?? TRAY_DEFAULTS.localUsagePeriod}
               disabled={saving}
               options={[
                 { value: "today", label: "今日" },
@@ -315,51 +410,24 @@ export default function TrayPanelPage({
           className="s5-tray-flyout"
           style={{ zoom: previewScale }}
         >
-          <div className="tray-panel">
-            <ProviderGrid
-              providers={preview}
-              selectedProviderId={selectedProviderId}
-              display={display}
-              showProviderIcons={settings.switcherShowsIcons}
-              onSelect={setSelectedProviderId}
-            />
-            <div className="flyout-body">
-              {visible.map((snapshot, idx) => {
-                const recordForSnapshot = records.find(
-                  (r) => r.snapshot?.providerId === snapshot.providerId,
-                );
-                const liveChart = recordForSnapshot
-                  ? trayCoreStore.getChartData(recordForSnapshot.key)
-                  : null;
-                const chartDataForCard =
-                  liveChart ?? PREVIEW_CHART_DATA[snapshot.providerId] ?? null;
-
-                const speedId = outputSpeedProviderId(snapshot.providerId);
-                const speedForCard = !outputSpeedEnabled
-                  ? null
-                  : (speedId && liveSpeed?.[speedId]) ||
-                    (snapshot.providerId === "claude" ? PREVIEW_CLAUDE_SPEED : null);
-
-                return (
-                  <div key={snapshot.providerId}>
-                    {idx > 0 && <div className="provider-stack-divider" />}
-                    <TrayCard
-                      provider={snapshot}
-                      densityMode={density}
-                      display={display}
-                      showProviderIcon={settings.switcherShowsIcons}
-                      localUsagePeriod={settings.localUsagePeriod ?? "today"}
-                      outputSpeed={speedForCard}
-                      outputSpeedEnabled={outputSpeedEnabled}
-                      chartData={chartDataForCard}
-                      detail={isDetail}
-                    />
-                  </div>
-                );
-              })}
-            </div>
-
-          </div>
+          <TrayPanelContent
+            gridProviders={gridProviders}
+            visibleProviders={visibleProviders}
+            selectedProviderId={selectedProviderId}
+            display={display}
+            densityMode={density}
+            showProviderIcons={settings.switcherShowsIcons}
+            expanded={gridExpanded}
+            onExpandedChange={setGridExpanded}
+            speedByProviderId={speedByProviderId}
+            outputSpeedEnabled={outputSpeedEnabled}
+            localUsagePeriod={settings.localUsagePeriod}
+            chartByProviderId={chartByProviderId}
+            coreById={coreById}
+            detail={isDetail}
+            onSelect={setSelectedProviderId}
+            footer={<TrayPanelFooter interactive={false} />}
+          />
         </div>
       </SurfacePreviewFrame>
     </div>

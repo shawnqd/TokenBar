@@ -587,9 +587,9 @@ impl AntigravityProvider {
                     continue;
                 };
                 let bucket_title = bucket_display_title(&bucket);
-                let remaining_fraction = bucket.remaining_fraction.or_else(|| {
-                    bucket.remaining.as_ref().and_then(|r| r.remaining_fraction)
-                });
+                let remaining_fraction = bucket
+                    .remaining_fraction
+                    .or_else(|| bucket.remaining.as_ref().and_then(|r| r.remaining_fraction));
                 let usage_known = !bucket.disabled && remaining_fraction.is_some();
                 let window_minutes = bucket_window_minutes(&bucket);
                 let resets_at = bucket.reset_time.as_deref().and_then(parse_reset_time);
@@ -681,14 +681,14 @@ impl Provider for AntigravityProvider {
                 return Err(e);
             }
         };
-        let api_port = match Self::find_api_port(process_info.extension_port, process_info.pid).await
-        {
-            Ok(port) => port,
-            Err(e) => {
-                tracing::warn!("Antigravity probe failed: {}", e);
-                return Err(e);
-            }
-        };
+        let api_port =
+            match Self::find_api_port(process_info.extension_port, process_info.pid).await {
+                Ok(port) => port,
+                Err(e) => {
+                    tracing::warn!("Antigravity probe failed: {}", e);
+                    return Err(e);
+                }
+            };
 
         // Preferred source: RetrieveUserQuotaSummary (the two-group payload the
         // official Models screen shows). Old IDE servers answer 404; fall back
@@ -945,15 +945,13 @@ impl<'de> Deserialize<'de> for QuotaSummaryRemainingPayload {
             value: Option<f64>,
         }
         let raw = Raw::deserialize(deserializer)?;
-        let remaining_fraction = raw
-            .remaining_fraction
-            .or_else(|| {
-                if raw.oneof_case.as_deref() == Some("remainingFraction") {
-                    raw.value
-                } else {
-                    None
-                }
-            });
+        let remaining_fraction = raw.remaining_fraction.or_else(|| {
+            if raw.oneof_case.as_deref() == Some("remainingFraction") {
+                raw.value
+            } else {
+                None
+            }
+        });
         Ok(Self { remaining_fraction })
     }
 }
@@ -1305,7 +1303,9 @@ const SESSION_CADENCE_ALIASES: [&str; 5] = ["session", "5h", "5-hour", "five hou
 /// word. This is deliberately a little more permissive than the upstream
 /// suffix-only matcher, because a cadence hint only renames the window — the
 /// numbers come from `remainingFraction` regardless.
-fn quota_cadence_candidates(bucket: &QuotaSummaryBucketPayload) -> std::collections::HashSet<String> {
+fn quota_cadence_candidates(
+    bucket: &QuotaSummaryBucketPayload,
+) -> std::collections::HashSet<String> {
     let mut candidates = std::collections::HashSet::new();
     for raw in [bucket.bucket_id.as_deref(), bucket.display_name.as_deref()] {
         let Some(raw) = raw else { continue };
@@ -1449,7 +1449,10 @@ mod tests {
     ) -> serde_json::Value {
         let mut quota = serde_json::Map::new();
         if let Some(remaining) = remaining {
-            quota.insert("remainingFraction".to_string(), serde_json::json!(remaining));
+            quota.insert(
+                "remainingFraction".to_string(),
+                serde_json::json!(remaining),
+            );
         }
         if let Some(reset_time) = reset_time {
             quota.insert("resetTime".to_string(), serde_json::json!(reset_time));
@@ -1805,18 +1808,16 @@ mod tests {
         let provider = AntigravityProvider::new();
         let gemini_only = provider
             .parse_quota_summary(make_summary_response(
-                vec![
-                    (
-                        "Gemini Models",
-                        vec![make_summary_bucket(
-                            "gemini-models-five-hour-limit",
-                            "Five Hour Limit Remaining",
-                            Some(0.8),
-                            Some("2026-08-14T18:00:00Z"),
-                            false,
-                        )],
-                    ),
-                ],
+                vec![(
+                    "Gemini Models",
+                    vec![make_summary_bucket(
+                        "gemini-models-five-hour-limit",
+                        "Five Hour Limit Remaining",
+                        Some(0.8),
+                        Some("2026-08-14T18:00:00Z"),
+                        false,
+                    )],
+                )],
                 "response",
             ))
             .unwrap();
@@ -1824,18 +1825,16 @@ mod tests {
 
         let claude_only = provider
             .parse_quota_summary(make_summary_response(
-                vec![
-                    (
-                        "Claude and GPT models",
-                        vec![make_summary_bucket(
-                            "claude-gpt-models-weekly-limit",
-                            "Weekly Limit Remaining",
-                            Some(0.8),
-                            Some("2026-08-17T00:00:00Z"),
-                            false,
-                        )],
-                    ),
-                ],
+                vec![(
+                    "Claude and GPT models",
+                    vec![make_summary_bucket(
+                        "claude-gpt-models-weekly-limit",
+                        "Weekly Limit Remaining",
+                        Some(0.8),
+                        Some("2026-08-17T00:00:00Z"),
+                        false,
+                    )],
+                )],
                 "response",
             ))
             .unwrap();
@@ -2029,14 +2028,18 @@ mod tests {
                 "response": { "description": "summary", "groups": groups },
             });
             let response: QuotaSummaryResponse = serde_json::from_value(json).unwrap();
-            let snap = AntigravityProvider::new().parse_quota_summary(response).unwrap();
+            let snap = AntigravityProvider::new()
+                .parse_quota_summary(response)
+                .unwrap();
             assert_eq!(snap.extra_rate_windows.len(), 1, "code {code}");
         }
         let json = serde_json::json!({
             "response": { "description": "summary", "groups": groups },
         });
         let response: QuotaSummaryResponse = serde_json::from_value(json).unwrap();
-        let snap = AntigravityProvider::new().parse_quota_summary(response).unwrap();
+        let snap = AntigravityProvider::new()
+            .parse_quota_summary(response)
+            .unwrap();
         assert_eq!(snap.extra_rate_windows.len(), 1);
     }
 
@@ -2060,7 +2063,9 @@ mod tests {
             }
         });
         let response: QuotaSummaryResponse = serde_json::from_value(json).unwrap();
-        let snap = AntigravityProvider::new().parse_quota_summary(response).unwrap();
+        let snap = AntigravityProvider::new()
+            .parse_quota_summary(response)
+            .unwrap();
 
         assert_eq!(snap.extra_rate_windows.len(), 1);
         // 0.65 remaining → 35% used.

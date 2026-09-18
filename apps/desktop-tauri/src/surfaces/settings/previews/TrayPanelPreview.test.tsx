@@ -100,6 +100,8 @@ describe("TrayPanelPreview (core read model)", () => {
     // pickPreviewSnapshot([]) falls back to the Claude fixture (78%).
     expect(container.textContent).toContain("Claude");
     expect(container.textContent).toContain("78%");
+    expect(container.querySelector(".tray-panel")).not.toBeNull();
+    expect(container.querySelector(".menu-card")).toBeNull();
   });
 
   it("reads the preview provider from the tray core store (same source as the flyout)", async () => {

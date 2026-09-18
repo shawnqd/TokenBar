@@ -139,7 +139,9 @@ pub struct CostSummary {
 pub enum ModelPricingCompleteness {
     #[default]
     Complete,
-    Partial { unpriced_models: Vec<String> },
+    Partial {
+        unpriced_models: Vec<String>,
+    },
 }
 
 impl ModelPricingCompleteness {
@@ -439,8 +441,7 @@ impl CostScanner {
 
         let (turns, coverage_established) =
             self.collect_unique_codex_turns_with_status(cancel, None);
-        let (total_cost, turn_count) =
-            apply_codex_turns_to_summary(&mut summary, &turns, &range);
+        let (total_cost, turn_count) = apply_codex_turns_to_summary(&mut summary, &turns, &range);
         summary.total_cost_usd += total_cost;
         // One session == one deduplicated turn of real consumption.
         summary.sessions_count = turn_count;
@@ -460,7 +461,8 @@ impl CostScanner {
         cancel: Option<&AtomicBool>,
         deadline: Option<Instant>,
     ) -> Vec<CachedTurn> {
-        self.collect_unique_codex_turns_with_status(cancel, deadline).0
+        self.collect_unique_codex_turns_with_status(cancel, deadline)
+            .0
     }
 
     pub(crate) fn collect_unique_codex_turns_with_status(
@@ -468,9 +470,8 @@ impl CostScanner {
         cancel: Option<&AtomicBool>,
         deadline: Option<Instant>,
     ) -> (Vec<CachedTurn>, bool) {
-        let stopped = || {
-            is_cancelled(cancel) || deadline.is_some_and(|limit| Instant::now() >= limit)
-        };
+        let stopped =
+            || is_cancelled(cancel) || deadline.is_some_and(|limit| Instant::now() >= limit);
         let mut candidates: Vec<(PathBuf, bool)> = Vec::new();
         let mut source_available = false;
         let today = Local::now().date_naive();
@@ -520,16 +521,12 @@ impl CostScanner {
                 break;
             }
             let key = codex_path_key(&path);
-            let thread = identities
-                .get(&key)
-                .cloned()
-                .flatten()
-                .or_else(|| {
-                    JsonlScanner::read_codex_session_identity(&path)
-                        .ok()
-                        .and_then(|(thread, _)| thread)
-                        .filter(|thread| !thread.trim().is_empty())
-                });
+            let thread = identities.get(&key).cloned().flatten().or_else(|| {
+                JsonlScanner::read_codex_session_identity(&path)
+                    .ok()
+                    .and_then(|(thread, _)| thread)
+                    .filter(|thread| !thread.trim().is_empty())
+            });
             let is_lineage_ancestor = thread
                 .as_ref()
                 .is_some_and(|thread| recent_threads.contains(thread));
@@ -561,7 +558,10 @@ impl CostScanner {
         let mut per_thread: std::collections::HashMap<String, Vec<CodexFileCache>> =
             std::collections::HashMap::new();
         for file in files {
-            let key = file.thread.clone().unwrap_or_else(|| "file:unknown".to_string());
+            let key = file
+                .thread
+                .clone()
+                .unwrap_or_else(|| "file:unknown".to_string());
             per_thread.entry(key).or_default().push(file);
         }
         let mut unique: Vec<CachedTurn> = Vec::new();
@@ -684,9 +684,10 @@ impl CostScanner {
         // turn must not be counted twice.
         let mut seen = HashSet::new();
         let mut handle_file = |path: &Path| {
-            let counted = for_each_grok_turn(path, &cutoff, &mut seen, cancel, |_timestamp, turn| {
-                add_grok_turn_to_summary(&mut summary, turn);
-            });
+            let counted =
+                for_each_grok_turn(path, &cutoff, &mut seen, cancel, |_timestamp, turn| {
+                    add_grok_turn_to_summary(&mut summary, turn);
+                });
             if counted > 0 {
                 summary.sessions_count += 1;
             }
@@ -767,7 +768,6 @@ impl CostScanner {
             &default_wsl_roots(),
         )
     }
-
 
     fn get_claude_projects_dir(&self) -> PathBuf {
         if let Ok(claude_config) = std::env::var("CLAUDE_CONFIG_DIR") {
@@ -1002,8 +1002,12 @@ where
         let Ok(parsed) = serde_json::from_str::<GrokUpdateLine>(&line) else {
             continue;
         };
-        let Some(params) = parsed.params else { continue };
-        let Some(update) = params.update else { continue };
+        let Some(params) = parsed.params else {
+            continue;
+        };
+        let Some(update) = params.update else {
+            continue;
+        };
         if update.session_update.as_deref() != Some("turn_completed") {
             continue;
         }
@@ -1141,11 +1145,8 @@ pub fn get_daily_cost_history_with_budget(
             let window = CostUsageDayRange::new(today - Duration::days((days - 1).into()), today);
             let turns = scanner.collect_unique_codex_turns(cancel, deadline);
             for turn in &turns {
-                if !CostUsageDayRange::is_in_range(
-                    &turn.day,
-                    &window.since_key,
-                    &window.until_key,
-                ) {
+                if !CostUsageDayRange::is_in_range(&turn.day, &window.since_key, &window.until_key)
+                {
                     continue;
                 }
                 if let Some(cost) = codex_turn_cost_at_date(
@@ -1154,8 +1155,7 @@ pub fn get_daily_cost_history_with_budget(
                     turn.cached,
                     turn.output,
                     CostUsageDayRange::parse_day_key(&turn.day),
-                )
-                {
+                ) {
                     *daily_costs.entry(turn.day.clone()).or_insert(0.0) += cost;
                 }
             }
@@ -1218,8 +1218,20 @@ mod tests {
             thread: Some("root".to_string()),
             created: Some("2026-08-12T00:00:00Z".to_string()),
             turns: vec![
-                CachedTurn { day: "2026-08-12".to_string(), model: "gpt-5.6-luna".to_string(), input: 100, cached: 50, output: 10 },
-                CachedTurn { day: "2026-08-20".to_string(), model: "gpt-5.6-luna".to_string(), input: 200, cached: 80, output: 20 },
+                CachedTurn {
+                    day: "2026-08-12".to_string(),
+                    model: "gpt-5.6-luna".to_string(),
+                    input: 100,
+                    cached: 50,
+                    output: 10,
+                },
+                CachedTurn {
+                    day: "2026-08-20".to_string(),
+                    model: "gpt-5.6-luna".to_string(),
+                    input: 200,
+                    cached: 80,
+                    output: 20,
+                },
             ],
         };
         let fork = CodexFileCache {
@@ -1229,10 +1241,28 @@ mod tests {
             created: Some("2026-08-29T00:00:00Z".to_string()),
             turns: vec![
                 // 重放:值与 root 相同,day 已改写
-                CachedTurn { day: "2026-08-29".to_string(), model: "gpt-5.6-luna".to_string(), input: 100, cached: 50, output: 10 },
-                CachedTurn { day: "2026-08-29".to_string(), model: "gpt-5.6-luna".to_string(), input: 200, cached: 80, output: 20 },
+                CachedTurn {
+                    day: "2026-08-29".to_string(),
+                    model: "gpt-5.6-luna".to_string(),
+                    input: 100,
+                    cached: 50,
+                    output: 10,
+                },
+                CachedTurn {
+                    day: "2026-08-29".to_string(),
+                    model: "gpt-5.6-luna".to_string(),
+                    input: 200,
+                    cached: 80,
+                    output: 20,
+                },
                 // 分叉后的真实新消费
-                CachedTurn { day: "2026-08-29".to_string(), model: "gpt-5.6-luna".to_string(), input: 30, cached: 0, output: 3 },
+                CachedTurn {
+                    day: "2026-08-29".to_string(),
+                    model: "gpt-5.6-luna".to_string(),
+                    input: 30,
+                    cached: 0,
+                    output: 3,
+                },
             ],
         };
 
@@ -1304,11 +1334,13 @@ mod tests {
 
         let range = CostUsageDayRange::new(codex_period_start(today, 30), today);
         let mut summary = CostSummary::default();
-        let (cost, turn_count) =
-            apply_codex_turns_to_summary(&mut summary, &entry.turns, &range);
+        let (cost, turn_count) = apply_codex_turns_to_summary(&mut summary, &entry.turns, &range);
 
         assert_eq!(turn_count, 1);
-        assert_eq!(summary.sessions_count, 0, "sessions belongs to scan_codex, not apply");
+        assert_eq!(
+            summary.sessions_count, 0,
+            "sessions belongs to scan_codex, not apply"
+        );
         assert_eq!(summary.input_tokens, 125);
         assert_eq!(summary.cached_tokens, 30);
         assert_eq!(summary.output_tokens, 15);
@@ -1507,7 +1539,10 @@ mod tests {
         // 12_971_000_000 ticks at 1e9 ticks per USD.
         assert!((summary.total_cost_usd - 12.971).abs() < 1e-9);
         assert_eq!(
-            summary.by_model_tokens.get("grok-4.5-build").map(ModelTokenCounts::total),
+            summary
+                .by_model_tokens
+                .get("grok-4.5-build")
+                .map(ModelTokenCounts::total),
             Some(2_723_988)
         );
     }
@@ -1605,7 +1640,10 @@ mod tests {
         let (history, stopped) = get_daily_cost_history_with_budget("grok", 7, None, None);
         assert!(!stopped);
         let today_entry = history.iter().find(|(date, _)| date == &today_date_str);
-        assert!(today_entry.is_some(), "today entry must exist in grok history");
+        assert!(
+            today_entry.is_some(),
+            "today entry must exist in grok history"
+        );
         assert!(today_entry.unwrap().1 > 0.0, "today cost must be > 0");
 
         unsafe {

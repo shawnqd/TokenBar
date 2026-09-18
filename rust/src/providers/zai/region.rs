@@ -93,10 +93,8 @@ impl ZaiRegion {
         match self {
             ZaiRegion::Global => None,
             ZaiRegion::BigModelCn => Some(
-                Url::parse(
-                    "https://www.bigmodel.cn/api/biz/account/query-customer-account-report",
-                )
-                .expect("region balance URL is a valid constant"),
+                Url::parse("https://www.bigmodel.cn/api/biz/account/query-customer-account-report")
+                    .expect("region balance URL is a valid constant"),
             ),
         }
     }
@@ -114,10 +112,13 @@ impl ZaiRegion {
             .map(str::to_ascii_lowercase)
             .as_deref()
         {
-            Some("bigmodel-cn") | Some("bigmodel_cn") | Some("bigmodel") | Some("cn")
-            | Some("china") | Some("china-mainland") | Some("china_mainland") => {
-                ZaiRegion::BigModelCn
-            }
+            Some("bigmodel-cn")
+            | Some("bigmodel_cn")
+            | Some("bigmodel")
+            | Some("cn")
+            | Some("china")
+            | Some("china-mainland")
+            | Some("china_mainland") => ZaiRegion::BigModelCn,
             _ => ZaiRegion::Global,
         }
     }

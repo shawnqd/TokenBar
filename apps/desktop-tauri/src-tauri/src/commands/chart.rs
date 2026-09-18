@@ -9,6 +9,7 @@ use codexbar::core::OpenAIDashboardCacheStore;
 use codexbar::cost_scanner::{CostScanner, CostSummary, get_daily_cost_history_with_budget};
 use codexbar::locale::{self, LocaleKey};
 use codexbar::settings::Settings;
+use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
@@ -25,9 +26,10 @@ const PROVIDER_CHART_TTL: Duration = Duration::from_secs(5 * 60);
 /// walk. The background prewarm path remains uncapped, while an on-demand
 /// chart returns a bounded/partial bundle and lets the next TTL pass retry.
 const INTERACTIVE_CHART_SCAN_BUDGET: Duration = Duration::from_secs(3);
-// v3: ProviderLocalUsageSummary gained per-period top-model fields; discard v2
-// caches so the new fields are recomputed instead of loading as null.
-const PROVIDER_CHART_CACHE_VERSION: u8 = 3;
+// v4: ProviderLocalUsageSummary gained scan-quality and measurement metadata;
+// discard v3 caches so the new fields are recomputed instead of loading with
+// stale/default quality values.
+const PROVIDER_CHART_CACHE_VERSION: u8 = 4;
 
 /// A single (date, value) point for cost or credits history charts.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -70,6 +72,13 @@ pub struct ProviderLocalUsageSummary {
     pub seven_day_top_model: Option<String>,
     pub thirty_day_top_model: Option<String>,
     pub estimate_note: String,
+    /// Quality metadata from the scanner. These fields keep the bridge from
+    /// collapsing an unavailable/partial read into a believable zero.
+    pub history_coverage_established: bool,
+    pub known_zero: bool,
+    pub pricing_complete: bool,
+    pub unpriced_models: Vec<String>,
+    pub measured_at: String,
 }
 
 /// Full chart data bundle for one provider.
@@ -412,18 +421,18 @@ fn load_local_usage_summary(
     if cancel.is_some_and(|flag| flag.load(Ordering::Relaxed)) {
         return None;
     }
-    let seven_day = scan_local_cost(provider_id, 7, cancel).unwrap_or_default();
+    let seven_day = scan_local_cost(provider_id, 7, cancel)?;
     if cancel.is_some_and(|flag| flag.load(Ordering::Relaxed)) {
         return None;
     }
-    let today = scan_local_cost(provider_id, 1, cancel).unwrap_or_default();
+    let today = scan_local_cost(provider_id, 1, cancel)?;
 
     let thirty_day_tokens = total_tokens(&thirty_day);
     let seven_day_tokens = total_tokens(&seven_day);
     let today_tokens = total_tokens(&today);
     let has_usage =
         thirty_day.sessions_count > 0 || thirty_day.total_cost_usd > 0.0 || thirty_day_tokens > 0;
-    if !has_usage {
+    if !has_usage && !thirty_day.known_zero {
         return None;
     }
 
@@ -439,6 +448,14 @@ fn load_local_usage_summary(
         seven_day_top_model: top_model(&seven_day),
         thirty_day_top_model: top_model(&thirty_day),
         estimate_note: localized_estimate_note(provider_id, lang),
+        history_coverage_established: thirty_day.history_coverage_established,
+        known_zero: thirty_day.known_zero,
+        pricing_complete: thirty_day.model_pricing_completeness.is_complete(),
+        unpriced_models: thirty_day
+            .model_pricing_completeness
+            .unpriced_models()
+            .to_vec(),
+        measured_at: Utc::now().to_rfc3339(),
     })
 }
 
@@ -854,6 +871,11 @@ mod tests {
             seven_day_top_model: Some("gpt-5".to_string()),
             thirty_day_top_model: Some("gpt-5".to_string()),
             estimate_note: "estimated".to_string(),
+            history_coverage_established: true,
+            known_zero: false,
+            pricing_complete: true,
+            unpriced_models: Vec::new(),
+            measured_at: "2026-09-17T00:00:00Z".to_string(),
         };
         apply_local_usage_scan("codex".to_string(), Some(summary));
 
@@ -922,6 +944,11 @@ mod tests {
             seven_day_top_model: None,
             thirty_day_top_model: Some("gpt-5".to_string()),
             estimate_note: "estimated".to_string(),
+            history_coverage_established: true,
+            known_zero: false,
+            pricing_complete: true,
+            unpriced_models: Vec::new(),
+            measured_at: "2026-09-17T00:00:00Z".to_string(),
         };
         apply_local_usage_scan("codex".to_string(), Some(summary));
         assert!(cached_provider_local_usage_summary("codex").is_some());

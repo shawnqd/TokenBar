@@ -766,6 +766,15 @@ fn only_timeout_failures_enter_the_retry_policy() {
     assert!(!super::provider_error_is_timeout(
         &codexbar::core::ProviderError::AuthRequired
     ));
+    assert!(super::provider_error_is_transient(
+        &codexbar::core::ProviderError::Timeout
+    ));
+    assert!(super::provider_error_is_transient(
+        &codexbar::core::ProviderError::Other("HTTP 503 Service Unavailable".into())
+    ));
+    assert!(!super::provider_error_is_transient(
+        &codexbar::core::ProviderError::AuthRequired
+    ));
 }
 
 #[test]
@@ -849,6 +858,41 @@ fn claude_repeated_auth_failure_surfaces_error() {
     );
 
     assert!(surfaced.error.is_some());
+}
+
+#[test]
+fn first_transport_failure_preserves_last_good_snapshot_as_stale() {
+    let metadata = instantiate_provider(ProviderId::Codex).metadata().clone();
+    let result = ProviderFetchResult {
+        usage: codexbar::core::UsageSnapshot::new(codexbar::core::RateWindow::new(42.0)),
+        cost: None,
+        wayfinder_usage: None,
+        source_label: "API".to_string(),
+    };
+    let good = ProviderUsageSnapshot::from_fetch_result(ProviderId::Codex, &metadata, &result);
+    let error = ProviderUsageSnapshot::from_error(
+        ProviderId::Codex,
+        &metadata,
+        "HTTP 503 Service Unavailable".to_string(),
+    );
+    let mut state = crate::state::AppState::new();
+    state.provider_cache.push(good.clone());
+
+    let preserved = super::providers::preserve_last_good_transient_failure_with_transport(
+        &mut state,
+        ProviderId::Codex,
+        error,
+        true,
+    );
+
+    assert_eq!(preserved.error, None);
+    assert!(preserved.stale);
+    assert_eq!(
+        preserved.stale_reason.as_deref(),
+        Some("HTTP 503 Service Unavailable")
+    );
+    assert_eq!(preserved.primary.used_percent, 42.0);
+    assert_eq!(preserved.updated_at, good.updated_at);
 }
 
 #[test]

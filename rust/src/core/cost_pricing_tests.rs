@@ -35,10 +35,18 @@ fn unattributed_codex_usage_stays_unpriced() {
 #[test]
 fn routed_codex_models_are_not_native_subscription_usage() {
     assert!(CostUsagePricing::counts_toward_codex_subscription("gpt-5"));
-    assert!(CostUsagePricing::counts_toward_codex_subscription("OPENAI/gpt-5"));
-    assert!(!CostUsagePricing::counts_toward_codex_subscription("deepseek/model"));
-    assert!(!CostUsagePricing::counts_toward_codex_subscription("opencode-go-qwen/model"));
-    assert!(!CostUsagePricing::counts_toward_codex_subscription("codex-auto-review"));
+    assert!(CostUsagePricing::counts_toward_codex_subscription(
+        "OPENAI/gpt-5"
+    ));
+    assert!(!CostUsagePricing::counts_toward_codex_subscription(
+        "deepseek/model"
+    ));
+    assert!(!CostUsagePricing::counts_toward_codex_subscription(
+        "opencode-go-qwen/model"
+    ));
+    assert!(!CostUsagePricing::counts_toward_codex_subscription(
+        "codex-auto-review"
+    ));
     assert!(CostUsagePricing::codex_cost_usd("acme/model", 1_000_000, 0, 1_000_000).is_none());
 }
 
@@ -226,8 +234,14 @@ fn test_gpt56_historical_rates_use_event_date() {
 
     // One million input tokens exercises the long-context tier: the legacy
     // Terra rate was $5/M input + $22.50/M output, then moved to $4/M + $18/M.
-    assert!((before - 27.5).abs() < 1e-10, "before={before}, after={after}");
-    assert!((after - 22.0).abs() < 1e-10, "before={before}, after={after}");
+    assert!(
+        (before - 27.5).abs() < 1e-10,
+        "before={before}, after={after}"
+    );
+    assert!(
+        (after - 22.0).abs() < 1e-10,
+        "before={before}, after={after}"
+    );
 }
 
 #[test]
