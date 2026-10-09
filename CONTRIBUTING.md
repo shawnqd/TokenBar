@@ -1,7 +1,9 @@
 # Contributing
 
-Thanks for helping improve TokenBar. This repository contains the Windows/Tauri
-application and its shared Rust code.
+Thanks for helping improve TokenBar. This repo ships the Windows/Tauri product;
+prefer the active Windows codepaths. macOS users should use the original
+[CodexBar](https://github.com/steipete/CodexBar); macOS implementation details
+are not maintained here.
 
 ## Active project layout
 
@@ -10,7 +12,9 @@ application and its shared Rust code.
 - `apps\desktop-tauri\src-tauri\src\` contains the Tauri shell, tray bridge, commands, and desktop integration.
 - `rust\src\` contains shared backend/domain logic and the standalone `codexbar` CLI.
 - `rust\src\providers\` contains provider-specific fetch, auth, and parsing logic.
-- `docs\` contains user-facing Windows build and usage notes.
+- `docs\` may retain historical audit records, but they are not product
+  instructions. For macOS, use the original [CodexBar](https://github.com/steipete/CodexBar)
+  rather than looking for a TokenBar build or implementation in this repository.
 
 ## Before filing an issue
 

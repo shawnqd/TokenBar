@@ -1,15 +1,35 @@
 //! Cookie Header Cache
 //!
-//! Caches cookie headers for providers to avoid repeated browser cookie extraction.
-//! Stores normalized cookie headers with timestamps and source labels.
+//! Caches cookie headers per site (primary cookie domain) so browser-session
+//! providers keep working while the browser holds an exclusive lock on its
+//! own cookie database (Chrome active profiles). The cached value is only an
+//! auth credential: fetches made with it still return live server data.
+//! Entries are stored through the DPAPI-backed secure-file layer — a cached
+//! cookie is a session credential and must never hit disk in plaintext.
 
-#![allow(dead_code)]
-
-use crate::core::ProviderId;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
+
+/// How long a cached cookie header may stand in for a live extraction.
+/// Session cookies typically outlive this by far; the bound exists so a
+/// server-revoked session cannot be served forever after a lock failure.
+pub const COOKIE_CACHE_TTL_SECS: i64 = 24 * 60 * 60;
+
+/// Test-only cache directory override (see [`CookieHeaderCache::cache_path`]).
+#[cfg(test)]
+static CACHE_DIR_OVERRIDE: std::sync::RwLock<Option<PathBuf>> = std::sync::RwLock::new(None);
+
+#[cfg(test)]
+pub(crate) fn set_cache_dir_for_tests(dir: PathBuf) {
+    *CACHE_DIR_OVERRIDE.write().expect("cache dir override lock") = Some(dir);
+}
+
+#[cfg(test)]
+fn clear_cache_dir_for_tests() {
+    *CACHE_DIR_OVERRIDE.write().expect("cache dir override lock") = None;
+}
 
 /// Cached cookie header entry
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -42,16 +62,16 @@ impl CookieHeaderEntry {
 pub struct CookieHeaderCache;
 
 impl CookieHeaderCache {
-    /// Load cached cookie header for a provider
-    pub fn load(provider: ProviderId) -> Option<CookieHeaderEntry> {
-        let path = Self::cache_path(provider)?;
-        let data = fs::read_to_string(&path).ok()?;
-        serde_json::from_str(&data).ok()
+    /// Load cached cookie header for a site (primary cookie domain)
+    pub fn load(site: &str) -> Option<CookieHeaderEntry> {
+        let path = Self::cache_path(site)?;
+        let content = crate::secure_file::read_string(&path).ok()?;
+        serde_json::from_str(&content).ok()
     }
 
-    /// Store a cookie header for a provider
+    /// Store a cookie header for a site (primary cookie domain)
     pub fn store(
-        provider: ProviderId,
+        site: &str,
         cookie_header: &str,
         source_label: &str,
     ) -> Result<(), CookieHeaderCacheError> {
@@ -62,12 +82,12 @@ impl CookieHeaderCache {
 
         if normalized.is_empty() {
             // Clear the cache if the normalized header is empty
-            Self::clear(provider);
+            Self::clear(site);
             return Ok(());
         }
 
         let entry = CookieHeaderEntry::new(normalized, source_label);
-        let path = Self::cache_path(provider).ok_or(CookieHeaderCacheError::PathNotAvailable)?;
+        let path = Self::cache_path(site).ok_or(CookieHeaderCacheError::PathNotAvailable)?;
 
         // Create parent directory
         if let Some(parent) = path.parent() {
@@ -75,10 +95,10 @@ impl CookieHeaderCache {
         }
 
         let json = serde_json::to_string_pretty(&entry)?;
-        fs::write(&path, json)?;
+        crate::secure_file::write_string(&path, &json)?;
 
         tracing::debug!(
-            provider = %provider.cli_name(),
+            site = %site,
             source = source_label,
             "Stored cookie header to cache"
         );
@@ -86,26 +106,48 @@ impl CookieHeaderCache {
         Ok(())
     }
 
-    /// Clear cached cookie header for a provider
-    pub fn clear(provider: ProviderId) {
-        if let Some(path) = Self::cache_path(provider)
+    /// Clear cached cookie header for a site
+    pub fn clear(site: &str) {
+        if let Some(path) = Self::cache_path(site)
             && let Err(e) = fs::remove_file(&path)
             && e.kind() != std::io::ErrorKind::NotFound
         {
             tracing::warn!(
-                provider = %provider.cli_name(),
+                site = %site,
                 error = %e,
                 "Failed to remove cookie cache"
             );
         }
     }
 
-    /// Get the cache file path for a provider
-    fn cache_path(provider: ProviderId) -> Option<PathBuf> {
-        dirs::data_local_dir().map(|d| {
-            d.join("CodexBar")
-                .join(format!("{}-cookie.json", provider.cli_name()))
-        })
+    /// Get the cache file path for a site. Domains are filename-safe after
+    /// mangling the characters filesystems dislike.
+    fn cache_path(site: &str) -> Option<PathBuf> {
+        let site = site.trim().to_ascii_lowercase();
+        if site.is_empty() {
+            return None;
+        }
+        let safe: String = site
+            .chars()
+            .map(|c| {
+                if c.is_ascii_alphanumeric() || c == '.' || c == '-' {
+                    c
+                } else {
+                    '_'
+                }
+            })
+            .collect();
+        // Tests redirect the cache dir via the in-process override: env vars
+        // are unsafe to mutate in Rust 2024 and racy across parallel tests.
+        #[cfg(test)]
+        if let Some(dir) = CACHE_DIR_OVERRIDE
+            .read()
+            .expect("cache dir override lock")
+            .clone()
+        {
+            return Some(dir.join(format!("{safe}-cookie.json")));
+        }
+        dirs::data_local_dir().map(|d| d.join("CodexBar").join(format!("{safe}-cookie.json")))
     }
 
     /// Normalize a cookie header string
@@ -141,8 +183,8 @@ impl CookieHeaderCache {
     }
 
     /// Check if a cached entry exists and is fresh
-    pub fn has_fresh_cache(provider: ProviderId, max_age_secs: i64) -> bool {
-        match Self::load(provider) {
+    pub fn has_fresh_cache(site: &str, max_age_secs: i64) -> bool {
+        match Self::load(site) {
             Some(entry) => !entry.is_stale(max_age_secs),
             None => false,
         }
@@ -189,5 +231,45 @@ mod tests {
 
         let whitespace = CookieHeaderCache::normalize_cookie_header("   ;  ;  ");
         assert!(whitespace.is_empty());
+    }
+
+    // The cache stores session credentials: roundtrip must go through the
+    // DPAPI-backed secure-file layer, keyed per site, isolated per test via
+    // the dir override.
+    #[test]
+    fn cache_roundtrip_is_site_scoped_and_secure() {
+        let dir =
+            std::env::temp_dir().join(format!("codexbar-cookie-cache-test-{}", std::process::id()));
+        set_cache_dir_for_tests(dir.clone());
+
+        CookieHeaderCache::store("platform.xiaomimimo.com", "b=2; a=1", "browser")
+            .expect("store should succeed");
+        let entry = CookieHeaderCache::load("platform.xiaomimimo.com").expect("cache entry loads");
+        // Normalized (sorted) header survives the roundtrip.
+        assert_eq!(entry.cookie_header, "a=1; b=2");
+        assert_eq!(entry.source_label, "browser");
+        assert!(!entry.is_stale(COOKIE_CACHE_TTL_SECS));
+
+        // Sites do not share entries.
+        assert!(CookieHeaderCache::load("grok.com").is_none());
+
+        // The stored file must be protected, never plaintext.
+        let raw = std::fs::read_to_string(dir.join("platform.xiaomimimo.com-cookie.json"))
+            .expect("cache file exists");
+        assert!(
+            raw.contains("codexbar.secure-file") && raw.contains("windows-dpapi-user"),
+            "cache file must use the DPAPI secure-file envelope"
+        );
+        assert!(
+            !raw.contains("a=1"),
+            "the cookie payload must not be readable plaintext"
+        );
+
+        // Clearing removes only the requested site.
+        CookieHeaderCache::clear("platform.xiaomimimo.com");
+        assert!(CookieHeaderCache::load("platform.xiaomimimo.com").is_none());
+
+        clear_cache_dir_for_tests();
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

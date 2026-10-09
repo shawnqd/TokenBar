@@ -33,8 +33,10 @@ describe("useTrayPanelLayout first-frame handshake", () => {
   });
 
   it("reveals only after fonts and two composited frame boundaries", async () => {
+    // `null` restores the unbounded font wait so this test exercises the
+    // fonts-gated path deterministically instead of racing the ceiling.
     const { result } = renderHook(() =>
-      useTrayPanelLayout({ canMeasure: true }),
+      useTrayPanelLayout({ canMeasure: true, fontReadyTimeoutMs: null }),
     );
 
     await waitFor(() =>
@@ -59,7 +61,7 @@ describe("useTrayPanelLayout first-frame handshake", () => {
 
   it("does not reveal after the surface unmounts during first-frame work", async () => {
     const { unmount } = renderHook(() =>
-      useTrayPanelLayout({ canMeasure: true }),
+      useTrayPanelLayout({ canMeasure: true, fontReadyTimeoutMs: null }),
     );
     await waitFor(() =>
       expect(tauriMocks.reanchorTrayPanel).toHaveBeenCalledTimes(1),
@@ -69,5 +71,27 @@ describe("useTrayPanelLayout first-frame handshake", () => {
     await act(async () => resolveFonts());
     expect(frames).toHaveLength(0);
     expect(tauriMocks.revealTrayPanelWindow).not.toHaveBeenCalled();
+  });
+
+  it("reveals without fonts once the wait ceiling elapses", async () => {
+    // A 20MB preferred web font must never hold the panel hostage: with the
+    // ceiling at 0 the handshake proceeds and `font-display: swap` paints the
+    // fallback family until the real font lands.
+    const { result } = renderHook(() =>
+      useTrayPanelLayout({ canMeasure: true, fontReadyTimeoutMs: 0 }),
+    );
+
+    await waitFor(() => expect(result.current.layoutReady).toBe(true));
+    expect(tauriMocks.revealTrayPanelWindow).not.toHaveBeenCalled();
+
+    await act(async () => frames.shift()?.(0));
+    await act(async () => frames.shift()?.(16));
+    await waitFor(() =>
+      expect(tauriMocks.revealTrayPanelWindow).toHaveBeenCalledTimes(1),
+    );
+
+    // Resolving fonts afterwards must not trigger a second reveal.
+    await act(async () => resolveFonts());
+    expect(tauriMocks.revealTrayPanelWindow).toHaveBeenCalledTimes(1);
   });
 });

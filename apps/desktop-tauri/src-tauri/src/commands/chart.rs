@@ -5,11 +5,11 @@
 //! the Codex / OpenAI dashboard cache and require an `account_email` to scope
 //! reads to the right cached bundle.
 
+use chrono::Utc;
 use codexbar::core::OpenAIDashboardCacheStore;
 use codexbar::cost_scanner::{CostScanner, CostSummary, get_daily_cost_history_with_budget};
 use codexbar::locale::{self, LocaleKey};
 use codexbar::settings::Settings;
-use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
@@ -124,11 +124,22 @@ pub async fn get_provider_chart_data(
     })
 }
 
-/// Start the expensive Codex / Claude log aggregation after the shell is up,
+/// Start the expensive local-log aggregation after the shell is up,
 /// so opening the tray normally hits a warm cache instead of beginning a scan.
 pub(crate) fn prewarm_provider_chart_data() {
     tauri::async_runtime::spawn_blocking(move || {
-        for provider_id in ["codex", "claude", "grok"] {
+        for provider_id in [
+            "codex",
+            "claude",
+            "grok",
+            "gemini",
+            "copilot",
+            "kimi",
+            "amp",
+            "opencode",
+            "opencodego",
+            "antigravity",
+        ] {
             let (data, scan_stopped) =
                 build_provider_chart_data_with_cancel(provider_id.to_string(), None, None);
             cache_provider_chart_data_if_complete(&data, None, scan_stopped, false);
@@ -655,6 +666,13 @@ fn scan_local_cost(
         "codex" => Some(scanner.scan_codex_with_cancel(cancel)),
         "claude" => Some(scanner.scan_claude_with_cancel(cancel)),
         "grok" => Some(scanner.scan_grok_with_cancel(cancel)),
+        "gemini" => Some(scanner.scan_gemini_with_cancel(cancel)),
+        "copilot" => Some(scanner.scan_copilot_with_cancel(cancel)),
+        "kimi" => Some(scanner.scan_kimi_with_cancel(cancel)),
+        "amp" => Some(scanner.scan_amp_with_cancel(cancel)),
+        "opencode" => Some(scanner.scan_opencode_with_cancel(cancel)),
+        "opencodego" => Some(scanner.scan_opencodego_with_cancel(cancel)),
+        "antigravity" => Some(scanner.scan_antigravity_with_cancel(cancel)),
         // Everything else has no local log this app knows how to read, so the
         // recent-usage block stays absent rather than showing a zero it did not
         // measure.

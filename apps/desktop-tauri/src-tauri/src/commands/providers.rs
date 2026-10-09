@@ -62,7 +62,12 @@ pub(crate) fn build_fetch_context(
         .and_then(|override_data| override_data.env_override.as_ref());
     let active_token_api_key = active_token_env.and_then(|env| env.values().next().cloned());
     let usage_source = SourceMode::parse(settings.usage_source(id)).unwrap_or_default();
-    let api_key = stored_api_key.or(active_token_api_key);
+    let has_active_token_cookie = active_token_cookie.is_some();
+    let api_key = if id == ProviderId::Grok {
+        active_token_api_key.or(stored_api_key)
+    } else {
+        stored_api_key.or(active_token_api_key)
+    };
     let has_kimi_code_api_key =
         id == ProviderId::Kimi && api_key.as_deref().is_some_and(|key| !key.trim().is_empty());
     // MiMo's pay-as-you-go provider validates an `sk-...` key and optionally
@@ -73,96 +78,167 @@ pub(crate) fn build_fetch_context(
         id == ProviderId::MiMoApi && api_key.as_deref().is_some_and(|key| !key.trim().is_empty());
 
     let provider_supports_web = instantiate_provider(id).supports_web();
-    let (source_mode, cookie_header) = if has_mimo_api_key {
-        // Keep an explicitly imported per-card cookie available, but always
-        // execute the API-capable Auto source. MiMoApiProvider also falls back
-        // to the shared `mimo` platform session for a balance lookup.
-        (SourceMode::Auto, active_token_cookie.or(stored_cookie))
-    } else if !provider_supports_web || provider_cookie_domain(id, settings).is_none() {
-        let source_mode = if active_token_env.is_some() {
-            SourceMode::OAuth
+    let mut fallback_cookie_header: Option<String> = None;
+    let (source_mode, cookie_header, allow_browser_cookie) = if id == ProviderId::MiMo {
+        if cookie_source == "off" {
+            (SourceMode::Web, None, false)
+        } else if let Some(token_cookie) = active_token_cookie {
+            // In auto mode preserve an explicitly selected MiMo token-account override
+            // so the account is not silently switched.
+            (SourceMode::Web, Some(token_cookie), false)
+        } else if cookie_source == "manual" {
+            // Explicit manual mode must use only the saved/imported Cookie
+            // and must not probe browser storage.
+            (SourceMode::Web, stored_cookie, false)
+        } else if matches!(cookie_source, "auto" | "browser" | "web") {
+            // Auto / browser mode (default): try browser first, fall back to saved/imported cookie.
+            fallback_cookie_header = stored_cookie;
+            let mode = if usage_source != SourceMode::Auto {
+                usage_source
+            } else {
+                SourceMode::Auto
+            };
+            (mode, None, true)
         } else {
-            usage_source
-        };
-        (source_mode, None)
+            // Unknown persisted values fail closed: keep any saved cookie, but
+            // do not implicitly opt into reading browser storage.
+            (usage_source, stored_cookie, false)
+        }
     } else {
-        match cookie_source {
-            _ if active_token_env.is_some() => (SourceMode::OAuth, None),
-            "off" if id == ProviderId::Claude && usage_source != SourceMode::Cli => {
-                (SourceMode::OAuth, None)
-            }
-            "off" if has_kimi_code_api_key && usage_source == SourceMode::Auto => {
-                (SourceMode::Auto, None)
-            }
-            "off" => (SourceMode::Cli, None),
-            "manual" => {
-                // A cookie the user supplied on purpose — pasted, imported
-                // from a file, or captured by the in-app login window — is an
-                // instruction to read that web session, so honour it. With no
-                // session saved, hand control back to the provider's own
-                // ladder instead of pinning the fetch to one source (pinning
-                // is what once made a cookie feel mandatory).
-                let (source_mode, cookie_header) =
-                    resolve_web_session(active_token_cookie, stored_cookie, None, usage_source);
-                let source_mode = if has_kimi_code_api_key && usage_source == SourceMode::Auto {
-                    SourceMode::Auto
-                } else {
-                    source_mode
-                };
-                (source_mode, cookie_header)
-            }
-            // `browser`/`web` are legacy aliases from older settings. Auto is
-            // an explicit opt-in (2026-09-06 source contract): token account →
-            // saved session → browser cookie, then the provider's own ladder.
-            // The browser store is never consulted when the user already
-            // supplied a session, and a resolved cookie only picks the Web
-            // strategy for this fetch — the persisted usage source stays
-            // untouched.
-            "auto" | "browser" | "web" => {
-                let browser_cookie = provider_cookie_domain(id, settings).and_then(|domain| {
-                    match codexbar::browser::cookies::get_cookie_header(domain) {
-                        Ok(header) if !header.trim().is_empty() => Some(header),
-                        Ok(_) => None,
-                        Err(error) => {
-                            tracing::debug!(
-                                provider = id.cli_name(),
-                                domain,
-                                error = %error,
-                                "automatic browser cookie read failed; trying provider fallback"
-                            );
-                            None
-                        }
-                    }
-                });
-                // Upstream parity: an explicit non-Auto usage-source pin is
-                // honored as-is. The best available session (token account →
-                // saved → browser) still rides along for providers that can
-                // use it, but a pinned Cli/OAuth fetch is never rewritten to
-                // Web just because a session exists. Auto keeps the
-                // acquisition ladder below.
-                if usage_source != SourceMode::Auto {
-                    (
-                        usage_source,
-                        active_token_cookie.or(stored_cookie).or(browser_cookie),
-                    )
-                } else {
-                    let (source_mode, cookie_header) = resolve_web_session(
-                        active_token_cookie,
-                        stored_cookie,
-                        browser_cookie,
-                        usage_source,
-                    );
-                    let source_mode = if has_kimi_code_api_key {
+        let (source_mode, cookie_header) = if has_mimo_api_key {
+            // Keep an explicitly imported per-card cookie available, but always
+            // execute the API-capable Auto source. MiMoApiProvider also falls back
+            // to the shared `mimo` platform session for a balance lookup.
+            (SourceMode::Auto, active_token_cookie.or(stored_cookie))
+        } else if !provider_supports_web || provider_cookie_domain(id, settings).is_none() {
+            let source_mode = if active_token_env.is_some() {
+                SourceMode::OAuth
+            } else {
+                usage_source
+            };
+            (source_mode, None)
+        } else {
+            match cookie_source {
+                _ if active_token_env.is_some() => (SourceMode::OAuth, None),
+                "off" if id == ProviderId::Grok && usage_source != SourceMode::Cli => {
+                    // Cookie-off disables only the web session. Grok Auto and
+                    // OAuth still need auth.json/API credentials, not a forced
+                    // CLI-only principal that rejects OIDC entries.
+                    (usage_source, None)
+                }
+                "off" if id == ProviderId::Claude && usage_source != SourceMode::Cli => {
+                    (SourceMode::OAuth, None)
+                }
+                "off" if has_kimi_code_api_key && usage_source == SourceMode::Auto => {
+                    (SourceMode::Auto, None)
+                }
+                "off" if id == ProviderId::OpenCodeGo && usage_source == SourceMode::Auto => {
+                    (SourceMode::Auto, None)
+                }
+                "off" => (SourceMode::Cli, None),
+                "manual" => {
+                    // A cookie the user supplied on purpose — pasted, imported
+                    // from a file, or captured by the in-app login window — is an
+                    // instruction to read that web session, so honour it. With no
+                    // session saved, hand control back to the provider's own
+                    // ladder instead of pinning the fetch to one source (pinning
+                    // is what once made a cookie feel mandatory).
+                    let (source_mode, cookie_header) = if id == ProviderId::Grok
+                        && usage_source != SourceMode::Auto
+                    {
+                        (usage_source, active_token_cookie.or(stored_cookie))
+                    } else {
+                        resolve_web_session(active_token_cookie, stored_cookie, None, usage_source)
+                    };
+                    let source_mode = if has_kimi_code_api_key && usage_source == SourceMode::Auto {
                         SourceMode::Auto
                     } else {
                         source_mode
                     };
                     (source_mode, cookie_header)
                 }
+                // `browser`/`web` are legacy aliases from older settings. Auto is
+                // an explicit opt-in (2026-09-06 source contract): token account →
+                // saved session → browser cookie, then the provider's own ladder.
+                // The browser store is never consulted when the user already
+                // supplied a session, and a resolved cookie only picks the Web
+                // strategy for this fetch — the persisted usage source stays
+                // untouched.
+                "auto" | "browser" | "web" => {
+                    let browser_cookie = if id == ProviderId::Grok && active_token_cookie.is_some()
+                    {
+                        None
+                    } else {
+                        provider_cookie_domain(id, settings).and_then(|domain| {
+                            // The cached variant keeps browser-session
+                            // providers alive while the browser locks its
+                            // active-profile cookie database.
+                            match codexbar::providers::browser_cookie_header(&[domain]) {
+                                Ok(header) => Some(header),
+                                Err(error) => {
+                                    tracing::debug!(
+                                        provider = id.cli_name(),
+                                        domain,
+                                        error = %error,
+                                        "automatic browser cookie read failed; trying provider fallback"
+                                    );
+                                    None
+                                }
+                            }
+                        })
+                    };
+                    // Upstream parity: an explicit non-Auto usage-source pin is
+                    // honored as-is. The best available session (token account →
+                    // saved → browser) still rides along for providers that can
+                    // use it, but a pinned Cli/OAuth fetch is never rewritten to
+                    // Web just because a session exists. Auto keeps the
+                    // acquisition ladder below.
+                    if usage_source != SourceMode::Auto {
+                        (
+                            usage_source,
+                            active_token_cookie.or(stored_cookie).or(browser_cookie),
+                        )
+                    } else {
+                        let (source_mode, cookie_header) = resolve_web_session(
+                            active_token_cookie,
+                            stored_cookie,
+                            browser_cookie,
+                            usage_source,
+                        );
+                        let source_mode = if has_kimi_code_api_key {
+                            SourceMode::Auto
+                        } else {
+                            source_mode
+                        };
+                        (source_mode, cookie_header)
+                    }
+                }
+                _ => (usage_source, stored_cookie),
             }
-            _ => (usage_source, stored_cookie),
-        }
+        };
+        let allow_browser = !(id == ProviderId::OpenCodeGo
+            && (cookie_source == "off" || (cookie_source == "manual" && cookie_header.is_none()))
+            || id == ProviderId::Grok && matches!(cookie_source, "off" | "manual"));
+        (source_mode, cookie_header, allow_browser)
     };
+
+    // For API/CLI-backed providers, cookie selection supplies a fallback
+    // credential; it must not rewrite Auto to Web before the provider's own
+    // source ladder runs. Explicit Web/CLI/OAuth source choices are honored.
+    let source_mode = if usage_source == SourceMode::Auto
+        && matches!(id, ProviderId::OpenCodeGo | ProviderId::Grok)
+    {
+        SourceMode::Auto
+    } else {
+        source_mode
+    };
+    // Grok's selected token-account Cookie is an account identity override, not
+    // an optional fallback to the machine-wide auth.json principal. Other
+    // providers retain the historical manual-cookie preference behavior.
+    let auto_prefer_web =
+        (id == ProviderId::Grok && has_active_token_cookie && cookie_source != "off")
+            || (id != ProviderId::Grok && token_override.is_some())
+            || (id != ProviderId::Grok && cookie_source == "manual" && cookie_header.is_some());
 
     let workspace_id = settings.workspace_id(id).trim().to_string();
     let api_region = settings.api_region(id).trim().to_string();
@@ -171,10 +247,13 @@ pub(crate) fn build_fetch_context(
     FetchContext {
         source_mode,
         manual_cookie_header: cookie_header,
+        fallback_cookie_header,
+        allow_browser_cookie,
         api_key,
         workspace_id: (!workspace_id.is_empty()).then_some(workspace_id),
         api_region: (!api_region.is_empty()).then_some(api_region),
         gateway_url: (!gateway_url.is_empty()).then_some(gateway_url),
+        auto_prefer_web,
         ..FetchContext::default()
     }
 }
@@ -199,6 +278,10 @@ pub(crate) fn provider_cookie_domain(id: ProviderId, settings: &Settings) -> Opt
 
 const DEFAULT_PROVIDER_FETCH_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(35);
 const SLOW_PROVIDER_FETCH_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(75);
+/// Shared with the provider so the wrapper includes its local-stage budget,
+/// both agy subprocess deadlines, and a small scheduling/startup margin.
+const ANTIGRAVITY_PROVIDER_FETCH_TIMEOUT: std::time::Duration =
+    std::time::Duration::from_secs(codexbar::providers::antigravity::PROVIDER_FETCH_TIMEOUT_SECS);
 const MAX_CONTEXT_FETCH_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(65);
 /// A timeout is usually a transient network/provider stall. Retry it three
 /// times, with a short linear backoff, then pause this provider for automatic
@@ -210,9 +293,19 @@ pub(crate) fn timeout_retry_delay(retry_number: u8) -> std::time::Duration {
     TIMEOUT_RETRY_BASE_DELAY.saturating_mul(u32::from(retry_number.max(1)))
 }
 
+pub(crate) fn provider_timeout_retry_limit(id: ProviderId) -> u8 {
+    match id {
+        // AGY already has a bounded 120s CLI invocation. Repeating that slow
+        // path several times would turn one failed refresh into many minutes.
+        ProviderId::Antigravity => 0,
+        _ => MAX_TIMEOUT_RETRIES,
+    }
+}
+
 pub(crate) fn provider_fetch_timeout(id: ProviderId, ctx: &FetchContext) -> std::time::Duration {
     let provider_timeout = match id {
         ProviderId::Claude | ProviderId::Codex | ProviderId::Copilot => SLOW_PROVIDER_FETCH_TIMEOUT,
+        ProviderId::Antigravity => ANTIGRAVITY_PROVIDER_FETCH_TIMEOUT,
         _ => DEFAULT_PROVIDER_FETCH_TIMEOUT,
     };
     let context_timeout = std::time::Duration::from_secs(ctx.web_timeout.saturating_add(5));
@@ -522,6 +615,13 @@ async fn refresh_provider(
         drop(guard);
         events::emit_provider_updated(&app, &snapshot);
         events::emit_provider_projection_updated(&app, &projection);
+        // Publish the tray icon/tooltip and taskbar-strip entries per
+        // provider, not only after the whole round completes. The strip used
+        // to stay blank (a fully transparent surface) until the slowest
+        // enabled provider finished, which on CLI-probe providers can be
+        // minutes after launch. Settings::load and the output-speed snapshot
+        // are cached, so this is cheap per completion.
+        crate::tray_bridge::refresh_tray_presentation(&app);
     } else {
         events::emit_provider_updated(&app, &snapshot);
     }
@@ -701,12 +801,13 @@ async fn fetch_provider_snapshot(
             ),
         };
 
-        if timeout_recovery_enabled && timed_out && retries < MAX_TIMEOUT_RETRIES {
+        let max_retries = provider_timeout_retry_limit(id);
+        if timeout_recovery_enabled && timed_out && retries < max_retries {
             retries += 1;
             tracing::warn!(
                 provider = id.cli_name(),
                 retry = retries,
-                max_retries = MAX_TIMEOUT_RETRIES,
+                max_retries,
                 "provider refresh timed out; retrying"
             );
             tokio::time::sleep(timeout_retry_delay(retries)).await;
@@ -717,7 +818,8 @@ async fn fetch_provider_snapshot(
             tracing::warn!(
                 provider = id.cli_name(),
                 retries,
-                "provider refresh timed out after retries; pausing automatic refresh"
+                max_retries,
+                "provider refresh timed out; pausing automatic refresh"
             );
         }
         record_provider_fetch_duration(id, &mut snapshot, started);

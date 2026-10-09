@@ -71,6 +71,7 @@ fn cookie_source_provider(provider_id: &str) -> Option<codexbar::core::ProviderI
         "mistral" => ProviderId::Mistral,
         "qoder" => ProviderId::Qoder,
         "sakana" => ProviderId::Sakana,
+        "mimo" => ProviderId::MiMo,
         _ => return None,
     })
 }
@@ -375,7 +376,7 @@ mod tests {
         assert_eq!(values("kimik2"), vec!["auto", "manual", "off"]);
         for id in [
             "claude", "cursor", "opencode", "factory", "alibaba", "minimax", "augment", "amp",
-            "ollama", "mistral",
+            "ollama", "mistral", "mimo", "mimoapi",
         ] {
             assert_eq!(values(id), vec!["auto", "manual"], "{id}");
         }
@@ -547,6 +548,15 @@ pub fn cookie_source_options_for(provider_id: &str, lang: Language) -> Vec<Cooki
             cookie_option(lang, "auto", &automatic_help, "", None),
             cookie_option(lang, "manual", "", &manual_help, None),
             cookie_option(lang, "off", "", "", Some(&disabled_help)),
+        ],
+        // MiMo Token Plan and the MiMo API-key balance supplement both read
+        // the shared platform.xiaomimimo.com console session. Without this
+        // arm the picker is hidden AND `set_provider_cookie_source` rejects
+        // every value, so a user who signed in with their browser can never
+        // opt into automatic cookie reading (2026-09-27 live report).
+        "mimo" | "mimoapi" => vec![
+            cookie_option(lang, "auto", &automatic_help, "", None),
+            cookie_option(lang, "manual", "", &manual_help, None),
         ],
         _ => Vec::new(),
     }

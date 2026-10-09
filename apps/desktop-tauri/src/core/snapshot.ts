@@ -63,6 +63,8 @@ export interface RateWindowSnapshot {
   windowMinutes: number | null;
   resetsAt: string | null;
   resetDescription: string | null;
+  /** Scheduled start time; not a reset and not an active quota yet. */
+  activationAt?: string | null;
   isExhausted: boolean;
   isInformational: boolean;
   usageKnown: boolean;

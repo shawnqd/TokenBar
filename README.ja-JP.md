@@ -1,67 +1,105 @@
-# TokenBar
+# Win-CodexBar
 
 [English](./README.md) | [简体中文](./README.zh-CN.md) | [繁體中文（臺灣）](./README.zh-TW.md) | [日本語](./README.ja-JP.md) | [한국어](./README.ko-KR.md) | [Español mexicano](./README.es-MX.md)
 
-TokenBar は、AI コーディングツールの使用量を Windows のシステムトレイ
-から確認できるアプリです。[CodexBar](https://github.com/steipete/CodexBar)
-の使用量ワークフローを Tauri + React のデスクトップシェルと共有 Rust
-ロジックで Windows に提供します。
+Win-CodexBar は、複数の AI コーディングツールの使用量を Windows のシステムトレイから確認できるデスクトップアプリです。[CodexBar](https://github.com/steipete/CodexBar) の考え方を、Tauri + React のデスクトップシェルと共有 Rust バックエンドで Windows 向けに移植しています。
 
-<p align="center">
-  <img src="docs/images/tray-panel.png" width="320" alt="TokenBar トレイパネル"/>
-  <img src="docs/images/settings-providers.png" width="520" alt="TokenBar プロバイダー設定"/>
-</p>
+<table>
+  <tr>
+    <td width="36%" align="center">
+      <img src="docs/images/tray-panel.png" alt="プロバイダー使用量カードを表示する Win-CodexBar のトレイパネル"/>
+    </td>
+    <td width="64%" align="center">
+      <img src="docs/images/settings-providers.png" alt="Win-CodexBar のプロバイダー設定画面"/>
+    </td>
+  </tr>
+</table>
 
 ## 主な機能
 
-- 使用量カードと更新操作を備えたコンパクトなトレイパネル。
-- プロバイダーが対応する場合の認証情報、セッション Cookie、API キー、
-  リージョン、表示設定。
-- ブラウザー Cookie の自動読み取りと手動インポートを別の選択肢として提供。
-  アプリ独自のログインブラウザーは開きません。
-- 使用量、コスト、設定、診断を扱うローカル CLI。
-- Windows 用インストーラーとポータブル版、公開時は SHA-256 チェックサム付き。
+- **56 プロバイダー**: Codex、Claude、Copilot、OpenRouter、Cursor、Gemini、DeepSeek、MiniMax、Kiro、Antigravity、Groq、Qoder、Sakana AI、CrossModel など。
+- **トレイ中心のワークフロー**: コンパクトなプロバイダー一覧、使用量カード、更新、設定、終了操作。
+- **プロバイダー設定**: ソース選択、認証情報、Cookie インポート、トークンアカウント、API キー、リージョン、トレイ表示設定。
+- **Windows 認証情報保護**: アプリ管理の API キー、手動 Cookie、トークンアカウントを、利用可能な場合はユーザー単位の DPAPI で保護。
+- **保存したセッション Cookie を既定使用**: Web 認証プロバイダーは保存・インポートしたセッションを読み取り、ブラウザー Cookie の自動読み取りはプロバイダーごとの明示的なオプトインです。
+- **ローカル CLI**: 使用量、コスト、設定、診断、ローカル連携をスクリプトから利用できます。
+- **インストーラー / ポータブルビルド**: WebView2 Runtime、VC++ Runtime、SHA-256 チェックサムを含みます。
 
 ## インストール
 
-[TokenBar Releases](https://github.com/shawnqd/TokenBar/releases) から最新の
-インストーラーまたはポータブル版をダウンロードしてください。現在は
-GitHub Releases から配布しており、Winget パッケージはまだありません。
+Windows Package Manager でインストールできます。
+
+```powershell
+winget install Finesssee.Win-CodexBar
+```
+
+または [GitHub Releases](https://github.com/Finesssee/Win-CodexBar/releases) から最新のインストーラー / ポータブル版をダウンロードしてください。
+
+- インストーラー: `CodexBar-<version>-Setup.exe`
+- ポータブル: `CodexBar-<version>-portable.exe`
+- チェックサム: 各リリースに `.sha256` ファイルが含まれます
 
 ## 初回起動
 
-1. スタートメニューまたはポータブル exe から TokenBar を起動します。
-2. トレイアイコンをクリックしてパネルを開きます。
-3. **設定 → プロバイダー**を開き、使用するプロバイダーを有効にします。
-4. 各プロバイダーが対応する認証ソース（ブラウザー自動読み取り、保存/手動
-   Cookie、API キー、CLI/OAuth）だけを設定します。
+1. スタートメニューまたはポータブル exe から **TokenBar** を起動します。
+2. トレイアイコンをクリックして使用量パネルを開きます。
+3. **Settings -> Providers** を開きます。
+4. 使うプロバイダーを有効化します。
+5. プロバイダーが実際に対応する認証だけを使用します。Web 認証は既定で保存済みセッション Cookie を読み取り、ブラウザー Cookie の自動読み取りは「読み取り元」設定で選択できます。API キーと CLI/OAuth は別の経路です。
+
+Claude では、Claude の設定ページと同じ使用量に近づけるため、ブラウザー Cookie / sessionKey の自動読み取りが優先です。手動 Cookie はフォールバックです。OAuth と CLI は対応プロバイダーで利用でき、Codex や Gemini は先に各 CLI でログインしてください。
+
+## 最新リリース
+
+現在の変更履歴は [CHANGELOG.md](CHANGELOG.md) を参照してください。対応プロバイダーの一覧は [English README](./README.md#supported-providers) にあります。
 
 ## ソースからビルド
 
-要件: Windows 10/11、pnpm を含む Node.js、Rust。
-
 ```powershell
-git clone https://github.com/shawnqd/TokenBar.git
-cd TokenBar
-pnpm --dir apps/desktop-tauri install
-pnpm --dir apps/desktop-tauri tauri:dev
+# 前提: Node.js + pnpm。Rust と MinGW は必要に応じてスクリプトがインストールします。
+git clone https://github.com/Finesssee/Win-CodexBar.git
+cd Win-CodexBar
+.\scripts\dev.ps1
 ```
 
-本番ビルド:
+便利な開発フラグ:
 
 ```powershell
-pnpm --dir apps/desktop-tauri tauri:build
+.\scripts\dev.ps1 -Release      # 最適化ビルド
+.\scripts\dev.ps1 -SkipBuild    # 直前のビルドを再起動
 ```
 
-詳細は [docs/BUILDING.md](docs/BUILDING.md) を参照してください。
+CLI 例:
 
-## プライバシーと macOS
+```bash
+codexbar-cli --help
+codexbar-cli diagnose --pretty
+codexbar-cli usage -p claude
+codexbar-cli usage -p all
+codexbar-cli cost -p codex
+```
 
-プロバイダーデータはローカル設定または設定した API から読み取ります。
-Cookie の抽出は有効にしたプロバイダーに対してだけ実行され、診断に認証情報は
-含まれません。TokenBar は Windows 向けです。macOS では
-[CodexBar original](https://github.com/steipete/CodexBar) を使用してください。
+## プライバシー
+
+- **基本はローカル**: プロバイダーデータは既知のローカルパス、または設定したプロバイダー API から読み取ります。
+- **Cookie は任意**: ブラウザー Cookie 抽出は、有効化したプロバイダーに対してのみ実行されます。
+- **シークレット保護**: API キー、手動 Cookie、トークンアカウントはセキュアファイル層で保存され、Windows では利用可能な場合 DPAPI を使います。
+- **安全な診断**: 診断はプロバイダー、ソース、状態のメタデータのみを表示し、Cookie、API キー、Bearer トークン、OAuth 値は表示しません。
+
+## ドキュメント
+
+| トピック | リンク |
+|---|---|
+| ソースからビルド | [docs/BUILDING.md](docs/BUILDING.md) |
+| WSL セットアップと認証 Tips | [docs/WSL.md](docs/WSL.md) |
+| ブラウザー Cookie の詳細 | [docs/COOKIES.md](docs/COOKIES.md) |
+
+## クレジット
+
+- macOS 版: TokenBar は Windows 専用です。macOS ユーザーは元の
+  [steipete/CodexBar](https://github.com/steipete/CodexBar) を直接利用してください。
+- コスト追跡は [ccusage](https://github.com/ryoppippi/ccusage) から着想を得ています
 
 ## ライセンス
 
-MIT ライセンスです。
+元の CodexBar と同じ MIT ライセンスです。

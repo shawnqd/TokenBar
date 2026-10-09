@@ -111,3 +111,6 @@ codexbar-desktop-tauri.exe
 # Local Playwright CLI capture output (console logs from browser QA runs —
 # can contain page data from signed-in provider sessions, never commit).
 .playwright-cli/
+
+# Local WorkBuddy probes/captures (diagnostic residue, never product source).
+.workbuddy/

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import Sortable from "sortablejs";
+import { useDragAutoScroll } from "../../../hooks/useDragAutoScroll";
 import { ProviderIcon } from "../../../components/providers/ProviderIcon";
 import { getProviderIcon } from "../../../components/providers/providerIcons";
 import type { ProviderSnapshot } from "../../../core/snapshot";
@@ -22,6 +23,7 @@ import {
   getProviderCookieSource,
   getProviderCookieSourceOptions,
   getTokenAccountProviders,
+  previewCookieFile,
 } from "../../../lib/tauri";
 import type {
   MetricPreference,
@@ -29,6 +31,7 @@ import type {
   ApiKeyInfoBridge,
   CookieInfoBridge,
   CookieSourceOption,
+  CookieFilePreviewBridge,
   RegionOption,
   ProviderAuthCapabilitiesBridge,
 } from "../../../types/bridge";
@@ -40,7 +43,6 @@ import {
   COOKIE_IMPORT_ID,
   METHOD_LABEL,
   buildProviderCatalog,
-  cookieImportTargets,
   type AuthMethod,
   type FixtureProvider,
 } from "./htmlFixture";
@@ -417,6 +419,28 @@ function useCoreSnapshotListForPage(store?: UsageStore | null): ProviderSnapshot
   return useMemo(() => Object.values(state.records).map((r) => r.snapshot).filter(Boolean) as ProviderSnapshot[], [state]);
 }
 
+function formatFileSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  const kb = bytes / 1024;
+  if (kb < 1024) return `${Math.max(1, Math.round(kb))} KB`;
+  return `${(kb / 1024).toFixed(1)} MB`;
+}
+
+function ImportCheckMark() {
+  return (
+    <svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true">
+      <path
+        d="M3.2 8.2 6.3 11.2 12.8 4.6"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.8"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
 export default function ProvidersPage({
   settings,
   set,
@@ -475,7 +499,19 @@ export default function ProvidersPage({
   const [cookieFile, setCookieFile] = useState(false);
   const [cookieFileContents, setCookieFileContents] = useState("");
   const [cookieFileName, setCookieFileName] = useState("");
+  const [cookieFileSize, setCookieFileSize] = useState(0);
+  const [cookiePhase, setCookiePhase] = useState<"empty" | "preview" | "confirm" | "done">("empty");
+  const [cookieWritten, setCookieWritten] = useState<Array<{ id: string; name: string }>>([]);
+  const [stepsOpen, setStepsOpen] = useState(false);
+  const [unmatchedOpen, setUnmatchedOpen] = useState(false);
   const cookieInputRef = useRef<HTMLInputElement>(null);
+  // Batch-import preview (backend `preview_cookie_file`): which providers the
+  // chosen file actually matches, so the write step is a confirmation of real
+  // matches instead of a blind list of every cookie-capable provider.
+  const [cookiePreview, setCookiePreview] = useState<CookieFilePreviewBridge | null>(null);
+  const [cookiePreviewBusy, setCookiePreviewBusy] = useState(false);
+  const [cookiePreviewError, setCookiePreviewError] = useState<string | null>(null);
+  const [cookieDragOver, setCookieDragOver] = useState(false);
   // Absent key means "checked by default" so late-arriving catalog entries
   // don't need to be merged into the toggle record.
   const [cookieTargets, setCookieTargets] = useState<Record<string, boolean>>({});
@@ -565,7 +601,91 @@ export default function ProvidersPage({
     [enabled, liveCatalog, settings.providerOrder, authCaps],
   );
 
-  const importTargets = useMemo(() => cookieImportTargets(catalog), [catalog]);
+  // Cookie 文件上限与后端 `parse_cookie_file` 前的预览一致（2 MB）。
+  const MAX_COOKIE_FILE_BYTES = 2 * 1024 * 1024;
+
+  const resetCookieFile = useCallback(() => {
+    setCookieFile(false);
+    setCookieFileContents("");
+    setCookieFileName("");
+    setCookieFileSize(0);
+    setCookiePreview(null);
+    setCookiePreviewError(null);
+    setCookiePreviewBusy(false);
+    setCookieTargets({});
+    setCookiePhase("empty");
+    setCookieWritten([]);
+    setUnmatchedOpen(false);
+  }, []);
+
+  // Read a chosen file, enforce the size cap locally, then ask the backend
+  // which providers the file actually matches. Every failure path lands in
+  // `cookiePreviewError` so the dropzone area always explains itself.
+  const loadCookieFile = useCallback(async (file: File) => {
+    setCookiePreviewError(null);
+    setCookiePreview(null);
+    setCookieTargets({});
+    if (file.size > MAX_COOKIE_FILE_BYTES) {
+      setCookieFile(false);
+      setCookieFileContents("");
+      setCookieFileName("");
+      setCookiePreviewError(
+        `文件超过 2 MB 限制（${(file.size / 1024 / 1024).toFixed(1)} MB）。请在扩展导出时只勾选需要的站点。`,
+      );
+      return;
+    }
+    const text = await file.text();
+    setCookieFileContents(text);
+    setCookieFileName(file.name);
+    setCookieFileSize(file.size);
+    setCookieFile(true);
+    setCookiePhase("preview");
+    setCookiePreviewBusy(true);
+    try {
+      const preview = await previewCookieFile(text);
+      setCookiePreview(preview);
+      setUnmatchedOpen(false);
+    } catch (error) {
+      setCookieFile(false);
+      setCookiePreview(null);
+      setCookiePhase("empty");
+      setCookiePreviewError(
+        typeof error === "string" ? error : `无法解析这份文件：${String(error)}`,
+      );
+    } finally {
+      setCookiePreviewBusy(false);
+    }
+  }, []);
+
+  const savedCookieIds = useMemo(
+    () => new Set(manualCookies.map((cookie) => cookie.providerId)),
+    [manualCookies],
+  );
+
+  const commitCookieImport = useCallback(
+    (ids: string[]) => {
+      const written = ids.map((id) => {
+        const row = catalog.find((item) => item.id === id);
+        const entry = cookiePreview?.providers.find((item) => item.providerId === id);
+        return { id, name: row?.name ?? entry?.provider ?? id };
+      });
+      void requireActionResult(
+        (actionDispatcher as ActionDispatcher).dispatch({
+          type: "importCookieFile",
+          target: { kind: "settings" },
+          contents: cookieFileContents,
+          providerIds: ids,
+        }),
+      )
+        .then(() => {
+          setCookieWritten(written);
+          setCookiePhase("done");
+          void reloadCredentials();
+        })
+        .catch((error) => setNote(String(error)));
+    },
+    [actionDispatcher, catalog, cookieFileContents, cookiePreview, reloadCredentials],
+  );
 
   const visible = catalog.filter((p) => {
     if (!query.trim()) return true;
@@ -574,6 +694,8 @@ export default function ProvidersPage({
   });
 
     const rowsRef = useRef<HTMLDivElement>(null);
+    const [dragActive, setDragActive] = useState(false);
+    useDragAutoScroll(rowsRef, dragActive);
 
     useEffect(() => {
       const el = rowsRef.current;
@@ -582,8 +704,16 @@ export default function ProvidersPage({
       const sortable = Sortable.create(el, {
         animation: 150,
         draggable: ".s5-prow",
+        filter: ".s5-pinned",
+        preventOnFilter: false,
         ghostClass: "s5-prow--ghost",
         chosenClass: "s5-prow--dragging",
+        // Sortable 内置自动滚动在指针离开列表（如移到上方搜索框）的瞬间会
+        // 清空全部滚动定时器，向上拖动因此滚不动；滚动交给
+        // useDragAutoScroll 在 window 级跟踪指针并连续处理。
+        scroll: false,
+        onStart: () => setDragActive(true),
+        onEnd: () => setDragActive(false),
         onUpdate: () => {
           const ordered = Array.from(
             el.querySelectorAll<HTMLElement>(":scope > .s5-prow[data-prow-id]"),
@@ -730,14 +860,33 @@ export default function ProvidersPage({
             ) : null}
           </div>
         </div>
-        <button
-          type="button"
-          className={`s5-pinned${selected === COOKIE_IMPORT_ID ? " on" : ""}`}
-          onClick={() => setSelectedWrapped(COOKIE_IMPORT_ID)}
-        >
-          批量导入浏览器 Cookie
-        </button>
         <div ref={rowsRef} className="s5-prov-rows">
+          <button
+            type="button"
+            className={`s5-pinned${selected === COOKIE_IMPORT_ID ? " on" : ""}`}
+            onClick={() => setSelectedWrapped(COOKIE_IMPORT_ID)}
+          >
+            <span className="s5-pinned-icon" aria-hidden="true">
+              <svg
+                viewBox="0 0 16 16"
+                width="14"
+                height="14"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.4"
+              >
+                <path
+                  d="M8 10V2.5M8 2.5L5.5 5M8 2.5L10.5 5"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                />
+                <path d="M2.5 10.5v2a1 1 0 0 0 1 1h9a1 1 0 0 0 1-1v-2" strokeLinecap="round" />
+              </svg>
+            </span>
+            <span className="s5-pinned-text">
+              <span className="s5-pinned-title">批量导入浏览器 Cookie</span>
+            </span>
+          </button>
           {catalog.length === 0 ? (
             // Runtime catalog missing (bootstrap not resolved or backend
             // failure): show an honest empty state, never a static list.
@@ -791,14 +940,100 @@ export default function ProvidersPage({
               <div>
                 <h3>批量导入浏览器 Cookie</h3>
                 <p className="s5-pd-src">
-                  这不是登录方式。它和每家里的「粘贴 Cookie」相同，只是一次导入多家。
+                  从浏览器导出 cookies.txt 或 JSON，一次写入多家。这不是登录。
                 </p>
               </div>
+              {cookiePhase === "done" ? (
+                <div className="s5-actions s5-import-head">
+                  <button
+                    type="button"
+                    className="s5-primary"
+                    onClick={() => {
+                      const id = cookieWritten[0]?.id;
+                      if (id) setSelectedWrapped(id);
+                    }}
+                  >
+                    查看 {cookieWritten[0]?.name ?? "服务商"}
+                  </button>
+                  <button type="button" className="s5-ghost" onClick={resetCookieFile}>
+                    再导入一份
+                  </button>
+                </div>
+              ) : cookiePhase === "confirm" && cookiePreview ? (
+                <div className="s5-actions s5-import-head">
+                  <button
+                    type="button"
+                    className="s5-primary"
+                    onClick={() => {
+                      const ids = cookiePreview.providers
+                        .map((entry) => entry.providerId)
+                        .filter((id) => cookieTargets[id] !== false);
+                      if (ids.length === 0) return;
+                      commitCookieImport(ids);
+                    }}
+                  >
+                    确认覆盖并写入
+                  </button>
+                  <button
+                    type="button"
+                    className="s5-ghost"
+                    onClick={() => setCookiePhase("preview")}
+                  >
+                    返回
+                  </button>
+                </div>
+              ) : cookieFile && cookiePreview ? (
+                <div className="s5-actions s5-import-head">
+                  {cookiePreview.providers.length > 0 ? (
+                    <button
+                      type="button"
+                      className="s5-primary"
+                      disabled={
+                        cookiePreview.providers.every(
+                          (entry) => cookieTargets[entry.providerId] === false,
+                        )
+                      }
+                      onClick={() => {
+                        const picked = cookiePreview.providers.filter(
+                          (entry) => cookieTargets[entry.providerId] !== false,
+                        );
+                        if (picked.length === 0) return;
+                        if (picked.some((entry) => savedCookieIds.has(entry.providerId))) {
+                          setCookiePhase("confirm");
+                          return;
+                        }
+                        commitCookieImport(picked.map((entry) => entry.providerId));
+                      }}
+                    >
+                      {(() => {
+                        const picked = cookiePreview.providers.filter(
+                          (entry) => cookieTargets[entry.providerId] !== false,
+                        );
+                        const overwrite = picked.filter((entry) =>
+                          savedCookieIds.has(entry.providerId),
+                        ).length;
+                        return overwrite > 0
+                          ? `覆盖 ${overwrite} 家并写入`
+                          : `写入 ${picked.length} 家`;
+                      })()}
+                    </button>
+                  ) : null}
+                  <button type="button" className="s5-ghost" onClick={resetCookieFile}>
+                    清除文件
+                  </button>
+                </div>
+              ) : null}
             </div>
-            <div className="s5-pd-card">
-              <p className="s5-pd-lead" style={{ margin: "0 0 10px" }}>
-                从浏览器导出 Cookie 文件（不超过 2 MB）。这里不显示原文。导入后刷新会先用这份本机保存的 Cookie。
-              </p>
+
+            {cookiePhase === "done" ? (
+              <div className="s5-import-sheet">
+                <p className="s5-import-done">
+                  已写入 {cookieWritten.map((item) => item.name).join("、")}。
+                </p>
+                <p className="s5-pd-lead">回托盘刷新后生效。</p>
+              </div>
+            ) : !cookieFile || !cookiePreview ? (
+            <div className="s5-import-sheet">
                 <input
                   ref={cookieInputRef}
                   type="file"
@@ -806,84 +1041,214 @@ export default function ProvidersPage({
                   style={{ display: "none" }}
                   onChange={(event) => {
                     const file = event.target.files?.[0];
+                    event.target.value = "";
                     if (!file) return;
-                    void file.text().then((text) => {
-                      setCookieFileContents(text);
-                      setCookieFileName(file.name);
-                      setCookieFile(true);
-                    });
+                    void loadCookieFile(file);
                   }}
                 />
               <button
                 type="button"
-                className="s5-dropzone"
+                className={`s5-dropzone${cookieDragOver ? " is-drag" : ""}`}
                 onClick={() => cookieInputRef.current?.click()}
+                onDragOver={(event) => {
+                  event.preventDefault();
+                  setCookieDragOver(true);
+                }}
+                onDragLeave={() => setCookieDragOver(false)}
+                onDrop={(event) => {
+                  event.preventDefault();
+                  setCookieDragOver(false);
+                  const file = event.dataTransfer.files?.[0];
+                  if (file) void loadCookieFile(file);
+                }}
               >
-                {cookieFileName ? `已选择：${cookieFileName}` : "把文件拖到这里，或点击选择"}
-              </button>
-            </div>
-            {cookieFile ? (
-              <div className="s5-pd-card">
-                <div className="s5-pd-card-h">
-                  <h4>将作为已保存 Cookie 写入</h4>
-                </div>
-                <p className="s5-pd-lead">
-                  勾选的服务商会换成这份 Cookie。不会改成密钥，也不会新建账号。
-                </p>
-                {importTargets.length === 0 ? (
-                  <p className="s5-pd-lead">服务商目录尚未加载，暂时无法选择写入对象。</p>
+                {cookiePreviewBusy ? (
+                  "正在解析文件…"
                 ) : (
-                  importTargets.map((id) => {
-                    const row = catalog.find((item) => item.id === id);
+                  <>
+                    <strong>点击选择 Cookie 文件</strong>
+                    <span>把文件拖到这里，或点击选择</span>
+                  </>
+                )}
+              </button>
+              <details
+                className="s5-import-how"
+                open={stepsOpen}
+                onToggle={(event) => setStepsOpen(event.currentTarget.open)}
+              >
+                <summary>查看导出步骤</summary>
+                <ol className="s5-import-steps">
+                  <li>
+                    <span>
+                      在浏览器登录后，用 Cookie 导出扩展（推荐 Get cookies.txt LOCALLY）导出{" "}
+                      <b>cookies.txt</b> 或 JSON 文件。
+                    </span>
+                  </li>
+                  <li>
+                    <span>把文件拖进这里，或点击选择。</span>
+                  </li>
+                  <li>
+                    <span>勾选要写入的服务商。已有 Cookie 的会先确认再覆盖。</span>
+                  </li>
+                </ol>
+              </details>
+              <p className="s5-import-privacy">
+                支持 Netscape cookies.txt / JSON，不超过 2 MB。文件只在导入时读取，不留原文。
+              </p>
+              {cookiePreviewError ? (
+                <p className="s5-issue" style={{ marginTop: 10, marginBottom: 0 }}>
+                  {cookiePreviewError}
+                </p>
+              ) : null}
+            </div>
+            ) : cookiePreview.providers.length === 0 ? (
+                <div className="s5-import-sheet">
+                  <div className="s5-import-file">
+                    <span className="s5-import-file-name">{cookieFileName}</span>
+                    <span className="s5-import-file-meta">{formatFileSize(cookieFileSize)}</span>
+                    <button type="button" className="s5-ghost" onClick={resetCookieFile}>
+                      更换
+                    </button>
+                  </div>
+                  <h4 className="s5-import-empty-title">没有匹配的服务商</h4>
+                  <p className="s5-pd-lead">
+                    这份文件里没有能匹配到任何服务商的 Cookie。请确认导出的是已登录站点的
+                    cookies.txt 或 JSON。
+                  </p>
+                </div>
+              ) : (
+                <div className="s5-import-sheet">
+                  <div className="s5-import-file">
+                    <span className="s5-import-file-name">{cookieFileName}</span>
+                    <span className="s5-import-file-meta">{formatFileSize(cookieFileSize)}</span>
+                    <button type="button" className="s5-ghost" onClick={resetCookieFile}>
+                      更换
+                    </button>
+                  </div>
+                  <div className="s5-import-sum">
+                    <p>
+                      {(() => {
+                        const picked = cookiePreview.providers.filter(
+                          (entry) => cookieTargets[entry.providerId] !== false,
+                        );
+                        const overwrite = picked.filter((entry) =>
+                          savedCookieIds.has(entry.providerId),
+                        ).length;
+                        return `写入 ${picked.length} 家 · 覆盖 ${overwrite} · 新增 ${picked.length - overwrite} · 忽略 ${cookiePreview.unmatchedCookieCount} 条`;
+                      })()}
+                    </p>
+                    <button
+                      type="button"
+                      className="s5-ghost"
+                      onClick={() => {
+                        const allOn = cookiePreview.providers.every(
+                          (entry) => cookieTargets[entry.providerId] !== false,
+                        );
+                        setCookieTargets(
+                          Object.fromEntries(
+                            cookiePreview.providers.map((entry) => [entry.providerId, !allOn]),
+                          ),
+                        );
+                        if (allOn) setCookiePhase("preview");
+                      }}
+                    >
+                      {cookiePreview.providers.every(
+                        (entry) => cookieTargets[entry.providerId] !== false,
+                      )
+                        ? "全不选"
+                        : "全选"}
+                    </button>
+                  </div>
+                  {cookiePhase === "confirm" ? (
+                    <p className="s5-import-note">
+                      {cookiePreview.providers
+                        .filter(
+                          (entry) =>
+                            cookieTargets[entry.providerId] !== false &&
+                            savedCookieIds.has(entry.providerId),
+                        )
+                        .map((entry) => catalog.find((item) => item.id === entry.providerId)?.name ?? entry.provider)
+                        .join("、")}{" "}
+                      已有 Cookie，会换成这份文件里的。
+                    </p>
+                  ) : null}
+                  <div className="s5-import-rows">
+                  {cookiePreview.providers.map((entry) => {
+                    const row = catalog.find((item) => item.id === entry.providerId);
+                    const name = row?.name ?? entry.provider;
+                    const on = cookieTargets[entry.providerId] !== false;
+                    const warn = savedCookieIds.has(entry.providerId);
                     return (
-                      <div className="s5-pd-row" key={id}>
-                        <div className="s5-field-label">{row?.name ?? id}</div>
-                        <V5Toggle
-                          on={cookieTargets[id] !== false}
-                          onChange={(next) =>
-                            setCookieTargets((cur) => ({ ...cur, [id]: next }))
-                          }
-                        />
+                      <div
+                        className={`s5-import-card${warn ? " is-warn" : ""}`}
+                        key={entry.providerId}
+                      >
+                        <span
+                          className="s5-import-ico"
+                          style={{
+                            ["--c" as string]: getProviderIcon(entry.providerId).brandColor,
+                          }}
+                        >
+                          <ProviderIcon providerId={entry.providerId} size={17} />
+                        </span>
+                        <div className="s5-import-card-text">
+                          <div className="s5-import-name">{name}</div>
+                          <div className={`s5-import-help${warn ? " is-warn" : ""}`}>
+                            {warn
+                              ? "会覆盖已经保存的 Cookie"
+                              : "现在没有已保存的 Cookie，会新写入"}
+                          </div>
+                        </div>
+                        <button
+                          type="button"
+                          className={`s5-import-check${on ? " on" : ""}`}
+                          aria-pressed={on}
+                          aria-label={`写入 ${name}`}
+                          onClick={() => {
+                            const next = !on;
+                            setCookieTargets((cur) => ({ ...cur, [entry.providerId]: next }));
+                            if (!next && warn && cookiePhase === "confirm") {
+                              const still = cookiePreview.providers.some((item) => {
+                                const checked =
+                                  item.providerId === entry.providerId
+                                    ? false
+                                    : cookieTargets[item.providerId] !== false;
+                                return checked && savedCookieIds.has(item.providerId);
+                              });
+                              if (!still) setCookiePhase("preview");
+                            }
+                          }}
+                        >
+                          {on ? <ImportCheckMark /> : null}
+                        </button>
                       </div>
                     );
-                  })
-                )}
-                <div className="s5-actions" style={{ marginTop: 12 }}>
-                  <button
-                    type="button"
-                    className="s5-primary"
-                    disabled={importTargets.length === 0}
-                    onClick={() => {
-                      const ids = importTargets.filter((id) => cookieTargets[id] !== false);
-                      void requireActionResult(
-                        (actionDispatcher as ActionDispatcher).dispatch({
-                          type: "importCookieFile",
-                          target: { kind: "settings" },
-                          contents: cookieFileContents,
-                          providerIds: ids,
-                        }),
-                      )
-                        .then(() => {
-                          setCookieFile(false);
-                          setCookieFileContents("");
-                          setCookieFileName("");
-                          setNote(`已写入 ${ids.length} 个服务商的 Cookie`);
-                        })
-                        .catch((error) => setNote(String(error)));
-                    }}
-                  >
-                    写入所选
-                  </button>
-                  <button
-                    type="button"
-                    className="s5-ghost"
-                    onClick={() => setCookieFile(false)}
-                  >
-                    取消
-                  </button>
+                  })}
+                  </div>
+                  {(cookiePreview.unmatchedCookieCount > 0 ||
+                    (cookiePreview.unmatchedDomains?.length ?? 0) > 0) ? (
+                    <details
+                      className="s5-import-miss"
+                      open={unmatchedOpen}
+                      onToggle={(event) => setUnmatchedOpen(event.currentTarget.open)}
+                    >
+                      <summary>
+                        {cookiePreview.unmatchedCookieCount} 条没对上任何服务商
+                      </summary>
+                      {cookiePreview.unmatchedDomains && cookiePreview.unmatchedDomains.length > 0 ? (
+                        <ul>
+                          {cookiePreview.unmatchedDomains.map((domain) => (
+                            <li key={domain}>{domain}</li>
+                          ))}
+                        </ul>
+                      ) : null}
+                    </details>
+                  ) : null}
+                  <p className="s5-import-privacy">
+                    写入后只保存在本机。不会改成密钥，也不会新建账号。
+                  </p>
                 </div>
-              </div>
-            ) : null}
+              )}
           </>
         ) : selectedProvider ? (
           <>

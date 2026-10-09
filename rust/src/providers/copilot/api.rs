@@ -299,10 +299,13 @@ fn snapshot_from_response(response: CopilotUsageResponse) -> Result<UsageSnapsho
         ));
     }
 
+    // No usable quota rows means the payload carried no quota data (not that
+    // the user has spent nothing): keep it informational instead of showing a
+    // fresh 0%-used meter (upstream parity).
     let primary = primary_quota
         .as_ref()
         .map(|quota| quota.to_rate_window(reset))
-        .unwrap_or_else(|| RateWindow::new(0.0));
+        .unwrap_or_else(|| RateWindow::informational("No Copilot quota reported"));
 
     let mut usage =
         UsageSnapshot::new(primary).with_login_method(plan_label(&response.copilot_plan));
@@ -698,6 +701,35 @@ mod tests {
     fn parse_snapshot_result(json: &str) -> Result<UsageSnapshot, ProviderError> {
         let response: CopilotUsageResponse = serde_json::from_str(json).unwrap();
         snapshot_from_response(response)
+    }
+
+    // A payload without usable quota rows carries no data, not zero usage:
+    // the primary slot stays informational instead of a fresh 0% meter.
+    #[test]
+    fn missing_quotas_render_informational_not_zero_percent() {
+        let usage = parse_snapshot(
+            r#"{
+                "copilot_plan": "business",
+                "quota_snapshots": {}
+            }"#,
+        );
+        assert!(usage.primary.is_informational);
+
+        // Placeholder-only snapshots (all entitlement 0) behave the same.
+        let usage = parse_snapshot(
+            r#"{
+                "copilot_plan": "business",
+                "quota_snapshots": {
+                    "premium_interactions": {
+                        "entitlement": 0,
+                        "remaining": 0,
+                        "percent_remaining": 0,
+                        "quota_id": "premium_interactions"
+                    }
+                }
+            }"#,
+        );
+        assert!(usage.primary.is_informational);
     }
 
     #[test]

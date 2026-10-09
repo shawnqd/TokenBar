@@ -315,30 +315,26 @@ impl MiniMaxProvider {
             .and_then(|v| v.as_f64())
             .unwrap_or(0.0);
 
+        // A payload without a total quota carries no data, not an untouched
+        // plan: the invented 100.0 default rendered a fabricated percentage.
         let credit_limit = json
             .get("total_quota")
             .or_else(|| json.get("quota"))
             .and_then(|v| v.as_f64())
-            .unwrap_or(100.0);
+            .filter(|limit| limit.is_finite() && *limit > 0.0);
 
-        let used_percent = if credit_limit > 0.0 {
-            (used_credits / credit_limit) * 100.0
-        } else {
-            0.0
+        let used_percent = match credit_limit {
+            Some(limit) => (used_credits / limit * 100.0).clamp(0.0, 100.0),
+            None => {
+                return Ok(UsageSnapshot::new(RateWindow::informational(
+                    "No MiniMax plan quota reported (pay-as-you-go usage only)",
+                ))
+                .with_login_method(plan_label(&json)));
+            }
         };
 
-        let plan = json
-            .get("plan_name")
-            .or_else(|| json.get("current_plan_title"))
-            .or_else(|| json.get("current_subscribe_title"))
-            .or_else(|| json.get("combo_title"))
-            .or_else(|| json.pointer("/current_combo_card/title"))
-            .or_else(|| json.get("plan_type"))
-            .or_else(|| json.get("type"))
-            .and_then(|v| v.as_str())
-            .unwrap_or("MiniMax");
-
-        let usage = UsageSnapshot::new(RateWindow::new(used_percent)).with_login_method(plan);
+        let usage =
+            UsageSnapshot::new(RateWindow::new(used_percent)).with_login_method(plan_label(&json));
 
         Ok(usage)
     }
@@ -403,15 +399,31 @@ impl MiniMaxProvider {
             .unwrap_or(false);
 
         if has_env_vars || has_config {
-            let usage =
-                UsageSnapshot::new(RateWindow::new(0.0)).with_login_method("MiniMax (configured)");
-            Ok(usage)
+            // Configured-but-unreadable is an error condition, never a
+            // healthy-looking 0% quota (fake-success regression guard).
+            Err(ProviderError::Other(
+                "MiniMax credentials are configured but no quota source succeeded".to_string(),
+            ))
         } else {
             Err(ProviderError::NotInstalled(
                 "MiniMax API not configured. Set MINIMAX_API_KEY and MINIMAX_GROUP_ID environment variables".to_string()
             ))
         }
     }
+}
+
+fn plan_label(json: &serde_json::Value) -> String {
+    json.get("plan_name")
+        .or_else(|| json.get("current_plan_title"))
+        .or_else(|| json.get("current_subscribe_title"))
+        .or_else(|| json.get("combo_title"))
+        .or_else(|| json.pointer("/current_combo_card/title"))
+        .or_else(|| json.get("plan_type"))
+        .or_else(|| json.get("type"))
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .unwrap_or("MiniMax")
+        .to_string()
 }
 
 fn parse_billing_summary(json: &serde_json::Value) -> Result<MiniMaxBillingSummary, ProviderError> {
@@ -854,6 +866,32 @@ mod tests {
     }
 
     #[test]
+    // A billing payload without total_quota carries no plan quota data: the
+    // invented 100.0 default used to render a fabricated percentage.
+    #[test]
+    fn missing_total_quota_is_informational_not_fabricated_percent() {
+        let provider = MiniMaxProvider::new();
+        let snapshot = provider
+            .parse_usage_response(&serde_json::json!({
+                "base_resp": { "status_code": 0 },
+                "used_amount": 12.5,
+                "plan_name": "MiniMax Pro"
+            }))
+            .unwrap();
+        assert!(snapshot.primary.is_informational);
+        assert_eq!(snapshot.login_method.as_deref(), Some("MiniMax Pro"));
+
+        let snapshot = provider
+            .parse_usage_response(&serde_json::json!({
+                "base_resp": { "status_code": 0 },
+                "used_amount": 0,
+                "total_quota": 1000
+            }))
+            .unwrap();
+        assert!(!snapshot.primary.is_informational);
+        assert!((snapshot.primary.used_percent - 0.0).abs() < f64::EPSILON);
+    }
+
     fn parses_plan_title_from_coding_plan_fields() {
         let provider = MiniMaxProvider::new();
         for (field, expected) in [

@@ -110,11 +110,13 @@ describe("TrayCard OpenCode Go projection (core read model)", () => {
       .map((el) => el.textContent);
     expect(tileResets).toHaveLength(2);
     expect(tileResets.every((text) => text && text.length > 0)).toBe(true);
-    // OpenCode Go has no local session-log scanner and no output-speed parser,
-    // so the insight footer (speed | usage) must be hidden entirely — never an
-    // empty slot. Capability comes from the core snapshot, not fetch state,
-    // so the card does not flicker the footer in and out while data loads.
-    expect(container.querySelector(".meta-well")).toBeNull();
+    // OpenCode Go has both a local-session scanner and an output-speed parser,
+    // so the insight footer is capability-gated on: the speed slot renders
+    // (honestly "--" until an enrichment reading arrives) instead of the
+    // footer flickering in and out with fetch state.
+    const metaWell = container.querySelector(".meta-well");
+    expect(metaWell).not.toBeNull();
+    expect(metaWell?.querySelector('[data-slot="speed"]')?.textContent).toBe("--");
   });
 
   it("still accepts the legacy bridge shape (Settings preview path) and projects it through core", async () => {

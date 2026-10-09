@@ -1,6 +1,13 @@
-//! Local cost-usage scanner for Codex, Claude and Grok
+//! Local cost-usage scanner for Codex, Claude, Grok, Gemini CLI, Copilot CLI,
+//! Kimi, Amp and OpenCode-family local databases.
 //!
-//! Scans local JSONL log files to aggregate token usage and calculate costs.
+//! Scans local log files to aggregate token usage and calculate costs. Each
+//! source only contributes what its logs actually record: Grok and Amp carry
+//! provider-side cost figures, OpenCode-family rows carry OpenCode's own
+//! computed cost, and the Gemini/Copilot/Kimi logs are token-only: those are
+//! priced from canonical model rates when the model is known and a rate
+//! resolves, and stay explicitly unpriced (marked partial) otherwise rather
+//! than inventing dollar values.
 //!
 //! Codex file parsing goes through the incremental per-file cache
 //! ([`crate::scan_cache`]): unchanged session files are never re-read.
@@ -416,12 +423,25 @@ impl GrokUsage {
 /// Cost usage scanner
 pub struct CostScanner {
     days: u32,
+    /// Explicit models.dev cache root used by tests so pricing assertions do
+    /// not depend on the machine's downloaded catalog. Production scans leave
+    /// this `None` and read the real cache.
+    pricing_cache_root: Option<PathBuf>,
 }
 
 impl CostScanner {
     /// Create a new scanner for the last N days
     pub fn new(days: u32) -> Self {
-        Self { days }
+        Self {
+            days,
+            pricing_cache_root: None,
+        }
+    }
+
+    #[cfg(test)]
+    fn with_pricing_cache_root(mut self, root: PathBuf) -> Self {
+        self.pricing_cache_root = Some(root);
+        self
     }
 
     /// Scan Codex local logs
@@ -825,6 +845,413 @@ impl CostScanner {
             }
         }
     }
+
+    /// Recursively visit files whose mtime is inside the window and let each
+    /// provider's closure apply its own name/extension filter. Mirrors the
+    /// grok/claude walkers but format-agnostic: the JSON-doc sources (Gemini
+    /// chats, Amp threads), the Copilot session-state tree and the Kimi wire
+    /// logs all share this traversal. A file rewritten in the window carries
+    /// every message it contains, so the mtime bound never drops in-window
+    /// rows — the per-record timestamp filters below do the precise cut.
+    fn walk_source_files<F>(
+        &self,
+        dir: &Path,
+        cutoff: &DateTime<Utc>,
+        cancel: Option<&AtomicBool>,
+        on_file: &mut F,
+    ) where
+        F: FnMut(&Path),
+    {
+        if is_cancelled(cancel) {
+            return;
+        }
+        let entries = match fs::read_dir(dir) {
+            Ok(entries) => entries,
+            Err(_) => return,
+        };
+
+        for entry in entries.flatten() {
+            if is_cancelled(cancel) {
+                break;
+            }
+            let path = entry.path();
+            if path.is_dir() {
+                self.walk_source_files(&path, cutoff, cancel, on_file);
+            } else if let Ok(metadata) = fs::metadata(&path)
+                && let Ok(modified) = metadata.modified()
+            {
+                let modified_dt: DateTime<Utc> = modified.into();
+                if modified_dt >= *cutoff {
+                    on_file(&path);
+                }
+            }
+        }
+    }
+
+    fn finish_summary(
+        mut summary: CostSummary,
+        sessions: u32,
+        cancel: Option<&AtomicBool>,
+    ) -> CostSummary {
+        summary.sessions_count = sessions;
+        summary.history_coverage_established = !is_cancelled(cancel);
+        summary.known_zero = summary.history_coverage_established && sessions == 0;
+        summary
+    }
+
+    fn cutoff_for(&self) -> DateTime<Utc> {
+        Utc::now() - Duration::days(self.days as i64)
+    }
+
+    fn period_bounds(&self, summary: &mut CostSummary) {
+        let today = Utc::now().date_naive();
+        summary.period_start = Some(today - Duration::days(self.days as i64));
+        summary.period_end = Some(today);
+    }
+
+    /// Root of the Gemini CLI's per-project chat documents.
+    ///
+    /// `GEMINI_CLI_HOME` is honoured the same way the CLI itself relocates its
+    /// data, so a relocated install stays readable. `~/.gemini/tmp` holds one
+    /// JSON chat document (plus legacy `session-*.json` files) per project.
+    fn get_gemini_tmp_dir(&self) -> PathBuf {
+        if let Ok(home) = std::env::var("GEMINI_CLI_HOME") {
+            let trimmed = home.trim();
+            if !trimmed.is_empty() {
+                return PathBuf::from(trimmed).join("tmp");
+            }
+        }
+        dirs::home_dir()
+            .unwrap_or_else(|| PathBuf::from("."))
+            .join(".gemini")
+            .join("tmp")
+    }
+
+    /// Root of the Copilot CLI's per-session event logs.
+    ///
+    /// `COPILOT_HOME` relocates the CLI's data root. Only
+    /// `session-state/*/events.jsonl` is read here: it is always written and
+    /// carries cumulative per-model usage snapshots at session shutdown.
+    fn get_copilot_session_state_dir(&self) -> PathBuf {
+        if let Ok(home) = std::env::var("COPILOT_HOME") {
+            let trimmed = home.trim();
+            if !trimmed.is_empty() {
+                return PathBuf::from(trimmed).join("session-state");
+            }
+        }
+        dirs::home_dir()
+            .unwrap_or_else(|| PathBuf::from("."))
+            .join(".copilot")
+            .join("session-state")
+    }
+
+    /// Roots of the Kimi CLI and Kimi Code wire logs.
+    ///
+    /// Both dialects live in `wire.jsonl` files under `sessions/`:
+    /// `~/.kimi/sessions/...` (Kimi CLI) and `~/.kimi-code/sessions/...`
+    /// (Kimi Code, whose `KIMI_CODE_HOME` override is honoured verbatim).
+    /// `KIMI_HOME` mirrors that override for the CLI root so relocated installs
+    /// and tests stay readable without touching the real home directory.
+    fn get_kimi_session_roots(&self) -> Vec<PathBuf> {
+        let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
+        let kimi_home = std::env::var("KIMI_HOME")
+            .ok()
+            .map(|value| PathBuf::from(value.trim().to_string()))
+            .filter(|path| !path.as_os_str().is_empty())
+            .unwrap_or_else(|| home.join(".kimi"));
+        let kimi_code_home = std::env::var("KIMI_CODE_HOME")
+            .ok()
+            .map(|value| PathBuf::from(value.trim().to_string()))
+            .filter(|path| !path.as_os_str().is_empty())
+            .unwrap_or_else(|| home.join(".kimi-code"));
+        vec![kimi_home.join("sessions"), kimi_code_home.join("sessions")]
+    }
+
+    /// Root of Amp's local thread ledgers (`amp/threads/T-*.json`).
+    ///
+    /// Amp follows the XDG data convention, which on Windows resolves to
+    /// `%USERPROFILE%\.local\share`; `XDG_DATA_HOME` overrides it.
+    fn get_amp_threads_dir(&self) -> PathBuf {
+        let base = std::env::var("XDG_DATA_HOME")
+            .ok()
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty())
+            .map(PathBuf::from)
+            .or_else(|| dirs::home_dir().map(|home| home.join(".local").join("share")));
+        base.unwrap_or_else(|| PathBuf::from("."))
+            .join("amp")
+            .join("threads")
+    }
+
+    /// Scan Gemini CLI chat documents (`~/.gemini/tmp/**`).
+    ///
+    /// Chat documents carry one token object per message with the input count
+    /// **inclusive** of cached reads (Gemini API convention), so the cached
+    /// portion is subtracted before summing — the same correction tokscale
+    /// applies. The logs carry no cost figures, so the summary stays
+    /// explicitly unpriced.
+    pub fn scan_gemini_with_cancel(&self, cancel: Option<&AtomicBool>) -> CostSummary {
+        let root = self.get_gemini_tmp_dir();
+        let mut summary = CostSummary::default();
+        if !root.exists() {
+            return summary;
+        }
+        self.period_bounds(&mut summary);
+        let cutoff = self.cutoff_for();
+
+        let mut seen = HashSet::new();
+        let mut sessions = 0u32;
+        let mut handle_file = |path: &Path| {
+            let counted = for_each_gemini_entry(path, &cutoff, &mut seen, cancel, |entry| {
+                add_gemini_entry_to_summary(
+                    &mut summary,
+                    entry,
+                    self.pricing_cache_root.as_deref(),
+                );
+            });
+            if counted > 0 {
+                sessions += 1;
+            }
+        };
+        self.walk_source_files(&root, &cutoff, cancel, &mut handle_file);
+        Self::finish_summary(summary, sessions, cancel)
+    }
+
+    pub fn scan_gemini(&self) -> CostSummary {
+        self.scan_gemini_with_cancel(None)
+    }
+
+    /// Scan Antigravity's local conversation databases (offline history).
+    ///
+    /// Port of upstream CodexBar's Antigravity local reader: every conversation
+    /// SQLite database stores one protobuf generation record per completed
+    /// model call with token counts and the model id, and generation dates are
+    /// recovered from the `steps` table. Antigravity records no per-response
+    /// duration, so this source contributes usage and cost only.
+    pub fn scan_antigravity_with_cancel(&self, cancel: Option<&AtomicBool>) -> CostSummary {
+        use crate::providers::antigravity::local_history::{ScanCoverage, scan};
+
+        let mut summary = CostSummary::default();
+        self.period_bounds(&mut summary);
+        let scan = scan(cancel);
+        if scan.coverage == ScanCoverage::Unavailable {
+            // No local Antigravity install — not a known zero.
+            return summary;
+        }
+        let cutoff_ms = self.cutoff_for().timestamp_millis();
+        let mut sessions = 0u32;
+        for event in &scan.events {
+            if event.timestamp_ms < cutoff_ms {
+                continue;
+            }
+            add_antigravity_event_to_summary(
+                &mut summary,
+                event,
+                self.pricing_cache_root.as_deref(),
+            );
+            sessions = sessions.saturating_add(1);
+        }
+        summary.sessions_count = sessions;
+        summary.history_coverage_established =
+            scan.coverage == ScanCoverage::Complete && !is_cancelled(cancel);
+        summary.known_zero = summary.history_coverage_established && sessions == 0;
+        summary
+    }
+
+    pub fn scan_antigravity(&self) -> CostSummary {
+        self.scan_antigravity_with_cancel(None)
+    }
+
+    /// Scan Copilot CLI session-state logs (`~/.copilot/session-state/**`).
+    ///
+    /// Each `events.jsonl` ends with `session.shutdown` snapshots whose
+    /// `modelMetrics` are **cumulative** per session and model, so consecutive
+    /// snapshots are differenced inside one file — the same handling tokscale
+    /// and ccusage apply. First snapshot contributes its full value. Token
+    /// logs carry no cost figures, so the summary stays explicitly unpriced.
+    pub fn scan_copilot_with_cancel(&self, cancel: Option<&AtomicBool>) -> CostSummary {
+        let root = self.get_copilot_session_state_dir();
+        let mut summary = CostSummary::default();
+        if !root.exists() {
+            return summary;
+        }
+        self.period_bounds(&mut summary);
+        let cutoff = self.cutoff_for();
+
+        let mut sessions = 0u32;
+        let mut handle_file = |path: &Path| {
+            let is_events_log = path.file_name().is_some_and(|name| name == "events.jsonl");
+            if !is_events_log {
+                return;
+            }
+            let counted = for_each_copilot_shutdown(path, &cutoff, cancel, |deltas, _timestamp| {
+                add_copilot_deltas_to_summary(
+                    &mut summary,
+                    &deltas,
+                    self.pricing_cache_root.as_deref(),
+                );
+            });
+            if counted > 0 {
+                sessions += 1;
+            }
+        };
+        self.walk_source_files(&root, &cutoff, cancel, &mut handle_file);
+        Self::finish_summary(summary, sessions, cancel)
+    }
+
+    pub fn scan_copilot(&self) -> CostSummary {
+        self.scan_copilot_with_cancel(None)
+    }
+
+    /// Scan Kimi CLI and Kimi Code wire logs (`wire.jsonl`).
+    ///
+    /// The two dialects differ: the CLI emits per-message `StatusUpdate`
+    /// rows whose `token_usage` is a running total (later rows replace
+    /// earlier ones per `message_id`), while Kimi Code emits turn-scoped
+    /// `usage.record` rows that are per-turn deltas. The logs carry no cost
+    /// figures, so the summary stays explicitly unpriced.
+    pub fn scan_kimi_with_cancel(&self, cancel: Option<&AtomicBool>) -> CostSummary {
+        let mut summary = CostSummary::default();
+        self.period_bounds(&mut summary);
+        let cutoff = self.cutoff_for();
+
+        let mut sessions = 0u32;
+        for root in self.get_kimi_session_roots() {
+            if !root.exists() {
+                continue;
+            }
+            let mut handle_file = |path: &Path| {
+                let is_wire_log = path.file_name().is_some_and(|name| name == "wire.jsonl");
+                if !is_wire_log {
+                    return;
+                }
+                let counted = for_each_kimi_entry(path, &cutoff, cancel, |entry| {
+                    add_kimi_entry_to_summary(
+                        &mut summary,
+                        entry,
+                        self.pricing_cache_root.as_deref(),
+                    );
+                });
+                if counted > 0 {
+                    sessions += 1;
+                }
+            };
+            self.walk_source_files(&root, &cutoff, cancel, &mut handle_file);
+        }
+        Self::finish_summary(summary, sessions, cancel)
+    }
+
+    pub fn scan_kimi(&self) -> CostSummary {
+        self.scan_kimi_with_cancel(None)
+    }
+
+    /// Scan Amp thread ledgers (`~/.local/share/amp/threads/T-*.json`).
+    ///
+    /// The usage ledger is Amp's own billing record: each event carries token
+    /// counts plus a `credits` figure in Amp's USD credit unit, which is
+    /// treated as provider-reported cost. Newer Amp builds moved usage
+    /// accounting server-side and may not write these files anymore — an
+    /// absent directory simply yields an empty scan, never a fabricated zero.
+    pub fn scan_amp_with_cancel(&self, cancel: Option<&AtomicBool>) -> CostSummary {
+        let root = self.get_amp_threads_dir();
+        let mut summary = CostSummary::default();
+        if !root.exists() {
+            return summary;
+        }
+        self.period_bounds(&mut summary);
+        let cutoff = self.cutoff_for();
+
+        let mut sessions = 0u32;
+        let mut handle_file = |path: &Path| {
+            let is_thread = path.file_name().is_some_and(|name| {
+                let name = name.to_string_lossy();
+                name.starts_with("T-") && name.ends_with(".json")
+            });
+            if !is_thread {
+                return;
+            }
+            let counted = for_each_amp_event(path, &cutoff, cancel, |event| {
+                add_amp_event_to_summary(&mut summary, event);
+            });
+            if counted > 0 {
+                sessions += 1;
+            }
+        };
+        self.walk_source_files(&root, &cutoff, cancel, &mut handle_file);
+        Self::finish_summary(summary, sessions, cancel)
+    }
+
+    pub fn scan_amp(&self) -> CostSummary {
+        self.scan_amp_with_cancel(None)
+    }
+
+    /// OpenCode-family local database scan for one Zen subscription.
+    ///
+    /// `opencode-go` reconstructs the Go plan windows; the plain `opencode`
+    /// Zen provider reads the same database filtered to its own rows. Costs
+    /// are the values OpenCode itself computed and stored (`$.cost`), never
+    /// derived here.
+    pub fn scan_opencodego_with_cancel(&self, cancel: Option<&AtomicBool>) -> CostSummary {
+        self.scan_opencode_local(cancel, "opencode-go")
+    }
+
+    pub fn scan_opencodego(&self) -> CostSummary {
+        self.scan_opencodego_with_cancel(None)
+    }
+
+    pub fn scan_opencode_with_cancel(&self, cancel: Option<&AtomicBool>) -> CostSummary {
+        self.scan_opencode_local(cancel, "opencode")
+    }
+
+    pub fn scan_opencode(&self) -> CostSummary {
+        self.scan_opencode_with_cancel(None)
+    }
+
+    fn scan_opencode_local(
+        &self,
+        cancel: Option<&AtomicBool>,
+        provider_filter: &str,
+    ) -> CostSummary {
+        // The database read is one bounded SQL query with no streaming cancel
+        // point; a cancellation is checked before the read starts.
+        if is_cancelled(cancel) {
+            return CostSummary::default();
+        }
+        let now = Utc::now();
+        let mut summary = CostSummary::default();
+        self.period_bounds(&mut summary);
+
+        let Some(scan) = crate::providers::opencodego::local::model_cost_summary_scan_for(
+            provider_filter,
+            now,
+            self.days,
+        ) else {
+            // No local install detected — not a known zero, so the chart layer
+            // keeps the recent-usage slot absent instead of showing 0.
+            return summary;
+        };
+
+        summary.total_cost_usd = scan.total_cost_usd;
+        summary.by_model = scan.by_model;
+        summary.input_tokens = scan.tokens.input;
+        summary.output_tokens = scan.tokens.output;
+        summary.cached_tokens = scan.tokens.cached;
+        for (model, tokens) in scan.by_model_tokens {
+            summary.by_model_tokens.insert(
+                model,
+                ModelTokenCounts {
+                    input_tokens: tokens.input,
+                    output_tokens: tokens.output,
+                    cached_tokens: tokens.cached,
+                },
+            );
+        }
+        // Upstream parity: one session-like unit per provider invocation.
+        summary.sessions_count = scan.request_count;
+        summary.history_coverage_established = true;
+        summary.known_zero = scan.request_count == 0 && scan.total_cost_usd == 0.0;
+        summary
+    }
 }
 
 /// Stream the de-duplicated, in-window usage records from one transcript
@@ -1091,6 +1518,1129 @@ fn add_grok_turn_to_summary(summary: &mut CostSummary, turn: &GrokUsage) {
     }
 }
 
+/// Mark a model as unpriced in a token-only summary.
+///
+/// Gemini/Copilot/Kimi logs carry no cost figures of their own; when no
+/// canonical rate (embedded table or models.dev catalog) resolves for the
+/// model, it lands in `model_pricing_completeness` as partial instead of
+/// contributing a made-up dollar value.
+fn mark_model_unpriced(summary: &mut CostSummary, model: &str) {
+    summary.model_pricing_completeness.mark_partial(model);
+}
+
+/// Provider candidates tried against the models.dev catalog for each
+/// token-only source. Canonical embedded tables always win in
+/// `generic_model_cost_usd_with_root`; these only cover models those tables
+/// do not know (Gemini direct models, Kimi/Moonshot models).
+const GEMINI_PRICING_PROVIDERS: &[&str] = &["google", "gemini"];
+const COPILOT_PRICING_PROVIDERS: &[&str] = &["github-copilot", "copilot"];
+const KIMI_PRICING_PROVIDERS: &[&str] = &["moonshotai", "moonshot"];
+
+/// Placeholder used when tokens exist but the log never named a model, so the
+/// summary can still report that its pricing is incomplete.
+const UNKNOWN_MODEL_LABEL: &str = "unknown";
+
+fn price_tokens_with_candidates(
+    provider_candidates: &[&str],
+    model: &str,
+    input: u64,
+    cached: u64,
+    output: u64,
+    pricing_cache_root: Option<&Path>,
+) -> Option<f64> {
+    CostUsagePricing::generic_model_cost_usd_with_root(
+        provider_candidates,
+        model,
+        input,
+        cached,
+        output,
+        pricing_cache_root,
+    )
+}
+
+/// Antigravity routes Gemini-family turns through Google's catalog; the shared
+/// generic pricing also resolves the Claude/GPT families its logs record.
+const ANTIGRAVITY_PRICING_PROVIDERS: &[&str] = &["google", "gemini"];
+
+/// Routing variants Antigravity records that bill at the base model's public
+/// price (mirrors upstream `AntigravityLocalReader.routingVariantSuffixes`).
+const ANTIGRAVITY_ROUTING_SUFFIXES: [&str; 3] = ["-tiered", "-low", "-thinking"];
+
+/// Antigravity records Gemini 3.1 Pro under product aliases and effort tiers
+/// while the catalog lists only `gemini-3.1-pro-preview`; the safety-routed
+/// 3.7 Flash id maps to ordinary 3.7 Flash (upstream alias table).
+fn antigravity_pricing_alias(model: &str) -> Option<&'static str> {
+    match model.to_ascii_lowercase().as_str() {
+        "gemini-pro-default"
+        | "gemini-pro-agent"
+        | "gemini-3.1-pro"
+        | "gemini-3.1-pro-high"
+        | "gemini-3.1-pro-low" => Some("gemini-3.1-pro-preview"),
+        "gemini-3.7-flash-safety-le" => Some("gemini-3.7-flash"),
+        _ => None,
+    }
+}
+
+/// Price one Antigravity generation. The exact recorded model id wins so an
+/// explicitly catalogued variant keeps its own price; otherwise a known
+/// routing-variant suffix or product alias falls back to the base model.
+fn antigravity_cost_usd(
+    model: &str,
+    input: u64,
+    cached: u64,
+    output: u64,
+    pricing_cache_root: Option<&Path>,
+) -> Option<f64> {
+    let price = |candidate: &str| {
+        price_tokens_with_candidates(
+            ANTIGRAVITY_PRICING_PROVIDERS,
+            candidate,
+            input,
+            cached,
+            output,
+            pricing_cache_root,
+        )
+    };
+    if let Some(alias) = antigravity_pricing_alias(model)
+        && let Some(cost) = price(alias)
+    {
+        return Some(cost);
+    }
+    if let Some(cost) = price(model) {
+        return Some(cost);
+    }
+    let lower = model.to_ascii_lowercase();
+    for suffix in ANTIGRAVITY_ROUTING_SUFFIXES {
+        if let Some(stripped) = lower.strip_suffix(suffix) {
+            let base = &model[..stripped.len()];
+            let candidate = antigravity_pricing_alias(base).unwrap_or(base);
+            if let Some(cost) = price(candidate) {
+                return Some(cost);
+            }
+        }
+    }
+    None
+}
+
+/// Accept RFC3339 strings, epoch seconds, or epoch milliseconds — the local
+/// formats touched here use all three shapes across tools.
+fn parse_flexible_timestamp(value: Option<&serde_json::Value>) -> Option<DateTime<Utc>> {
+    match value? {
+        serde_json::Value::Number(number) => {
+            let as_f64 = number.as_f64()?;
+            let secs = if as_f64 > 100_000_000_000.0 {
+                as_f64 / 1000.0
+            } else {
+                as_f64
+            };
+            DateTime::<Utc>::from_timestamp(secs as i64, 0)
+        }
+        serde_json::Value::String(text) => {
+            let trimmed = text.trim();
+            if let Ok(dt) = DateTime::parse_from_rfc3339(trimmed) {
+                return Some(dt.with_timezone(&Utc));
+            }
+            let as_f64 = trimmed.parse::<f64>().ok()?;
+            let secs = if as_f64 > 100_000_000_000.0 {
+                as_f64 / 1000.0
+            } else {
+                as_f64
+            };
+            DateTime::<Utc>::from_timestamp(secs as i64, 0)
+        }
+        _ => None,
+    }
+}
+
+fn file_mtime(path: &Path) -> Option<DateTime<Utc>> {
+    fs::metadata(path)
+        .ok()
+        .and_then(|meta| meta.modified().ok())
+        .map(|modified| modified.into())
+}
+
+// ── Gemini CLI chat documents ───────────────────────────────────────────────
+
+/// Token counts of one Gemini chat message. Every numeric shape the CLI has
+/// shipped is accepted through aliases; `input`/`promptTokenCount` is
+/// cache-inclusive and the caller nets the cached portion out.
+#[derive(Debug, Default, Deserialize)]
+#[serde(default)]
+struct GeminiTokenCounts {
+    #[serde(
+        alias = "input",
+        alias = "prompt",
+        alias = "input_tokens",
+        alias = "prompt_tokens",
+        alias = "promptTokenCount"
+    )]
+    input: Option<u64>,
+    #[serde(
+        alias = "output",
+        alias = "candidates",
+        alias = "output_tokens",
+        alias = "completion_tokens",
+        alias = "candidatesTokenCount"
+    )]
+    output: Option<u64>,
+    #[serde(
+        alias = "cached",
+        alias = "cached_tokens",
+        alias = "cachedContentTokenCount"
+    )]
+    cached: Option<u64>,
+    #[serde(
+        alias = "thoughts",
+        alias = "reasoning",
+        alias = "thoughts_tokens",
+        alias = "thoughtsTokenCount"
+    )]
+    thoughts: Option<u64>,
+}
+
+impl GeminiTokenCounts {
+    fn is_empty(&self) -> bool {
+        self.input.is_none()
+            && self.output.is_none()
+            && self.cached.is_none()
+            && self.thoughts.is_none()
+    }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct GeminiChatMessage {
+    #[serde(default)]
+    id: Option<String>,
+    #[serde(default)]
+    timestamp: Option<serde_json::Value>,
+    #[serde(default, rename = "type")]
+    kind: Option<String>,
+    #[serde(default)]
+    model: Option<String>,
+    #[serde(default)]
+    tokens: Option<GeminiTokenCounts>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct GeminiChatDoc {
+    #[serde(default)]
+    session_id: Option<String>,
+    #[serde(default)]
+    messages: Vec<GeminiChatMessage>,
+}
+
+/// One headless (`gemini -p`) JSONL run: `init` names the model, `result`
+/// carries the run's token stats under the same alias set.
+#[derive(Debug, Deserialize)]
+struct GeminiHeadlessLine {
+    #[serde(default, rename = "type")]
+    kind: Option<String>,
+    #[serde(default)]
+    model: Option<String>,
+    #[serde(default)]
+    stats: Option<GeminiTokenCounts>,
+    #[serde(default)]
+    timestamp: Option<serde_json::Value>,
+}
+
+/// Token totals of one counted Gemini message, with the cached portion
+/// already subtracted from the input count.
+struct GeminiUsageEntry {
+    model: Option<String>,
+    input: u64,
+    output: u64,
+    cached: u64,
+    /// Message time (or file mtime fallback), used for per-day cost buckets.
+    timestamp: Option<DateTime<Utc>>,
+}
+
+impl GeminiUsageEntry {
+    fn from_counts(
+        model: Option<String>,
+        counts: &GeminiTokenCounts,
+        timestamp: Option<DateTime<Utc>>,
+    ) -> Self {
+        let cached = counts.cached.unwrap_or(0);
+        let input = counts.input.unwrap_or(0).saturating_sub(cached);
+        // Thought tokens are generated output in the Gemini API contract, so
+        // they count toward output; tool tokens ride the prompt side and are
+        // left out rather than guessed.
+        let output = counts
+            .output
+            .unwrap_or(0)
+            .saturating_add(counts.thoughts.unwrap_or(0));
+        Self {
+            model,
+            input,
+            output,
+            cached,
+            timestamp,
+        }
+    }
+}
+
+/// Stream one Gemini chat document's in-window messages (or one headless
+/// JSONL run's result line) into `on_entry`, returning how many were counted.
+fn for_each_gemini_entry<F>(
+    path: &Path,
+    cutoff: &DateTime<Utc>,
+    seen: &mut HashSet<String>,
+    cancel: Option<&AtomicBool>,
+    mut on_entry: F,
+) -> u32
+where
+    F: FnMut(&GeminiUsageEntry),
+{
+    let Ok(text) = fs::read_to_string(path) else {
+        return 0;
+    };
+
+    // Chat documents are single JSON objects with a `messages` array. The
+    // struct defaults make almost any object decode, so only treat it as a
+    // document when messages actually exist — otherwise fall through to the
+    // headless JSONL reader.
+    if let Ok(doc) = serde_json::from_str::<GeminiChatDoc>(&text)
+        && !doc.messages.is_empty()
+    {
+        let mtime = file_mtime(path);
+        let mut counted = 0;
+        for message in &doc.messages {
+            if is_cancelled(cancel) {
+                break;
+            }
+            let Some(tokens) = message.tokens.as_ref() else {
+                continue;
+            };
+            if tokens.is_empty() {
+                continue;
+            }
+            if message.kind.as_deref() == Some("user") {
+                continue;
+            }
+            let timestamp = parse_flexible_timestamp(message.timestamp.as_ref()).or(mtime);
+            if let Some(recorded) = timestamp
+                && recorded < *cutoff
+            {
+                continue;
+            }
+            // One message can be replayed into both the chats/ layout and a
+            // legacy session-*.json file, so identical session+message ids
+            // must only count once.
+            let dedup_key = format!(
+                "{}:{}",
+                doc.session_id.clone().unwrap_or_default(),
+                message.id.clone().unwrap_or_default()
+            );
+            if !message.id.is_none() && !seen.insert(dedup_key) {
+                continue;
+            }
+            on_entry(&GeminiUsageEntry::from_counts(
+                message
+                    .model
+                    .clone()
+                    .filter(|model| !model.trim().is_empty()),
+                tokens,
+                timestamp,
+            ));
+            counted += 1;
+        }
+        return counted;
+    }
+
+    // Headless JSONL: `init` names the model, `result` carries the stats.
+    let file = match File::open(path) {
+        Ok(file) => file,
+        Err(_) => return 0,
+    };
+    let mtime = file_mtime(path);
+    let mut last_init_model: Option<String> = None;
+    let mut counted = 0;
+    for line in BufReader::new(file).lines().map_while(Result::ok) {
+        if is_cancelled(cancel) {
+            break;
+        }
+        if !line.contains("\"result\"") && !line.contains("\"init\"") {
+            continue;
+        }
+        let Ok(parsed) = serde_json::from_str::<GeminiHeadlessLine>(&line) else {
+            continue;
+        };
+        match parsed.kind.as_deref() {
+            Some("init") => {
+                last_init_model = parsed.model.filter(|model| !model.trim().is_empty());
+            }
+            Some("result") => {
+                let Some(stats) = parsed.stats.as_ref() else {
+                    continue;
+                };
+                if stats.is_empty() {
+                    continue;
+                }
+                let timestamp = parse_flexible_timestamp(parsed.timestamp.as_ref()).or(mtime);
+                if let Some(recorded) = timestamp
+                    && recorded < *cutoff
+                {
+                    continue;
+                }
+                on_entry(&GeminiUsageEntry::from_counts(
+                    last_init_model.clone(),
+                    stats,
+                    timestamp,
+                ));
+                counted += 1;
+            }
+            _ => {}
+        }
+    }
+    counted
+}
+
+fn add_gemini_entry_to_summary(
+    summary: &mut CostSummary,
+    entry: &GeminiUsageEntry,
+    pricing_cache_root: Option<&Path>,
+) {
+    summary.input_tokens += entry.input;
+    summary.output_tokens += entry.output;
+    summary.cached_tokens += entry.cached;
+    match entry.model.as_deref() {
+        Some(model) => {
+            let tokens = summary
+                .by_model_tokens
+                .entry(model.to_string())
+                .or_default();
+            tokens.input_tokens += entry.input;
+            tokens.output_tokens += entry.output;
+            tokens.cached_tokens += entry.cached;
+            match price_tokens_with_candidates(
+                GEMINI_PRICING_PROVIDERS,
+                model,
+                entry.input,
+                entry.cached,
+                entry.output,
+                pricing_cache_root,
+            ) {
+                Some(cost) => {
+                    summary.total_cost_usd += cost;
+                    *summary.by_model.entry(model.to_string()).or_insert(0.0) += cost;
+                }
+                None => mark_model_unpriced(summary, model),
+            }
+        }
+        None if entry.input + entry.output + entry.cached > 0 => {
+            mark_model_unpriced(summary, UNKNOWN_MODEL_LABEL);
+        }
+        None => {}
+    }
+}
+
+fn add_antigravity_event_to_summary(
+    summary: &mut CostSummary,
+    event: &crate::providers::antigravity::local_history::GenerationEvent,
+    pricing_cache_root: Option<&Path>,
+) {
+    summary.input_tokens += event.new_input;
+    summary.output_tokens += event.billed_output();
+    summary.cached_tokens += event.cache_read;
+    match event.model.as_deref() {
+        Some(model) => {
+            let tokens = summary
+                .by_model_tokens
+                .entry(model.to_string())
+                .or_default();
+            tokens.input_tokens += event.new_input;
+            tokens.output_tokens += event.billed_output();
+            tokens.cached_tokens += event.cache_read;
+            match antigravity_cost_usd(
+                model,
+                event.new_input,
+                event.cache_read,
+                event.billed_output(),
+                pricing_cache_root,
+            ) {
+                Some(cost) => {
+                    summary.total_cost_usd += cost;
+                    *summary.by_model.entry(model.to_string()).or_insert(0.0) += cost;
+                }
+                None => mark_model_unpriced(summary, model),
+            }
+        }
+        None if event.total_tokens() > 0 => {
+            mark_model_unpriced(summary, UNKNOWN_MODEL_LABEL);
+        }
+        None => {}
+    }
+}
+
+fn add_antigravity_event_to_daily_costs(
+    daily_costs: &mut HashMap<String, f64>,
+    event: &crate::providers::antigravity::local_history::GenerationEvent,
+    pricing_cache_root: Option<&Path>,
+) {
+    let Some(model) = event.model.as_deref() else {
+        return;
+    };
+    let Some(cost) = antigravity_cost_usd(
+        model,
+        event.new_input,
+        event.cache_read,
+        event.billed_output(),
+        pricing_cache_root,
+    ) else {
+        return;
+    };
+    let Some(timestamp) = DateTime::<Utc>::from_timestamp_millis(event.timestamp_ms) else {
+        return;
+    };
+    if let Some(bucket) = daily_costs.get_mut(&daily_cost_day_key(timestamp)) {
+        *bucket += cost;
+    }
+}
+
+// ── Copilot CLI session-state snapshots ─────────────────────────────────────
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CopilotUsage {
+    #[serde(default)]
+    input_tokens: Option<u64>,
+    #[serde(default)]
+    output_tokens: Option<u64>,
+    #[serde(default)]
+    cache_read_tokens: Option<u64>,
+    #[serde(default)]
+    cache_write_tokens: Option<u64>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CopilotModelMetrics {
+    #[serde(default)]
+    usage: Option<CopilotUsage>,
+}
+
+/// Per-model token deltas after differencing one shutdown snapshot against the
+/// previous one. `input` is net of both cache buckets (the log's inputTokens
+/// is inclusive), `cached` is the separate cache traffic.
+#[derive(Debug, Default, Clone)]
+struct CopilotModelDelta {
+    input: u64,
+    output: u64,
+    cached: u64,
+}
+
+/// Stream one `events.jsonl`'s `session.shutdown` snapshots into `on_event` as
+/// per-model deltas, returning how many snapshots were counted.
+fn for_each_copilot_shutdown<F>(
+    path: &Path,
+    cutoff: &DateTime<Utc>,
+    cancel: Option<&AtomicBool>,
+    mut on_event: F,
+) -> u32
+where
+    F: FnMut(&HashMap<String, CopilotModelDelta>, Option<DateTime<Utc>>),
+{
+    let Ok(file) = File::open(path) else {
+        return 0;
+    };
+    let mtime = file_mtime(path);
+    let mut previous: HashMap<String, CopilotUsage> = HashMap::new();
+    let mut counted = 0;
+
+    for line in BufReader::new(file).lines().map_while(Result::ok) {
+        if is_cancelled(cancel) {
+            break;
+        }
+        if !line.contains("session.shutdown") {
+            continue;
+        }
+        let Ok(value) = serde_json::from_str::<serde_json::Value>(&line) else {
+            continue;
+        };
+        if value.get("type").and_then(|kind| kind.as_str()) != Some("session.shutdown") {
+            continue;
+        }
+        let Some(metrics) = value
+            .get("data")
+            .and_then(|data| data.get("modelMetrics"))
+            .and_then(|metrics| {
+                serde_json::from_value::<HashMap<String, CopilotModelMetrics>>(metrics.clone()).ok()
+            })
+        else {
+            continue;
+        };
+        let timestamp = parse_flexible_timestamp(value.get("timestamp")).or(mtime);
+        if let Some(recorded) = timestamp
+            && recorded < *cutoff
+        {
+            continue;
+        }
+
+        let mut deltas: HashMap<String, CopilotModelDelta> = HashMap::new();
+        let mut any = false;
+        for (model, metrics) in metrics {
+            let Some(usage) = metrics.usage else {
+                continue;
+            };
+            let previous_usage = previous.get(&model);
+            let delta_of = |current: Option<u64>, earlier: Option<u64>| {
+                current.unwrap_or(0).saturating_sub(earlier.unwrap_or(0))
+            };
+            let cache_read = usage.cache_read_tokens.unwrap_or(0);
+            let cache_write = usage.cache_write_tokens.unwrap_or(0);
+            let gross_input = usage.input_tokens.unwrap_or(0);
+            let (prev_read, prev_write, prev_gross) = previous_usage
+                .map(|prev| {
+                    (
+                        prev.cache_read_tokens.unwrap_or(0),
+                        prev.cache_write_tokens.unwrap_or(0),
+                        prev.input_tokens.unwrap_or(0),
+                    )
+                })
+                .unwrap_or((0, 0, 0));
+            let delta = CopilotModelDelta {
+                input: gross_input
+                    .saturating_sub(cache_read)
+                    .saturating_sub(cache_write)
+                    .saturating_sub(
+                        prev_gross
+                            .saturating_sub(prev_read)
+                            .saturating_sub(prev_write),
+                    ),
+                output: delta_of(
+                    usage.output_tokens,
+                    previous_usage.and_then(|prev| prev.output_tokens),
+                ),
+                cached: (cache_read + cache_write).saturating_sub(prev_read + prev_write),
+            };
+            previous.insert(model.clone(), usage);
+            if delta.input > 0 || delta.output > 0 || delta.cached > 0 {
+                any = true;
+                deltas.insert(model, delta);
+            }
+        }
+        if any {
+            on_event(&deltas, timestamp);
+            counted += 1;
+        }
+    }
+
+    counted
+}
+
+fn add_copilot_deltas_to_summary(
+    summary: &mut CostSummary,
+    deltas: &HashMap<String, CopilotModelDelta>,
+    pricing_cache_root: Option<&Path>,
+) {
+    for (model, delta) in deltas {
+        summary.input_tokens += delta.input;
+        summary.output_tokens += delta.output;
+        summary.cached_tokens += delta.cached;
+        let tokens = summary.by_model_tokens.entry(model.clone()).or_default();
+        tokens.input_tokens += delta.input;
+        tokens.output_tokens += delta.output;
+        tokens.cached_tokens += delta.cached;
+        match price_tokens_with_candidates(
+            COPILOT_PRICING_PROVIDERS,
+            model,
+            delta.input,
+            delta.cached,
+            delta.output,
+            pricing_cache_root,
+        ) {
+            Some(cost) => {
+                summary.total_cost_usd += cost;
+                *summary.by_model.entry(model.clone()).or_insert(0.0) += cost;
+            }
+            None => mark_model_unpriced(summary, model),
+        }
+    }
+}
+
+// ── Kimi CLI / Kimi Code wire logs ──────────────────────────────────────────
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "snake_case")]
+struct KimiTokenUsage {
+    #[serde(default, alias = "inputOther")]
+    input_other: Option<u64>,
+    #[serde(default)]
+    output: Option<u64>,
+    #[serde(default, alias = "inputCacheRead")]
+    input_cache_read: Option<u64>,
+    #[serde(default, alias = "inputCacheCreation")]
+    input_cache_creation: Option<u64>,
+}
+
+/// One counted Kimi usage record. `input_other` is the non-cached portion;
+/// cache reads and creations sit alongside it (Claude-style).
+struct KimiUsageEntry {
+    model: Option<String>,
+    input_other: u64,
+    output: u64,
+    cache_read: u64,
+    cache_creation: u64,
+    timestamp: Option<DateTime<Utc>>,
+}
+
+const KIMI_SYMBOLIC_MODEL: &str = "__kimi_env_model__";
+const KIMI_CODE_MODEL_PREFIX: &str = "kimi-code/";
+
+fn normalize_kimi_model(raw: Option<&str>) -> Option<String> {
+    let model = raw?.trim();
+    if model.is_empty() || model == KIMI_SYMBOLIC_MODEL {
+        return None;
+    }
+    let model = model.strip_prefix(KIMI_CODE_MODEL_PREFIX).unwrap_or(model);
+    let model = model.trim();
+    (!model.is_empty()).then(|| model.to_string())
+}
+
+/// Stream one `wire.jsonl`'s usage rows into `on_entry`, returning how many
+/// were counted. Both dialects are handled in one pass: CLI rows carry a
+/// `message.payload.token_usage` running total keyed by `message_id` (later
+/// rows replace earlier ones, so finals are emitted at end of file), while
+/// Kimi Code rows are turn-scoped `usage.record` deltas emitted directly.
+fn for_each_kimi_entry<F>(
+    path: &Path,
+    cutoff: &DateTime<Utc>,
+    cancel: Option<&AtomicBool>,
+    mut on_entry: F,
+) -> u32
+where
+    F: FnMut(&KimiUsageEntry),
+{
+    let Ok(file) = File::open(path) else {
+        return 0;
+    };
+    let mtime = file_mtime(path);
+    let mut counted = 0u32;
+
+    // CLI dialect: final token_usage per message id.
+    let mut cli_finals: HashMap<String, (KimiTokenUsage, Option<DateTime<Utc>>)> = HashMap::new();
+    // Code dialect: model named by the preceding `llm.request` row.
+    let mut last_request_model: Option<String> = None;
+
+    for line in BufReader::new(file).lines().map_while(Result::ok) {
+        if is_cancelled(cancel) {
+            break;
+        }
+        if !line.contains("token_usage")
+            && !line.contains("usage.record")
+            && !line.contains("llm.request")
+        {
+            continue;
+        }
+        let Ok(value) = serde_json::from_str::<serde_json::Value>(&line) else {
+            continue;
+        };
+
+        if let Some(message) = value.get("message") {
+            // Kimi CLI dialect.
+            let Some(payload) = message.get("payload") else {
+                continue;
+            };
+            let Ok(usage) = serde_json::from_value::<KimiTokenUsage>(
+                payload.get("token_usage").cloned().unwrap_or_default(),
+            ) else {
+                continue;
+            };
+            let timestamp = parse_flexible_timestamp(value.get("timestamp")).or(mtime);
+            let message_id = payload
+                .get("message_id")
+                .or_else(|| payload.get("messageId"))
+                .and_then(|id| id.as_str())
+                .unwrap_or_default()
+                .to_string();
+            let entry_key = if message_id.is_empty() {
+                format!("line-{}", counted as usize + cli_finals.len())
+            } else {
+                message_id
+            };
+            cli_finals.insert(entry_key, (usage, timestamp));
+            continue;
+        }
+
+        if value.get("type").and_then(|kind| kind.as_str()) == Some("llm.request") {
+            // The concrete model arrives on the request row; turn records may
+            // only carry the symbolic env model.
+            if let Some(model) =
+                normalize_kimi_model(value.get("model").and_then(|model| model.as_str()))
+            {
+                last_request_model = Some(model);
+            }
+            continue;
+        }
+
+        if value.get("type").and_then(|kind| kind.as_str()) == Some("usage.record") {
+            // Kimi Code dialect: turn-scoped records.
+            let scope = value.get("usageScope").and_then(|scope| scope.as_str());
+            if scope.is_some_and(|scope| scope != "turn") {
+                // Session-scoped records are cumulative bookkeeping, not spend.
+                if let Some(model) = value.get("model").and_then(|model| model.as_str()) {
+                    if let Some(model) = normalize_kimi_model(Some(model)) {
+                        last_request_model = Some(model);
+                    }
+                }
+                continue;
+            }
+            let Ok(usage) = serde_json::from_value::<KimiTokenUsage>(
+                value.get("usage").cloned().unwrap_or_default(),
+            ) else {
+                continue;
+            };
+            if usage.output.is_none()
+                && usage.input_other.is_none()
+                && usage.input_cache_read.is_none()
+                && usage.input_cache_creation.is_none()
+            {
+                continue;
+            }
+            let timestamp = parse_flexible_timestamp(value.get("time")).or(mtime);
+            if let Some(recorded) = timestamp
+                && recorded < *cutoff
+            {
+                continue;
+            }
+            let model = normalize_kimi_model(value.get("model").and_then(|model| model.as_str()))
+                .or_else(|| last_request_model.clone());
+            on_entry(&KimiUsageEntry {
+                model,
+                input_other: usage.input_other.unwrap_or(0),
+                output: usage.output.unwrap_or(0),
+                cache_read: usage.input_cache_read.unwrap_or(0),
+                cache_creation: usage.input_cache_creation.unwrap_or(0),
+                timestamp,
+            });
+            counted += 1;
+        }
+    }
+
+    // Emit the CLI finals whose last update landed inside the window.
+    for (usage, timestamp) in cli_finals.into_values() {
+        if let Some(recorded) = timestamp
+            && recorded < *cutoff
+        {
+            continue;
+        }
+        if usage.output.is_none()
+            && usage.input_other.is_none()
+            && usage.input_cache_read.is_none()
+            && usage.input_cache_creation.is_none()
+        {
+            continue;
+        }
+        on_entry(&KimiUsageEntry {
+            model: None,
+            input_other: usage.input_other.unwrap_or(0),
+            output: usage.output.unwrap_or(0),
+            cache_read: usage.input_cache_read.unwrap_or(0),
+            cache_creation: usage.input_cache_creation.unwrap_or(0),
+            timestamp,
+        });
+        counted += 1;
+    }
+
+    counted
+}
+
+fn add_kimi_entry_to_summary(
+    summary: &mut CostSummary,
+    entry: &KimiUsageEntry,
+    pricing_cache_root: Option<&Path>,
+) {
+    summary.input_tokens += entry.input_other;
+    summary.output_tokens += entry.output;
+    summary.cached_tokens += entry.cache_read + entry.cache_creation;
+    match entry.model.as_deref() {
+        Some(model) => {
+            let tokens = summary
+                .by_model_tokens
+                .entry(model.to_string())
+                .or_default();
+            tokens.input_tokens += entry.input_other;
+            tokens.output_tokens += entry.output;
+            tokens.cached_tokens += entry.cache_read + entry.cache_creation;
+            match price_tokens_with_candidates(
+                KIMI_PRICING_PROVIDERS,
+                model,
+                entry.input_other,
+                entry.cache_read + entry.cache_creation,
+                entry.output,
+                pricing_cache_root,
+            ) {
+                Some(cost) => {
+                    summary.total_cost_usd += cost;
+                    *summary.by_model.entry(model.to_string()).or_insert(0.0) += cost;
+                }
+                None => mark_model_unpriced(summary, model),
+            }
+        }
+        // The Kimi CLI dialect names no model, so its spend cannot be priced
+        // from a catalog entry; say so instead of reporting complete pricing.
+        None if entry.input_other + entry.output + entry.cache_read + entry.cache_creation > 0 => {
+            mark_model_unpriced(summary, UNKNOWN_MODEL_LABEL);
+        }
+        None => {}
+    }
+}
+
+// ── Amp thread ledgers ──────────────────────────────────────────────────────
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AmpTokens {
+    #[serde(default)]
+    input: Option<u64>,
+    #[serde(default)]
+    output: Option<u64>,
+    #[serde(default)]
+    cache_read_input_tokens: Option<u64>,
+    #[serde(default)]
+    cache_creation_input_tokens: Option<u64>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AmpLedgerEvent {
+    #[serde(default)]
+    timestamp: Option<String>,
+    #[serde(default)]
+    model: Option<String>,
+    #[serde(default)]
+    credits: Option<f64>,
+    #[serde(default)]
+    tokens: Option<AmpTokens>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AmpThread {
+    #[serde(default)]
+    created: Option<i64>,
+    #[serde(default, rename = "usageLedger")]
+    usage_ledger: Option<AmpLedger>,
+}
+
+#[derive(Debug, Deserialize)]
+struct AmpLedger {
+    #[serde(default)]
+    events: Vec<AmpLedgerEvent>,
+}
+
+/// One counted Amp ledger event. `credits` is Amp's own USD-unit billing
+/// figure and is treated as provider-reported cost, not an estimate.
+struct AmpUsageEvent<'a> {
+    model: Option<&'a str>,
+    input: u64,
+    output: u64,
+    cache_read: u64,
+    cache_creation: u64,
+    credits: f64,
+    timestamp: Option<DateTime<Utc>>,
+}
+
+/// Stream one thread's ledger events into `on_event`, returning how many were
+/// counted. Events without their own timestamp anchor to the thread creation
+/// time, then the file mtime — the same fallback order tokscale uses.
+fn for_each_amp_event<F>(
+    path: &Path,
+    cutoff: &DateTime<Utc>,
+    cancel: Option<&AtomicBool>,
+    mut on_event: F,
+) -> u32
+where
+    F: FnMut(&AmpUsageEvent),
+{
+    let Ok(text) = fs::read_to_string(path) else {
+        return 0;
+    };
+    let Ok(thread) = serde_json::from_str::<AmpThread>(&text) else {
+        return 0;
+    };
+    let Some(ledger) = thread.usage_ledger else {
+        return 0;
+    };
+    let mtime = file_mtime(path);
+    let thread_created = thread
+        .created
+        .and_then(|ms| DateTime::<Utc>::from_timestamp_millis(ms));
+    let mut counted = 0;
+
+    for event in &ledger.events {
+        if is_cancelled(cancel) {
+            break;
+        }
+        let tokens = event.tokens.as_ref();
+        let timestamp = event
+            .timestamp
+            .as_deref()
+            .and_then(|text| DateTime::parse_from_rfc3339(text.trim()).ok())
+            .map(|dt| dt.with_timezone(&Utc))
+            .or(thread_created)
+            .or(mtime);
+        if let Some(recorded) = timestamp
+            && recorded < *cutoff
+        {
+            continue;
+        }
+        let input = tokens.and_then(|tokens| tokens.input).unwrap_or(0);
+        let output = tokens.and_then(|tokens| tokens.output).unwrap_or(0);
+        let cache_read = tokens
+            .and_then(|tokens| tokens.cache_read_input_tokens)
+            .unwrap_or(0);
+        let cache_creation = tokens
+            .and_then(|tokens| tokens.cache_creation_input_tokens)
+            .unwrap_or(0);
+        if input == 0
+            && output == 0
+            && cache_read == 0
+            && cache_creation == 0
+            && event.credits.unwrap_or(0.0) == 0.0
+        {
+            continue;
+        }
+        on_event(&AmpUsageEvent {
+            model: event
+                .model
+                .as_deref()
+                .filter(|model| !model.trim().is_empty()),
+            input,
+            output,
+            cache_read,
+            cache_creation,
+            credits: event.credits.unwrap_or(0.0).max(0.0),
+            timestamp,
+        });
+        counted += 1;
+    }
+
+    counted
+}
+
+fn add_amp_event_to_summary(summary: &mut CostSummary, event: &AmpUsageEvent) {
+    summary.total_cost_usd += event.credits;
+    summary.input_tokens += event.input;
+    summary.output_tokens += event.output;
+    summary.cached_tokens += event.cache_read + event.cache_creation;
+    let tokens_spent = event.input + event.output + event.cache_read + event.cache_creation;
+    if let Some(model) = event.model {
+        *summary.by_model.entry(model.to_string()).or_insert(0.0) += event.credits;
+        let tokens = summary
+            .by_model_tokens
+            .entry(model.to_string())
+            .or_default();
+        tokens.input_tokens += event.input;
+        tokens.output_tokens += event.output;
+        tokens.cached_tokens += event.cache_read + event.cache_creation;
+        // Amp's ledger normally carries the provider-reported `credits`; a
+        // token-bearing event without one is unpriced, not free.
+        if event.credits <= 0.0 && tokens_spent > 0 {
+            mark_model_unpriced(summary, model);
+        }
+    } else if event.credits <= 0.0 && tokens_spent > 0 {
+        mark_model_unpriced(summary, UNKNOWN_MODEL_LABEL);
+    }
+}
+
+fn add_amp_event_to_daily_costs(daily_costs: &mut HashMap<String, f64>, event: &AmpUsageEvent) {
+    let Some(timestamp) = event.timestamp else {
+        return;
+    };
+    let date_str = timestamp
+        .with_timezone(&Local)
+        .date_naive()
+        .format("%Y-%m-%d")
+        .to_string();
+    if let Some(cost) = daily_costs.get_mut(&date_str) {
+        *cost += event.credits;
+    }
+}
+
+fn daily_cost_day_key(timestamp: DateTime<Utc>) -> String {
+    timestamp
+        .with_timezone(&Local)
+        .date_naive()
+        .format("%Y-%m-%d")
+        .to_string()
+}
+
+fn add_gemini_entry_to_daily_costs(
+    daily_costs: &mut HashMap<String, f64>,
+    entry: &GeminiUsageEntry,
+    pricing_cache_root: Option<&Path>,
+) {
+    let (Some(timestamp), Some(model)) = (entry.timestamp, entry.model.as_deref()) else {
+        return;
+    };
+    let Some(cost) = price_tokens_with_candidates(
+        GEMINI_PRICING_PROVIDERS,
+        model,
+        entry.input,
+        entry.cached,
+        entry.output,
+        pricing_cache_root,
+    ) else {
+        return;
+    };
+    if let Some(bucket) = daily_costs.get_mut(&daily_cost_day_key(timestamp)) {
+        *bucket += cost;
+    }
+}
+
+fn add_copilot_deltas_to_daily_costs(
+    daily_costs: &mut HashMap<String, f64>,
+    deltas: &HashMap<String, CopilotModelDelta>,
+    timestamp: Option<DateTime<Utc>>,
+    pricing_cache_root: Option<&Path>,
+) {
+    let Some(timestamp) = timestamp else {
+        return;
+    };
+    let mut total = 0.0;
+    for (model, delta) in deltas {
+        if let Some(cost) = price_tokens_with_candidates(
+            COPILOT_PRICING_PROVIDERS,
+            model,
+            delta.input,
+            delta.cached,
+            delta.output,
+            pricing_cache_root,
+        ) {
+            total += cost;
+        }
+    }
+    if let Some(bucket) = daily_costs.get_mut(&daily_cost_day_key(timestamp)) {
+        *bucket += total;
+    }
+}
+
+fn add_kimi_entry_to_daily_costs(
+    daily_costs: &mut HashMap<String, f64>,
+    entry: &KimiUsageEntry,
+    pricing_cache_root: Option<&Path>,
+) {
+    let (Some(timestamp), Some(model)) = (entry.timestamp, entry.model.as_deref()) else {
+        return;
+    };
+    let Some(cost) = price_tokens_with_candidates(
+        KIMI_PRICING_PROVIDERS,
+        model,
+        entry.input_other,
+        entry.cache_read + entry.cache_creation,
+        entry.output,
+        pricing_cache_root,
+    ) else {
+        return;
+    };
+    if let Some(bucket) = daily_costs.get_mut(&daily_cost_day_key(timestamp)) {
+        *bucket += cost;
+    }
+}
+
 /// Check if any cost usage sources are available
 #[allow(dead_code)]
 pub fn has_cost_usage_sources() -> bool {
@@ -1120,6 +2670,19 @@ pub fn get_daily_cost_history_with_budget(
     days: u32,
     cancel: Option<&AtomicBool>,
     deadline: Option<Instant>,
+) -> (Vec<(String, f64)>, bool) {
+    get_daily_cost_history_with_budget_and_pricing_root(provider, days, cancel, deadline, None)
+}
+
+/// `get_daily_cost_history_with_budget` with an explicit pricing cache root so
+/// tests can exercise priced per-day buckets without touching the machine's
+/// real models.dev cache. Production callers use the wrapper above.
+fn get_daily_cost_history_with_budget_and_pricing_root(
+    provider: &str,
+    days: u32,
+    cancel: Option<&AtomicBool>,
+    deadline: Option<Instant>,
+    pricing_cache_root: Option<&Path>,
 ) -> (Vec<(String, f64)>, bool) {
     if days == 0 {
         return (Vec::new(), false);
@@ -1188,6 +2751,106 @@ pub fn get_daily_cost_history_with_budget(
                 scanner.walk_grok_files(&sessions_dir, &cutoff, cancel, &mut handle_file);
             }
         }
+        "gemini" => {
+            let root = scanner.get_gemini_tmp_dir();
+            if root.exists() {
+                let cutoff = Utc::now() - Duration::days(days as i64);
+                let mut seen = HashSet::new();
+                let mut handle_file = |path: &Path| {
+                    for_each_gemini_entry(path, &cutoff, &mut seen, cancel, |entry| {
+                        add_gemini_entry_to_daily_costs(
+                            &mut daily_costs,
+                            entry,
+                            pricing_cache_root,
+                        );
+                    });
+                };
+                scanner.walk_source_files(&root, &cutoff, cancel, &mut handle_file);
+            }
+        }
+        "copilot" => {
+            let root = scanner.get_copilot_session_state_dir();
+            if root.exists() {
+                let cutoff = Utc::now() - Duration::days(days as i64);
+                let mut handle_file = |path: &Path| {
+                    let is_events_log = path.file_name().is_some_and(|name| name == "events.jsonl");
+                    if !is_events_log {
+                        return;
+                    }
+                    for_each_copilot_shutdown(path, &cutoff, cancel, |deltas, timestamp| {
+                        add_copilot_deltas_to_daily_costs(
+                            &mut daily_costs,
+                            &deltas,
+                            timestamp,
+                            pricing_cache_root,
+                        );
+                    });
+                };
+                scanner.walk_source_files(&root, &cutoff, cancel, &mut handle_file);
+            }
+        }
+        "kimi" => {
+            for root in scanner.get_kimi_session_roots() {
+                if !root.exists() {
+                    continue;
+                }
+                let cutoff = Utc::now() - Duration::days(days as i64);
+                let mut handle_file = |path: &Path| {
+                    let is_wire_log = path.file_name().is_some_and(|name| name == "wire.jsonl");
+                    if !is_wire_log {
+                        return;
+                    }
+                    for_each_kimi_entry(path, &cutoff, cancel, |entry| {
+                        add_kimi_entry_to_daily_costs(&mut daily_costs, entry, pricing_cache_root);
+                    });
+                };
+                scanner.walk_source_files(&root, &cutoff, cancel, &mut handle_file);
+            }
+        }
+        "antigravity" => {
+            use crate::providers::antigravity::local_history::ScanCoverage;
+
+            let scan = crate::providers::antigravity::local_history::scan(cancel);
+            if scan.coverage != ScanCoverage::Unavailable {
+                let cutoff_ms = (Utc::now() - Duration::days(days as i64)).timestamp_millis();
+                for event in &scan.events {
+                    if event.timestamp_ms < cutoff_ms {
+                        continue;
+                    }
+                    add_antigravity_event_to_daily_costs(
+                        &mut daily_costs,
+                        event,
+                        pricing_cache_root,
+                    );
+                }
+            }
+        }
+        "amp" => {
+            let threads_dir = scanner.get_amp_threads_dir();
+            if threads_dir.exists() {
+                let cutoff = Utc::now() - Duration::days(days as i64);
+                let mut handle_file = |path: &Path| {
+                    for_each_amp_event(path, &cutoff, cancel, |event| {
+                        add_amp_event_to_daily_costs(&mut daily_costs, event);
+                    });
+                };
+                scanner.walk_source_files(&threads_dir, &cutoff, cancel, &mut handle_file);
+            }
+        }
+        "opencode" | "opencodego" => {
+            // One bounded SQL read per provider; the rows already carry
+            // OpenCode's own per-message cost, so no per-day re-derivation.
+            let filter = if provider == "opencodego" {
+                "opencode-go"
+            } else {
+                "opencode"
+            };
+            for (day, cost) in
+                crate::providers::opencodego::local::daily_cost_series_for(filter, Utc::now(), days)
+            {
+                *daily_costs.entry(day).or_insert(0.0) += cost;
+            }
+        }
         _ => {}
     }
 
@@ -1207,6 +2870,29 @@ pub fn get_daily_cost_history_with_budget(
 mod tests {
     use super::*;
     use std::io::Write;
+    use std::sync::Mutex;
+
+    /// The new scanners locate their roots through process-global env vars
+    /// (GEMINI_CLI_HOME, COPILOT_HOME, KIMI_HOME, KIMI_CODE_HOME,
+    /// XDG_DATA_HOME). Tests that redirect them must serialize, or a parallel
+    /// test's fixture directory leaks into another test's summary.
+    static ENV_SCAN_LOCK: Mutex<()> = Mutex::new(());
+
+    /// Write a synthetic models.dev cache artifact under `root` so pricing
+    /// assertions are deterministic instead of depending on the machine's
+    /// downloaded catalog.
+    fn write_pricing_cache(root: &Path, providers: &str) {
+        let dir = root.join("model-pricing");
+        std::fs::create_dir_all(&dir).expect("pricing cache dir");
+        let fetched_at = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|duration| duration.as_millis())
+            .unwrap_or(0);
+        let artifact = format!(
+            r#"{{"version":1,"fetched_at_unix_ms":{fetched_at},"catalog":{{"providers":{providers}}}}}"#
+        );
+        std::fs::write(dir.join("models-dev-v1.json"), artifact).expect("pricing cache");
+    }
 
     #[test]
     fn dedup_thread_turns_counts_fork_replay_once() {
@@ -1804,5 +3490,839 @@ mod tests {
 
         let _ = std::fs::remove_file(&file_a);
         let _ = std::fs::remove_file(&file_b);
+    }
+
+    // ── Gemini CLI chat documents ───────────────────────────────────────────
+
+    /// A chat document whose messages were all written "now" so they survive
+    /// any realistic cutoff.
+    fn gemini_chat_doc(session_id: &str, msg_id: &str, tokens: &str) -> String {
+        format!(
+            r#"{{"sessionId":"{session_id}","projectHash":"hash","messages":[{{"id":"{msg_id}","timestamp":"{now}","type":"gemini","model":"gemini-2.5-pro","tokens":{tokens}}}]}}"#,
+            now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+        )
+    }
+
+    #[test]
+    fn gemini_chat_doc_nets_cached_tokens_from_input() {
+        let env_guard = ENV_SCAN_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        // promptTokenCount is cache-inclusive: 1000 prompt − 700 cached = 300
+        // net input, while the cached count lands in its own bucket.
+        let doc = gemini_chat_doc(
+            "s1",
+            "m1",
+            r#"{"promptTokenCount":1000,"candidatesTokenCount":80,"cachedContentTokenCount":700,"thoughtsTokenCount":20}"#,
+        );
+        let dir = std::env::temp_dir().join(format!("gemini-scan-{}", std::process::id()));
+        let chats = dir.join("tmp").join("hash").join("chats");
+        std::fs::create_dir_all(&chats).expect("temp dir");
+        std::fs::write(chats.join("chat.json"), doc).expect("write");
+
+        unsafe {
+            std::env::set_var("GEMINI_CLI_HOME", &dir);
+        }
+        let summary = CostScanner::new(30)
+            .with_pricing_cache_root(dir.join("empty-pricing"))
+            .scan_gemini();
+        unsafe {
+            std::env::remove_var("GEMINI_CLI_HOME");
+        }
+
+        assert_eq!(summary.sessions_count, 1);
+        assert_eq!(summary.input_tokens, 300, "input must be net of cached");
+        assert_eq!(summary.output_tokens, 100, "thoughts count as output");
+        assert_eq!(summary.cached_tokens, 700);
+        assert!(
+            summary.total_cost_usd == 0.0,
+            "no catalog rate resolves from an empty cache root"
+        );
+        assert!(
+            !summary.model_pricing_completeness.is_complete(),
+            "token-only sources stay explicitly unpriced"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn gemini_counts_a_message_once_across_legacy_and_chats_layouts() {
+        let env_guard = ENV_SCAN_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let doc = gemini_chat_doc("s1", "m1", r#"{"input":50,"output":10}"#);
+        let dir = std::env::temp_dir().join(format!("gemini-dedup-{}", std::process::id()));
+        let chats = dir.join("tmp").join("hash").join("chats");
+        let legacy = dir.join("tmp").join("legacy");
+        std::fs::create_dir_all(&chats).expect("temp dir");
+        std::fs::create_dir_all(&legacy).expect("temp dir");
+        std::fs::write(chats.join("chat.json"), &doc).expect("write");
+        std::fs::write(legacy.join("session-1.json"), &doc).expect("write");
+
+        unsafe {
+            std::env::set_var("GEMINI_CLI_HOME", &dir);
+        }
+        let summary = CostScanner::new(30).scan_gemini();
+        unsafe {
+            std::env::remove_var("GEMINI_CLI_HOME");
+        }
+
+        assert_eq!(summary.input_tokens, 50, "replayed message counts once");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn gemini_headless_result_line_is_counted_with_init_model() {
+        let env_guard = ENV_SCAN_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let now_ts = chrono::Utc::now().timestamp();
+        let lines = format!(
+            concat!(
+                r#"{{"type":"init","model":"gemini-2.5-flash","session_id":"h1"}}"#,
+                "\n",
+                r#"{{"type":"result","stats":{{"input_tokens":120,"output_tokens":30}},"timestamp":{now_ts}}}"#
+            ),
+            now_ts = now_ts,
+        );
+        let dir = std::env::temp_dir().join(format!("gemini-headless-{}", std::process::id()));
+        let chats = dir.join("tmp").join("hash").join("chats");
+        std::fs::create_dir_all(&chats).expect("temp dir");
+        std::fs::write(chats.join("run.jsonl"), lines).expect("write");
+
+        unsafe {
+            std::env::set_var("GEMINI_CLI_HOME", &dir);
+        }
+        let summary = CostScanner::new(30).scan_gemini();
+        unsafe {
+            std::env::remove_var("GEMINI_CLI_HOME");
+        }
+
+        assert_eq!(summary.input_tokens, 120);
+        assert_eq!(summary.output_tokens, 30);
+        assert!(
+            summary.by_model_tokens.contains_key("gemini-2.5-flash"),
+            "init-declared model must attribute the run: {:?}",
+            summary.by_model_tokens
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // ── Copilot CLI session-state snapshots ─────────────────────────────────
+
+    #[test]
+    fn copilot_shutdown_snapshots_are_differenced_not_summed() {
+        let env_guard = ENV_SCAN_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        // Cumulative snapshots: shutdown #1 totals 100 in / 20 out; shutdown #2
+        // totals 150 in / 45 out. Only the deltas (100+50 in, 20+25 out) are
+        // real spend; summing the snapshots would double the first window.
+        let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+        let events = format!(
+            concat!(
+                r#"{{"type":"session.startup","data":{{}},"timestamp":"{now}"}}"#,
+                "\n",
+                r#"{{"type":"session.shutdown","id":"e1","timestamp":"{now}","data":{{"modelMetrics":{{"gpt-5":{{"usage":{{"inputTokens":100,"outputTokens":20,"cacheReadTokens":0,"cacheWriteTokens":0}}}}}}}}}}"#,
+                "\n",
+                r#"{{"type":"session.shutdown","id":"e2","timestamp":"{now}","data":{{"modelMetrics":{{"gpt-5":{{"usage":{{"inputTokens":150,"outputTokens":45,"cacheReadTokens":10,"cacheWriteTokens":0}}}}}}}}}}"#
+            ),
+            now = now,
+        );
+        let dir = std::env::temp_dir().join(format!("copilot-scan-{}", std::process::id()));
+        let session = dir.join("session-state").join("sess-1");
+        std::fs::create_dir_all(&session).expect("temp dir");
+        std::fs::write(session.join("events.jsonl"), events).expect("write");
+
+        unsafe {
+            std::env::set_var("COPILOT_HOME", &dir);
+        }
+        let summary = CostScanner::new(30).scan_copilot();
+        unsafe {
+            std::env::remove_var("COPILOT_HOME");
+        }
+
+        assert_eq!(summary.sessions_count, 1);
+        assert_eq!(summary.input_tokens, 140, "net of the 10 cached read delta");
+        assert_eq!(summary.output_tokens, 45);
+        assert_eq!(summary.cached_tokens, 10);
+        // gpt-5 resolves through the canonical Codex table: 140 input at
+        // $1.25/M, 10 cached at $0.125/M and 45 output at $10/M.
+        let expected = 140.0 * 1.25e-6 + 10.0 * 1.25e-7 + 45.0 * 1e-5;
+        assert!(
+            (summary.total_cost_usd - expected).abs() < 1e-12,
+            "expected {expected}, got {}",
+            summary.total_cost_usd
+        );
+        assert!(
+            summary.model_pricing_completeness.is_complete(),
+            "embedded rates price every model in this fixture"
+        );
+        assert!((summary.by_model["gpt-5"] - expected).abs() < 1e-12);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn copilot_ignores_non_event_files_and_incomplete_snapshots() {
+        let env_guard = ENV_SCAN_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let dir = std::env::temp_dir().join(format!("copilot-skip-{}", std::process::id()));
+        let session = dir.join("session-state").join("sess-1");
+        std::fs::create_dir_all(&session).expect("temp dir");
+        std::fs::write(
+            session.join("events.jsonl"),
+            r#"{"type":"session.shutdown","id":"e1","data":{"modelMetrics":{}}}"#,
+        )
+        .expect("write");
+        std::fs::write(session.join("other.jsonl"), "not events").expect("write");
+
+        unsafe {
+            std::env::set_var("COPILOT_HOME", &dir);
+        }
+        let summary = CostScanner::new(30).scan_copilot();
+        unsafe {
+            std::env::remove_var("COPILOT_HOME");
+        }
+
+        assert_eq!(summary.sessions_count, 0);
+        assert!(summary.known_zero, "an inspected empty log is a known zero");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // ── Kimi wire logs ──────────────────────────────────────────────────────
+
+    #[test]
+    fn kimi_cli_running_totals_use_the_last_update_per_message() {
+        let env_guard = ENV_SCAN_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        // StatusUpdate rows for one message carry running totals; only the
+        // final row's counts are real spend.
+        let now = chrono::Utc::now().timestamp() as f64;
+        let lines = format!(
+            concat!(
+                r#"{{"timestamp":{t},"message":{{"type":"StatusUpdate","payload":{{"message_id":"m1","token_usage":{{"input_other":100,"output":10,"input_cache_read":5,"input_cache_creation":1}}}}}}}}"#,
+                "\n",
+                r#"{{"timestamp":{t},"message":{{"type":"StatusUpdate","payload":{{"message_id":"m1","token_usage":{{"input_other":200,"output":25,"input_cache_read":8,"input_cache_creation":2}}}}}}}}"#
+            ),
+            t = now,
+        );
+        let dir = std::env::temp_dir().join(format!("kimi-cli-{}", std::process::id()));
+        let sessions = dir.join("sessions").join("g").join("s");
+        std::fs::create_dir_all(&sessions).expect("temp dir");
+        std::fs::write(sessions.join("wire.jsonl"), lines).expect("write");
+
+        unsafe {
+            std::env::set_var("KIMI_HOME", &dir);
+        }
+        let summary = CostScanner::new(30).scan_kimi();
+        unsafe {
+            std::env::remove_var("KIMI_HOME");
+        }
+
+        assert_eq!(summary.input_tokens, 200, "final running total wins");
+        assert_eq!(summary.output_tokens, 25);
+        assert_eq!(summary.cached_tokens, 10, "cache read + creation");
+        assert!(
+            !summary.model_pricing_completeness.is_complete(),
+            "the CLI dialect names no model, so its tokens cannot be priced"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn kimi_code_turn_records_count_directly_and_pair_models() {
+        let env_guard = ENV_SCAN_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let now_ms = chrono::Utc::now().timestamp_millis();
+        let lines = format!(
+            concat!(
+                r#"{{"type":"llm.request","model":"kimi-code/kimi-for-coding","time":{t}}}"#,
+                "\n",
+                r#"{{"type":"usage.record","model":"__kimi_env_model__","usageScope":"turn","usage":{{"inputOther":300,"output":40,"inputCacheRead":12,"inputCacheCreation":3}},"time":{t}}}"#,
+                "\n",
+                r#"{{"type":"usage.record","usageScope":"session","usage":{{"inputOther":9999,"output":9999}},"time":{t}}}"#
+            ),
+            t = now_ms,
+        );
+        let dir = std::env::temp_dir().join(format!("kimi-code-{}", std::process::id()));
+        let sessions = dir
+            .join("sessions")
+            .join("ws")
+            .join("s")
+            .join("agents")
+            .join("a");
+        std::fs::create_dir_all(&sessions).expect("temp dir");
+        std::fs::write(sessions.join("wire.jsonl"), lines).expect("write");
+
+        unsafe {
+            std::env::set_var("KIMI_CODE_HOME", &dir);
+        }
+        let summary = CostScanner::new(30).scan_kimi();
+        unsafe {
+            std::env::remove_var("KIMI_CODE_HOME");
+        }
+
+        assert_eq!(
+            summary.input_tokens, 300,
+            "session-scope bookkeeping excluded"
+        );
+        assert_eq!(summary.output_tokens, 40);
+        assert_eq!(summary.cached_tokens, 15);
+        assert!(
+            summary.by_model_tokens.contains_key("kimi-for-coding"),
+            "request model attributed after stripping the route prefix: {:?}",
+            summary.by_model_tokens
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // ── Amp thread ledgers ──────────────────────────────────────────────────
+
+    #[test]
+    fn amp_ledger_credits_count_as_provider_reported_cost() {
+        let env_guard = ENV_SCAN_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let now_ms = chrono::Utc::now().timestamp_millis();
+        let thread = format!(
+            r#"{{"id":"T-1","created":{now_ms},"usageLedger":{{"events":[{{"model":"claude-sonnet-4-6","credits":0.42,"tokens":{{"input":900,"output":70,"cacheReadInputTokens":500,"cacheCreationInputTokens":30}}}}]}}}}"#
+        );
+        let dir = std::env::temp_dir().join(format!("amp-scan-{}", std::process::id()));
+        let threads = dir.join("amp").join("threads");
+        std::fs::create_dir_all(&threads).expect("temp dir");
+        std::fs::write(threads.join("T-1.json"), thread).expect("write");
+
+        unsafe {
+            std::env::set_var("XDG_DATA_HOME", &dir);
+        }
+        let summary = CostScanner::new(30).scan_amp();
+        unsafe {
+            std::env::remove_var("XDG_DATA_HOME");
+        }
+
+        assert_eq!(summary.sessions_count, 1);
+        assert!(
+            (summary.total_cost_usd - 0.42).abs() < 1e-9,
+            "credits are cost"
+        );
+        assert_eq!(summary.input_tokens, 900);
+        assert_eq!(summary.output_tokens, 70);
+        assert_eq!(summary.cached_tokens, 530);
+        assert!((summary.by_model["claude-sonnet-4-6"] - 0.42).abs() < 1e-9);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn get_daily_cost_history_buckets_amp_credits_by_day() {
+        let env_guard = ENV_SCAN_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let dir = std::env::temp_dir().join(format!("amp-hist-{}", std::process::id()));
+        let threads = dir.join("amp").join("threads");
+        std::fs::create_dir_all(&threads).expect("temp dir");
+        let now_ms = chrono::Local::now().timestamp_millis();
+        std::fs::write(
+            threads.join("T-2.json"),
+            format!(
+                r#"{{"id":"T-2","created":{now_ms},"usageLedger":{{"events":[{{"model":"m","credits":1.25,"tokens":{{"input":10,"output":5}}}}]}}}}"#
+            ),
+        )
+        .expect("write");
+
+        unsafe {
+            std::env::set_var("XDG_DATA_HOME", &dir);
+        }
+        let (history, stopped) = get_daily_cost_history_with_budget("amp", 7, None, None);
+        unsafe {
+            std::env::remove_var("XDG_DATA_HOME");
+        }
+
+        assert!(!stopped);
+        let today_str = chrono::Local::now()
+            .date_naive()
+            .format("%Y-%m-%d")
+            .to_string();
+        let today = history.iter().find(|(date, _)| date == &today_str);
+        assert!(
+            today.is_some(),
+            "amp credits must land on today: {history:?}"
+        );
+        assert!((today.unwrap().1 - 1.25).abs() < 1e-9);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // ── OpenCode-family local database ──────────────────────────────────────
+
+    #[test]
+    fn opencode_local_scan_filters_rows_by_provider_and_carries_tokens() {
+        let env_guard = ENV_SCAN_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let dir = tempfile::tempdir().unwrap();
+        let base = dir.path().join("opencode");
+        std::fs::create_dir_all(&base).expect("temp dir");
+        let db = base.join("opencode.db");
+        let conn = rusqlite::Connection::open(&db).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE message (id TEXT PRIMARY KEY, data TEXT, time_created INTEGER);",
+        )
+        .unwrap();
+        let now_ms = chrono::Utc::now().timestamp_millis();
+        for (id, provider, cost, tokens) in [
+            ("go1", "opencode-go", 3.0, (100i64, 20i64, 5i64, 1i64)),
+            ("zen1", "opencode", 2.5, (200, 30, 7, 2)),
+        ] {
+            let data = format!(
+                r#"{{"providerID":"{provider}","role":"assistant","cost":{cost},"modelID":"m-{id}","tokens":{{"input":{in_t},"output":{out_t},"cache":{{"read":{cr},"write":{cw}}}}},"time":{{"created":{now_ms}}}}}"#,
+                in_t = tokens.0,
+                out_t = tokens.1,
+                cr = tokens.2,
+                cw = tokens.3,
+            );
+            conn.execute(
+                "INSERT INTO message (id, data, time_created) VALUES (?1, ?2, ?3)",
+                rusqlite::params![id, data, now_ms],
+            )
+            .unwrap();
+        }
+        drop(conn);
+
+        unsafe {
+            std::env::set_var("XDG_DATA_HOME", dir.path());
+        }
+        let go_summary = CostScanner::new(30).scan_opencodego();
+        let zen_summary = CostScanner::new(30).scan_opencode();
+        unsafe {
+            std::env::remove_var("XDG_DATA_HOME");
+        }
+
+        assert!(
+            (go_summary.total_cost_usd - 3.0).abs() < 1e-9,
+            "{go_summary:?}"
+        );
+        assert_eq!(go_summary.input_tokens, 100);
+        assert!(
+            (zen_summary.total_cost_usd - 2.5).abs() < 1e-9,
+            "{zen_summary:?}"
+        );
+        assert_eq!(zen_summary.output_tokens, 30);
+        assert_eq!(zen_summary.cached_tokens, 9);
+        let _ = dir.close();
+    }
+
+    // ── Token-only sources priced from the models.dev catalog ───────────────
+
+    #[test]
+    fn gemini_models_price_from_the_catalog_and_unknown_models_stay_partial() {
+        let env_guard = ENV_SCAN_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let dir = std::env::temp_dir().join(format!("gemini-price-{}", std::process::id()));
+        let chats = dir.join("tmp").join("hash").join("chats");
+        std::fs::create_dir_all(&chats).expect("temp dir");
+        let now = chrono::Local::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, false);
+        let doc = format!(
+            concat!(
+                r#"{{"sessionId":"s1","messages":["#,
+                r#"{{"id":"m1","timestamp":"{now}","type":"gemini","model":"gemini-test","tokens":{{"promptTokenCount":1000,"candidatesTokenCount":500}}}},"#,
+                r#"{{"id":"m2","timestamp":"{now}","type":"gemini","model":"gemini-mystery","tokens":{{"promptTokenCount":200,"candidatesTokenCount":50}}}}"#,
+                r#"]}}"#
+            ),
+            now = now,
+        );
+        std::fs::write(chats.join("chat.json"), doc).expect("write");
+        let pricing_root = dir.join("pricing");
+        write_pricing_cache(
+            &pricing_root,
+            r#"{"google":{"id":"google","models":{"gemini-test":{"id":"gemini-test","cost":{"input":1.0,"output":2.0}}}}}"#,
+        );
+
+        unsafe {
+            std::env::set_var("GEMINI_CLI_HOME", &dir);
+        }
+        let summary = CostScanner::new(30)
+            .with_pricing_cache_root(pricing_root)
+            .scan_gemini();
+        unsafe {
+            std::env::remove_var("GEMINI_CLI_HOME");
+        }
+
+        // gemini-test: 1000 input @ $1/M + 500 output @ $2/M = $0.002.
+        assert!(
+            (summary.total_cost_usd - 0.002).abs() < 1e-12,
+            "{summary:?}"
+        );
+        assert!((summary.by_model["gemini-test"] - 0.002).abs() < 1e-12);
+        assert!(
+            summary
+                .model_pricing_completeness
+                .unpriced_models()
+                .iter()
+                .any(|model| model == "gemini-mystery"),
+            "the unpriced model must be named: {:?}",
+            summary.model_pricing_completeness
+        );
+        assert!(!summary.model_pricing_completeness.is_complete());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn kimi_code_models_price_from_the_catalog() {
+        let env_guard = ENV_SCAN_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let now_ms = chrono::Utc::now().timestamp_millis();
+        let lines = format!(
+            concat!(
+                r#"{{"type":"llm.request","model":"kimi-code/kimi-for-coding","time":{t}}}"#,
+                "\n",
+                r#"{{"type":"usage.record","model":"__kimi_env_model__","usageScope":"turn","usage":{{"inputOther":300,"output":40,"inputCacheRead":12,"inputCacheCreation":3}},"time":{t}}}"#
+            ),
+            t = now_ms,
+        );
+        let dir = std::env::temp_dir().join(format!("kimi-price-{}", std::process::id()));
+        let sessions = dir.join("sessions").join("ws").join("s");
+        std::fs::create_dir_all(&sessions).expect("temp dir");
+        std::fs::write(sessions.join("wire.jsonl"), lines).expect("write");
+        let pricing_root = dir.join("pricing");
+        write_pricing_cache(
+            &pricing_root,
+            r#"{"moonshotai":{"id":"moonshotai","models":{"kimi-for-coding":{"id":"kimi-for-coding","cost":{"input":4.0,"output":16.0,"cache_read":0.4}}}}}"#,
+        );
+
+        unsafe {
+            std::env::set_var("KIMI_CODE_HOME", &dir);
+        }
+        let summary = CostScanner::new(30)
+            .with_pricing_cache_root(pricing_root)
+            .scan_kimi();
+        unsafe {
+            std::env::remove_var("KIMI_CODE_HOME");
+        }
+
+        // 300 input @ $4/M + 15 cached @ $0.4/M + 40 output @ $16/M.
+        let expected = 300.0 * 4e-6 + 15.0 * 0.4e-6 + 40.0 * 16e-6;
+        assert!(
+            (summary.total_cost_usd - expected).abs() < 1e-12,
+            "expected {expected}, got {summary:?}"
+        );
+        assert!(summary.model_pricing_completeness.is_complete());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn amp_events_without_credits_are_marked_unpriced_and_cache_rows_survive() {
+        let env_guard = ENV_SCAN_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let now_ms = chrono::Utc::now().timestamp_millis();
+        let thread = format!(
+            r#"{{"id":"T-3","created":{now_ms},"usageLedger":{{"events":[{{"model":"mystery","tokens":{{"cacheReadInputTokens":50,"cacheCreationInputTokens":10}}}}]}}}}"#
+        );
+        let dir = std::env::temp_dir().join(format!("amp-unpriced-{}", std::process::id()));
+        let threads = dir.join("amp").join("threads");
+        std::fs::create_dir_all(&threads).expect("temp dir");
+        std::fs::write(threads.join("T-3.json"), thread).expect("write");
+
+        unsafe {
+            std::env::set_var("XDG_DATA_HOME", &dir);
+        }
+        let summary = CostScanner::new(30).scan_amp();
+        unsafe {
+            std::env::remove_var("XDG_DATA_HOME");
+        }
+
+        assert_eq!(summary.sessions_count, 1);
+        assert_eq!(summary.cached_tokens, 60, "cache-only rows are kept");
+        assert_eq!(summary.total_cost_usd, 0.0);
+        assert!(
+            !summary.model_pricing_completeness.is_complete(),
+            "a token-bearing event without credits is unpriced, not free"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn get_daily_cost_history_prices_gemini_by_message_day() {
+        let env_guard = ENV_SCAN_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let dir = std::env::temp_dir().join(format!("gemini-hist-{}", std::process::id()));
+        let chats = dir.join("tmp").join("hash").join("chats");
+        std::fs::create_dir_all(&chats).expect("temp dir");
+        let now = chrono::Local::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, false);
+        let doc = format!(
+            r#"{{"sessionId":"s1","messages":[{{"id":"m1","timestamp":"{now}","type":"gemini","model":"gemini-test","tokens":{{"promptTokenCount":1000,"candidatesTokenCount":500}}}}]}}"#,
+            now = now,
+        );
+        std::fs::write(chats.join("chat.json"), doc).expect("write");
+        let pricing_root = dir.join("pricing");
+        write_pricing_cache(
+            &pricing_root,
+            r#"{"google":{"id":"google","models":{"gemini-test":{"id":"gemini-test","cost":{"input":1.0,"output":2.0}}}}}"#,
+        );
+
+        unsafe {
+            std::env::set_var("GEMINI_CLI_HOME", &dir);
+        }
+        let (history, stopped) = get_daily_cost_history_with_budget_and_pricing_root(
+            "gemini",
+            7,
+            None,
+            None,
+            Some(&pricing_root),
+        );
+        unsafe {
+            std::env::remove_var("GEMINI_CLI_HOME");
+        }
+
+        assert!(!stopped);
+        let today_str = chrono::Local::now()
+            .date_naive()
+            .format("%Y-%m-%d")
+            .to_string();
+        let today = history
+            .iter()
+            .find(|(date, _)| date == &today_str)
+            .expect("today bucket");
+        assert!((today.1 - 0.002).abs() < 1e-12, "{history:?}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn get_daily_cost_history_prices_copilot_shutdown_deltas_by_day() {
+        let env_guard = ENV_SCAN_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let dir = std::env::temp_dir().join(format!("copilot-hist-{}", std::process::id()));
+        let session = dir.join("session-state").join("sess-1");
+        std::fs::create_dir_all(&session).expect("temp dir");
+        let now = chrono::Local::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, false);
+        let events = format!(
+            r#"{{"type":"session.shutdown","id":"e1","timestamp":"{now}","data":{{"modelMetrics":{{"gpt-5":{{"usage":{{"inputTokens":100,"outputTokens":20,"cacheReadTokens":0,"cacheWriteTokens":0}}}}}}}}}}"#,
+            now = now,
+        );
+        std::fs::write(session.join("events.jsonl"), events).expect("write");
+
+        unsafe {
+            std::env::set_var("COPILOT_HOME", &dir);
+        }
+        let (history, stopped) = get_daily_cost_history_with_budget("copilot", 7, None, None);
+        unsafe {
+            std::env::remove_var("COPILOT_HOME");
+        }
+
+        assert!(!stopped);
+        let today_str = chrono::Local::now()
+            .date_naive()
+            .format("%Y-%m-%d")
+            .to_string();
+        // gpt-5: 100 input @ $1.25/M + 20 output @ $10/M.
+        let expected = 100.0 * 1.25e-6 + 20.0 * 1e-5;
+        let today = history
+            .iter()
+            .find(|(date, _)| date == &today_str)
+            .expect("today bucket");
+        assert!((today.1 - expected).abs() < 1e-12, "{history:?}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn get_daily_cost_history_prices_kimi_code_records_by_day() {
+        let env_guard = ENV_SCAN_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let dir = std::env::temp_dir().join(format!("kimi-hist-{}", std::process::id()));
+        let sessions = dir.join("sessions").join("ws").join("s");
+        std::fs::create_dir_all(&sessions).expect("temp dir");
+        let now_ms = chrono::Local::now().timestamp_millis();
+        let lines = format!(
+            concat!(
+                r#"{{"type":"llm.request","model":"kimi-code/kimi-for-coding","time":{t}}}"#,
+                "\n",
+                r#"{{"type":"usage.record","model":"__kimi_env_model__","usageScope":"turn","usage":{{"inputOther":100,"output":10}},"time":{t}}}"#
+            ),
+            t = now_ms,
+        );
+        std::fs::write(sessions.join("wire.jsonl"), lines).expect("write");
+        let pricing_root = dir.join("pricing");
+        write_pricing_cache(
+            &pricing_root,
+            r#"{"moonshotai":{"id":"moonshotai","models":{"kimi-for-coding":{"id":"kimi-for-coding","cost":{"input":4.0,"output":16.0}}}}}"#,
+        );
+
+        unsafe {
+            std::env::set_var("KIMI_CODE_HOME", &dir);
+        }
+        let (history, stopped) = get_daily_cost_history_with_budget_and_pricing_root(
+            "kimi",
+            7,
+            None,
+            None,
+            Some(&pricing_root),
+        );
+        unsafe {
+            std::env::remove_var("KIMI_CODE_HOME");
+        }
+
+        assert!(!stopped);
+        let today_str = chrono::Local::now()
+            .date_naive()
+            .format("%Y-%m-%d")
+            .to_string();
+        let expected = 100.0 * 4e-6 + 10.0 * 16e-6;
+        let today = history
+            .iter()
+            .find(|(date, _)| date == &today_str)
+            .expect("today bucket");
+        assert!((today.1 - expected).abs() < 1e-12, "{history:?}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // ── Antigravity conversation databases ──────────────────────────────────
+
+    fn write_antigravity_database(dir: &Path, turns: &[Vec<u8>], steps: &[Vec<u8>]) -> PathBuf {
+        let base = dir.join("antigravity-cli").join("conversations");
+        std::fs::create_dir_all(&base).expect("temp dir");
+        let db = base.join("conv-1.db");
+        crate::providers::antigravity::local_history::test_support::create_database(
+            &db, turns, steps,
+        );
+        db
+    }
+
+    #[test]
+    fn antigravity_scan_prices_known_models_and_marks_unknown_partial() {
+        use crate::providers::antigravity::local_history::test_support::{step_blob, turn_blob};
+
+        let env_guard = ENV_SCAN_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let dir = std::env::temp_dir().join(format!("antigravity-scan-{}", std::process::id()));
+        let now_ms = chrono::Utc::now().timestamp_millis();
+        let turns = vec![
+            turn_blob(
+                "gemini-test",
+                "step-1",
+                "resp-1",
+                "bot-1",
+                1000,
+                0,
+                0,
+                500,
+                None,
+            ),
+            turn_blob(
+                "gemini-mystery",
+                "step-2",
+                "resp-2",
+                "bot-2",
+                100,
+                0,
+                0,
+                50,
+                None,
+            ),
+        ];
+        let steps = vec![
+            step_blob("step-1", now_ms, "bot-1"),
+            step_blob("step-2", now_ms, "bot-2"),
+        ];
+        let _db = write_antigravity_database(&dir, &turns, &steps);
+
+        let pricing_root = dir.join("pricing");
+        write_pricing_cache(
+            &pricing_root,
+            r#"{"google":{"id":"google","models":{"gemini-test":{"id":"gemini-test","cost":{"input":1.0,"output":2.0}}}}}"#,
+        );
+
+        unsafe {
+            std::env::set_var("GEMINI_CLI_HOME", &dir);
+        }
+        let summary = CostScanner::new(30)
+            .with_pricing_cache_root(pricing_root.clone())
+            .scan_antigravity();
+        unsafe {
+            std::env::remove_var("GEMINI_CLI_HOME");
+        }
+
+        assert_eq!(summary.sessions_count, 2);
+        assert_eq!(summary.input_tokens, 1100);
+        assert_eq!(summary.output_tokens, 550);
+        // gemini-test: 1000 input @ $1/M + 500 output @ $2/M = $0.002.
+        assert!(
+            (summary.total_cost_usd - 0.002).abs() < 1e-12,
+            "{summary:?}"
+        );
+        assert!(summary.history_coverage_established);
+        assert!(
+            summary
+                .model_pricing_completeness
+                .unpriced_models()
+                .iter()
+                .any(|model| model == "gemini-mystery"),
+            "the unpriced model must be named: {:?}",
+            summary.model_pricing_completeness
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn get_daily_cost_history_prices_antigravity_generations_by_day() {
+        use crate::providers::antigravity::local_history::test_support::{step_blob, turn_blob};
+
+        let env_guard = ENV_SCAN_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let dir = std::env::temp_dir().join(format!("antigravity-hist-{}", std::process::id()));
+        let now_ms = chrono::Local::now().timestamp_millis();
+        let turns = vec![turn_blob(
+            "gemini-test",
+            "step-1",
+            "resp-1",
+            "bot-1",
+            1000,
+            0,
+            0,
+            500,
+            None,
+        )];
+        let steps = vec![step_blob("step-1", now_ms, "bot-1")];
+        let _db = write_antigravity_database(&dir, &turns, &steps);
+
+        let pricing_root = dir.join("pricing");
+        write_pricing_cache(
+            &pricing_root,
+            r#"{"google":{"id":"google","models":{"gemini-test":{"id":"gemini-test","cost":{"input":1.0,"output":2.0}}}}}"#,
+        );
+
+        unsafe {
+            std::env::set_var("GEMINI_CLI_HOME", &dir);
+        }
+        let (history, stopped) = get_daily_cost_history_with_budget_and_pricing_root(
+            "antigravity",
+            7,
+            None,
+            None,
+            Some(&pricing_root),
+        );
+        unsafe {
+            std::env::remove_var("GEMINI_CLI_HOME");
+        }
+
+        assert!(!stopped);
+        let today_str = chrono::Local::now()
+            .date_naive()
+            .format("%Y-%m-%d")
+            .to_string();
+        let today = history
+            .iter()
+            .find(|(date, _)| date == &today_str)
+            .expect("today bucket");
+        assert!((today.1 - 0.002).abs() < 1e-12, "{history:?}");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

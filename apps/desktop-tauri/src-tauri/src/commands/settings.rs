@@ -595,6 +595,9 @@ pub fn get_taskbar_window_availability(
                 "codex" => speed.codex.tokens_per_second.is_some(),
                 "claude" => speed.claude.tokens_per_second.is_some(),
                 "grok" => speed.grok.tokens_per_second.is_some(),
+                "kimi" => speed.kimi.tokens_per_second.is_some(),
+                "opencode" => speed.opencode.tokens_per_second.is_some(),
+                "opencodego" => speed.opencodego.tokens_per_second.is_some(),
                 _ => false,
             };
             (
@@ -972,20 +975,39 @@ mod tests {
         let mut settings = Settings::default();
         patch.apply_to(&mut settings).expect("patch applies");
 
-        assert_eq!(settings.float_bar_quota_display, QuotaDisplayPreference::Follow);
-        assert_eq!(settings.float_bar_reset_display, ResetDisplayPreference::Follow);
+        assert_eq!(
+            settings.float_bar_quota_display,
+            QuotaDisplayPreference::Follow
+        );
+        assert_eq!(
+            settings.float_bar_reset_display,
+            ResetDisplayPreference::Follow
+        );
         assert!(!settings.float_bar_show_as_used);
         assert!(!settings.float_bar_reset_time_relative);
-        assert_eq!(settings.dashboard_quota_display, QuotaDisplayPreference::Used);
+        assert_eq!(
+            settings.dashboard_quota_display,
+            QuotaDisplayPreference::Used
+        );
         assert!(settings.dashboard_show_as_used);
-        assert_eq!(settings.dashboard_reset_display, ResetDisplayPreference::Absolute);
+        assert_eq!(
+            settings.dashboard_reset_display,
+            ResetDisplayPreference::Absolute
+        );
         assert!(!settings.dashboard_reset_time_relative);
-        assert_eq!(settings.taskbar_quota_display, QuotaDisplayPreference::Remaining);
+        assert_eq!(
+            settings.taskbar_quota_display,
+            QuotaDisplayPreference::Remaining
+        );
         assert!(!settings.taskbar_show_as_used);
-        assert_eq!(settings.taskbar_reset_display, ResetDisplayPreference::Countdown);
+        assert_eq!(
+            settings.taskbar_reset_display,
+            ResetDisplayPreference::Countdown
+        );
         assert!(settings.taskbar_reset_time_relative);
 
-        let json = serde_json::to_value(SettingsSnapshot::from(settings)).expect("snapshot serializes");
+        let json =
+            serde_json::to_value(SettingsSnapshot::from(settings)).expect("snapshot serializes");
         assert_eq!(json["floatBarQuotaDisplay"], serde_json::json!("follow"));
         assert_eq!(json["dashboardQuotaDisplay"], serde_json::json!("used"));
         assert_eq!(json["taskbarQuotaDisplay"], serde_json::json!("remaining"));

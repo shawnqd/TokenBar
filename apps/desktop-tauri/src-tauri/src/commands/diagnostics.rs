@@ -55,7 +55,7 @@ fn safe_diagnostics_from(
     has_api_keys.sort();
 
     SafeDiagnostics {
-        app_version: env!("CARGO_PKG_VERSION").to_string(),
+        app_version: codexbar::core::display_version().to_string(),
         platform: std::env::consts::OS.to_string(),
         schema_version: 1,
         enabled_providers,

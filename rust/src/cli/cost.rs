@@ -1,6 +1,8 @@
 //! Cost command implementation
 //!
-//! Scans local JSONL logs to calculate token costs for Codex and Claude.
+//! Scans local CLI session logs to calculate token usage and costs for the
+//! locally scannable providers (Codex, Claude, Grok, Gemini, Copilot, Kimi,
+//! Amp, OpenCode, OpenCode Go).
 
 use clap::Args;
 
@@ -11,7 +13,8 @@ use crate::cost_scanner::{CostScanner, CostSummary};
 /// Arguments for the cost command
 #[derive(Args, Debug, Default)]
 pub struct CostArgs {
-    /// Provider to query (codex, claude, cursor, gemini, copilot, all, both)
+    /// Provider to query (codex, claude, grok, gemini, copilot, kimi, amp,
+    /// opencode, opencodego, antigravity, all, both)
     #[arg(short, long)]
     pub provider: Option<String>,
 
@@ -59,26 +62,29 @@ pub async fn run(args: CostArgs) -> anyhow::Result<()> {
     let mut results: Vec<CostResult> = Vec::new();
 
     for provider in providers.as_list() {
-        match provider {
-            ProviderId::Codex => {
-                let summary = scanner.scan_codex();
-                results.push(CostResult {
-                    provider: provider.cli_name().to_string(),
-                    display_name: provider.display_name().to_string(),
-                    summary,
-                    supported: true,
-                });
-            }
-            ProviderId::Claude => {
-                let summary = scanner.scan_claude();
-                results.push(CostResult {
-                    provider: provider.cli_name().to_string(),
-                    display_name: provider.display_name().to_string(),
-                    summary,
-                    supported: true,
-                });
-            }
-            _ => {
+        // Kept in step with the desktop's `chart.rs::scan_local_cost` — the
+        // same providers are locally scannable from either surface.
+        let summary = match provider {
+            ProviderId::Codex => Some(scanner.scan_codex()),
+            ProviderId::Claude => Some(scanner.scan_claude()),
+            ProviderId::Grok => Some(scanner.scan_grok()),
+            ProviderId::Gemini => Some(scanner.scan_gemini()),
+            ProviderId::Copilot => Some(scanner.scan_copilot()),
+            ProviderId::Kimi => Some(scanner.scan_kimi()),
+            ProviderId::Amp => Some(scanner.scan_amp()),
+            ProviderId::OpenCode => Some(scanner.scan_opencode()),
+            ProviderId::OpenCodeGo => Some(scanner.scan_opencodego()),
+            ProviderId::Antigravity => Some(scanner.scan_antigravity()),
+            _ => None,
+        };
+        match summary {
+            Some(summary) => results.push(CostResult {
+                provider: provider.cli_name().to_string(),
+                display_name: provider.display_name().to_string(),
+                summary,
+                supported: true,
+            }),
+            None => {
                 // Other providers don't have local logs to scan
                 results.push(CostResult {
                     provider: provider.cli_name().to_string(),
@@ -124,7 +130,8 @@ fn print_text_output(results: &[CostResult], use_color: bool, days: u32) {
 
         if !result.supported {
             println!("  Local cost scanning not available for this provider");
-            println!("  (Only Codex and Claude have local logs)");
+            println!("  (Local logs are scanned for Codex, Claude, Grok, Gemini,");
+            println!("   Copilot, Kimi, Amp, OpenCode, OpenCode Go and Antigravity)");
         } else if result.summary.sessions_count == 0 {
             println!("  No usage data found");
             println!("  Check that you have used {} locally", result.display_name);
@@ -155,7 +162,7 @@ fn print_text_output(results: &[CostResult], use_color: bool, days: u32) {
             }
             if !result.summary.model_pricing_completeness.is_complete() {
                 println!(
-                    "  Warning: estimated pricing for unknown models: {}",
+                    "  Warning: no canonical rate for these models; they are excluded from the total: {}",
                     result
                         .summary
                         .model_pricing_completeness

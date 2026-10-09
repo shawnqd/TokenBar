@@ -16,13 +16,22 @@ pub use window::FLOATBAR_LABEL;
 use codexbar::settings::Settings;
 use tauri::{Emitter, Manager};
 
-/// Install the native z-order guard and reopen the floating bar on app start
-/// if it was enabled previously.
+/// Install the native z-order guard.
 ///
 /// Called once from `main.rs::setup` so the guard has the app handle before
-/// the floatbar is shown.
+/// the floatbar is shown. The floating bar's own WebView is built separately
+/// by [`restore_at_startup`], which runs after the event loop is pumping —
+/// building it inside `setup` delayed the first tray click by a whole
+/// WebView2 controller handshake.
 pub fn install(app: &tauri::AppHandle) {
     topmost_guard::install(app);
+}
+
+/// Reopen the floating bar on app start if it was enabled previously.
+///
+/// Must run on the main thread (window creation is thread-affine); the
+/// deferred warmup in `main.rs` marshals it there.
+pub fn restore_at_startup(app: &tauri::AppHandle) {
     let persisted = Settings::load();
     if persisted.float_bar_enabled {
         let _ = window::show(

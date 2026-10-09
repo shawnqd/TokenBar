@@ -327,12 +327,19 @@ mod tests {
 
     #[test]
     fn test_codex_pricing_uses_gpt55_standard_short_context_rates() {
-        let cost = codex_cost_usd("gpt-5.5", 1_000_000, 400_000, 1_000_000);
+        // Short-context request (input <= 272K): 150k non-cached input at
+        // $5/M, 50k cached input at $0.50/M, 100k output at $30/M.
+        let cost = codex_cost_usd("gpt-5.5", 200_000, 50_000, 100_000);
+        assert!((cost - 3.775).abs() < 0.01);
+    }
 
-        // GPT-5.5 standard short-context pricing:
-        // 600k non-cached input at $5/M, 400k cached input at $0.50/M,
-        // and 1M output at $30/M.
-        assert!((cost - 33.20).abs() < 0.01);
+    #[test]
+    fn test_codex_pricing_uses_gpt55_long_context_rates_above_threshold() {
+        // Above 272K input the official long-context tier applies:
+        // 600k non-cached input at $10/M, 400k cached input at $1/M,
+        // 1M output at $45/M.
+        let cost = codex_cost_usd("gpt-5.5", 1_000_000, 400_000, 1_000_000);
+        assert!((cost - 51.40).abs() < 0.01);
     }
 
     #[test]

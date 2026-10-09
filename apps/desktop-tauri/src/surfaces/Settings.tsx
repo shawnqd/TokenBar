@@ -259,6 +259,9 @@ export default function Settings({
       <div className="settings-titlebar settings-v5__titlebar" data-tauri-drag-region>
         <span className="settings-titlebar__title" data-tauri-drag-region>
           {t("SettingsWindowTitle")}
+          {/* dev 链（vite dev server）在标题上标注 (dev)，与已安装正式版区分；
+              正式构建该值为 false，标题保持原样。 */}
+          {import.meta.env.DEV ? " (dev)" : ""}
         </span>
         <div className="settings-titlebar__controls">
           <button

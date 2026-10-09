@@ -126,11 +126,61 @@ pub use windsurf::WindsurfProvider;
 pub use zai::{ZaiProvider, ZaiRegion};
 pub use zed::ZedProvider;
 
-pub(crate) fn browser_cookie_header(
-    domains: &[&str],
-) -> Result<String, crate::core::ProviderError> {
-    crate::browser::cookies::get_cookie_header_for_domains(domains)
-        .map_err(map_browser_cookie_error)
+/// Browser cookie header for a provider's domains, with a last-good cache.
+///
+/// Every successful live extraction refreshes the per-site cache. When live
+/// extraction fails for an environmental reason — the browser holding an
+/// exclusive lock on its active-profile database, an unreadable store, ABE —
+/// a fresh cached header stands in so browser-session providers keep working
+/// while the browser runs. A definitive "no session for this domain" result
+/// is never cached over (the user logging out must stay visible) and clears
+/// the cache, because the cached credential is dead at that point.
+pub fn browser_cookie_header(domains: &[&str]) -> Result<String, crate::core::ProviderError> {
+    use crate::browser::cookie_cache::{COOKIE_CACHE_TTL_SECS, CookieHeaderCache};
+    use crate::browser::cookies::CookieError;
+
+    let primary = domains.first().copied().unwrap_or("").trim().to_string();
+    if primary.is_empty() {
+        return crate::browser::cookies::get_cookie_header_for_domains(domains)
+            .map_err(map_browser_cookie_error);
+    }
+
+    let extraction = crate::browser::cookies::get_cookie_header_for_domains(domains);
+    match extraction {
+        // Live read worked: refresh the cache and use it.
+        Ok(header) if !header.trim().is_empty() => {
+            let _ = CookieHeaderCache::store(&primary, &header, "browser");
+            Ok(header)
+        }
+        // Extraction ran and found no usable session: honest logged-out, and
+        // the cached credential is dead at this point.
+        Ok(_) => {
+            CookieHeaderCache::clear(&primary);
+            Err(crate::core::ProviderError::NoCookies)
+        }
+        Err(CookieError::NotFound(_)) => {
+            CookieHeaderCache::clear(&primary);
+            Err(crate::core::ProviderError::NoCookies)
+        }
+        // Environmental failure (locked database, unreadable store, ABE): a
+        // fresh cache covers it. Note the cached header still fetches live
+        // server data — only the credential is cached, never quota numbers.
+        Err(error) => {
+            if let Some(entry) = CookieHeaderCache::load(&primary)
+                && !entry.is_stale(COOKIE_CACHE_TTL_SECS)
+            {
+                tracing::debug!(
+                    site = %primary,
+                    age_secs = chrono::Utc::now()
+                        .signed_duration_since(entry.stored_at)
+                        .num_seconds(),
+                    "Browser cookie extraction failed; using last-good cached header"
+                );
+                return Ok(entry.cookie_header);
+            }
+            Err(map_browser_cookie_error(error))
+        }
+    }
 }
 
 pub(crate) fn browser_cookies_for_domain(

@@ -11,6 +11,8 @@
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
+use std::sync::Mutex;
+use std::time::SystemTime;
 
 use crate::core::ProviderId;
 
@@ -30,6 +32,32 @@ pub use types::*;
 
 #[cfg(test)]
 mod tests;
+
+/// In-process cache behind [`Settings::load`].
+///
+/// `load()` sits on every hot path — the auto-refresh poll, each per-provider
+/// refresh completion, every outside-click dismissal, every tray-menu open,
+/// and every WebView's bootstrap command — and each uncached call read
+/// settings.json from disk *and* reconciled the Start-at-login registry
+/// value. The cache keys on the file's `(mtime, len)` so any external edit or
+/// `save()` invalidates it; the registry reconciliation therefore re-runs
+/// exactly when the settings file (or the process) changed, which is the only
+/// time its result can differ. A user who edits the autostart Run key outside
+/// the app is picked up on the next load that follows any settings change or
+/// process start, matching how the value is otherwise maintained.
+static LOAD_CACHE: Mutex<Option<CachedSettings>> = Mutex::new(None);
+
+struct CachedSettings {
+    /// `None` models "settings file absent" so the default-settings case
+    /// caches too.
+    file_stamp: Option<(SystemTime, u64)>,
+    settings: Settings,
+}
+
+fn settings_file_stamp(path: Option<&PathBuf>) -> Option<(SystemTime, u64)> {
+    let metadata = std::fs::metadata(path?).ok()?;
+    Some((metadata.modified().ok()?, metadata.len()))
+}
 
 /// Application settings
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -797,6 +825,17 @@ fn default_local_usage_period() -> String {
 /// keeps it off unless the user selects `auto`. See docs/COOKIES.md.
 const DEFAULT_COOKIE_SOURCE: &str = "manual";
 
+/// Default cookie source value for a given provider.
+///
+/// MiMo defaults to `auto` (browser-first with fallback to saved/imported cookie).
+/// All other providers retain the global `manual` default (explicit opt-in).
+fn default_cookie_source(id: ProviderId) -> &'static str {
+    match id {
+        ProviderId::MiMo => "auto",
+        _ => DEFAULT_COOKIE_SOURCE,
+    }
+}
+
 /// Default usage source value for any provider.
 const DEFAULT_PROVIDER_SOURCE: &str = "auto";
 
@@ -956,8 +995,18 @@ impl Settings {
 
     /// Load settings from disk
     pub fn load() -> Self {
+        let path = Self::settings_path();
+        let stamp = settings_file_stamp(path.as_ref());
+
+        if let Ok(guard) = LOAD_CACHE.lock()
+            && let Some(cached) = guard.as_ref()
+            && cached.file_stamp == stamp
+        {
+            return cached.settings.clone();
+        }
+
         #[allow(unused_mut)]
-        let mut settings = match Self::settings_path() {
+        let mut settings = match path {
             Some(path) if path.exists() => match crate::secure_file::read_string(&path) {
                 Ok(content) => {
                     serde_json::from_str(content.trim_start_matches('\u{feff}')).unwrap_or_default()
@@ -979,6 +1028,13 @@ impl Settings {
         // the single user-facing provider and persist the cleanup once.
         if settings.retire_mimo_api_provider() {
             let _ = settings.save();
+        }
+
+        if let Ok(mut guard) = LOAD_CACHE.lock() {
+            *guard = Some(CachedSettings {
+                file_stamp: stamp,
+                settings: settings.clone(),
+            });
         }
 
         settings
@@ -1008,6 +1064,13 @@ impl Settings {
 
         let json = serde_json::to_string_pretty(self)?;
         crate::secure_file::write_string(&path, &json)?;
+
+        // The on-disk state just changed underneath the cache key. Drop the
+        // entry so the next `load()` re-reads instead of trusting a stamp that
+        // may not have moved (same-size write inside one timestamp tick).
+        if let Ok(mut guard) = LOAD_CACHE.lock() {
+            *guard = None;
+        }
 
         Ok(())
     }
@@ -1219,12 +1282,12 @@ impl Settings {
         self.provider_configs.entry(id).or_default()
     }
 
-    /// Cookie source for `id`, or the default `"auto"` if unset.
+    /// Cookie source for `id`, or the provider-specific default if unset.
     pub fn cookie_source(&self, id: ProviderId) -> &str {
         self.provider_configs
             .get(&id)
             .and_then(|c| c.cookie_source.as_deref())
-            .unwrap_or(DEFAULT_COOKIE_SOURCE)
+            .unwrap_or_else(|| default_cookie_source(id))
     }
 
     pub fn set_cookie_source(&mut self, id: ProviderId, source: impl Into<String>) {
@@ -1535,5 +1598,42 @@ impl Settings {
     }
     pub fn set_claude_avoid_keychain_prompts(&mut self, v: bool) {
         self.set_avoid_keychain_prompts(ProviderId::Claude, v)
+    }
+}
+
+#[cfg(test)]
+mod load_cache_tests {
+    use super::*;
+
+    #[test]
+    fn stamp_is_none_for_a_missing_file() {
+        let missing = std::env::temp_dir().join(format!(
+            "codexbar-settings-stamp-missing-{}.json",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&missing);
+        assert_eq!(settings_file_stamp(Some(&missing)), None);
+        assert_eq!(settings_file_stamp(None), None);
+    }
+
+    #[test]
+    fn stamp_tracks_mtime_and_len_of_an_existing_file() {
+        let path = std::env::temp_dir().join(format!(
+            "codexbar-settings-stamp-{}.json",
+            std::process::id()
+        ));
+        std::fs::write(&path, "{}").expect("write stamp fixture");
+        let first = settings_file_stamp(Some(&path)).expect("stamp after write");
+        assert_eq!(first.1, "{}".len() as u64);
+
+        // A content change that also changes length must move the stamp.
+        std::fs::write(&path, "{\"a\":1}").expect("rewrite stamp fixture");
+        let second = settings_file_stamp(Some(&path)).expect("stamp after rewrite");
+        assert_ne!(
+            first, second,
+            "different len must produce a different stamp"
+        );
+
+        let _ = std::fs::remove_file(&path);
     }
 }

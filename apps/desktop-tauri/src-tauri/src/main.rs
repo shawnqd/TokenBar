@@ -120,6 +120,44 @@ fn should_suppress_blur_dismiss(launch: LaunchBehavior, proof_mode: bool) -> boo
     launch.suppress_blur_dismiss || proof_mode
 }
 
+/// Build the prewarm WebViews after the event loop has started pumping.
+///
+/// `WebviewWindowBuilder::build` blocks for the whole WebView2 controller
+/// handshake. Running the settings and flyout prewarms inside `setup` delayed
+/// the first pump of the event loop by that entire cost — the window in which
+/// a freshly launched tray icon "does nothing" when clicked, and the taskbar
+/// strip cannot be shown or repainted. The flyout (the tray click target) is
+/// built as soon as the loop can run; the floating bar and the Settings
+/// prewarm follow once the shell is interactive. Early interactions still
+/// work: every open path builds on demand and arms the same frontend-ready
+/// reveal handshake the prewarm uses.
+fn defer_webview_warmup(handle: tauri::AppHandle) {
+    tauri::async_runtime::spawn(async move {
+        let flyout = handle.clone();
+        let _ = handle.run_on_main_thread(move || {
+            boot::stage("tray panel prewarm", || {
+                shell::flyout_window::prewarm(&flyout)
+            });
+        });
+
+        tokio::time::sleep(Duration::from_millis(800)).await;
+        let float_bar = handle.clone();
+        let _ = handle.run_on_main_thread(move || {
+            boot::stage_infallible("floating bar restore", || {
+                floatbar::restore_at_startup(&float_bar)
+            });
+        });
+
+        tokio::time::sleep(Duration::from_millis(1_200)).await;
+        let settings = handle.clone();
+        let _ = handle.run_on_main_thread(move || {
+            boot::stage("settings window prewarm", || {
+                shell::settings_window::prewarm(&settings)
+            });
+        });
+    });
+}
+
 fn main() {
     codexbar::logging::init(false, false).expect("failed to initialize logging");
 
@@ -265,24 +303,25 @@ fn main() {
                 window.hide().map_err(|e| e.to_string())
             });
             boot::stage("tray icon", || tray_bridge::setup(app));
-            // Preload the two tray-driven WebViews while keeping them hidden.
-            // Their frontend-ready handshakes prevent blank native surfaces,
-            // and the first user click no longer pays WebView2 creation cost.
-            boot::stage("settings window prewarm", || {
-                shell::settings_window::prewarm(app.handle())
-            });
-            boot::stage("tray panel prewarm", || {
-                shell::flyout_window::prewarm(app.handle())
-            });
             #[cfg(windows)]
             boot::stage_infallible("taskbar strip", || {
                 taskbar_widget::set_app_handle(app.handle());
                 taskbar_widget::install();
             });
+            // The strip paints a fully transparent (invisible) surface until
+            // it is given entries. Resolve the configured entries against the
+            // still-empty cache right now so the first frame shows the real
+            // "no data yet" states instead of nothing; per-provider refresh
+            // completions replace them progressively.
+            boot::stage_infallible("tray presentation warmup", || {
+                tray_bridge::refresh_tray_presentation(app.handle())
+            });
             boot::stage_infallible("global shortcut", || {
                 shortcut_bridge::register(app.handle())
             });
-            boot::stage_infallible("floating bar", || floatbar::install(app.handle()));
+            // Only the native z-order guard here; the floating bar's own
+            // WebView is built by the deferred warmup below.
+            boot::stage_infallible("floating bar guard", || floatbar::install(app.handle()));
             boot::stage_infallible("auto refresh", || {
                 auto_refresh::install(app.handle().clone())
             });
@@ -300,6 +339,8 @@ fn main() {
                     codexbar::core::refresh_pricing_if_stale().await;
                 });
             });
+
+            defer_webview_warmup(app.handle().clone());
 
             // Local cost/token summaries are expensive because they aggregate
             // up to 30 days of Codex and Claude JSONL logs. Warm them after the

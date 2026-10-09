@@ -18,6 +18,8 @@ pub struct CookieFilePreviewBridge {
     pub format: String,
     pub providers: Vec<CookieFileProviderBridge>,
     pub unmatched_cookie_count: usize,
+    /// Domains that matched no provider. Values are never included.
+    pub unmatched_domains: Vec<String>,
 }
 
 /// One cookie taken from somewhere outside the provider fetchers — a user's
@@ -40,7 +42,40 @@ pub fn preview_cookie_file(contents: String) -> Result<CookieFilePreviewBridge, 
         format,
         providers: preview_providers(&grouped),
         unmatched_cookie_count: cookies.len().saturating_sub(matched),
+        unmatched_domains: unmatched_domains(&cookies, &grouped),
     })
+}
+
+fn unmatched_domains(
+    cookies: &[ImportedCookie],
+    grouped: &HashMap<codexbar::core::ProviderId, Vec<ImportedCookie>>,
+) -> Vec<String> {
+    let matched = grouped
+        .values()
+        .flatten()
+        .map(|cookie| {
+            (
+                cookie.domain.clone(),
+                cookie.name.clone(),
+                cookie.value.clone(),
+            )
+        })
+        .collect::<std::collections::HashSet<_>>();
+    let mut domains = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    for cookie in cookies {
+        let key = (
+            cookie.domain.clone(),
+            cookie.name.clone(),
+            cookie.value.clone(),
+        );
+        if matched.contains(&key) || !seen.insert(cookie.domain.clone()) {
+            continue;
+        }
+        domains.push(cookie.domain.clone());
+    }
+    domains.sort();
+    domains
 }
 
 /// Persist selected provider cookies from a user-exported Cookie file. The
@@ -262,6 +297,20 @@ fn preview_providers(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn preview_reports_unmatched_domains_without_cookie_values() {
+        let preview = preview_cookie_file(
+            "# Netscape HTTP Cookie File\n.not-a-provider.invalid\tTRUE\t/\tTRUE\t0\tsession\tsecret-value\n"
+                .to_string(),
+        )
+        .unwrap();
+        assert_eq!(
+            preview.unmatched_domains,
+            vec!["not-a-provider.invalid".to_string()]
+        );
+        assert!(!format!("{preview:?}").contains("secret-value"));
+    }
 
     #[test]
     fn parses_netscape_export_without_retaining_comment_lines() {

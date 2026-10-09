@@ -201,10 +201,14 @@ fn build_usage_fetch_context(args: &UsageArgs, source_mode: SourceMode) -> Fetch
         web_timeout: args.web_timeout,
         verbose: false,
         manual_cookie_header: None,
+        fallback_cookie_header: None,
         api_key: None,
         workspace_id: None,
         api_region: None,
         gateway_url: None,
+        allow_browser_cookie: true,
+        auto_prefer_web: false,
+        requires_optional_usage_completeness: true,
     }
 }
 

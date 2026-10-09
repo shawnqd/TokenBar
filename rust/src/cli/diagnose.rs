@@ -171,6 +171,7 @@ async fn collect_provider_diagnostic(
         manual_cookie_header: manual_cookies
             .get(provider_id.cli_name())
             .map(ToOwned::to_owned),
+        fallback_cookie_header: None,
         api_key: api_keys.get(provider_id.cli_name()).map(ToOwned::to_owned),
         workspace_id: settings
             .provider_config(provider_id)
@@ -181,6 +182,9 @@ async fn collect_provider_diagnostic(
         gateway_url: settings
             .provider_config(provider_id)
             .and_then(|config| config.gateway_url.clone()),
+        allow_browser_cookie: true,
+        auto_prefer_web: false,
+        requires_optional_usage_completeness: false,
     };
 
     let fetch_result = provider.fetch_usage(&ctx).await;
@@ -367,13 +371,21 @@ fn source_mode_name(mode: SourceMode) -> &'static str {
 
 fn error_category(err: &ProviderError) -> &'static str {
     match err {
-        ProviderError::AuthRequired | ProviderError::OAuth(_) | ProviderError::NoCookies => "auth",
+        ProviderError::AuthRequired
+        | ProviderError::AuthUnavailable(_)
+        | ProviderError::OAuth(_)
+        | ProviderError::NoCookies => "auth",
         ProviderError::Network(_) | ProviderError::Timeout => "network",
         ProviderError::NotInstalled(_) | ProviderError::UnsupportedSource(_) => "config",
         ProviderError::Parse(_) => "parse",
         ProviderError::Other(message) => {
             let lower = message.to_lowercase();
-            if lower.contains("rate limit") || lower.contains("429") {
+            if lower.contains("entitlement") {
+                "auth"
+            } else if lower.contains("rate limit")
+                || lower.contains("429")
+                || lower.contains("http 403")
+            {
                 "api"
             } else {
                 "unknown"
@@ -402,6 +414,22 @@ mod tests {
         assert_eq!(source_mode_name(SourceMode::OAuth), "oauth");
         assert_eq!(source_mode_name(SourceMode::Web), "web");
         assert_eq!(source_mode_name(SourceMode::Cli), "cli");
+    }
+
+    #[test]
+    fn go_entitlement_and_other_forbidden_errors_have_distinct_categories() {
+        assert_eq!(
+            error_category(&ProviderError::Other(
+                "OpenCode Go subscription entitlement is unavailable for this API key".into()
+            )),
+            "auth"
+        );
+        assert_eq!(
+            error_category(&ProviderError::Other(
+                "OpenCode Go API returned HTTP 403".into()
+            )),
+            "api"
+        );
     }
 
     #[test]

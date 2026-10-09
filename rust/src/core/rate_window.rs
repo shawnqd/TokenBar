@@ -118,12 +118,72 @@ impl RateWindow {
         }
     }
 
+    /// Monthly window minutes from a known reset. Returns `None` when there
+    /// is no reset (upstream leaves windowMinutes unset in that case).
+    ///
+    /// Calendar providers (MiMo Token Plan, Alibaba billing month) reset on a
+    /// real calendar month, not a fixed 30-day bucket, so the declared window
+    /// length derives from the reset instant (upstream parity).
+    pub fn monthly_window_minutes(resets_at: Option<DateTime<Utc>>) -> Option<u32> {
+        resets_at.and_then(Self::calendar_month_window_minutes)
+    }
+
+    /// Minutes between the start of `resets_at`'s calendar month and itself
+    /// (28-31 days). Ported from upstream `calendar_month_window_minutes`.
+    pub fn calendar_month_window_minutes(resets_at: DateTime<Utc>) -> Option<u32> {
+        let start = subtract_one_calendar_month(resets_at)?;
+        let minutes = (resets_at - start).num_minutes();
+        if minutes > 0 {
+            // A real calendar month is 28-31 days (~45k minutes), far below u32::MAX.
+            #[allow(
+                clippy::cast_possible_truncation,
+                reason = "calendar month minutes fit u32"
+            )]
+            let minutes_u32 = minutes as u32;
+            Some(minutes_u32)
+        } else {
+            None
+        }
+    }
+
     fn finite_percent(value: f64) -> f64 {
         if value.is_finite() {
             value.clamp(0.0, 100.0)
         } else {
             0.0
         }
+    }
+}
+
+/// One calendar month before `dt`, clamping the day for shorter months
+/// (Mar 31 → Feb 28/29). Ported from upstream.
+fn subtract_one_calendar_month(dt: DateTime<Utc>) -> Option<DateTime<Utc>> {
+    use chrono::Datelike;
+
+    let y = dt.year();
+    let m = dt.month();
+    let (py, pm) = if m == 1 { (y - 1, 12) } else { (y, m - 1) };
+    let max_day = days_in_month(py, pm);
+    let day = dt.day().min(max_day);
+    dt.date_naive()
+        .with_year(py)?
+        .with_month(pm)?
+        .with_day(day)
+        .map(|d| d.and_time(dt.time()).and_utc())
+}
+
+fn days_in_month(year: i32, month: u32) -> u32 {
+    match month {
+        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+        4 | 6 | 9 | 11 => 30,
+        2 => {
+            if chrono::NaiveDate::from_ymd_opt(year, 2, 29).is_some() {
+                29
+            } else {
+                28
+            }
+        }
+        _ => 30,
     }
 }
 
@@ -189,5 +249,26 @@ mod tests {
         assert!(window.is_informational);
         assert!(!window.is_exhausted());
         assert_eq!(window.used_percent, 0.0);
+    }
+
+    #[test]
+    fn monthly_window_minutes_follow_the_calendar_month() {
+        use chrono::TimeZone;
+
+        // Mar 15 → one calendar month back is Feb 15 = 28 days (non-leap 2026).
+        let resets = Utc.with_ymd_and_hms(2026, 3, 15, 0, 0, 0).unwrap();
+        assert_eq!(
+            RateWindow::monthly_window_minutes(Some(resets)),
+            Some(28 * 24 * 60)
+        );
+
+        // Feb 28 12:00 → Jan 28 12:00 = 31 days.
+        let feb_end = Utc.with_ymd_and_hms(2026, 2, 28, 12, 0, 0).unwrap();
+        assert_eq!(
+            RateWindow::monthly_window_minutes(Some(feb_end)),
+            Some(31 * 24 * 60)
+        );
+
+        assert_eq!(RateWindow::monthly_window_minutes(None), None);
     }
 }

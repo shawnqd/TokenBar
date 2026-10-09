@@ -76,7 +76,7 @@ impl MiMoApiProvider {
         Self {
             metadata: ProviderMetadata {
                 id: ProviderId::MiMoApi,
-                display_name: "Xiaomi MiMo API",
+                display_name: "MiMo API",
                 session_label: "API Key",
                 weekly_label: "Balance",
                 supports_opus: false,

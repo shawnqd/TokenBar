@@ -143,7 +143,18 @@ impl JetBrainsProvider {
     }
 
     fn usage_from_quota(quota: JetBrainsQuota) -> UsageSnapshot {
-        UsageSnapshot::new(RateWindow::new(quota.used_percent())).with_login_method("JetBrains AI")
+        // The local option file only sometimes carries quota keys. Without a
+        // real used/limit pair there is nothing honest to display: an
+        // informational row replaces the old fabricated 0%-of-1000 window.
+        match quota.used_percent() {
+            Some(percent) => {
+                UsageSnapshot::new(RateWindow::new(percent)).with_login_method("JetBrains AI")
+            }
+            None => UsageSnapshot::new(RateWindow::informational(
+                "No local JetBrains AI quota data",
+            ))
+            .with_login_method("JetBrains AI"),
+        }
     }
 
     /// Extract numeric value from XML attribute
@@ -166,15 +177,15 @@ impl JetBrainsProvider {
 }
 
 struct JetBrainsQuota {
-    used_credits: f64,
-    credit_limit: f64,
+    used_credits: Option<f64>,
+    credit_limit: Option<f64>,
 }
 
 impl Default for JetBrainsQuota {
     fn default() -> Self {
         Self {
-            used_credits: 0.0,
-            credit_limit: 1000.0,
+            used_credits: None,
+            credit_limit: None,
         }
     }
 }
@@ -184,13 +195,13 @@ impl JetBrainsQuota {
         if Self::is_used_credits_line(line)
             && let Some(value) = JetBrainsProvider::extract_xml_value(line)
         {
-            self.used_credits = value;
+            self.used_credits = Some(value);
         }
 
         if Self::is_credit_limit_line(line)
             && let Some(value) = JetBrainsProvider::extract_xml_value(line)
         {
-            self.credit_limit = value;
+            self.credit_limit = Some(value);
         }
     }
 
@@ -207,12 +218,10 @@ impl JetBrainsQuota {
             || line.contains("monthlyLimit")
     }
 
-    fn used_percent(&self) -> f64 {
-        if self.credit_limit > 0.0 {
-            (self.used_credits / self.credit_limit) * 100.0
-        } else {
-            0.0
-        }
+    fn used_percent(&self) -> Option<f64> {
+        let used = self.used_credits?;
+        let limit = self.credit_limit.filter(|limit| *limit > 0.0)?;
+        Some((used / limit * 100.0).clamp(0.0, 100.0))
     }
 }
 
@@ -257,5 +266,37 @@ impl Provider for JetBrainsProvider {
 
     fn supports_cli(&self) -> bool {
         true
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // A config file without quota keys must not invent a 0%-of-1000-credit
+    // quota for a paying user whose credits are actually exhausted server-side.
+    #[test]
+    fn missing_quota_keys_stay_informational() {
+        let usage = JetBrainsProvider::usage_from_quota(JetBrainsQuota::default());
+        assert!(usage.primary.is_informational);
+    }
+
+    #[test]
+    fn recognized_quota_keys_render_a_real_window() {
+        let content = r#"<component name="AiAssistant">
+  <option name="usedCredits" value="250" />
+  <option name="creditLimit" value="1000" />
+</component>"#;
+        let quota = JetBrainsProvider::parse_quota_values(content);
+        let usage = JetBrainsProvider::usage_from_quota(quota);
+        assert!(!usage.primary.is_informational);
+        assert!((usage.primary.used_percent - 25.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn used_without_limit_stays_informational() {
+        let content = r#"<option name="usedCredits" value="250" />"#;
+        let quota = JetBrainsProvider::parse_quota_values(content);
+        assert!(quota.used_percent().is_none());
     }
 }

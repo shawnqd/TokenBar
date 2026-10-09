@@ -59,6 +59,9 @@ struct KeyResponse {
 #[derive(Debug, Deserialize)]
 struct KeyData {
     limit: Option<f64>,
+    /// Server-reported remaining spend for the key's current reset period.
+    /// Authoritative for the period meter; cumulative `usage` is not.
+    limit_remaining: Option<f64>,
     usage: Option<f64>,
     usage_daily: Option<f64>,
     usage_weekly: Option<f64>,
@@ -120,18 +123,64 @@ impl OpenRouterProvider {
         }
     }
 
-    /// Fetch usage from OpenRouter API
+    /// Fetch usage from OpenRouter API.
+    /// `/credits` (account) and `/key` (per-key quota) are independent sources:
+    /// OpenRouter can reject the account-level credits call while the selected
+    /// key still reports a current spend/quota. Fetch both concurrently and
+    /// fall back to the key lanes instead of discarding a funded key's data.
     async fn fetch_usage_api(&self, ctx: &FetchContext) -> Result<UsageSnapshot, ProviderError> {
         let api_key = Self::get_api_token(ctx.api_key.as_deref())?;
         let client = Self::build_client(OPENROUTER_TIMEOUT)?;
-        let credits = Self::fetch_credits(&client, &api_key).await?;
-        let mut usage = Self::build_credits_usage(&credits.data);
+        let (credits_result, key_data_result) = tokio::join!(
+            Self::fetch_credits(&client, &api_key),
+            Self::fetch_key_data(&api_key),
+        );
+        let key_data = match key_data_result {
+            Ok(key_data) => key_data,
+            Err(error) => {
+                tracing::debug!(%error, "OpenRouter key endpoint degraded");
+                None
+            }
+        };
+        OpenRouterProvider::resolve_usage(credits_result, key_data)
+    }
 
-        if let Some(key_data) = Self::fetch_key_data(&api_key).await? {
-            Self::enrich_usage_with_key_data(&mut usage, key_data);
+    /// Combine the credits and key endpoints into one snapshot. When credits
+    /// is unavailable but the key reports a capped quota, the key limit is the
+    /// only authoritative percentage and the account balance stays unknown.
+    fn resolve_usage(
+        credits_result: Result<CreditsResponse, ProviderError>,
+        key_data: Option<KeyData>,
+    ) -> Result<UsageSnapshot, ProviderError> {
+        match credits_result {
+            Ok(credits) => {
+                let mut usage = Self::build_credits_usage(&credits.data);
+                if let Some(key_data) = key_data {
+                    Self::enrich_usage_with_key_data(&mut usage, key_data);
+                }
+                Ok(usage)
+            }
+            Err(credits_error) => {
+                let Some(key_data) = key_data else {
+                    return Err(credits_error);
+                };
+                let Some(usage) = Self::build_key_fallback_usage(key_data) else {
+                    return Err(credits_error);
+                };
+                Ok(usage)
+            }
         }
+    }
 
-        Ok(usage)
+    /// Snapshot from the selected API key when account-level credits are
+    /// unavailable. Requires a capped key (`limit`), which is what produces a
+    /// real percentage; spend-only keys cannot fake a balance meter.
+    fn build_key_fallback_usage(key_data: KeyData) -> Option<UsageSnapshot> {
+        let mut usage =
+            UsageSnapshot::new(RateWindow::informational("Account balance unavailable"));
+        Self::enrich_usage_with_key_data(&mut usage, key_data);
+        usage.secondary.as_ref()?;
+        Some(usage)
     }
 
     fn build_client(timeout: std::time::Duration) -> Result<reqwest::Client, ProviderError> {
@@ -210,7 +259,7 @@ impl OpenRouterProvider {
     }
 
     fn enrich_usage_with_key_data(usage: &mut UsageSnapshot, key_data: KeyData) {
-        Self::add_key_quota(usage, &key_data);
+        OpenRouterProvider::add_key_quota(usage, &key_data);
         Self::add_spend_window(
             usage,
             key_data.usage_daily,
@@ -235,18 +284,36 @@ impl OpenRouterProvider {
     }
 
     fn add_key_quota(usage: &mut UsageSnapshot, key_data: &KeyData) {
-        let (Some(limit), Some(key_usage)) = (key_data.limit, key_data.usage) else {
+        let Some(limit) = key_data.limit else {
             return;
         };
 
-        if limit <= 0.0 {
+        if limit <= 0.0 || !limit.is_finite() {
             return;
         }
+
+        // Prefer the server-reported current-period remaining, clamped so an
+        // overspent key reads 100% and an above-limit reading reads 0%.
+        // Cumulative lifetime `usage` must never render as the period meter.
+        let Some(key_usage) = Self::key_period_usage(key_data, limit) else {
+            return;
+        };
 
         let key_percent = ((key_usage / limit) * 100.0).clamp(0.0, 100.0);
         let mut key_window = RateWindow::new(key_percent);
         key_window.reset_description = Some(format!("${:.2}/${:.2} key quota", key_usage, limit));
         *usage = usage.clone().with_secondary(key_window);
+    }
+
+    fn key_period_usage(key_data: &KeyData, limit: f64) -> Option<f64> {
+        if let Some(remaining) = key_data.limit_remaining {
+            if !remaining.is_finite() {
+                return None;
+            }
+            return Some(limit - remaining.clamp(0.0, limit));
+        }
+        let usage = key_data.usage?;
+        (usage.is_finite() && usage >= 0.0).then_some(usage)
     }
 
     fn add_spend_window(
@@ -336,5 +403,98 @@ mod tests {
     fn key_url_resolves_to_canonical_path() {
         let url = format!("{}/key", OPENROUTER_API_BASE);
         assert_eq!(url, "https://openrouter.ai/api/v1/key");
+    }
+
+    fn key_data_fixture(
+        limit: Option<f64>,
+        limit_remaining: Option<f64>,
+        usage: Option<f64>,
+    ) -> KeyData {
+        KeyData {
+            limit,
+            limit_remaining,
+            usage,
+            usage_daily: None,
+            usage_weekly: None,
+            usage_monthly: None,
+            rate_limit: None,
+        }
+    }
+
+    // A funded capped key must still surface its quota when the account-level
+    // /credits call is rejected (403/5xx): the key limit becomes the primary
+    // authoritative meter instead of erroring the whole fetch.
+    #[test]
+    fn credits_failure_falls_back_to_capped_key_quota() {
+        let key_data = key_data_fixture(Some(20.0), Some(4.0), Some(150.0));
+        let result = OpenRouterProvider::resolve_usage(
+            Err(ProviderError::Other(
+                "OpenRouter API returned status 503".into(),
+            )),
+            Some(key_data),
+        )
+        .expect("key fallback should succeed");
+
+        let secondary = result.secondary.expect("key quota present");
+        assert_eq!(secondary.used_percent, 80.0);
+        assert!(result.primary.is_informational);
+    }
+
+    // Without a usable key quota there is no honest fallback: the original
+    // credits error must be preserved instead of a fabricated snapshot.
+    #[test]
+    fn credits_failure_without_key_quota_preserves_error() {
+        let err = OpenRouterProvider::resolve_usage(
+            Err(ProviderError::Other(
+                "OpenRouter API returned status 503".into(),
+            )),
+            Some(key_data_fixture(None, None, Some(150.0))),
+        )
+        .expect_err("no capped key -> original error");
+        assert!(matches!(err, ProviderError::Other(_)));
+
+        let err = OpenRouterProvider::resolve_usage(
+            Err(ProviderError::Other(
+                "OpenRouter API returned status 503".into(),
+            )),
+            None,
+        )
+        .expect_err("no key data -> original error");
+        assert!(matches!(err, ProviderError::Other(_)));
+    }
+
+    // The period meter uses server-reported `limit_remaining` when present;
+    // cumulative lifetime `usage` (150 vs a 20 cap) must not be rendered.
+    #[test]
+    fn key_quota_prefers_limit_remaining_over_cumulative_usage() {
+        let mut usage = UsageSnapshot::new(RateWindow::informational("credits"));
+        OpenRouterProvider::add_key_quota(
+            &mut usage,
+            &key_data_fixture(Some(20.0), Some(4.0), Some(150.0)),
+        );
+        let secondary = usage.secondary.expect("key quota present");
+        assert_eq!(secondary.used_percent, 80.0);
+        assert_eq!(
+            secondary.reset_description.as_deref(),
+            Some("$16.00/$20.00 key quota")
+        );
+    }
+
+    #[test]
+    fn key_quota_clamps_overspent_remaining_to_100_percent() {
+        let mut usage = UsageSnapshot::new(RateWindow::informational("credits"));
+        OpenRouterProvider::add_key_quota(
+            &mut usage,
+            &key_data_fixture(Some(20.0), Some(-5.0), None),
+        );
+        let secondary = usage.secondary.expect("key quota present");
+        assert_eq!(secondary.used_percent, 100.0);
+    }
+
+    #[test]
+    fn key_quota_hidden_without_usable_period_usage() {
+        let mut usage = UsageSnapshot::new(RateWindow::informational("credits"));
+        OpenRouterProvider::add_key_quota(&mut usage, &key_data_fixture(Some(20.0), None, None));
+        assert!(usage.secondary.is_none());
     }
 }

@@ -17,6 +17,19 @@ describe("providerCapabilities", () => {
     expect(codex.outputSpeed).toBe(true);
     expect(codex.localUsage).toBe(true);
 
+    const opencodego = providerCapabilities({
+      providerId: "opencodego",
+      capabilities: undefined,
+    });
+    expect(opencodego.outputSpeed).toBe(true);
+    expect(opencodego.localUsage).toBe(true);
+
+    const antigravity = providerCapabilities({
+      providerId: "antigravity",
+      capabilities: undefined,
+    });
+    expect(antigravity.localUsage).toBe(true);
+
     const cursor = providerCapabilities({ providerId: "cursor", capabilities: undefined });
     expect(cursor.outputSpeed).toBe(false);
     expect(cursor.localUsage).toBe(false);

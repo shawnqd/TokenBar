@@ -2,72 +2,287 @@
 
 [English](./README.md) | [简体中文](./README.zh-CN.md) | [繁體中文（臺灣）](./README.zh-TW.md) | [日本語](./README.ja-JP.md) | [한국어](./README.ko-KR.md) | [Español mexicano](./README.es-MX.md)
 
-TokenBar 是一个 Windows 系统托盘应用，用来集中查看 AI 编程工具的使用量，减少在多个服务商面板之间切换。它将 [CodexBar](https://github.com/steipete/CodexBar) 的用量工作流带到 Tauri + React 桌面壳，并使用 Rust 共享服务商逻辑。
+[CodexBar](https://github.com/steipete/CodexBar) 的 Windows 移植版 —— 一个系统托盘应用，让你随时掌握各个 AI 编程工具的用量额度。
+
+> 基于 **Tauri + React** 构建，底层复用共享 **Rust** 后端；需要 macOS 版本时请直接使用原版 CodexBar（见文末链接）。
 
 <p align="center">
-  <img src="docs/images/tray-panel.png" width="320" alt="TokenBar 托盘面板"/>
-  <img src="docs/images/settings-providers.png" width="520" alt="TokenBar 服务商设置"/>
+  <img src="docs/images/tray-panel.png" width="280" alt="托盘面板 — 服务商网格与 Codex 用量"/>
+  &nbsp;&nbsp;
+  <img src="docs/images/settings-providers.png" width="480" alt="设置 — 服务商选项卡"/>
 </p>
 
-## 功能
+## 功能特性
 
-- 托盘面板显示紧凑的服务商额度卡片，并支持刷新。
-- 服务商设置支持凭据、会话 Cookie、API 密钥、地区和显示选项（以服务商能力为准）。
-- 自动读取浏览器会话与手动导入 Cookie 是两种独立来源，不创建应用自有登录浏览器。
-- 提供本地 CLI，用于查询用量、成本、配置和诊断。
-- 提供 Windows 安装版与便携版，并发布 SHA-256 校验文件（如该版本包含）。
-- 支持中文、英文、繁体中文、日语、韩语和墨西哥西班牙语界面。
+- **56 个 AI 服务商** — Codex、Claude、Cursor、Factory、Gemini、Copilot、Antigravity、z.ai、MiniMax、Kiro、Vertex AI、Augment、OpenCode、Kimi、Kimi K2、Amp、Warp、Ollama、Azure OpenAI、T3 Chat、OpenRouter、JetBrains AI、Alibaba、Alibaba Token Plan、NanoGPT、Infini、Perplexity、Abacus AI、Mistral、OpenCode Go、Kilo、AWS Bedrock、Codebuff、DeepSeek、Windsurf、Manus、小米 MiMo、Doubao、Command Code、Crof、StepFun、Venice、OpenAI、Grok、ElevenLabs、Deepgram、Groq、LLM Proxy、Chutes、LiteLLM、Poe、Devin、Zed、CrossModel、Qoder、Sakana AI
+- **系统托盘图标** — 动态双条进度显示会话与周用量
+- **Floating Bar** — 可选的置顶透明用量条，支持方向、透明度和点击穿透控制
+- **默认使用保存的会话 Cookie** — 网页认证服务商默认读取你保存/导入的会话；自动读取浏览器 Cookie 为按服务商的显式开启项
+- **逐服务商凭据管理** — 自动来源、手动 Cookie、API Key 和 OAuth 按真实能力管理
+- **凭据加固** — 应用管理的本地敏感存储会在保存时使用 Windows DPAPI 保护
+- **Windows 发布打包** — Inno Setup 安装包、独立便携 exe、WebView2 Runtime 引导、VC++ 运行库引导和 SHA-256 校验文件
+- **CLI** — `codexbar usage`、`codexbar cost`、`codexbar config` 和本机回环 `codexbar serve`，便于脚本化、本地集成和 CI
+- **WSL 支持** — CLI 开箱即用，桌面壳层通过 WSLg 运行
 
-## 安装
+## v0.57.3 当前正式发布
 
-请从 [TokenBar Releases](https://github.com/shawnqd/TokenBar/releases) 下载最新 Windows 安装包或便携版。每个版本的可执行文件和校验文件以发布页为准。
+- 开发版与已安装正式版使用独立的单实例标识和 WebView 数据目录，开发链运行时不会拦截正式版启动或升级。
+- 当前本地发布候选已统一版本、安装器和 CLI，安装/卸载烟测通过；`0.57.3` 会作为 `0.57.2` 的补丁更新安装。
+- 自动更新只读取公开 TokenBar release feed；本地开发构建需先手动安装，公开 release 未同步前不会显示为线上更新。
+- 发布前仍需用户完成小型状态栏在切桌面、刷新、启停和极窄宽度下的真实验收。
 
-目前 TokenBar 通过 GitHub Releases 分发，尚未启用 Winget。
+## v0.33.2 更新内容
+
+- 修复托盘面板失焦后不会自动关闭的问题，现在表现更接近标准 Windows 托盘弹窗。
+- 支持按 Escape 关闭托盘面板，不会退出应用。
+- 修复点击托盘图标触发失焦关闭后又立刻重新打开的反弹问题。
+
+## v0.33.1 更新内容
+
+- 当 GitHub Copilot 返回超额预算时，现在会显示真实百分比，例如 `115% used`，而不是强行压到 `100%`。
+- 进度条仍然保持满格显示，避免 UI 溢出；托盘、弹出面板、Provider 侧栏和设置详情都会保留真实超额数值。
+
+## v0.33.0 更新内容
+
+- 将上游 CodexBar v0.33.0 的 provider 与成本统计修复移植到 Win-CodexBar。
+- 设置界面新增日语作为可选显示语言。
+- 加固带凭据的 provider HTTP 请求：跨源重定向不会继续沿用 provider 认证上下文。
+- 更新 Claude 本地成本估算，覆盖 Fable 5、Opus 4.6、Sonnet 4.6 与 1 小时 cache write 计价。
+- 修复 Doubao Ark 成功响应里不可靠的 `0 remaining` 请求限制头导致误显示 100% 用尽的问题。
+
+## v0.32.2 更新内容
+
+- 将上游 CodexBar v0.32.2 的性能优化和托盘 UI 微调移植到 Win-CodexBar。
+- 本地 Codex token 成本扫描会先走轻量 JSONL 快速路径，大型 session 日志库扫描更快、内存占用更低。
+- 紧凑托盘卡片增加横向和纵向留白，账号与套餐行不再那么拥挤。
+- 增加当前 Codex token-count JSONL 形态的回归测试，覆盖 `last_token_usage`、`total_token_usage` 和旧版 `event_msg` payload。
+
+## v0.32.1 更新内容
+
+- 将上游 CodexBar v0.32.1 的稳定性修复移植到 Win-CodexBar。
+- 托盘面板打开后会短暂延后自动 provider 刷新，让 UI 先完成绘制并保持可点击。
+- Codex 凭据读取会复用短生命周期缓存，并避免在进程内保留未使用的 Codex refresh token。
+- Claude OAuth 用量读取保持只读，不接管 Claude Code 自己管理的凭据生命周期。
+
+## v0.32.0 更新内容
+
+- 将上游 CodexBar v0.32.0 的 provider 修复移植到 Win-CodexBar。
+- Providers 设置页新增搜索，可按服务商名称或 id 过滤大型 provider 列表，同时不破坏拖拽排序的完整顺序。
+- 更新 Augment CLI 解析，支持新版 `auggie account status` 输出，并保留旧格式兼容。
+- 加固 Ollama Web Cookie 获取：导入的 Cookie 只会附加到 HTTPS `ollama.com` 请求，不会在不安全重定向中继续携带。
+- 改进 Antigravity model quota 选择：image/lite/autocomplete/internal 行不会驱动主摘要条，但仍保留在详细 model 窗口中。
+- Claude 首次临时 auth/unauthorized 刷新失败时会保留上一次成功用量快照；连续失败仍会显示真实错误。
+
+## v0.31.1 更新内容
+
+- 修复 Antigravity 在 Windows 上无法获取用量的问题：当本地 language server 的 API 绑定到随机监听端口，而不是 `--extension_server_port` 附近端口时，现在也能正确发现。
+- 应用会优先检查 Antigravity language server 进程实际监听的端口，同时保留旧的启发式端口探测作为 fallback。
+
+## v0.31.0 更新内容
+
+- 将上游 CodexBar v0.31.0 的 provider 行为修复移植到 Win-CodexBar。
+- AWS Bedrock 现在支持通过命名 AWS CLI profile 获取用量，包括 AWS CLI 可解析的 SSO / assume-role profile。
+- 当 Codex 用量接口返回 Spark 专属限制时，会显示 Codex Spark 5 小时与每周 quota。
+- 隐藏 Claude 已废弃的 Design quota，同时保留其他 Claude 用量窗口。
+- 本地 Codex/Claude 图表扫描支持取消，连续刷新时会更快停止过期 JSONL 扫描。
+
+## v0.30.3 更新内容
+
+- 修复 DeepSeek 余额显示：仅有 CNY/RMB 余额的账号不再因为 USD 为 0 而显示 Exhausted。
+- 已在 Windows 上通过原生 Rust provider 测试验证 DeepSeek CNY fallback 回归用例。
+- 包含 v0.30.2 的 About 链接修复。
+
+## v0.30.2 更新内容
+
+- 修复 About 选项卡外部链接按钮，GitHub、Website、Original Project 和页脚项目链接现在会通过 Windows Tauri 壳层正确打开。
+- 已在真实 Windows 桌面中验证 About 选项卡链接流程。
+- 包含 v0.30.1 的 Codex 本地用量修复。
+
+## v0.30.1 更新内容
+
+- 修复当前 Codex session 日志格式下的本地 token 用量解析。
+- 修复本地 token 总数中 cached input tokens 被重复计入的问题。
+- Codex 本地成本扫描改为复用共享 JSONL 扫描器，保持托盘、图表和 CLI 路径一致。
+- 异步本地用量数据加载后会正确刷新托盘布局。
+- 包含 v0.30.0 的服务商更新。
+
+## v0.30.0 更新内容
+
+- DeepSeek 新增用量摘要：token 总量、请求数、Top model、分类明细，以及平台 API 暴露时的当月成本。
+- OpenAI Admin API 用量支持在服务商详情面板按可选 project ID 限定范围，默认仍为组织级用量。
+- Alibaba Token Plan 更新到当前 Bailian 订阅摘要 API，并扩展新的额度/重置字段解析。
+- StepFun Oasis 在存在 access/refresh 组合 token 时可刷新过期 token。
+- 托盘和设置 UI 显示更丰富的 Ollama pace windows 与 Antigravity per-model quota windows。
+
+## 快速开始
+
+```powershell
+# Windows 开发热重载的唯一入口：必须从当前仓库根目录执行
+# 从当前仓库根目录执行
+Set-Location (Get-Location)
+.\scripts\dev-windows.ps1 -Verbose
+```
+
+该入口会清理本 checkout 可归属的旧进程，并启动一条隐藏的
+`pnpm → tauri dev → Vite + Rust/Tauri` 开发链。不要单独运行 `pnpm dev`、
+`tauri dev` 或 `target\debug\codexbar-desktop-tauri.exe`，否则可能只启动前端、复用旧二进制
+或创建第二个实例。
+
+只有同时满足以下条件，才算应用真正启动：
+
+- 本 checkout 的 `target\` 下只有一个 `codexbar-desktop-tauri.exe`；
+- `127.0.0.1:1420` 由本 checkout 的 Vite 监听；
+- Tauri 进程仍响应，或能看到实际窗口/托盘；
+- `%TEMP%\tokenbar-dev\tauri-dev.stdout.log` 有 Vite `ready`，stderr 有 Tauri `Running` 行。
+
+如果需要重启，先清理再启动：
+
+```powershell
+.\scripts\dev-windows.ps1 -StopOnly
+.\scripts\dev-windows.ps1 -Verbose
+```
+
+正常启动采用 **tray-first**：窗口会预热但保持隐藏，桌面上只出现托盘图标；左键托盘图标
+打开托盘面板，右键打开菜单。需要人工验证时直接显示面板，请使用一次性开关：
+
+```powershell
+.\scripts\dev-windows.ps1 -StartVisible -Verbose
+```
+
+该开关不改变保存的启动设置；截图自动化仍使用 `-ProofMode trayPanel`。
+
+启动验证应同时核对 launcher/Tauri 进程、Vite 端口和实际窗口响应；
+“命令返回”“编译完成”或“Vite ready”单独出现，都不能证明桌面应用已经启动。
+给其他执行平台的启动命令和 PowerShell 核验脚本，见
+[开发启动教程](./docs/BUILDING.md)。
+
+## 下载
+
+请前往 [TokenBar GitHub Releases](https://github.com/shawnqd/TokenBar/releases) 下载安装包或便携版。
+
+TokenBar fork 目前尚未启用 Winget 分发，请不要使用历史 Win-CodexBar 的包名。
+
+- **安装包**：`CodexBar-<version>-Setup.exe`
+- **便携版**：`CodexBar-<version>-portable.exe`
+- **校验和**：每个发布版本都包含 `.sha256` 文件，便于手动校验
+
+安装包会包含桌面应用、Microsoft Evergreen WebView2 引导程序、应用图标、开始菜单快捷方式、卸载信息，以及干净 Windows 机器可能需要的 Visual C++ 运行库引导。便携版 exe 是没有安装器集成的同一个桌面应用；release 构建会静态链接 WebView2 loader，所以便携版用户只需要机器上已安装 Microsoft Edge WebView2 Runtime。
+
+## 快速 Windows 发布构建
+
+在 Windows 机器上做本地发布构建时，使用缓存版构建脚本：
+
+```powershell
+.\scripts\windows-release-build.ps1 -Ref v0.57.3
+```
+
+脚本会在自身的工作目录下维护干净源码签出、Rust/pnpm 构建缓存和已签名的 WebView2/VC++ 引导程序下载。它仍会构建真实 release 二进制、校验 Microsoft 签名、用 Inno Setup 打包，并输出 GitHub Release 使用的四个资产。
+
+常用发布参数：
+
+```powershell
+.\scripts\windows-release-build.ps1 -Ref v0.57.3 -WarmCacheOnly
+.\scripts\windows-release-build.ps1 -Ref v0.57.3 -WarmCliCache
+.\scripts\windows-release-build.ps1 -Ref v0.57.3 -SmokeInstall
+.\scripts\windows-release-build.ps1 -Ref v0.57.3 -UploadRelease v0.57.3
+.\scripts\release-doctor.ps1 -Version 0.57.3
+```
+
+安装包和便携版资产以 Windows 构建服务器脚本为主发布路径。
 
 ## 首次运行
 
-1. 从开始菜单或便携版可执行文件启动 TokenBar。
-2. 点击托盘图标打开用量面板。
-3. 打开 **设置 → 服务商**，启用需要使用的服务商。
-4. 按服务商支持的方式配置来源：自动读取浏览器、已保存/手动 Cookie、API 密钥或服务商 CLI/OAuth。未支持的方式不会显示。
+1. 启动 CodexBar — 它会驻留在系统托盘
+2. 点击托盘图标打开用量面板
+3. 前往 **Settings → Providers**，启用你使用的服务商
+4. 对于基于网页会话的服务商，默认使用你保存或导入的会话 Cookie；想让应用自动读取浏览器里已登录的会话，在该服务商的「读取方式」里选择 **自动**
+5. 对于基于 CLI 的服务商（`codex`、`claude`、`gemini`），请确保已登录
 
-## 从源码构建
+## CLI
 
-要求：Windows 10/11、Node.js（含 pnpm）和 Rust 工具链。
-
-```powershell
-git clone https://github.com/shawnqd/TokenBar.git
-cd TokenBar
-pnpm --dir apps/desktop-tauri install
-pnpm --dir apps/desktop-tauri tauri:dev
+```bash
+codexbar usage -p claude          # 单个服务商
+codexbar usage -p all             # 所有已启用的服务商
+codexbar cost  -p codex           # 本地成本（JSONL 日志）
 ```
 
-构建生产版本：
+## 支持的服务商
 
-```powershell
-pnpm --dir apps/desktop-tauri tauri:build
-```
-
-更多构建命令见 [docs/BUILDING.md](docs/BUILDING.md)。
+| 服务商 | 认证方式 | 跟踪内容 |
+|--------|----------|----------|
+| Codex | OAuth / CLI | 会话、周用量、Credits |
+| Claude | OAuth / Cookies / CLI | 会话（5h）、周用量 |
+| Cursor | Cookies | 套餐、用量、账单 |
+| Factory | Cookies | 用量 |
+| Gemini | gcloud OAuth | 配额 |
+| Copilot | GitHub Device Flow | 用量 |
+| Antigravity | Cookies / LSP | 用量 |
+| z.ai | API Token | 配额 |
+| MiniMax | API / Cookies | 用量、账单汇总 |
+| Kiro | Cookies / CLI | 月度 Credits、超额用量 |
+| Vertex AI | gcloud OAuth | 成本 |
+| Augment | Cookies | Credits |
+| OpenCode | 本地配置 | 用量 |
+| Kimi | Cookies | 5h 速率、周用量 |
+| Kimi K2 | API Key | Credits |
+| Amp | Cookies | 用量 |
+| Warp | 本地配置 | 用量 |
+| Ollama | Cookies | 用量 |
+| OpenRouter | API Key | Credits |
+| JetBrains AI | 本地配置 | 用量 |
+| Alibaba | Cookies | 用量 |
+| NanoGPT | API Key | Credits |
+| Infini | API Key | 会话、周用量、配额 |
+| Perplexity | Cookies | Credits、套餐 |
+| Abacus AI | Cookies | Credits |
+| Mistral | Cookies | 账单、用量 |
+| OpenCode Go | Cookies | 用量、Zen 余额 |
+| Kilo | API Key / CLI | 用量 |
+| Codebuff | API Key / 本地配置 | Credits、周用量 |
+| DeepSeek | API Key | 余额 |
+| Windsurf | 本地缓存 | 日用量、周用量 |
+| Manus | Cookies | Credits、刷新 Credits |
+| 小米 MiMo | Cookies | 余额、Token 套餐 |
+| Doubao | API Key | 请求限制 |
+| Command Code | Cookies | 月度 Credits、已购 Credits |
+| Crof | API Key | Credits、请求配额 |
+| StepFun | Oasis Token | 5h、周用量 |
+| Venice | API Key | USD / DIEM 余额 |
+| OpenAI | Admin API / API Key | 用量、请求数、余额 |
+| Grok | Cookies / auth.json | 账单 |
+| ElevenLabs | API Key | 订阅 Credits、Voice Slots |
+| Deepgram | API Key | 项目用量 |
+| Groq | API Key | Enterprise Metrics |
+| LLM Proxy | API Key | 配额统计 |
 
 ## 隐私
 
-- 服务商数据来自本地配置或用户配置的服务商 API。
-- 仅对已启用的服务商执行浏览器 Cookie 读取，诊断信息不包含 Cookie 原文。
-- API 密钥、手动 Cookie 和账号数据使用 Windows 可用的受保护凭据存储。
-- 诊断只包含服务商、来源和状态元数据，不包含凭据。
+- **仅本地处理** — 不会将数据发送到外部服务器（服务商 API 除外）
+- **不扫描磁盘** — 只读取已知配置路径和浏览器 Cookies
+- **按需启用** — 只有启用相应服务商后才会提取 Cookies
+- **受保护的凭据存储** — 应用管理的 API Key、手动 Cookie 和令牌账户会写入安全文件层；Windows 上会优先使用当前用户的 DPAPI
+- **安全诊断** — 诊断快照只展示服务商、来源和状态等元数据，不展示原始 Cookie、API Key、Bearer Token 或 OAuth 值
+- **已验证更新** — 自动下载的安装包需要 GitHub SHA-256 摘要，并会在应用前再次校验
 
-## 文档
+## 更多文档
 
-- [从源码构建](docs/BUILDING.md)
-- [浏览器 Cookie](docs/COOKIES.md)
-- [WSL 说明](docs/WSL.md)
+| 主题 | 链接 |
+|------|------|
+| 从源码构建 | [docs/BUILDING.md](docs/BUILDING.md) |
+| WSL 设置与认证 | [docs/WSL.md](docs/WSL.md) |
+| 浏览器 Cookie 详解 | [docs/COOKIES.md](docs/COOKIES.md) |
 
-## macOS
+## 致谢
 
-TokenBar 维护 Windows 版本。macOS 用户请直接使用原版 CodexBar：
-[steipete/CodexBar](https://github.com/steipete/CodexBar)。
+- **原版 CodexBar**：[steipete/CodexBar](https://github.com/steipete/CodexBar)，作者 Peter Steinberger
+- **灵感来源**：[ccusage](https://github.com/ryoppippi/ccusage)，用于成本跟踪思路
 
 ## 许可证
 
-TokenBar 使用 MIT 许可证。项目参考了 [CodexBar](https://github.com/steipete/CodexBar) 和 [ccusage](https://github.com/ryoppippi/ccusage)。
+MIT — 与原版 CodexBar 保持一致
+
+## macOS 版本
+
+TokenBar 只维护 Windows 版本。macOS 用户请直接使用原版 CodexBar：
+
+<https://github.com/steipete/CodexBar>

@@ -85,6 +85,10 @@ impl CookieExtractor {
         // Preserve the first ABE error seen so it can be surfaced when no cookies
         // were recovered from any profile of this browser.
         let mut abe_error: Option<CookieError> = None;
+        // Same for other per-profile failures (e.g. the active profile's locked
+        // database): without this the browser yields Ok(empty) and the caller
+        // reports a misleading "no cookies" instead of the real condition.
+        let mut first_profile_error: Option<CookieError> = None;
 
         for profile in &browser.profiles {
             match Self::extract_profile_cookies(browser, profile, domain) {
@@ -105,16 +109,22 @@ impl CookieExtractor {
                         profile.name,
                         e
                     );
+                    if first_profile_error.is_none() {
+                        first_profile_error = Some(e);
+                    }
                 }
             }
         }
 
         // If we obtained no cookies at all and every failure was ABE, surface that
         // specific error so callers can try alternative browsers or manual import.
-        if all_cookies.is_empty()
-            && let Some(abe_err) = abe_error
-        {
-            return Err(abe_err);
+        if all_cookies.is_empty() {
+            if let Some(abe_err) = abe_error {
+                return Err(abe_err);
+            }
+            if let Some(profile_err) = first_profile_error {
+                return Err(profile_err);
+            }
         }
 
         Ok(all_cookies)
@@ -581,10 +591,23 @@ impl CookieExtractor {
             const FILE_SHARE_WRITE: u32 = 0x00000002;
             const FILE_SHARE_DELETE: u32 = 0x00000004;
 
-            let mut src = std::fs::OpenOptions::new()
+            let open_result = std::fs::OpenOptions::new()
                 .read(true)
                 .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)
-                .open(path)?;
+                .open(path);
+            let mut src = match open_result {
+                Ok(file) => file,
+                // Chrome holds the ACTIVE profile's cookie database with no
+                // OS-level sharing, so no in-process trick can read it while
+                // that browser window runs. Name the condition instead of
+                // leaking a bare sharing violation.
+                Err(error) if error.raw_os_error() == Some(32) => {
+                    return Err(CookieError::Io(std::io::Error::other(
+                        "the running browser has the cookie database locked; close the browser (or use a different profile) and retry, or import the cookie manually",
+                    )));
+                }
+                Err(error) => return Err(error.into()),
+            };
 
             let mut contents = Vec::new();
             src.read_to_end(&mut contents)?;

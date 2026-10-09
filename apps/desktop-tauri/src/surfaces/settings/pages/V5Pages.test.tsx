@@ -1,5 +1,6 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import Sortable from "sortablejs";
 import { TEST_PROVIDER_CATALOG } from "../../../test/providerCatalog";
 import type { SettingsSnapshot } from "../../../types/bridge";
 import { createUsageStore } from "../../../core/usageStore";
@@ -25,6 +26,7 @@ const tauriMocks = vi.hoisted(() => {
   getTokenAccounts: vi.fn(),
   getGeminiCliSignedIn: vi.fn(),
   importCookieFile: vi.fn(),
+  previewCookieFile: vi.fn(),
   openProviderLogin: vi.fn(),
   captureProviderLogin: vi.fn(),
   closeProviderLogin: vi.fn(),
@@ -68,6 +70,7 @@ vi.mock("../../../lib/tauri", () => ({
   getTokenAccounts: tauriMocks.getTokenAccounts,
   getGeminiCliSignedIn: tauriMocks.getGeminiCliSignedIn,
   importCookieFile: tauriMocks.importCookieFile,
+  previewCookieFile: tauriMocks.previewCookieFile,
   openProviderLogin: tauriMocks.openProviderLogin,
   captureProviderLogin: tauriMocks.captureProviderLogin,
   closeProviderLogin: tauriMocks.closeProviderLogin,
@@ -203,6 +206,11 @@ describe("V5 settings pages from HTML", () => {
   });
   tauriMocks.getGeminiCliSignedIn.mockResolvedValue({ signedIn: false, credentialsPath: null });
   tauriMocks.importCookieFile.mockResolvedValue([]);
+  tauriMocks.previewCookieFile.mockResolvedValue({
+    format: "netscape",
+    providers: [],
+    unmatchedCookieCount: 0,
+  });
   tauriMocks.openProviderLogin.mockResolvedValue({ providerId: "claude", provider: "Claude", url: "https://claude.ai/" });
   tauriMocks.captureProviderLogin.mockResolvedValue([]);
   tauriMocks.closeProviderLogin.mockResolvedValue(undefined);
@@ -354,6 +362,25 @@ describe("V5 settings pages from HTML", () => {
       expect(screen.queryByText("API 密钥已保存")).not.toBeInTheDocument();
       expect(await screen.findByText("还没有保存 API 密钥。")).toBeInTheDocument();
     });
+
+  it("wires provider-row dragging to the shared auto-scroll, not Sortable's built-in one", async () => {
+    const createSpy = vi.spyOn(Sortable, "create");
+    try {
+      render(
+        <ProvidersPage settings={snapshot} set={() => {}} saving={false} catalog={runtimeCatalog} />,
+      );
+      await screen.findByText("批量导入浏览器 Cookie");
+      expect(createSpy).toHaveBeenCalled();
+      // Sortable 内置自动滚动在指针离开列表时立即停摆（向上拖不滚动的根因）；
+      // 合同是关闭内置滚动，由 useDragAutoScroll 接管。
+      const options = createSpy.mock.calls[0]?.[1];
+      expect(options?.scroll).toBe(false);
+      expect(options?.onStart).toBeTypeOf("function");
+      expect(options?.onEnd).toBeTypeOf("function");
+    } finally {
+      createSpy.mockRestore();
+    }
+  });
 
   it("lists the full catalog with brand icons, not letter marks", () => {
     render(
@@ -642,5 +669,143 @@ describe("V5 settings pages from HTML", () => {
     );
     expect(screen.getByText(/服务商目录尚未加载/)).toBeInTheDocument();
     expect(document.querySelector(".s5-prow")).toBeNull();
+  });
+
+  // ── 批量导入浏览器 Cookie：三步流（导出→预览→写入） ──
+
+  function aCookieFile(text: string, name = "cookies.txt"): File {
+    const file = new File([text], name, { type: "text/plain" });
+    // jsdom 未实现 Blob.text()；组件读取走这条路径。
+    Object.defineProperty(file, "text", { value: async () => text });
+    return file;
+  }
+
+  function cookieFileInput(): HTMLInputElement {
+    const input = document.querySelector('input[type="file"]');
+    expect(input).not.toBeNull();
+    return input as HTMLInputElement;
+  }
+
+  it("批量导入：解析文件后按真实匹配预览，且只写入勾选的服务商", async () => {
+    tauriMocks.previewCookieFile.mockResolvedValue({
+      format: "netscape",
+      providers: [
+        { providerId: "mimo", provider: "MiMo", cookieCount: 4 },
+        { providerId: "claude", provider: "Claude", cookieCount: 3 },
+      ],
+      unmatchedCookieCount: 2,
+    });
+    render(
+      <ProvidersPage settings={snapshot} set={() => {}} saving={false} catalog={runtimeCatalog} />,
+    );
+    fireEvent.click(await screen.findByRole("button", { name: /批量导入浏览器 Cookie/ }));
+    expect(await screen.findByText(/用 Cookie 导出扩展/)).toBeInTheDocument();
+
+    fireEvent.change(cookieFileInput(), {
+      target: { files: [aCookieFile("# Netscape HTTP Cookie File")] },
+    });
+    expect(await screen.findByText(/写入 2 家 · 覆盖 0 · 新增 2 · 忽略 2 条/)).toBeInTheDocument();
+    expect(screen.getAllByText("现在没有已保存的 Cookie，会新写入")).toHaveLength(2);
+    expect(document.querySelectorAll(".s5-import-card")).toHaveLength(2);
+    expect(tauriMocks.previewCookieFile).toHaveBeenCalledWith(
+      "# Netscape HTTP Cookie File",
+    );
+
+    // 关掉 Claude 后写入：只有 mimo 进 providerIds。测试环境没有注册全局
+    // dispatcher，dispatch 走 invokeSurfaceAction 回退通道。
+    fireEvent.click(screen.getByRole("button", { name: "写入 Claude" }));
+    fireEvent.click(screen.getByRole("button", { name: "写入 1 家" }));
+    await waitFor(() => {
+      expect(tauriMocks.invokeSurfaceAction).toHaveBeenCalledWith(
+        expect.objectContaining({ type: "importCookieFile", providerIds: ["mimo"] }),
+      );
+    });
+    expect(await screen.findByText(/已写入/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "再导入一份" })).toBeInTheDocument();
+  });
+
+  it("批量导入：超过 2MB 的文件就地报错且不请求后端", async () => {
+    tauriMocks.previewCookieFile.mockClear();
+    render(
+      <ProvidersPage settings={snapshot} set={() => {}} saving={false} catalog={runtimeCatalog} />,
+    );
+    fireEvent.click(await screen.findByRole("button", { name: /批量导入浏览器 Cookie/ }));
+    const file = aCookieFile("x");
+    Object.defineProperty(file, "size", { value: 3 * 1024 * 1024 });
+    fireEvent.change(cookieFileInput(), { target: { files: [file] } });
+    expect(await screen.findByText(/超过 2 MB 限制/)).toBeInTheDocument();
+    expect(tauriMocks.previewCookieFile).not.toHaveBeenCalled();
+  });
+
+  it("批量导入：零匹配时给出指引而不是可写入列表", async () => {
+    tauriMocks.previewCookieFile.mockResolvedValue({
+      format: "json",
+      providers: [],
+      unmatchedCookieCount: 5,
+    });
+    render(
+      <ProvidersPage settings={snapshot} set={() => {}} saving={false} catalog={runtimeCatalog} />,
+    );
+    fireEvent.click(await screen.findByRole("button", { name: /批量导入浏览器 Cookie/ }));
+    fireEvent.change(cookieFileInput(), {
+      target: { files: [aCookieFile("{}")] },
+    });
+    expect(await screen.findByText("没有匹配的服务商")).toBeInTheDocument();
+    expect(
+      screen.getByText(/没有能匹配到任何服务商的 Cookie/),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /写入 \d+ 家/ })).not.toBeInTheDocument();
+  });
+
+  it("批量导入：已有 Cookie 时先确认再覆盖，未覆盖的行同样是卡片", async () => {
+    tauriMocks.getManualCookies.mockResolvedValue([
+      { providerId: "claude", provider: "Claude", savedAt: "2026-09-01T00:00:00Z" },
+    ]);
+    tauriMocks.previewCookieFile.mockResolvedValue({
+      format: "netscape",
+      providers: [
+        { providerId: "claude", provider: "Claude", cookieCount: 2 },
+        { providerId: "cursor", provider: "Cursor", cookieCount: 1 },
+      ],
+      unmatchedCookieCount: 2,
+      unmatchedDomains: ["accounts.google.com", "github.com"],
+    });
+    render(
+      <ProvidersPage settings={snapshot} set={() => {}} saving={false} catalog={runtimeCatalog} />,
+    );
+    fireEvent.click(await screen.findByRole("button", { name: /批量导入浏览器 Cookie/ }));
+    fireEvent.change(cookieFileInput(), {
+      target: { files: [aCookieFile("# Netscape HTTP Cookie File")] },
+    });
+    expect(await screen.findByText("会覆盖已经保存的 Cookie")).toBeInTheDocument();
+    expect(screen.getByText("现在没有已保存的 Cookie，会新写入")).toBeInTheDocument();
+    expect(document.querySelectorAll(".s5-import-card")).toHaveLength(2);
+    expect(document.querySelectorAll(".s5-import-card.is-warn")).toHaveLength(1);
+
+    fireEvent.click(await screen.findByRole("button", { name: "覆盖 1 家并写入" }));
+    expect(await screen.findByText(/已有 Cookie，会换成这份文件里的/)).toBeInTheDocument();
+    fireEvent.click(screen.getByText("2 条没对上任何服务商"));
+    expect(screen.getByText("accounts.google.com")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "确认覆盖并写入" }));
+    await waitFor(() => {
+      expect(tauriMocks.invokeSurfaceAction).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: "importCookieFile",
+          providerIds: ["claude", "cursor"],
+        }),
+      );
+    });
+  });
+
+  it("批量导入：拖入文件时拖放区有高亮反馈", async () => {
+    render(
+      <ProvidersPage settings={snapshot} set={() => {}} saving={false} catalog={runtimeCatalog} />,
+    );
+    fireEvent.click(await screen.findByRole("button", { name: /批量导入浏览器 Cookie/ }));
+    const dropzone = await screen.findByRole("button", { name: /把文件拖到这里，或点击选择/ });
+    fireEvent.dragOver(dropzone);
+    expect(dropzone.className).toContain("is-drag");
+    fireEvent.dragLeave(dropzone);
+    expect(dropzone.className).not.toContain("is-drag");
   });
 });

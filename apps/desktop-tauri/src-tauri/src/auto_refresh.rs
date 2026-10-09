@@ -45,13 +45,29 @@ fn refresh_interval(seconds: u64) -> Option<Duration> {
 
 /// Providers eligible for the optional enrichment stage (UP-M-001): enabled
 /// providers whose local cost logs the app knows how to scan. Core quota
-/// snapshots are never part of this stage.
+/// snapshots are never part of this stage. Kept in step with
+/// `chart.rs::scan_local_cost` — grok was scannable but missing here, which
+/// left its recent-usage cache cold between interactive reads.
 pub(crate) fn enrichment_provider_ids(settings: &Settings) -> Vec<String> {
     settings
         .get_enabled_provider_ids()
         .into_iter()
         .map(|provider| provider.cli_name().to_string())
-        .filter(|provider_id| matches!(provider_id.as_str(), "codex" | "claude"))
+        .filter(|provider_id| {
+            matches!(
+                provider_id.as_str(),
+                "codex"
+                    | "claude"
+                    | "grok"
+                    | "gemini"
+                    | "copilot"
+                    | "kimi"
+                    | "amp"
+                    | "opencode"
+                    | "opencodego"
+                    | "antigravity"
+            )
+        })
         .collect()
 }
 
@@ -147,6 +163,9 @@ mod tests {
         settings.enabled_providers = [
             "codex".to_string(),
             "claude".to_string(),
+            "grok".to_string(),
+            "gemini".to_string(),
+            "amp".to_string(),
             "cursor".to_string(),
         ]
         .into_iter()
@@ -154,7 +173,16 @@ mod tests {
 
         let mut ids = enrichment_provider_ids(&settings);
         ids.sort();
-        assert_eq!(ids, vec!["claude".to_string(), "codex".to_string()]);
+        assert_eq!(
+            ids,
+            vec![
+                "amp".to_string(),
+                "claude".to_string(),
+                "codex".to_string(),
+                "gemini".to_string(),
+                "grok".to_string(),
+            ]
+        );
 
         settings.enabled_providers = ["cursor".to_string()].into_iter().collect();
         assert!(enrichment_provider_ids(&settings).is_empty());

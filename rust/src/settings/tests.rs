@@ -1307,3 +1307,39 @@ fn dashboard_compat_fields_do_not_drive_rendering() {
     let back: Settings = serde_json::from_str(&json2).expect("re-parse");
     assert_eq!(back.dashboard_provider_ids, s.dashboard_provider_ids);
 }
+
+#[test]
+fn mimo_cookie_source_defaults_to_auto_while_others_default_to_manual() {
+    let s = Settings::default();
+    assert_eq!(default_cookie_source(ProviderId::MiMo), "auto");
+    assert_eq!(default_cookie_source(ProviderId::Codex), "manual");
+    assert_eq!(default_cookie_source(ProviderId::Claude), "manual");
+    assert_eq!(default_cookie_source(ProviderId::Cursor), "manual");
+    assert_eq!(default_cookie_source(ProviderId::MiniMax), "manual");
+
+    assert_eq!(s.cookie_source(ProviderId::MiMo), "auto");
+    assert_eq!(s.cookie_source(ProviderId::Codex), "manual");
+    assert_eq!(s.cookie_source(ProviderId::Claude), "manual");
+    assert_eq!(s.cookie_source(ProviderId::Cursor), "manual");
+    assert_eq!(s.cookie_source(ProviderId::MiniMax), "manual");
+}
+
+#[test]
+fn persisted_mimo_cookie_source_is_respected() {
+    let mut s = Settings::default();
+    s.set_cookie_source(ProviderId::MiMo, "manual");
+    assert_eq!(s.cookie_source(ProviderId::MiMo), "manual");
+
+    s.set_cookie_source(ProviderId::MiMo, "auto");
+    assert_eq!(s.cookie_source(ProviderId::MiMo), "auto");
+}
+
+#[test]
+fn raw_settings_migrates_legacy_mimo_cookie_source() {
+    let json = r#"{
+        "mimo_cookie_source": "manual",
+        "refresh_interval_secs": 300
+    }"#;
+    let s: Settings = serde_json::from_str(json).expect("parse");
+    assert_eq!(s.cookie_source(ProviderId::MiMo), "manual");
+}

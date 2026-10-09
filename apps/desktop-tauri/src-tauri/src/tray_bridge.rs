@@ -279,7 +279,7 @@ pub fn setup(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
 
     let builder = TrayIconBuilder::with_id("codexbar-main")
         .icon(icon)
-        .tooltip("CodexBar Desktop")
+        .tooltip(&codexbar::core::dev_window_title("CodexBar Desktop"))
         .show_menu_on_left_click(false);
     #[cfg(not(windows))]
     let builder = builder
@@ -598,6 +598,9 @@ pub fn update_tray_icon_and_tooltip(
             "codex" => speed_snapshot.codex.tokens_per_second,
             "claude" => speed_snapshot.claude.tokens_per_second,
             "grok" => speed_snapshot.grok.tokens_per_second,
+            "kimi" => speed_snapshot.kimi.tokens_per_second,
+            "opencode" => speed_snapshot.opencode.tokens_per_second,
+            "opencodego" => speed_snapshot.opencodego.tokens_per_second,
             _ => None,
         };
 
@@ -699,7 +702,9 @@ fn status_labels_for_settings(
     if settings.tray_icon_mode == TrayIconMode::PerProvider {
         return healthy
             .into_iter()
-            .map(|s| provider_status_label(s, lang, settings.effective_taskbar_reset_time_relative()))
+            .map(|s| {
+                provider_status_label(s, lang, settings.effective_taskbar_reset_time_relative())
+            })
             .collect::<Vec<_>>();
     }
 
@@ -710,7 +715,11 @@ fn status_labels_for_settings(
         return vec![];
     };
 
-    let (_, label) = provider_status_label(selected, lang, settings.effective_taskbar_reset_time_relative());
+    let (_, label) = provider_status_label(
+        selected,
+        lang,
+        settings.effective_taskbar_reset_time_relative(),
+    );
     vec![("status_summary".to_string(), label)]
 }
 
@@ -919,9 +928,7 @@ fn automatic_metric_percent(
 /// primary/secondary slots. Include only that known allowance in Automatic;
 /// other extras (for example balances) must not accidentally become the
 /// headline metric.
-fn cursor_grok_bot_percent(
-    snapshot: &crate::commands::ProviderUsageSnapshot,
-) -> Option<f64> {
+fn cursor_grok_bot_percent(snapshot: &crate::commands::ProviderUsageSnapshot) -> Option<f64> {
     snapshot
         .extra_rate_windows
         .iter()
@@ -1353,6 +1360,7 @@ mod tests {
                 id: "cursor-grok-bot".into(),
                 title: "Grok Bot".into(),
                 window: metric_window(76.0),
+                activation_at: None,
                 usage_known: true,
                 inventory_expires_at: Vec::new(),
             },
@@ -1360,6 +1368,7 @@ mod tests {
                 id: "cursor-account-balance".into(),
                 title: "Account balance".into(),
                 window: metric_window(99.0),
+                activation_at: None,
                 usage_known: true,
                 inventory_expires_at: Vec::new(),
             },

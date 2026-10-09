@@ -6,7 +6,7 @@ pub fn get_app_info() -> AppInfoBridge {
     let settings = Settings::load();
     AppInfoBridge {
         name: "CodexBar".to_string(),
-        version: env!("CARGO_PKG_VERSION").to_string(),
+        version: codexbar::core::display_version().to_string(),
         build_number: option_env!("BUILD_NUMBER").unwrap_or("dev").to_string(),
         update_channel: update_channel_label(settings.update_channel).to_string(),
         tagline: "May your tokens never run out—keep agent limits in view.".to_string(),

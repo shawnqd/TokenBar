@@ -198,23 +198,35 @@ impl VertexAIProvider {
             ))
             .header("Authorization", format!("Bearer {}", token))
             .send()
-            .await;
+            .await?;
 
-        match resp {
-            Ok(r) if r.status().is_success() => {
-                let json: serde_json::Value = r
-                    .json()
-                    .await
-                    .map_err(|e| ProviderError::Parse(e.to_string()))?;
-                self.parse_usage_response(&json, &project_id)
-            }
-            _ => {
-                // Return placeholder with project info
-                let usage = UsageSnapshot::new(RateWindow::new(0.0))
-                    .with_login_method(format!("Vertex AI ({})", project_id));
-                Ok(usage)
-            }
+        if resp.status() == reqwest::StatusCode::UNAUTHORIZED {
+            return Err(ProviderError::AuthRequired);
         }
+        if resp.status() == reqwest::StatusCode::FORBIDDEN {
+            return Err(ProviderError::Other(
+                "Vertex AI request was forbidden.".to_string(),
+            ));
+        }
+        if resp.status().is_success() {
+            let json: serde_json::Value = resp
+                .json()
+                .await
+                .map_err(|e| ProviderError::Parse(e.to_string()))?;
+            self.parse_usage_response(&json, &project_id)
+        } else {
+            // The Cloud Resource Manager lookup carries no quota semantics; a
+            // failed lookup must surface as an informational placeholder, never
+            // as a fresh 0%-used quota bar.
+            Ok(self.project_placeholder(&project_id))
+        }
+    }
+
+    fn project_placeholder(&self, project_label: &str) -> UsageSnapshot {
+        UsageSnapshot::new(RateWindow::informational(
+            "No quota data (project lookup only)",
+        ))
+        .with_login_method(format!("Vertex AI ({})", project_label))
     }
 
     async fn get_project_id(&self) -> Result<String, ProviderError> {
@@ -260,10 +272,7 @@ impl VertexAIProvider {
             .and_then(|v| v.as_str())
             .unwrap_or(project_id);
 
-        let usage = UsageSnapshot::new(RateWindow::new(0.0))
-            .with_login_method(format!("Vertex AI ({})", project_name));
-
-        Ok(usage)
+        Ok(self.project_placeholder(project_name))
     }
 
     /// Probe CLI for detection
@@ -282,7 +291,8 @@ impl VertexAIProvider {
                 "Vertex AI (installed)".to_string()
             };
 
-            let usage = UsageSnapshot::new(RateWindow::new(0.0)).with_login_method(&label);
+            let window = RateWindow::informational("No quota data (CLI probe only)");
+            let usage = UsageSnapshot::new(window).with_login_method(&label);
             Ok(usage)
         } else {
             Err(ProviderError::NotInstalled("gcloud not found".to_string()))
@@ -339,5 +349,33 @@ impl Provider for VertexAIProvider {
 
     fn supports_cli(&self) -> bool {
         true
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Vertex AI has no quota API in this integration: every snapshot path must
+    // stay informational so a project lookup can never read as "0% used".
+    #[test]
+    fn placeholders_are_informational_not_zero_percent_quota() {
+        let provider = VertexAIProvider::new();
+        let json = serde_json::json!({ "name": "projects/my-project", "projectId": "my-project" });
+        let usage = provider
+            .parse_usage_response(&json, "my-project")
+            .expect("parse ok");
+        assert!(usage.primary.is_informational);
+        assert_eq!(
+            usage.login_method.as_deref(),
+            Some("Vertex AI (projects/my-project)")
+        );
+
+        let placeholder = provider.project_placeholder("my-project");
+        assert!(placeholder.primary.is_informational);
+        assert_eq!(
+            placeholder.login_method.as_deref(),
+            Some("Vertex AI (my-project)")
+        );
     }
 }

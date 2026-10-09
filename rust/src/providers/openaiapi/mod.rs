@@ -159,16 +159,10 @@ impl OpenAIApiProvider {
         project_id: Option<&str>,
     ) -> Result<ProviderFetchResult, ProviderError> {
         let now = Utc::now();
-        let start = (now.date_naive() - Duration::days(29))
-            .and_hms_opt(0, 0, 0)
-            .ok_or_else(|| ProviderError::Parse("Invalid OpenAI usage start date".to_string()))?
-            .and_utc()
-            .timestamp();
-        let end = (now.date_naive() + Duration::days(1))
-            .and_hms_opt(0, 0, 0)
-            .ok_or_else(|| ProviderError::Parse("Invalid OpenAI usage end date".to_string()))?
-            .and_utc()
-            .timestamp();
+        // The Admin usage API rejects an end_time in the future, so the range
+        // must end at `now`; a tomorrow-midnight end made every admin call
+        // fail and silently cascaded into the credit-grants fallback.
+        let (start, end) = admin_time_range(now)?;
         let project_id = clean_project_id(project_id);
 
         let costs: CostsResponse = self
@@ -232,10 +226,14 @@ impl OpenAIApiProvider {
             return Err(ProviderError::AuthRequired);
         }
         if !response.status().is_success() {
-            return Err(ProviderError::Other(format!(
-                "OpenAI API {label} returned status {}",
-                response.status()
-            )));
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            let detail = response_error_detail(&body);
+            return Err(ProviderError::Other(if detail.is_empty() {
+                format!("OpenAI API {label} returned status {status}")
+            } else {
+                format!("OpenAI API {label} returned status {status}: {detail}")
+            }));
         }
         response
             .json()
@@ -360,23 +358,21 @@ fn result_from_admin_usage(
             .unwrap_or(0.0);
     }
 
-    let request_percent = if request_total > 0 { 100.0 } else { 0.0 };
     let mut usage = UsageSnapshot::new(RateWindow::with_details(
         0.0,
         None,
         start,
         Some(format!("${cost_total:.2} over last 30 days")),
     ))
-    .with_secondary(RateWindow::with_details(
-        request_percent,
-        None,
-        None,
-        Some(format!("{request_total} requests")),
-    ))
+    .with_extra_rate_window(
+        "requests",
+        "Requests",
+        RateWindow::informational(format!("{request_total} requests")),
+    )
     .with_extra_rate_window(
         "tokens",
         "Tokens",
-        RateWindow::with_details(0.0, None, None, Some(format!("{token_total} tokens"))),
+        RateWindow::informational(format!("{token_total} tokens")),
     )
     .with_login_method(
         project_id
@@ -395,7 +391,7 @@ fn result_from_admin_usage(
         usage = usage.with_extra_rate_window(
             format!("model-{idx}"),
             format!("Model: {model}"),
-            RateWindow::with_details(0.0, None, None, Some(format!("{tokens} tokens"))),
+            RateWindow::informational(format!("{tokens} tokens")),
         );
     }
 
@@ -405,7 +401,7 @@ fn result_from_admin_usage(
         usage = usage.with_extra_rate_window(
             format!("line-item-{idx}"),
             format!("Cost: {item}"),
-            RateWindow::with_details(0.0, None, None, Some(format!("${amount:.2}"))),
+            RateWindow::informational(format!("${amount:.2}")),
         );
     }
 
@@ -431,11 +427,40 @@ fn admin_query(
     query
 }
 
+fn admin_time_range(now: DateTime<Utc>) -> Result<(i64, i64), ProviderError> {
+    let start = (now.date_naive() - Duration::days(29))
+        .and_hms_opt(0, 0, 0)
+        .ok_or_else(|| ProviderError::Parse("Invalid OpenAI usage start date".to_string()))?
+        .and_utc()
+        .timestamp();
+    Ok((start, now.timestamp()))
+}
+
 fn clean_project_id(project_id: Option<&str>) -> Option<String> {
     project_id
         .map(str::trim)
         .filter(|id| !id.is_empty())
         .map(ToOwned::to_owned)
+}
+
+fn response_error_detail(body: &str) -> String {
+    let trimmed = body.trim();
+    if trimmed.is_empty() {
+        return String::new();
+    }
+
+    if let Ok(value) = serde_json::from_str::<serde_json::Value>(trimmed)
+        && let Some(error) = value.get("error")
+    {
+        if let Some(message) = error.get("message").and_then(serde_json::Value::as_str) {
+            return message.to_string();
+        }
+        if let Some(message) = error.as_str() {
+            return message.to_string();
+        }
+    }
+
+    trimmed.chars().take(500).collect()
 }
 
 fn number_value(value: &serde_json::Value) -> Option<f64> {
@@ -612,5 +637,77 @@ mod tests {
             Some("  proj_123  "),
         );
         assert!(query.contains(&("project_ids", "proj_123".to_string())));
+    }
+
+    #[test]
+    fn openai_admin_usage_windows_are_informational_not_quota() {
+        let costs = CostsResponse {
+            data: vec![CostBucket {
+                start_time: 1_797_638_400,
+                end_time: 1_797_724_800,
+                results: vec![CostResult {
+                    amount: Some(CostAmount {
+                        value: serde_json::json!(12.5),
+                    }),
+                    line_item: Some("API".to_string()),
+                }],
+            }],
+        };
+        let completions = CompletionsUsageResponse {
+            data: vec![CompletionsUsageBucket {
+                start_time: 1_797_638_400,
+                end_time: 1_797_724_800,
+                results: vec![CompletionsUsageResult {
+                    model: None,
+                    input_tokens: Some(100),
+                    input_cached_tokens: Some(25),
+                    output_tokens: Some(50),
+                    input_audio_tokens: None,
+                    output_audio_tokens: None,
+                    num_model_requests: Some(7),
+                }],
+            }],
+        };
+        let now = Utc.timestamp_opt(1_797_724_800, 0).single().unwrap();
+        let result = result_from_admin_usage(&costs, &completions, now, None);
+
+        // The Admin API reports spend, not plan quotas. Request/token/model
+        // rows must stay informational so a busy month can never render as
+        // "100% used / exhausted".
+        assert!(result.usage.secondary.is_none());
+        let requests = result
+            .usage
+            .extra_rate_windows
+            .iter()
+            .find(|window| window.id == "requests")
+            .expect("requests window present");
+        assert!(requests.window.is_informational);
+        assert_eq!(
+            requests.window.reset_description.as_deref(),
+            Some("7 requests")
+        );
+        assert!(!result.usage.any_exhausted());
+    }
+
+    #[test]
+    fn openai_admin_time_range_does_not_end_in_the_future() {
+        let now = Utc.timestamp_opt(1_783_981_862, 0).single().unwrap();
+        let (start, end) = admin_time_range(now).unwrap();
+
+        assert_eq!(end, now.timestamp());
+        assert!(start < end);
+    }
+
+    #[test]
+    fn openai_response_error_detail_extracts_message() {
+        assert_eq!(response_error_detail(""), "");
+        assert_eq!(
+            response_error_detail(r#"{"error":{"message":"end_time must not be in the future"}}"#),
+            "end_time must not be in the future"
+        );
+        assert_eq!(
+            response_error_detail("plain gateway text"),
+            "plain gateway text"
+        );
     }
 }

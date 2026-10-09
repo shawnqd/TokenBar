@@ -14,8 +14,8 @@ use std::process::Command;
 use std::time::Duration;
 
 use crate::core::{
-    FetchContext, Provider, ProviderError, ProviderFetchResult, ProviderId, ProviderMetadata,
-    RateWindow, SourceMode, UsageSnapshot,
+    FetchContext, NamedRateWindow, Provider, ProviderError, ProviderFetchResult, ProviderId,
+    ProviderMetadata, RateWindow, SourceMode, UsageSnapshot,
 };
 
 const DOUBAO_API_URL: &str = "https://ark.cn-beijing.volces.com/api/coding/v3/chat/completions";
@@ -425,13 +425,64 @@ pub(crate) fn decode_coding_plan_usage(bytes: &[u8]) -> Result<CodingPlanResult,
 
 pub(crate) fn coding_plan_snapshot(usage: CodingPlanResult) -> UsageSnapshot {
     let primary = coding_plan_window(&usage, &["session", "5-hour", "five_hour"], Some(5 * 60))
-        .unwrap_or_else(|| RateWindow::new(0.0));
+        .unwrap_or_else(|| {
+            // No session-level bucket means the payload omitted it, not that
+            // the user has spent nothing. An informational row replaces the
+            // old fabricated 0% window.
+            RateWindow::informational("No Coding/Agent Plan session window reported")
+        });
     let mut snapshot = UsageSnapshot::new(primary);
     if let Some(weekly) = coding_plan_window(&usage, &["weekly", "week"], Some(7 * 24 * 60)) {
         snapshot = snapshot.with_secondary(weekly);
     }
     if let Some(monthly) = coding_plan_window(&usage, &["monthly", "month"], Some(30 * 24 * 60)) {
         snapshot = snapshot.with_tertiary(monthly);
+    }
+    // Agent / team plan buckets from arkcli carry a level prefix; without this
+    // mapping an Agent Plan subscriber's real quota rows were fetched and then
+    // silently discarded.
+    for (prefix, id_prefix) in [
+        ("agent_", "doubao-agent"),
+        ("coding_team_", "doubao-coding-team"),
+        ("agent_team_", "doubao-agent-team"),
+    ] {
+        if let Some(w) = coding_plan_window(
+            &usage,
+            &[
+                &format!("{prefix}session"),
+                &format!("{prefix}5-hour"),
+                &format!("{prefix}five_hour"),
+            ],
+            Some(5 * 60),
+        ) {
+            snapshot.extra_rate_windows.push(NamedRateWindow::new(
+                format!("{id_prefix}-session"),
+                "5-hour",
+                w,
+            ));
+        }
+        if let Some(w) = coding_plan_window(
+            &usage,
+            &[&format!("{prefix}weekly"), &format!("{prefix}week")],
+            Some(7 * 24 * 60),
+        ) {
+            snapshot.extra_rate_windows.push(NamedRateWindow::new(
+                format!("{id_prefix}-weekly"),
+                "Weekly",
+                w,
+            ));
+        }
+        if let Some(w) = coding_plan_window(
+            &usage,
+            &[&format!("{prefix}monthly"), &format!("{prefix}month")],
+            Some(30 * 24 * 60),
+        ) {
+            snapshot.extra_rate_windows.push(NamedRateWindow::new(
+                format!("{id_prefix}-monthly"),
+                "Monthly",
+                w,
+            ));
+        }
     }
     if let Some(status) = usage.status.filter(|s| !s.trim().is_empty()) {
         snapshot = snapshot.with_login_method(status);
@@ -656,6 +707,20 @@ impl Provider for DoubaoProvider {
                         self.fetch_coding_plan(&credentials).await?,
                         "coding-plan",
                     ));
+                }
+                // Prefer arkcli when available so Agent Plan / team quotas
+                // surface without signed API credentials.
+                if resolve_arkcli_binary().is_some() {
+                    match fetch_arkcli_usage() {
+                        Ok(snap) => return Ok(ProviderFetchResult::new(snap, "arkcli")),
+                        Err(ProviderError::AuthRequired) => {
+                            return Err(ProviderError::AuthRequired);
+                        }
+                        Err(ProviderError::NotInstalled(_)) => {}
+                        Err(_) => {
+                            // Fall through to the request-header probe when configured.
+                        }
+                    }
                 }
                 let api_key = Self::api_key(ctx.api_key.as_deref())?;
                 Ok(ProviderFetchResult::new(
@@ -903,6 +968,73 @@ fn resolve_api_key(
 mod tests {
     use super::*;
     use reqwest::header::{HeaderMap, HeaderValue};
+
+    // Agent Plan rows arrive from arkcli with a level prefix. They must be
+    // rendered as real windows, not fetched and silently dropped.
+    #[test]
+    fn agent_plan_levels_render_as_extra_windows() {
+        let usage = CodingPlanResult {
+            status: Some("agent-plan".into()),
+            update_timestamp: None,
+            quota_usage: vec![
+                CodingPlanQuota {
+                    level: "agent_session".into(),
+                    percent: 40.0,
+                    reset_timestamp: None,
+                },
+                CodingPlanQuota {
+                    level: "agent_weekly".into(),
+                    percent: 60.0,
+                    reset_timestamp: None,
+                },
+                CodingPlanQuota {
+                    level: "agent_team_monthly".into(),
+                    percent: 80.0,
+                    reset_timestamp: None,
+                },
+            ],
+        };
+        let snapshot = coding_plan_snapshot(usage);
+
+        let agent_session = snapshot
+            .extra_rate_windows
+            .iter()
+            .find(|w| w.id == "doubao-agent-session")
+            .expect("agent session window");
+        assert!((agent_session.window.used_percent - 40.0).abs() < 0.001);
+        let agent_weekly = snapshot
+            .extra_rate_windows
+            .iter()
+            .find(|w| w.id == "doubao-agent-weekly")
+            .expect("agent weekly window");
+        assert!((agent_weekly.window.used_percent - 60.0).abs() < 0.001);
+        let agent_team_monthly = snapshot
+            .extra_rate_windows
+            .iter()
+            .find(|w| w.id == "doubao-agent-team-monthly")
+            .expect("agent team monthly window");
+        assert!((agent_team_monthly.window.used_percent - 80.0).abs() < 0.001);
+    }
+
+    // A coding-plan payload without a session bucket carries no data for that
+    // lane; the primary slot stays informational instead of a fresh 0% bar.
+    #[test]
+    fn missing_session_level_is_informational_not_zero_percent() {
+        let usage = CodingPlanResult {
+            status: None,
+            update_timestamp: None,
+            quota_usage: vec![CodingPlanQuota {
+                level: "weekly".into(),
+                percent: 25.0,
+                reset_timestamp: None,
+            }],
+        };
+        let snapshot = coding_plan_snapshot(usage);
+        assert!(snapshot.primary.is_informational);
+        let weekly = snapshot.secondary.as_ref().expect("weekly window");
+        assert!((weekly.used_percent - 25.0).abs() < 0.001);
+        assert!(!snapshot.any_exhausted());
+    }
 
     #[test]
     fn doubao_snapshot_uses_rate_limit_headers() {

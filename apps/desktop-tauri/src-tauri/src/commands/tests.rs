@@ -398,6 +398,333 @@ fn fetch_context_manual_cookie_uses_web_without_browser_import() {
 }
 
 #[test]
+fn fetch_context_grok_auto_keeps_cli_ladder_and_passes_saved_cookie_as_fallback() {
+    let mut settings = Settings::default();
+    settings.set_cookie_source(ProviderId::Grok, "manual");
+    let mut cookies = ManualCookies::default();
+    cookies.set("grok", "session=grok-web-fallback");
+    let api_keys = ApiKeys::default();
+    let token_accounts = HashMap::new();
+
+    let ctx = super::build_fetch_context(
+        ProviderId::Grok,
+        &settings,
+        &cookies,
+        &api_keys,
+        &token_accounts,
+    );
+
+    assert_eq!(ctx.source_mode, SourceMode::Auto);
+    assert_eq!(
+        ctx.manual_cookie_header.as_deref(),
+        Some("session=grok-web-fallback")
+    );
+    assert!(!ctx.auto_prefer_web);
+    assert!(!ctx.allow_browser_cookie);
+}
+
+#[test]
+fn fetch_context_grok_selected_token_account_is_an_identity_override() {
+    let mut settings = Settings::default();
+    settings.set_cookie_source(ProviderId::Grok, "auto");
+    let cookies = ManualCookies::default();
+    let api_keys = ApiKeys::default();
+    let mut token_accounts = HashMap::new();
+    let mut data = ProviderAccountData::new();
+    data.add_account(TokenAccount::new("Selected Grok", "selected-grok-cookie"));
+    token_accounts.insert(ProviderId::Grok, data);
+
+    let ctx = super::build_fetch_context(
+        ProviderId::Grok,
+        &settings,
+        &cookies,
+        &api_keys,
+        &token_accounts,
+    );
+
+    assert_eq!(ctx.source_mode, SourceMode::Auto);
+    assert_eq!(
+        ctx.manual_cookie_header.as_deref(),
+        Some("selected-grok-cookie")
+    );
+    assert!(ctx.auto_prefer_web);
+}
+
+#[test]
+fn fetch_context_grok_explicit_web_stays_cookie_only() {
+    let mut settings = Settings::default();
+    settings.set_usage_source(ProviderId::Grok, "web");
+    settings.set_cookie_source(ProviderId::Grok, "manual");
+    let mut cookies = ManualCookies::default();
+    cookies.set("grok", "session=explicit-web");
+    let api_keys = ApiKeys::default();
+    let token_accounts = HashMap::new();
+
+    let ctx = super::build_fetch_context(
+        ProviderId::Grok,
+        &settings,
+        &cookies,
+        &api_keys,
+        &token_accounts,
+    );
+
+    assert_eq!(ctx.source_mode, SourceMode::Web);
+    assert_eq!(
+        ctx.manual_cookie_header.as_deref(),
+        Some("session=explicit-web")
+    );
+    assert!(!ctx.allow_browser_cookie);
+}
+
+#[test]
+fn fetch_context_grok_pinned_cli_and_oauth_survive_manual_cookie_selection() {
+    for (source, expected) in [("cli", SourceMode::Cli), ("oauth", SourceMode::OAuth)] {
+        let mut settings = Settings::default();
+        settings.set_usage_source(ProviderId::Grok, source);
+        settings.set_cookie_source(ProviderId::Grok, "manual");
+        let mut cookies = ManualCookies::default();
+        cookies.set("grok", "session=optional-fallback");
+        let api_keys = ApiKeys::default();
+        let token_accounts = HashMap::new();
+
+        let ctx = super::build_fetch_context(
+            ProviderId::Grok,
+            &settings,
+            &cookies,
+            &api_keys,
+            &token_accounts,
+        );
+
+        assert_eq!(ctx.source_mode, expected, "source={source}");
+        assert_eq!(
+            ctx.manual_cookie_header.as_deref(),
+            Some("session=optional-fallback")
+        );
+    }
+}
+
+#[test]
+fn fetch_context_grok_manual_without_saved_cookie_keeps_auto_without_browser_import() {
+    let mut settings = Settings::default();
+    settings.set_cookie_source(ProviderId::Grok, "manual");
+    let cookies = ManualCookies::default();
+    let api_keys = ApiKeys::default();
+    let token_accounts = HashMap::new();
+
+    let ctx = super::build_fetch_context(
+        ProviderId::Grok,
+        &settings,
+        &cookies,
+        &api_keys,
+        &token_accounts,
+    );
+
+    assert_eq!(ctx.source_mode, SourceMode::Auto);
+    assert!(ctx.manual_cookie_header.is_none());
+    assert!(!ctx.allow_browser_cookie);
+}
+
+#[test]
+fn fetch_context_grok_cookie_off_keeps_auto_without_web_fallback() {
+    let mut settings = Settings::default();
+    settings.set_cookie_source(ProviderId::Grok, "off");
+    let mut cookies = ManualCookies::default();
+    cookies.set("grok", "session=must-not-be-used");
+    let api_keys = ApiKeys::default();
+    let token_accounts = HashMap::new();
+
+    let ctx = super::build_fetch_context(
+        ProviderId::Grok,
+        &settings,
+        &cookies,
+        &api_keys,
+        &token_accounts,
+    );
+
+    assert_eq!(ctx.source_mode, SourceMode::Auto);
+    assert!(ctx.manual_cookie_header.is_none());
+    assert!(!ctx.allow_browser_cookie);
+}
+
+#[test]
+fn fetch_context_grok_cookie_off_preserves_pinned_cli_and_oauth_sources() {
+    for (source, expected) in [("cli", SourceMode::Cli), ("oauth", SourceMode::OAuth)] {
+        let mut settings = Settings::default();
+        settings.set_usage_source(ProviderId::Grok, source);
+        settings.set_cookie_source(ProviderId::Grok, "off");
+        let mut cookies = ManualCookies::default();
+        cookies.set("grok", "session=must-not-be-used");
+        let api_keys = ApiKeys::default();
+        let token_accounts = HashMap::new();
+
+        let ctx = super::build_fetch_context(
+            ProviderId::Grok,
+            &settings,
+            &cookies,
+            &api_keys,
+            &token_accounts,
+        );
+
+        assert_eq!(ctx.source_mode, expected, "source={source}");
+        assert!(ctx.manual_cookie_header.is_none());
+        assert!(!ctx.allow_browser_cookie);
+    }
+}
+
+#[test]
+fn fetch_context_opencode_go_manual_without_cookie_keeps_auto_and_disables_browser() {
+    let mut settings = Settings::default();
+    settings.set_cookie_source(ProviderId::OpenCodeGo, "manual");
+    let cookies = ManualCookies::default();
+    let api_keys = ApiKeys::default();
+    let token_accounts = HashMap::new();
+
+    let ctx = super::build_fetch_context(
+        ProviderId::OpenCodeGo,
+        &settings,
+        &cookies,
+        &api_keys,
+        &token_accounts,
+    );
+
+    assert_eq!(ctx.source_mode, SourceMode::Auto);
+    assert!(ctx.manual_cookie_header.is_none());
+    assert!(!ctx.allow_browser_cookie);
+}
+
+#[test]
+fn fetch_context_opencode_go_cookie_off_without_explicit_key_keeps_native_key_ladder() {
+    let mut settings = Settings::default();
+    settings.set_cookie_source(ProviderId::OpenCodeGo, "off");
+    let cookies = ManualCookies::default();
+    let api_keys = ApiKeys::default();
+    let token_accounts = HashMap::new();
+
+    let ctx = super::build_fetch_context(
+        ProviderId::OpenCodeGo,
+        &settings,
+        &cookies,
+        &api_keys,
+        &token_accounts,
+    );
+
+    assert_eq!(ctx.source_mode, SourceMode::Auto);
+    assert!(ctx.manual_cookie_header.is_none());
+    assert!(!ctx.allow_browser_cookie);
+}
+
+#[test]
+fn fetch_context_opencode_go_saved_cookie_keeps_auto_for_api_first() {
+    let mut settings = Settings::default();
+    settings.set_cookie_source(ProviderId::OpenCodeGo, "manual");
+    let mut cookies = ManualCookies::default();
+    cookies.set("opencodego", "session=go-test");
+    let api_keys = ApiKeys::default();
+    let token_accounts = HashMap::new();
+
+    let ctx = super::build_fetch_context(
+        ProviderId::OpenCodeGo,
+        &settings,
+        &cookies,
+        &api_keys,
+        &token_accounts,
+    );
+
+    assert_eq!(ctx.source_mode, SourceMode::Auto);
+    assert_eq!(ctx.manual_cookie_header.as_deref(), Some("session=go-test"));
+    assert!(ctx.allow_browser_cookie);
+    assert!(ctx.auto_prefer_web);
+}
+
+#[test]
+fn fetch_context_opencode_go_explicit_web_source_stays_web() {
+    let mut settings = Settings::default();
+    settings.set_cookie_source(ProviderId::OpenCodeGo, "manual");
+    settings.set_usage_source(ProviderId::OpenCodeGo, "web");
+    let mut cookies = ManualCookies::default();
+    cookies.set("opencodego", "session=go-test");
+    let api_keys = ApiKeys::default();
+    let token_accounts = HashMap::new();
+
+    let ctx = super::build_fetch_context(
+        ProviderId::OpenCodeGo,
+        &settings,
+        &cookies,
+        &api_keys,
+        &token_accounts,
+    );
+
+    assert_eq!(ctx.source_mode, SourceMode::Web);
+    assert_eq!(ctx.manual_cookie_header.as_deref(), Some("session=go-test"));
+}
+
+#[test]
+fn fetch_context_opencode_go_cookie_auto_keeps_provider_ladder() {
+    let mut settings = Settings::default();
+    settings.set_cookie_source(ProviderId::OpenCodeGo, "auto");
+    let cookies = ManualCookies::default();
+    let api_keys = ApiKeys::default();
+    let token_accounts = HashMap::new();
+
+    let ctx = super::build_fetch_context(
+        ProviderId::OpenCodeGo,
+        &settings,
+        &cookies,
+        &api_keys,
+        &token_accounts,
+    );
+
+    assert_eq!(ctx.source_mode, SourceMode::Auto);
+    assert!(ctx.manual_cookie_header.is_none());
+    assert!(ctx.allow_browser_cookie);
+}
+
+#[test]
+fn fetch_context_opencode_go_cookie_off_blocks_web_but_keeps_api_key_ladder() {
+    let mut settings = Settings::default();
+    settings.set_cookie_source(ProviderId::OpenCodeGo, "off");
+    let cookies = ManualCookies::default();
+    let mut api_keys = ApiKeys::default();
+    api_keys.set("opencodego", "go-api-test", None);
+    let token_accounts = HashMap::new();
+
+    let ctx = super::build_fetch_context(
+        ProviderId::OpenCodeGo,
+        &settings,
+        &cookies,
+        &api_keys,
+        &token_accounts,
+    );
+
+    assert_eq!(ctx.source_mode, SourceMode::Auto);
+    assert_eq!(ctx.api_key.as_deref(), Some("go-api-test"));
+    assert!(!ctx.allow_browser_cookie);
+}
+
+#[test]
+fn fetch_context_opencode_go_manual_without_cookie_keeps_api_key_auto_route() {
+    let mut settings = Settings::default();
+    settings.set_cookie_source(ProviderId::OpenCodeGo, "manual");
+    let cookies = ManualCookies::default();
+    let mut api_keys = ApiKeys::default();
+    api_keys.set("opencodego", "go-api-test", None);
+    let token_accounts = HashMap::new();
+
+    let ctx = super::build_fetch_context(
+        ProviderId::OpenCodeGo,
+        &settings,
+        &cookies,
+        &api_keys,
+        &token_accounts,
+    );
+
+    assert_eq!(ctx.source_mode, SourceMode::Auto);
+    assert_eq!(ctx.api_key.as_deref(), Some("go-api-test"));
+    assert!(!ctx.auto_prefer_web);
+    assert!(!ctx.allow_browser_cookie);
+}
+
+#[test]
 fn fetch_context_api_key_provider_uses_auto_without_cookie_import() {
     let settings = Settings::default();
     let cookies = ManualCookies::default();
@@ -501,6 +828,152 @@ fn fetch_context_token_account_uses_web_cookie_header() {
     assert_eq!(
         ctx.manual_cookie_header.as_deref(),
         Some("__Secure-session=abc123")
+    );
+}
+
+#[test]
+fn fetch_context_mimo_unset_cookie_source_defaults_to_auto_with_browser_first_and_fallback() {
+    let settings = Settings::default();
+    let mut cookies = ManualCookies::default();
+    cookies.set("mimo", "saved-mimo-cookie");
+    let api_keys = ApiKeys::default();
+    let token_accounts = HashMap::new();
+
+    let ctx = super::build_fetch_context(
+        ProviderId::MiMo,
+        &settings,
+        &cookies,
+        &api_keys,
+        &token_accounts,
+    );
+
+    assert_eq!(ctx.source_mode, SourceMode::Auto);
+    assert!(ctx.manual_cookie_header.is_none());
+    assert_eq!(
+        ctx.fallback_cookie_header.as_deref(),
+        Some("saved-mimo-cookie")
+    );
+    assert!(ctx.allow_browser_cookie);
+}
+
+#[test]
+fn fetch_context_mimo_explicit_manual_mode_disallows_browser_and_uses_saved_cookie() {
+    let mut settings = Settings::default();
+    settings.set_cookie_source(ProviderId::MiMo, "manual");
+    let mut cookies = ManualCookies::default();
+    cookies.set("mimo", "saved-mimo-cookie");
+    let api_keys = ApiKeys::default();
+    let token_accounts = HashMap::new();
+
+    let ctx = super::build_fetch_context(
+        ProviderId::MiMo,
+        &settings,
+        &cookies,
+        &api_keys,
+        &token_accounts,
+    );
+
+    assert_eq!(ctx.source_mode, SourceMode::Web);
+    assert_eq!(
+        ctx.manual_cookie_header.as_deref(),
+        Some("saved-mimo-cookie")
+    );
+    assert!(ctx.fallback_cookie_header.is_none());
+    assert!(!ctx.allow_browser_cookie);
+}
+
+#[test]
+fn fetch_context_mimo_explicit_manual_mode_without_saved_cookie_disallows_browser() {
+    let mut settings = Settings::default();
+    settings.set_cookie_source(ProviderId::MiMo, "manual");
+    settings.set_usage_source(ProviderId::MiMo, "cli");
+    let cookies = ManualCookies::default();
+    let api_keys = ApiKeys::default();
+    let token_accounts = HashMap::new();
+
+    let ctx = super::build_fetch_context(
+        ProviderId::MiMo,
+        &settings,
+        &cookies,
+        &api_keys,
+        &token_accounts,
+    );
+
+    assert_eq!(ctx.source_mode, SourceMode::Web);
+    assert!(ctx.manual_cookie_header.is_none());
+    assert!(ctx.fallback_cookie_header.is_none());
+    assert!(!ctx.allow_browser_cookie);
+}
+
+#[test]
+fn fetch_context_mimo_off_takes_precedence_over_selected_token_account() {
+    let mut settings = Settings::default();
+    settings.set_cookie_source(ProviderId::MiMo, "off");
+    let cookies = ManualCookies::default();
+    let api_keys = ApiKeys::default();
+    let mut token_accounts = HashMap::new();
+    let mut data = ProviderAccountData::new();
+    data.add_account(TokenAccount::new("Account 1", "token-account-cookie"));
+    token_accounts.insert(ProviderId::MiMo, data);
+
+    let ctx = super::build_fetch_context(
+        ProviderId::MiMo,
+        &settings,
+        &cookies,
+        &api_keys,
+        &token_accounts,
+    );
+
+    assert_eq!(ctx.source_mode, SourceMode::Web);
+    assert!(ctx.manual_cookie_header.is_none());
+    assert!(!ctx.allow_browser_cookie);
+}
+
+#[test]
+fn fetch_context_mimo_preserves_selected_token_account_override_in_auto_mode() {
+    let settings = Settings::default();
+    let mut cookies = ManualCookies::default();
+    cookies.set("mimo", "saved-mimo-cookie");
+    let api_keys = ApiKeys::default();
+    let mut token_accounts = HashMap::new();
+    let mut data = ProviderAccountData::new();
+    data.add_account(TokenAccount::new("Account 1", "token-account-cookie"));
+    token_accounts.insert(ProviderId::MiMo, data);
+
+    let ctx = super::build_fetch_context(
+        ProviderId::MiMo,
+        &settings,
+        &cookies,
+        &api_keys,
+        &token_accounts,
+    );
+
+    assert_eq!(
+        ctx.manual_cookie_header.as_deref(),
+        Some("token-account-cookie")
+    );
+    assert!(ctx.fallback_cookie_header.is_none());
+    assert!(!ctx.allow_browser_cookie);
+}
+
+#[test]
+fn provider_cookie_source_lookup_defaults_to_auto_for_mimo_and_manual_for_others() {
+    let settings = Settings::default();
+    assert_eq!(
+        provider_cookie_source_lookup(&settings, "mimo").as_deref(),
+        Some("auto")
+    );
+    assert_eq!(
+        provider_cookie_source_lookup(&settings, "codex").as_deref(),
+        Some("manual")
+    );
+    assert_eq!(
+        provider_cookie_source_lookup(&settings, "claude").as_deref(),
+        Some("manual")
+    );
+    assert_eq!(
+        provider_cookie_source_lookup(&settings, "cursor").as_deref(),
+        Some("manual")
     );
 }
 
@@ -711,6 +1184,12 @@ fn provider_fetch_timeout_allows_slower_authenticated_providers() {
         std::time::Duration::from_secs(75)
     );
     assert_eq!(
+        super::provider_fetch_timeout(ProviderId::Antigravity, &ctx),
+        std::time::Duration::from_secs(
+            codexbar::providers::antigravity::PROVIDER_FETCH_TIMEOUT_SECS
+        )
+    );
+    assert_eq!(
         super::provider_fetch_timeout(ProviderId::DeepSeek, &ctx),
         std::time::Duration::from_secs(35)
     );
@@ -756,6 +1235,15 @@ fn timeout_retry_policy_uses_three_retries_with_short_backoff() {
 }
 
 #[test]
+fn antigravity_timeout_does_not_repeat_its_bounded_cli_fallback() {
+    assert_eq!(
+        super::provider_timeout_retry_limit(ProviderId::Antigravity),
+        0
+    );
+    assert_eq!(super::provider_timeout_retry_limit(ProviderId::Grok), 3);
+}
+
+#[test]
 fn only_timeout_failures_enter_the_retry_policy() {
     assert!(super::provider_error_is_timeout(
         &codexbar::core::ProviderError::Timeout
@@ -785,6 +1273,7 @@ fn provider_cache_upsert_replaces_existing_provider() {
         cost: None,
         wayfinder_usage: None,
         source_label: "CLI".to_string(),
+        pace_authoritative: true,
     };
     let mut first = ProviderUsageSnapshot::from_fetch_result(ProviderId::Codex, &metadata, &result);
     let mut second = first.clone();
@@ -807,6 +1296,7 @@ fn claude_transient_auth_failure_preserves_first_last_good_snapshot() {
         cost: None,
         wayfinder_usage: None,
         source_label: "OAuth".to_string(),
+        pace_authoritative: true,
     };
     let good = ProviderUsageSnapshot::from_fetch_result(ProviderId::Claude, &metadata, &result);
     let error = ProviderUsageSnapshot::from_error(
@@ -835,6 +1325,7 @@ fn claude_repeated_auth_failure_surfaces_error() {
         cost: None,
         wayfinder_usage: None,
         source_label: "OAuth".to_string(),
+        pace_authoritative: true,
     };
     let good = ProviderUsageSnapshot::from_fetch_result(ProviderId::Claude, &metadata, &result);
     let first_error = ProviderUsageSnapshot::from_error(
@@ -868,6 +1359,7 @@ fn first_transport_failure_preserves_last_good_snapshot_as_stale() {
         cost: None,
         wayfinder_usage: None,
         source_label: "API".to_string(),
+        pace_authoritative: true,
     };
     let good = ProviderUsageSnapshot::from_fetch_result(ProviderId::Codex, &metadata, &result);
     let error = ProviderUsageSnapshot::from_error(
@@ -1012,6 +1504,7 @@ fn japanese_provider_snapshot_localizes_weekly_label() {
         cost: None,
         wayfinder_usage: None,
         source_label: "OAuth".to_string(),
+        pace_authoritative: true,
     };
 
     let snapshot = ProviderUsageSnapshot::from_fetch_result(ProviderId::Claude, &metadata, &result);
@@ -1040,6 +1533,7 @@ fn japanese_provider_snapshot_localizes_pace_reserve_description() {
         cost: None,
         wayfinder_usage: None,
         source_label: "OAuth".to_string(),
+        pace_authoritative: true,
     };
 
     let snapshot = ProviderUsageSnapshot::from_fetch_result(ProviderId::Claude, &metadata, &result);

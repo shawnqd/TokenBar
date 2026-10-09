@@ -12,8 +12,26 @@ import type {
   ProviderUsageSnapshot,
 } from "../types/bridge";
 
-const OUTPUT_SPEED_PARSED = new Set(["codex", "claude", "grok"]);
-const LOCAL_USAGE_PARSED = new Set(["codex", "claude", "grok"]);
+const OUTPUT_SPEED_PARSED = new Set([
+  "codex",
+  "claude",
+  "grok",
+  "kimi",
+  "opencode",
+  "opencodego",
+]);
+const LOCAL_USAGE_PARSED = new Set([
+  "codex",
+  "claude",
+  "grok",
+  "gemini",
+  "copilot",
+  "kimi",
+  "amp",
+  "opencode",
+  "opencodego",
+  "antigravity",
+]);
 
 export function providerCapabilities(
   provider: Pick<ProviderUsageSnapshot, "providerId" | "capabilities">,

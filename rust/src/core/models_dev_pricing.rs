@@ -2,12 +2,12 @@
 mod tests {
     use super::{
         ModelsDevCache, ModelsDevCacheArtifact, ModelsDevCatalog, ModelsDevRefreshCoordinator,
-        PRICING_SOURCES,
+        PRICING_SOURCES, lookup_model_anywhere_in_catalog, lookup_with_root,
     };
     use std::path::PathBuf;
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
-    use std::time::{Duration, UNIX_EPOCH};
+    use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
     /// LiteLLM publishes per-**token** rates; models.dev publishes per-million.
     /// Getting this wrong makes every cost 1,000,000x too small, which reads as
@@ -248,12 +248,85 @@ mod tests {
     }
 
     #[test]
+    fn cross_provider_lookup_prices_glm_at_zai_rates() {
+        let catalog = ModelsDevCatalog::decode_litellm(
+            r#"{
+                "glm-4.6": {
+                    "litellm_provider": "zai",
+                    "input_cost_per_token": 6e-7,
+                    "output_cost_per_token": 2.2e-6
+                },
+                "glm-4.6": {
+                    "litellm_provider": "zhipuai",
+                    "input_cost_per_token": 1.4e-6,
+                    "output_cost_per_token": 4.4e-6
+                }
+            }"#,
+        )
+        .expect("decodes");
+        // Duplicate JSON keys collapse to the last one; either way the
+        // anywhere-lookup returns a GLM price, not a Claude fallback.
+        let pricing = lookup_model_anywhere_in_catalog(
+            &ModelsDevCacheArtifact::new(catalog, std::time::SystemTime::UNIX_EPOCH),
+            "glm-4.6",
+        )
+        .expect("glm priced");
+        assert!(pricing.input_cost_per_token > 0.0);
+        assert!(pricing.output_cost_per_token > 0.0);
+        // And a truly unknown model stays unpriced (Sonnet fallback territory).
+        assert!(
+            lookup_model_anywhere_in_catalog(
+                &ModelsDevCacheArtifact::new(
+                    ModelsDevCatalog::default(),
+                    std::time::SystemTime::UNIX_EPOCH
+                ),
+                "not-a-model"
+            )
+            .is_none()
+        );
+    }
+
+    #[test]
     fn cache_path_uses_the_existing_per_user_cache_root() {
         let cache_root = ModelsDevCache::default_cache_root().expect("per-user cache root");
         assert_eq!(
             ModelsDevCache::cache_path(None),
             cache_root.join("model-pricing").join("models-dev-v1.json")
         );
+    }
+
+    #[test]
+    fn explicit_cache_root_lookup_reads_that_root_only() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let catalog = ModelsDevCatalog::decode(
+            r#"{
+                "providers": {
+                    "google": {
+                        "id": "google",
+                        "models": {
+                            "gemini-x": {
+                                "id": "gemini-x",
+                                "cost": { "input": 1.0, "output": 2.0 }
+                            }
+                        }
+                    }
+                }
+            }"#,
+        )
+        .expect("catalog decodes");
+        assert!(ModelsDevCache::save(
+            catalog,
+            SystemTime::now(),
+            Some(dir.path())
+        ));
+
+        let pricing = lookup_with_root("google", "gemini-x", Some(dir.path())).expect("priced");
+        assert!((pricing.input_cost_per_token - 1e-6).abs() < 1e-15);
+        assert!((pricing.output_cost_per_token - 2e-6).abs() < 1e-15);
+
+        // An unrelated root stays empty instead of leaking another cache.
+        let other = tempfile::tempdir().expect("temp dir");
+        assert!(lookup_with_root("google", "gemini-x", Some(other.path())).is_none());
     }
 }
 
@@ -263,7 +336,7 @@ use std::fs;
 use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, LazyLock, Mutex};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tokio::sync::{Mutex as AsyncMutex, watch};
 
 /// Where pricing comes from, in the order it is tried.
@@ -617,7 +690,13 @@ fn model_id_candidates(model_id: &str) -> Vec<String> {
     let mut index = 0;
     while index < candidates.len() {
         let candidate = candidates[index].clone();
-        if let Some(rest) = candidate.strip_prefix("openai/") {
+        // Catalog keys disagree on route prefixes (`openai/gpt-x`,
+        // `anthropic.claude-x`, `moonshot/kimi-x`, ...) while session logs
+        // usually name the bare model; offer the tail for every slash-prefixed
+        // candidate, not just the two providers that shipped first.
+        if let Some((_prefix, rest)) = candidate.split_once('/')
+            && !rest.is_empty()
+        {
             append_model_candidate(&mut candidates, rest.to_string());
         }
         if let Some(rest) = candidate.strip_prefix("anthropic.") {
@@ -916,11 +995,106 @@ static REFRESH_COORDINATOR: LazyLock<ModelsDevRefreshCoordinator> =
 
 /// Looks up a cached models.dev price for a provider/model pair.
 pub fn lookup(provider_id: &str, model_id: &str) -> Option<DynamicModelPricing> {
-    let load = ModelsDevCache::load(SystemTime::now(), None);
-    (!load.is_stale)
+    lookup_with_root(provider_id, model_id, None)
+}
+
+/// Resolved prices are reused for this long inside one process. A cost scan
+/// prices thousands of generations per model and each miss otherwise re-stats
+/// the cache file; prices only move on the daily catalog refresh, so a short
+/// TTL is safe.
+#[cfg(not(test))]
+const LOOKUP_MEMO_TTL: Duration = Duration::from_secs(60);
+
+#[cfg(not(test))]
+type LookupMemo =
+    Mutex<HashMap<(String, String, Option<PathBuf>), (Instant, Option<DynamicModelPricing>)>>;
+
+#[cfg(not(test))]
+fn lookup_memo() -> &'static LookupMemo {
+    static MEMO: LazyLock<LookupMemo> = LazyLock::new(|| Mutex::new(HashMap::new()));
+    &MEMO
+}
+
+/// `lookup` against an explicit cache root.
+///
+/// Production callers pass `None` and read the machine's real cache; the cost
+/// scanner threads a root in tests so pricing assertions do not depend on
+/// whether (or how recently) the models.dev catalog was downloaded. Non-test
+/// builds memoize resolved prices per (provider, model, root) for
+/// [`LOOKUP_MEMO_TTL`]; test builds always read fresh.
+pub(crate) fn lookup_with_root(
+    provider_id: &str,
+    model_id: &str,
+    cache_root: Option<&Path>,
+) -> Option<DynamicModelPricing> {
+    #[cfg(not(test))]
+    let memo_key = (
+        normalize_provider_id(provider_id),
+        normalize_model_id(model_id),
+        cache_root.map(Path::to_path_buf),
+    );
+
+    #[cfg(not(test))]
+    if let Ok(guard) = lookup_memo().lock()
+        && let Some((memoized_at, value)) = guard.get(&memo_key)
+        && memoized_at.elapsed() < LOOKUP_MEMO_TTL
+    {
+        return *value;
+    }
+
+    let load = ModelsDevCache::load(SystemTime::now(), cache_root);
+    let result = (!load.is_stale)
         .then_some(load.artifact)
         .flatten()
-        .and_then(|artifact| artifact.catalog.lookup(provider_id, model_id))
+        .and_then(|artifact| artifact.catalog.lookup(provider_id, model_id));
+
+    #[cfg(not(test))]
+    if let Ok(mut guard) = lookup_memo().lock() {
+        if guard.len() > 4096 {
+            let ttl = LOOKUP_MEMO_TTL;
+            guard.retain(|_, (at, _)| at.elapsed() < ttl);
+        }
+        guard.insert(memo_key, (Instant::now(), result));
+    }
+
+    result
+}
+
+/// Look a model up across every provider in the fresh catalog, for models
+/// that are not native to the scanner's own provider family — GLM/DeepSeek/
+/// Kimi token lines inside Claude Code transcripts, for example. Deterministic
+/// order (provider ids sorted); the first provider carrying a priceable model
+/// wins, so a model listed under two providers resolves to the
+/// alphabetically-first one (`zai` before `zhipuai` for GLM).
+pub fn lookup_model_anywhere(model_id: &str) -> Option<DynamicModelPricing> {
+    let load = ModelsDevCache::load(SystemTime::now(), None);
+    if load.is_stale {
+        return None;
+    }
+    lookup_model_anywhere_in_catalog(load.artifact.as_deref()?, model_id)
+}
+
+/// `lookup_model_anywhere` against an explicit cache root (tests).
+pub(crate) fn lookup_model_anywhere_with_root(
+    model_id: &str,
+    cache_root: Option<&Path>,
+) -> Option<DynamicModelPricing> {
+    let load = ModelsDevCache::load(SystemTime::now(), cache_root);
+    if load.is_stale {
+        return None;
+    }
+    lookup_model_anywhere_in_catalog(load.artifact.as_deref()?, model_id)
+}
+
+fn lookup_model_anywhere_in_catalog(
+    artifact: &ModelsDevCacheArtifact,
+    model_id: &str,
+) -> Option<DynamicModelPricing> {
+    let mut provider_ids: Vec<&String> = artifact.catalog.providers.keys().collect();
+    provider_ids.sort();
+    provider_ids
+        .into_iter()
+        .find_map(|provider| artifact.catalog.lookup(provider, model_id))
 }
 
 /// Refresh the pricing catalog if the cached copy has aged out.

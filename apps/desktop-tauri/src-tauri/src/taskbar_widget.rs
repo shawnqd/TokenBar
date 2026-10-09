@@ -281,6 +281,7 @@ type WinEventProc = unsafe extern "system" fn(
 unsafe extern "system" {
     fn FindWindowW(class_name: *const u16, window_name: *const u16) -> isize;
     fn FindWindowExW(parent: isize, after: isize, class: *const u16, name: *const u16) -> isize;
+    fn GetClassNameW(hwnd: isize, buffer: *mut u16, max_count: i32) -> i32;
     fn SetParent(hwnd: isize, new_parent: isize) -> isize;
     fn GetParent(hwnd: isize) -> isize;
     fn SetWindowLongPtrW(hwnd: isize, index: i32, value: isize) -> isize;
@@ -560,16 +561,8 @@ impl SurfaceCanvas {
             return None;
         }
         let mut bits: *mut c_void = std::ptr::null_mut();
-        let bitmap = unsafe {
-            CreateDIBSection(
-                hdc,
-                &raw const info,
-                DIB_RGB_COLORS,
-                &raw mut bits,
-                0,
-                0,
-            )
-        };
+        let bitmap =
+            unsafe { CreateDIBSection(hdc, &raw const info, DIB_RGB_COLORS, &raw mut bits, 0, 0) };
         if bitmap == 0 || bits.is_null() {
             unsafe { DeleteDC(hdc) };
             return None;
@@ -580,7 +573,9 @@ impl SurfaceCanvas {
             bitmap,
             previous,
             bits: bits as usize,
-            len: (width as usize).saturating_mul(height as usize).saturating_mul(4),
+            len: (width as usize)
+                .saturating_mul(height as usize)
+                .saturating_mul(4),
         })
     }
 
@@ -644,6 +639,11 @@ pub fn set_app_handle(app: &tauri::AppHandle) {
     let _ = APP_HANDLE.set(app.clone());
 }
 
+/// Window class shared by every TokenBar taskbar strip. A second app
+/// instance (dev next to stable) exposes a sibling strip of this same class;
+/// the geometry scan must tell siblings apart from foreign monitors.
+const STRIP_CLASS: &str = "CodexBarTaskbarWidget";
+
 fn taskbar() -> isize {
     unsafe { FindWindowW(wide("Shell_TrayWnd").as_ptr(), std::ptr::null()) }
 }
@@ -656,6 +656,7 @@ fn taskbar() -> isize {
 /// not enough. This predicate deliberately rejects full-screen/normal app
 /// windows: only surfaces no taller than twice the taskbar are eligible. It is
 /// called by the disposable geometry worker, never by the owner thread.
+#[allow(clippy::too_many_arguments)]
 fn consider_foreign_taskbar_window(
     hwnd: isize,
     parent: isize,
@@ -666,6 +667,7 @@ fn consider_foreign_taskbar_window(
     taskbar_height: i32,
     minimum_height: i32,
     rightmost: &mut Option<i32>,
+    siblings: &mut Vec<(u32, i32)>,
 ) {
     if hwnd == 0 || hwnd == own_widget || unsafe { IsWindowVisible(hwnd) } == 0 {
         return;
@@ -680,13 +682,28 @@ fn consider_foreign_taskbar_window(
     if unsafe { GetWindowRect(hwnd, &raw mut rect) } == 0 {
         return;
     }
+
+    // A sibling TokenBar strip (another app instance) is not an obstacle to
+    // fold into the anchor: both instances would otherwise keep leapfrogging
+    // each other on every geometry pass. Siblings are collected and slotted
+    // deterministically by process id - see `target_rect`.
+    let mut class_buf = [0u16; 64];
+    let class_len = unsafe { GetClassNameW(hwnd, class_buf.as_mut_ptr(), class_buf.len() as i32) };
+    if class_len > 0
+        && class_buf[..class_len as usize]
+            .iter()
+            .copied()
+            .eq(STRIP_CLASS.encode_utf16())
+    {
+        siblings.push((child_process, rect.right - rect.left));
+        return;
+    }
     let candidate_height = rect.bottom - rect.top;
     if candidate_height < minimum_height || candidate_height > taskbar_height.saturating_mul(2) {
         return;
     }
-    let vertical_overlap = (rect.bottom.min(screen_parent.bottom)
-        - rect.top.max(screen_parent.top))
-        .max(0);
+    let vertical_overlap =
+        (rect.bottom.min(screen_parent.bottom) - rect.top.max(screen_parent.top)).max(0);
     if vertical_overlap < minimum_height {
         return;
     }
@@ -714,6 +731,7 @@ fn consider_foreign_taskbar_window(
 /// Walk a bounded depth of a window's descendants. A bounded walk is enough
 /// for taskbar monitors (owner → dialog → optional child) and prevents an
 /// unrelated application's deep control tree from becoming a heartbeat cost.
+#[allow(clippy::too_many_arguments)]
 fn scan_foreign_taskbar_descendants(
     root: isize,
     parent: isize,
@@ -725,6 +743,7 @@ fn scan_foreign_taskbar_descendants(
     minimum_height: i32,
     depth: u8,
     rightmost: &mut Option<i32>,
+    siblings: &mut Vec<(u32, i32)>,
 ) {
     let mut after = 0;
     loop {
@@ -743,6 +762,7 @@ fn scan_foreign_taskbar_descendants(
             taskbar_height,
             minimum_height,
             rightmost,
+            siblings,
         );
         if depth > 0 {
             scan_foreign_taskbar_descendants(
@@ -756,6 +776,7 @@ fn scan_foreign_taskbar_descendants(
                 minimum_height,
                 depth - 1,
                 rightmost,
+                siblings,
             );
         }
     }
@@ -773,6 +794,17 @@ fn scan_foreign_taskbar_descendants(
 /// children (for example TrafficMonitor) and starts after their actual bounds;
 /// it does not depend on Explorer's private XAML class names.  Explorer's
 /// composition surface is never treated as an authoritative pixel rectangle.
+/// Horizontal space the sibling strips queued ahead of `own_pid` occupy
+/// (their width plus one margin each). Siblings are sorted by pid before
+/// this runs, so both instances compute the same layout independently.
+fn sibling_offset_ahead(siblings: &[(u32, i32)], own_pid: u32, margin: i32) -> i32 {
+    siblings
+        .iter()
+        .filter(|(pid, _)| *pid < own_pid)
+        .map(|(_, width)| width + margin)
+        .sum()
+}
+
 fn target_rect(parent: isize, position: WidgetPosition) -> Option<(i32, i32, i32, i32)> {
     let mut screen_parent = Rect::default();
     if unsafe { GetWindowRect(parent, &raw mut screen_parent) } == 0 {
@@ -822,12 +854,16 @@ fn target_rect(parent: isize, position: WidgetPosition) -> Option<(i32, i32, i32
     // descendant depth below the taskbar and below top-level owners so the
     // anchor follows the actual occupied surface without hard-coded Explorer
     // class names. This runs only on the disposable geometry worker.
-    let foreign_component_right = || -> Option<i32> {
+    // Foreign-surface scan + deterministic sibling slotting. Returns the
+    // right edge of foreign obstacles (TrafficMonitor and friends) and the
+    // (pid, width) of sibling TokenBar strips, sorted by pid.
+    let foreign_scan = || -> (Option<i32>, Vec<(u32, i32)>) {
         let mut parent_process = 0u32;
         unsafe { GetWindowThreadProcessId(parent, &raw mut parent_process) };
         let own_widget = WIDGET_HWND.lock().map(|guard| *guard).unwrap_or(0);
         let minimum_height = (height / 2).max(1);
         let mut rightmost = None;
+        let mut siblings: Vec<(u32, i32)> = Vec::new();
 
         // First cover Shell_TrayWnd descendants. This also catches monitors
         // that Explorer exposes directly in its child/owner chain.
@@ -842,6 +878,7 @@ fn target_rect(parent: isize, position: WidgetPosition) -> Option<(i32, i32, i32
             minimum_height,
             4,
             &mut rightmost,
+            &mut siblings,
         );
 
         // TrafficMonitor's Win11 dialog is owned by a hidden top-level window,
@@ -869,9 +906,11 @@ fn target_rect(parent: isize, position: WidgetPosition) -> Option<(i32, i32, i32
                 minimum_height,
                 2,
                 &mut rightmost,
+                &mut siblings,
             );
         }
-        rightmost
+        siblings.sort_unstable_by_key(|(pid, _)| *pid);
+        (rightmost, siblings)
     };
 
     let right_bound = if position == WidgetPosition::Left {
@@ -882,15 +921,23 @@ fn target_rect(parent: isize, position: WidgetPosition) -> Option<(i32, i32, i32
             .map(|l| l - margin)
             .unwrap_or(parent_rect.right - margin)
     };
+
+    // Deterministic sibling slotting: sibling TokenBar strips (another app
+    // instance) queue by process id, closest to the anchor first. Both
+    // instances compute the same order, so two strips settle side by side
+    // instead of chasing each other across the taskbar.
+    let (foreign_right, siblings) = foreign_scan();
+    let sibling_offset = sibling_offset_ahead(&siblings, std::process::id(), margin);
+
     let x = if position == WidgetPosition::Left {
         // Prefer the space immediately after an existing foreign status
-        // component. Fall back to the taskbar's own left inset when there is
-        // no such component.
-        foreign_component_right()
-            .map(|right| right + margin)
-            .unwrap_or(margin)
+        // component (and any sibling strip ahead of us). Fall back to the
+        // taskbar's own left inset when there is no such component.
+        foreign_right
+            .map(|right| right + margin + sibling_offset)
+            .unwrap_or(margin + sibling_offset)
     } else {
-        (right_bound - desired_width).max(parent_rect.left + margin)
+        (right_bound - desired_width - sibling_offset).max(parent_rect.left + margin)
     };
     let width = (right_bound - x).min(desired_width);
     if width <= 0 {
@@ -937,11 +984,46 @@ fn resolve_widget_theme(theme: codexbar::settings::ThemePreference, system_is_li
     }
 }
 
-/// Returns the effective text contrast without touching the registry. The
-/// worker refreshes `TASKBAR_THEME_CACHE`; an explicit Appearance override is
-/// therefore visible on the very next paint rather than after the next poll.
-fn widget_is_light() -> bool {
-    resolve_widget_theme(current_widget_theme(), cached_taskbar_is_light())
+/// The system taskbar brightness for one rendered frame, sampled from the
+/// same cache the worker maintains.
+///
+/// A cache miss (startup, a virtual-desktop switch, or a reparent — the exact
+/// moments that clear [`TASKBAR_THEME_CACHE`]) used to fall through to a
+/// hardcoded "dark" assumption, and the frame rendered during that window was
+/// uploaded to the layered surface. On a light taskbar that frame is inverted
+/// — white text on a light bar — and it becomes visible the moment the strip
+/// is re-shown after the desktop transition. Sampling the registry here (a
+/// per-user HKCU read, microseconds) closes that window: a render never
+/// guesses.
+fn ensure_taskbar_theme_cached() -> bool {
+    if let Some(light) = TASKBAR_THEME_CACHE.lock().ok().and_then(|cache| *cache) {
+        return light;
+    }
+    let light = taskbar_is_light();
+    if let Ok(mut cache) = TASKBAR_THEME_CACHE.lock() {
+        *cache = Some(light);
+    }
+    light
+}
+
+/// The strip's text colour for one frame: dark ink on a light system taskbar,
+/// white on a dark one, unless the user pinned the theme in Appearance.
+fn strip_text_color(system_is_light: bool, theme: codexbar::settings::ThemePreference) -> u32 {
+    if resolve_widget_theme(theme, system_is_light) {
+        0x003A_3A3A
+    } else {
+        0x00FF_FFFF
+    }
+}
+
+/// The nominal taskbar colour used only for muted-tag contrast on the
+/// non-premultiplied fallback path. The canvas itself stays transparent.
+fn strip_background_nominal(system_is_light: bool) -> u32 {
+    if system_is_light {
+        0x00E9_EFEE
+    } else {
+        0x0020_2020
+    }
 }
 
 /// Applies the global Appearance → Theme preference to the native strip.
@@ -1263,8 +1345,20 @@ fn start_geometry_worker(hwnd: isize, parent: isize) {
                         .unwrap_or(true);
                 if theme_due {
                     let light = taskbar_is_light();
+                    // A sampled value that differs from the cached one is a
+                    // real system theme flip. Without this repaint the strip
+                    // keeps the old contrast until an unrelated data or
+                    // geometry change happens to redraw it.
+                    let theme_changed = TASKBAR_THEME_CACHE
+                        .lock()
+                        .ok()
+                        .and_then(|cache| *cache)
+                        .is_some_and(|previous| previous != light);
                     if let Ok(mut cache) = TASKBAR_THEME_CACHE.lock() {
                         *cache = Some(light);
+                    }
+                    if theme_changed {
+                        request_repaint(hwnd);
                     }
                     last_theme_sample = Some(Instant::now());
                 }
@@ -1424,14 +1518,6 @@ fn reassert(hwnd: isize) {
     render_surface(hwnd);
 }
 
-fn cached_taskbar_is_light() -> bool {
-    TASKBAR_THEME_CACHE
-        .lock()
-        .ok()
-        .and_then(|cache| *cache)
-        .unwrap_or(false)
-}
-
 unsafe extern "system" fn wnd_proc(hwnd: isize, msg: u32, wparam: usize, lparam: isize) -> isize {
     match msg {
         // Painting is fully covered by WM_PAINT; letting the default proc
@@ -1587,20 +1673,15 @@ fn render_surface(hwnd: isize) {
     let hdc = canvas.hdc;
     tracing::debug!("taskbar widget: render surface hdc={hdc:#x} size={width}x{height}");
 
-
-    let light = widget_is_light();
-    let text = if light {
-        0x003A_3A3Au32
-    } else {
-        0x00FF_FFFFu32
-    };
+    // One sampled theme value drives the whole frame: text, tags and the
+    // nominal contrast colour come from a single read, so a worker store
+    // landing between two reads can never produce a half-inverted frame.
+    // A cache miss samples the registry synchronously instead of guessing.
+    let system_is_light = ensure_taskbar_theme_cached();
+    let text = strip_text_color(system_is_light, current_widget_theme());
     // This nominal colour is used only for muted-tag contrast.  The canvas
     // itself remains transparent; DWM supplies the real taskbar background.
-    let background = if cached_taskbar_is_light() {
-        0x00E9_EFEE
-    } else {
-        0x0020_2020
-    };
+    let background = strip_background_nominal(system_is_light);
     // Clear before either renderer so a Direct2D failure cannot expose bytes
     // from a previous provider frame through the layered surface.
     canvas.pixels().fill(0);
@@ -1748,7 +1829,10 @@ fn render_surface(hwnd: isize) {
         }
     }
 
-    let size = Size { cx: width, cy: height };
+    let size = Size {
+        cx: width,
+        cy: height,
+    };
     let source = Point::default();
     let blend = BlendFunction {
         blend_op: AC_SRC_OVER,
@@ -2138,6 +2222,79 @@ mod tests {
         for r in cell_rects(&narrow, 4, 6) {
             assert!(r.right >= r.left, "inverted rect: {r:?}");
             assert!(r.bottom >= r.top, "inverted rect: {r:?}");
+        }
+    }
+
+    // Two app instances must not chase each other: sibling strips queue by
+    // process id, and only siblings AHEAD of us (lower pid) push us left.
+    #[test]
+    fn sibling_offset_counts_only_lower_pids() {
+        let siblings = [(100u32, 200i32), (300, 160), (200, 180)];
+        // own pid 200: sibling 100 (200px) is ahead; 300 is behind.
+        assert_eq!(sibling_offset_ahead(&siblings, 200, 6), 200 + 6);
+        // own pid 100: nobody ahead.
+        assert_eq!(sibling_offset_ahead(&siblings, 100, 6), 0);
+        // own pid 400: everyone ahead.
+        assert_eq!(
+            sibling_offset_ahead(&siblings, 400, 6),
+            200 + 6 + 180 + 6 + 160 + 6
+        );
+        assert_eq!(sibling_offset_ahead(&[], 123, 6), 0);
+    }
+
+    // Adaptive contrast contract: dark taskbar → white ink, light taskbar →
+    // dark ink. An explicit Appearance override beats the sampled system
+    // value, and Auto defers to it.
+    #[test]
+    fn strip_text_color_follows_system_brightness_under_auto() {
+        use codexbar::settings::ThemePreference;
+        assert_eq!(
+            strip_text_color(false, ThemePreference::Auto),
+            0x00FF_FFFF,
+            "dark taskbar must render white text"
+        );
+        assert_eq!(
+            strip_text_color(true, ThemePreference::Auto),
+            0x003A_3A3A,
+            "light taskbar must render dark text"
+        );
+        assert_eq!(
+            strip_text_color(false, ThemePreference::Light),
+            0x003A_3A3A,
+            "explicit Light wins over a dark system sample"
+        );
+        assert_eq!(
+            strip_text_color(true, ThemePreference::Dark),
+            0x00FF_FFFF,
+            "explicit Dark wins over a light system sample"
+        );
+    }
+
+    #[test]
+    fn strip_background_nominal_matches_system_brightness() {
+        assert_eq!(strip_background_nominal(false), 0x0020_2020);
+        assert_eq!(strip_background_nominal(true), 0x00E9_EFEE);
+    }
+
+    // A cleared cache (desktop switch, reparent, startup) must be repaired by
+    // the next render instead of rendering a guessed "dark" frame — that
+    // guessed frame is what showed up as the occasional inverted strip.
+    #[test]
+    fn theme_cache_miss_is_sampled_not_guessed() {
+        if let Ok(mut cache) = TASKBAR_THEME_CACHE.lock() {
+            *cache = None;
+        }
+        let sampled = ensure_taskbar_theme_cached();
+        let stored = TASKBAR_THEME_CACHE.lock().ok().and_then(|cache| *cache);
+        assert_eq!(stored, Some(sampled), "a miss must populate the cache");
+
+        // A populated cache is returned as-is, whatever the registry says.
+        if let Ok(mut cache) = TASKBAR_THEME_CACHE.lock() {
+            *cache = Some(!sampled);
+        }
+        assert_eq!(ensure_taskbar_theme_cached(), !sampled);
+        if let Ok(mut cache) = TASKBAR_THEME_CACHE.lock() {
+            *cache = Some(sampled);
         }
     }
 }

@@ -628,6 +628,8 @@ export interface ProviderUsageSnapshot {
     id: string;
     title: string;
     window: RateWindowSnapshot;
+    /** Scheduled start time, separate from the quota's reset/expiry time. */
+    activationAt?: string | null;
     /**
      * False when the provider published the window without a known remaining
      * fraction (reset-only or disabled buckets). The window itself is
@@ -774,7 +776,7 @@ export interface ProviderLoginTargetBridge {
 }
 
 export interface ProviderOutputSpeed {
-  providerId: "codex" | "claude";
+  providerId: "codex" | "claude" | "grok" | "kimi" | "opencode" | "opencodego";
   status: "generating" | "recent" | "unavailable";
   tokensPerSecond: number | null;
   outputTokens: number | null;
@@ -795,6 +797,9 @@ export interface OutputSpeedSnapshot {
   codex: ProviderOutputSpeed;
   claude: ProviderOutputSpeed;
   grok: ProviderOutputSpeed;
+  kimi: ProviderOutputSpeed;
+  opencode: ProviderOutputSpeed;
+  opencodego: ProviderOutputSpeed;
 }
 
 export interface CookieFileProviderBridge {
@@ -807,6 +812,8 @@ export interface CookieFilePreviewBridge {
   format: string;
   providers: CookieFileProviderBridge[];
   unmatchedCookieCount: number;
+  /** Hosts that matched no provider. Names only; cookie values are never included. */
+  unmatchedDomains?: string[];
 }
 
 export interface AppInfoBridge {
@@ -975,6 +982,8 @@ export interface ProviderDetail {
     id: string;
     title: string;
     window: RateWindowSnapshot;
+    /** Scheduled start time, separate from the quota's reset/expiry time. */
+    activationAt?: string | null;
     /** False when the provider published the window without a known remaining
      *  fraction; render as unavailable, never as a 100%-remaining bar. */
     usageKnown?: boolean;

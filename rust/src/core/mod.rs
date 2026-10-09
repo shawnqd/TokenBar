@@ -8,6 +8,33 @@ mod http;
 mod jsonl_scanner;
 mod models_dev_pricing;
 
+/// User-facing app version. Debug builds (the dev chain always compiles the
+/// debug profile) carry a `-dev` suffix so a development window or CLI can
+/// never be mistaken for the installed stable build; release builds report
+/// the bare package version.
+pub fn display_version() -> &'static str {
+    static DISPLAY_VERSION: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
+        let base = env!("CARGO_PKG_VERSION");
+        if cfg!(debug_assertions) {
+            format!("{base}-dev")
+        } else {
+            base.to_string()
+        }
+    });
+    DISPLAY_VERSION.as_str()
+}
+
+/// Window/tooltip title for the current build: the shipped title, plus a
+/// ` (dev)` marker in debug builds so a development window is visually
+/// distinguishable from the installed stable app.
+pub fn dev_window_title(base: &str) -> String {
+    if cfg!(debug_assertions) {
+        format!("{base} (dev)")
+    } else {
+        base.to_string()
+    }
+}
+
 /// Refresh the model price catalog if the cached copy has aged out.
 ///
 /// Re-exported because the desktop shell has to be able to trigger it at
@@ -20,6 +47,7 @@ mod provider_factory;
 mod rate_window;
 mod redactor;
 mod session_quota;
+mod sqlite;
 mod token_accounts;
 mod usage_pace;
 mod usage_snapshot;
@@ -36,6 +64,7 @@ pub use provider_factory::instantiate as instantiate_provider;
 pub use rate_window::*;
 pub use redactor::*;
 pub use session_quota::*;
+pub use sqlite::*;
 pub use token_accounts::*;
 pub use usage_pace::*;
 pub use usage_snapshot::*;

@@ -429,6 +429,8 @@ locale_keys! {
     // QuotaResetUnknown: no `resets_at` and no provider-supplied description.
     // A reset time is never inferred.
     QuotaResetUnknown,
+    ProviderPlanPending,
+    ProviderPlanStartsAt,
     QuotaForecastUnavailable,
     QuotaPaceOnPace,
     QuotaPaceInReserve,

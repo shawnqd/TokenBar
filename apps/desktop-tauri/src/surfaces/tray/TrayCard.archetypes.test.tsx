@@ -69,6 +69,8 @@ describe("TrayCard Archetype Template Alignment", () => {
           ResetsInHoursMinutes: "{}小时{}分钟后",
           QuotaResetExpiredWaiting: "重置中…",
           QuotaResetUnknown: "重置时间未知",
+          ProviderPlanPending: "待启用",
+          ProviderPlanStartsAt: "启用时间",
         },
         "chinese",
       ),
@@ -338,6 +340,37 @@ describe("TrayCard Archetype Template Alignment", () => {
       expect(container.textContent).toContain("0%");
       expect(container.querySelector(".progress-bar")).not.toBeNull();
       expect(container.querySelector(".balance-single-line")?.textContent).toContain("¥48.45");
+    });
+
+    it("shows a future experience plan and its activation time without a fake quota bar", async () => {
+      const activationAt = "2026-09-25T09:30:00.000Z";
+      const pendingSnapshot: ProviderUsageSnapshot = {
+        ...zaiSnapshot,
+        extraRateWindows: [
+          {
+            id: "zai-zcode-upcoming-0-0",
+            title: "体验套餐 · GLM-5.3-Flash",
+            usageKnown: false,
+            activationAt,
+            window: {
+              ...rw(0, null, null),
+              isInformational: true,
+            },
+          },
+        ],
+      };
+      const { container } = renderCard(pendingSnapshot, "detailed");
+
+      await waitFor(() => {
+        expect(container.querySelector(".upcoming-plan-list")).not.toBeNull();
+      });
+      expect(container.textContent).toContain("体验套餐 · GLM-5.3-Flash");
+      expect(container.textContent).toContain("待启用");
+      expect(container.textContent).toContain("启用时间");
+      expect(container.querySelector("time")?.getAttribute("dateTime")).toBe(
+        activationAt,
+      );
+      expect(container.querySelector(".progress-bar")).toBeNull();
     });
   });
 

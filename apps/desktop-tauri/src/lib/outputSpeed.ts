@@ -5,11 +5,21 @@ import type { OutputSpeedSnapshot } from "../types/bridge";
  *
  * Speed is read from the CLI's own session logs, not from any provider API, so
  * a provider only appears here once its log format has actually been decoded —
- * see `commands/output_speed.rs`. Keeping the list in one place is why adding
- * Grok touched the backend and this file rather than every surface that shows a
- * speed readout.
+ * see `commands/output_speed.rs`. Kimi Code pairs `llm.request` rows with turn
+ * `usage.record` rows for a real duration; the OpenCode family reads
+ * per-message created/completed times from its local database (legacy JSON
+ * storage is still accepted as a fallback). Keeping the list in one place is
+ * why adding Grok touched the backend and this file rather than every surface
+ * that shows a speed readout.
  */
-export const OUTPUT_SPEED_PROVIDER_IDS = ["codex", "claude", "grok"] as const;
+export const OUTPUT_SPEED_PROVIDER_IDS = [
+  "codex",
+  "claude",
+  "grok",
+  "kimi",
+  "opencode",
+  "opencodego",
+] as const;
 
 export type OutputSpeedProviderId = keyof OutputSpeedSnapshot;
 

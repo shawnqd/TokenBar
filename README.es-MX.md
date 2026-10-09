@@ -1,71 +1,181 @@
-# TokenBar
+# Win-CodexBar
 
 [English](./README.md) | [简体中文](./README.zh-CN.md) | [繁體中文（臺灣）](./README.zh-TW.md) | [日本語](./README.ja-JP.md) | [한국어](./README.ko-KR.md) | [Español mexicano](./README.es-MX.md)
 
-TokenBar es una aplicación de bandeja del sistema para Windows que mantiene
-visible el uso de herramientas de programación con IA. Lleva el flujo de uso
-de [CodexBar](https://github.com/steipete/CodexBar) a una aplicación Tauri +
-React con lógica compartida en Rust.
+Win-CodexBar es una aplicación de bandeja del sistema para Windows que mantiene visible el uso de herramientas de codificación con IA sin necesidad de abrir una docena de paneles. Traslada el espíritu de [CodexBar](https://github.com/steipete/CodexBar) a un entorno de escritorio Tauri + React respaldado por lógica compartida de proveedores en Rust.
 
-<p align="center">
-  <img src="docs/images/tray-panel.png" width="320" alt="Panel de bandeja de TokenBar"/>
-  <img src="docs/images/settings-providers.png" width="520" alt="Configuración de proveedores de TokenBar"/>
-</p>
+<table>
+  <tr>
+    <td width="36%" align="center">
+      <img src="docs/images/tray-panel.png" alt="Panel de bandeja de Win-CodexBar mostrando tarjetas de uso de proveedores"/>
+    </td>
+    <td width="64%" align="center">
+      <img src="docs/images/settings-providers.png" alt="Página de configuración de Proveedores de Win-CodexBar"/>
+    </td>
+  </tr>
+</table>
 
-## Funciones
+## Destacados
 
-- Panel de bandeja compacto con tarjetas de uso y actualización.
-- Configuración de credenciales, cookies de sesión, claves API, regiones y
-  preferencias de visualización según las capacidades del proveedor.
-- Lectura automática de cookies del navegador e importación manual como
-  fuentes separadas; la aplicación no abre un navegador de inicio de sesión.
-- CLI local para uso, costos, configuración y diagnósticos.
-- Versiones instalable y portable para Windows con archivos SHA-256 cuando se
-  publican.
+- **48 proveedores** incluyendo Codex, Claude, Copilot, OpenRouter, Cursor, Gemini, DeepSeek, MiniMax, Kiro, Antigravity, Groq y más.
+- **Flujo centrado en la bandeja** con una cuadrícula compacta de proveedores, tarjetas de uso, acción de actualización, acceso directo a configuración y control de cierre.
+- **Configuración por proveedor** para selección de fuente, credenciales, importación de cookies, cuentas de token, claves API, regiones y preferencias de visualización en bandeja.
+- **Protección de credenciales en Windows** para claves API gestionadas por la aplicación, cookies manuales y cuentas de token, utilizando DPAPI con ámbito de usuario cuando está disponible.
+- **Cookies de sesión guardadas por omisión**: los proveedores web leen la cookie que guardaste o importaste; la lectura automática del navegador es una opción explícita por proveedor.
+- **CLI local instalada** para consultar uso, costo, configuración, diagnóstico e integraciones de bucle local.
+- **Compilaciones con instalador y portable** con arranque de WebView2 Runtime, arranque de VC++ Runtime y archivos de suma de verificación SHA-256.
 
 ## Instalación
 
-Descarga el instalador o la versión portable desde
-[TokenBar Releases](https://github.com/shawnqd/TokenBar/releases). TokenBar se
-distribuye actualmente mediante GitHub Releases; todavía no hay paquete de
-Winget.
+Instalar con el Administrador de Paquetes de Windows:
+
+```powershell
+winget install Finesssee.Win-CodexBar
+```
+
+O descarga la última versión (instalador o portable) desde [GitHub Releases](https://github.com/Finesssee/Win-CodexBar/releases).
+
+- Instalador: `CodexBar-<version>-Setup.exe`
+- Portable: `CodexBar-<version>-portable.exe`
+- Sumas de verificación: cada versión incluye archivos `.sha256`
+
+La distribución por Winget está aprobada a través de [microsoft/winget-pkgs](https://github.com/microsoft/winget-pkgs/tree/master/manifests/f/Finesssee/Win-CodexBar). Las nuevas versiones pueden tardar un poco en aparecer porque cada actualización de Winget está vinculada a una URL de versión específica y su hash de instalador.
 
 ## Primer uso
 
-1. Inicia TokenBar desde el menú Inicio o el ejecutable portable.
-2. Haz clic en el icono de la bandeja para abrir el panel.
-3. Abre **Configuración → Proveedores** y activa los proveedores que uses.
-4. Configura solo las fuentes de autenticación que admita cada proveedor:
-   lectura automática del navegador, cookies guardadas/manuales, claves API o
-   CLI/OAuth.
+1. Inicia **TokenBar** desde el Menú Inicio o el ejecutable portable.
+2. Haz clic en el icono de la bandeja para abrir el panel de uso.
+3. Abre **Configuración → Proveedores**.
+4. Habilita los proveedores que uses.
+5. Usa solo las credenciales que admita el proveedor. Los proveedores web leen primero la cookie de sesión guardada; la lectura automática del navegador se activa por proveedor en su ajuste de fuente de lectura. Las claves API y el inicio de sesión CLI/OAuth son rutas separadas.
+
+Para Claude, se prefiere la lectura automática de cookies/sessionKey porque coincide con el uso que muestra la página de configuración de Claude. Las cookies manuales son solo una alternativa. OAuth y CLI permanecen disponibles donde el proveedor los admite. Para proveedores basados en CLI como Codex y Gemini, inicia sesión primero con la CLI del proveedor.
+
+## Última versión
+
+**v0.37.6** agrega modo de ventana con controles de título, visibilidad en la barra de tareas, escalado de pantalla y compatibilidad `es-MX`. También separa la CLI instalada como `codexbar-cli.exe` para que la salida estándar funcione correctamente en scripts.
+
+Consulta el historial completo en [CHANGELOG.md](CHANGELOG.md).
+
+## Proveedores compatibles
+
+<details>
+<summary>Matriz de proveedores</summary>
+
+| Proveedor | Autenticación | Seguimiento |
+|--------|----------|----------|
+| Codex | OAuth / CLI | Sesión, Semanal, Créditos |
+| Claude | Cookies / OAuth alternativo / CLI alternativo | Sesión (5h), Semanal |
+| Cursor | Cookies | Plan, Uso, Facturación |
+| Factory | Cookies | Uso |
+| Gemini | gcloud OAuth | Cuota |
+| Copilot | GitHub Device Flow / gh CLI / token heredado | Uso del plan, Chat |
+| Antigravity | LSP local | Uso, Cuotas por modelo |
+| z.ai | Token API | Cuota |
+| MiniMax | API / Cookies | Uso, Resumen de facturación |
+| Kiro | Cookies / CLI | Créditos mensuales, Excedente |
+| Vertex AI | gcloud OAuth | Costo |
+| Augment | Cookies | Créditos |
+| OpenCode | Configuración local | Uso |
+| Kimi | Cookies | Tasa 5h, Semanal |
+| Kimi K2 | Clave API | Créditos |
+| Amp | Cookies | Uso |
+| Warp | Configuración local | Uso |
+| Ollama | Cookies / Clave API | Uso, Modelos en la nube, Ventanas de ritmo |
+| Azure OpenAI | Clave API | Despliegue |
+| T3 Chat | Cookies / cURL | Base, Excedente |
+| OpenRouter | Clave API | Créditos |
+| JetBrains AI | Configuración local | Uso |
+| Alibaba | Cookies | Uso |
+| Alibaba Token Plan | Cookies | Créditos del plan de tokens, Fecha de reinicio |
+| NanoGPT | Clave API | Créditos |
+| Infini | Clave API | Sesión, Semanal, Cuota |
+| Perplexity | Cookies | Créditos, Plan |
+| Abacus AI | Cookies | Créditos |
+| Mistral | Cookies | Facturación, Uso |
+| OpenCode Go | Cookies | Uso, Saldo Zen |
+| Kilo | Clave API / CLI | Uso |
+| Codebuff | Clave API / Configuración local | Créditos, Semanal |
+| DeepSeek | Clave API | Saldo, Resúmenes de uso, Costo |
+| Windsurf | Caché local | Diario, Semanal |
+| Manus | Cookies | Créditos, Refrescar créditos |
+| Xiaomi MiMo | Cookies | Saldo, Plan de tokens |
+| Doubao | Clave API | Límites de solicitudes |
+| Command Code | Cookies | Créditos mensuales, Créditos comprados |
+| Crof | Clave API | Créditos, Cuota de solicitudes |
+| StepFun | Token Oasis | 5h, Semanal, Refresco de token |
+| Venice | Clave API | Saldo USD / DIEM |
+| OpenAI | Admin API / Clave API | Uso, Solicitudes, Costo con ámbito de proyecto, Saldo de créditos |
+| Grok | Cookies / auth.json | Facturación |
+| ElevenLabs | Clave API | Créditos de suscripción, Slots de voz |
+| Deepgram | Clave API | Uso del proyecto |
+| Groq | Clave API | Métricas empresariales |
+| LLM Proxy | Clave API | Estadísticas de cuota |
+
+</details>
 
 ## Compilar desde el código fuente
 
-Requisitos: Windows 10/11, Node.js con pnpm y Rust.
-
 ```powershell
-git clone https://github.com/shawnqd/TokenBar.git
-cd TokenBar
-pnpm --dir apps/desktop-tauri install
-pnpm --dir apps/desktop-tauri tauri:dev
+# Requisitos previos: Node.js + pnpm. Rust y MinGW se instalan automáticamente cuando se necesitan.
+git clone https://github.com/Finesssee/Win-CodexBar.git
+cd Win-CodexBar
+.\scripts\dev.ps1
 ```
 
-Para una compilación de producción:
+Opciones útiles de desarrollo:
 
 ```powershell
-pnpm --dir apps/desktop-tauri tauri:build
+.\scripts\dev.ps1 -Release      # compilación optimizada
+.\scripts\dev.ps1 -SkipBuild    # relanzar la última compilación
 ```
 
-Consulta [docs/BUILDING.md](docs/BUILDING.md) para más comandos.
+Ejemplos de CLI:
+
+```bash
+codexbar --help
+codexbar diagnose --pretty
+codexbar usage -p claude
+codexbar usage -p all
+codexbar cost -p codex
+```
+
+Las compilaciones con instalador incluyen `codexbar.exe` como la CLI de consola y `codexbar-desktop.exe` como la aplicación de bandeja. Los accesos directos del Menú Inicio lanzan la aplicación de escritorio; los comandos de terminal usan `codexbar.exe`.
+
+## Compilaciones de versión
+
+Para compilaciones de versión locales en Windows, usa el constructor de versiones en caché:
+
+```powershell
+.\scripts\windows-release-build.ps1 -Ref v0.37.6 -SmokeInstall
+```
+
+El script compila el binario real de versión de Tauri más la CLI de consola, verifica las dependencias firmadas del instalador, empaqueta con Inno Setup, genera los archivos de instalador/portable, genera los archivos SHA-256 complementarios y puede ejecutar una prueba de instalación/desinstalación silenciosa.
+
+Más notas sobre automatización de versiones en [docs/release/ci-cd.md](docs/release/ci-cd.md).
 
 ## Privacidad
 
-Los datos de proveedores se leen desde la configuración local o las API que
-configures. La extracción de cookies solo se ejecuta para proveedores activos
-y los diagnósticos no incluyen credenciales.
+- **En el dispositivo por defecto**: los datos del proveedor se leen desde rutas locales conocidas o APIs del proveedor que configures.
+- **Cookies automáticas y acotadas**: la extracción solo se ejecuta para los proveedores que habilites; las cookies manuales son una alternativa explícita.
+- **Secretos protegidos**: las claves API, cookies manuales y cuentas de token usan la capa de archivo seguro; en Windows se utiliza DPAPI con ámbito de usuario cuando está disponible.
+- **Diagnóstico seguro**: los diagnósticos exponen solo metadatos de proveedor/fuente/estado, nunca cookies sin procesar, claves API, tokens de portador ni valores OAuth.
+- **Actualizaciones verificadas**: las descargas del instalador requieren un resumen SHA-256 de GitHub y se vuelven a verificar inmediatamente antes de aplicar.
 
-## macOS y licencia
+## Documentación
 
-TokenBar se mantiene para Windows. En macOS, usa el
-[CodexBar original](https://github.com/steipete/CodexBar). TokenBar se publica
-bajo la licencia MIT.
+| Tema | Enlace |
+|------|------|
+| Compilar desde el código fuente | [docs/BUILDING.md](docs/BUILDING.md) |
+| Configuración de WSL y consejos de autenticación | [docs/WSL.md](docs/WSL.md) |
+| Detalles de cookies del navegador | [docs/COOKIES.md](docs/COOKIES.md) |
+
+## Créditos
+
+- Versión para macOS: TokenBar solo se distribuye para Windows. Si usas macOS,
+  utiliza directamente el [CodexBar original](https://github.com/steipete/CodexBar) de Peter Steinberger.
+- Inspirado por [ccusage](https://github.com/ryoppippi/ccusage) para el seguimiento de costos
+
+## Licencia
+
+MIT, igual que el CodexBar original.

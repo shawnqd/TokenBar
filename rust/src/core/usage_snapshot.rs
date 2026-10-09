@@ -42,6 +42,10 @@ pub struct NamedRateWindow {
     pub id: String,
     pub title: String,
     pub window: RateWindow,
+    /// When a scheduled quota becomes usable. It is separate from `resets_at`
+    /// so surfaces never present a future activation as a quota reset.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub activation_at: Option<DateTime<Utc>>,
     /// False when the provider publishes the window without a known remaining
     /// fraction (reset-only or disabled buckets). Such a window must be shown
     /// as unavailable and must never be mistaken for a real 100%-remaining
@@ -64,6 +68,7 @@ impl NamedRateWindow {
             id: id.into(),
             title: title.into(),
             window,
+            activation_at: None,
             usage_known: true,
             inventory_expires_at: Vec::new(),
         }
@@ -72,6 +77,12 @@ impl NamedRateWindow {
     /// Mark this window as carrying unknown usage (reset-only / disabled).
     pub fn with_usage_known(mut self, usage_known: bool) -> Self {
         self.usage_known = usage_known;
+        self
+    }
+
+    /// Mark the instant at which a scheduled window becomes usable.
+    pub fn with_activation_at(mut self, activation_at: DateTime<Utc>) -> Self {
+        self.activation_at = Some(activation_at);
         self
     }
 
@@ -355,6 +366,16 @@ pub struct ProviderFetchResult {
 
     /// Label describing the data source (e.g., "oauth", "web", "cli")
     pub source_label: String,
+
+    /// Whether derived pace/run-out advice is authoritative for this result.
+    /// Device-local quota reconstruction is useful but must not be presented as
+    /// server-confirmed pace data.
+    #[serde(default = "default_pace_authoritative")]
+    pub pace_authoritative: bool,
+}
+
+fn default_pace_authoritative() -> bool {
+    true
 }
 
 impl ProviderFetchResult {
@@ -365,7 +386,14 @@ impl ProviderFetchResult {
             cost: None,
             wayfinder_usage: None,
             source_label: source_label.into(),
+            pace_authoritative: true,
         }
+    }
+
+    /// Mark this result as unsuitable for derived pace/run-out advice.
+    pub fn with_non_authoritative_pace(mut self) -> Self {
+        self.pace_authoritative = false;
+        self
     }
 
     /// Builder pattern: set cost

@@ -1,8 +1,6 @@
-# TokenBar Rust core
+# CodexBar for Windows
 
-The shared Rust library and CLI used by the Windows TokenBar application. The
-project follows the provider and usage ideas of
-[CodexBar](https://github.com/steipete/CodexBar).
+A Windows port of [CodexBar](https://github.com/steipete/CodexBar) - a system tray application for monitoring AI provider usage limits.
 
 ![CodexBar Windows](screenshots/tray-icon.png)
 
@@ -14,7 +12,7 @@ project follows the provider and usage ideas of
   - MiniMax, Kiro, Vertex AI, Augment, OpenCode, OpenCode Go, Kimi, Kimi K2
   - Amp, Warp, Ollama, OpenRouter, JetBrains AI, Alibaba
   - NanoGPT, Infini, Perplexity, Abacus AI, Mistral, Kilo, AWS Bedrock, Codebuff, DeepSeek, Windsurf
-  - Manus, Xiaomi MiMo API, Xiaomi MiMo Token Plan, Doubao, Command Code, Crof, StepFun, Venice, OpenAI API
+  - Manus, MiMo (Token Plan + console balance), legacy MiMo API probe, Doubao, Command Code, Crof, StepFun, Venice, OpenAI API
 - **Usage Notifications** - Windows toast alerts when usage hits thresholds
 - **Settings Panel** - Enable/disable providers, configure refresh intervals
 - **Manual Cookie Input** - Fallback for when automatic cookie extraction fails
@@ -25,8 +23,7 @@ project follows the provider and usage ideas of
 
 ### From Release
 
-Download the latest release from the
-[TokenBar Releases](https://github.com/shawnqd/TokenBar/releases) page.
+Download the latest release from the [Releases](https://github.com/Finesssee/Win-CodexBar/releases) page.
 
 - Recommended: `CodexBar-<version>-Setup.exe`
   - This installer now installs the required Microsoft Visual C++ runtime and Microsoft Edge WebView2 Runtime on clean Windows machines before launching CodexBar.
@@ -45,8 +42,8 @@ Requirements:
 
 ```powershell
 # Clone the repository
-git clone https://github.com/shawnqd/TokenBar.git
-cd TokenBar/rust
+git clone https://github.com/Finesssee/Win-CodexBar.git
+cd Win-CodexBar/rust
 
 # Build release version
 cargo build --release
@@ -167,8 +164,8 @@ Each provider has different authentication methods:
 | Kilo | API key / local CLI config |
 | Codebuff | API key / local Manicode config |
 | DeepSeek | API key |
-| Xiaomi MiMo API | Pay-as-you-go API key (`sk-...`) |
-| Xiaomi MiMo Token Plan | Browser cookies for plan usage (`tp-...` is an inference key, not a quota API) |
+| MiMo | Browser cookies for Token Plan usage and console account balance (`tp-...` is an inference key, not a quota API) |
+| MiMo API (legacy) | Pay-as-you-go API-key probe (`sk-...`); not a separate user-facing quota card |
 
 ### Claude session env vars
 

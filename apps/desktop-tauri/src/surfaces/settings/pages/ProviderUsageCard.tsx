@@ -1,5 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
 import { useLocale } from "../../../hooks/useLocale";
+import UpcomingPlanList, {
+  type UpcomingPlanItem,
+} from "../../../components/UpcomingPlanList";
 import { useResetDisplay } from "../../../hooks/useFormattedResetTime";
 import { getProviderDetailBalance } from "../../../lib/providerBalance";
 import {
@@ -280,6 +283,12 @@ export default function ProviderUsageCard({
     });
   }
   const resetCredits = (detail.extraRateWindows ?? []).find(isResetCreditsExtra);
+  const upcomingPlans: UpcomingPlanItem[] = (detail.extraRateWindows ?? []).flatMap(
+    (extra) =>
+      typeof extra.activationAt === "string" && extra.activationAt.trim()
+        ? [{ id: extra.id, label: extra.title, activationAt: extra.activationAt }]
+        : [],
+  );
   for (const extra of detail.extraRateWindows ?? []) {
     if (isResetCreditsExtra(extra)) continue;
     if (extra.id === "zai-account-balance" || extra.id === "zen-balance") continue;
@@ -330,7 +339,10 @@ export default function ProviderUsageCard({
             ) : null}
           </>
         ) : null}
-        {bars.length === 0 && !balance.balance && !resetCredits ? (
+        {upcomingPlans.length > 0 ? (
+          <UpcomingPlanList items={upcomingPlans} />
+        ) : null}
+        {bars.length === 0 && !balance.balance && !resetCredits && upcomingPlans.length === 0 ? (
           <div className="s5-chart-empty">还没有额度</div>
         ) : null}
         {bars.map((bar, index) => (

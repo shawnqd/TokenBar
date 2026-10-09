@@ -5,7 +5,7 @@ import { getProviderBalance } from "./providerBalance";
 function mimoApiSnapshot(description: string): ProviderUsageSnapshot {
   return {
     providerId: "mimoapi",
-    displayName: "Xiaomi MiMo API",
+    displayName: "MiMo API",
     primary: {
       usedPercent: 0,
       remainingPercent: 100,
@@ -65,7 +65,7 @@ describe("MiMo unified balance presentation", () => {
   it("uses the same balance block when no Token Plan is active", () => {
     const snapshot = mimoApiSnapshot("No active MiMo Token Plan");
     snapshot.providerId = "mimo";
-    snapshot.displayName = "Xiaomi MiMo";
+    snapshot.displayName = "MiMo";
     snapshot.primaryLabel = "Tokens";
     snapshot.planName = "MiMo Token Plan";
     snapshot.secondary = {

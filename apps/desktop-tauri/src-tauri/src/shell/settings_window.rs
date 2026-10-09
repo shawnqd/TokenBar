@@ -136,7 +136,7 @@ fn build_hidden(app: &tauri::AppHandle, tab: &str) -> Result<(), String> {
 
     let (width, height) = remembered_size();
     let builder = tauri::WebviewWindowBuilder::new(app, SETTINGS_LABEL, url)
-        .title("CodexBar Settings")
+        .title(codexbar::core::dev_window_title("CodexBar Settings"))
         .inner_size(width, height)
         .min_inner_size(SETTINGS_MIN_WIDTH, SETTINGS_MIN_HEIGHT)
         .decorations(false)

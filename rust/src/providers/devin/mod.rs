@@ -8,7 +8,11 @@ use crate::core::{
 };
 
 const CREDENTIAL_TARGET: &str = "codexbar-devin";
-const BASE_URL: &str = "https://api.devin.ai";
+// Web-session tokens (auth1_) are rejected on the API host but work on the
+// web host, and vice versa for service keys, so every candidate is tried.
+const BASE_URLS: [&str; 2] = ["https://api.devin.ai", "https://app.devin.ai/api"];
+const MISSING_ORGANIZATION_DETAIL: &str = "No organizations found for auth1 user";
+const MISSING_ORGANIZATION_MESSAGE: &str = "Devin organization context is missing. Set the organization in provider extras or DEVIN_ORG, then refresh.";
 
 pub struct DevinProvider {
     metadata: ProviderMetadata,
@@ -72,30 +76,9 @@ impl Provider for DevinProvider {
                             "Devin organization not found. Set it in provider extras or DEVIN_ORG."
                                 .into(),
                         )
-                    })?
-                    .to_string();
-                let response = self
-                    .client
-                    .get(devin_url(&org)?)
-                    .bearer_auth(token)
-                    .header("Accept", "application/json")
-                    .send()
-                    .await?;
-                if response.status() == reqwest::StatusCode::UNAUTHORIZED
-                    || response.status() == reqwest::StatusCode::FORBIDDEN
-                {
-                    return Err(ProviderError::AuthRequired);
-                }
-                if !response.status().is_success() {
-                    return Err(ProviderError::Other(format!(
-                        "Devin quota returned status {}",
-                        response.status()
-                    )));
-                }
-                let value: Value = response.json().await.map_err(|e| {
-                    ProviderError::Parse(format!("Failed to parse Devin quota: {e}"))
-                })?;
-                Ok(fetch_result_from_quota(&value, &org))
+                    })?;
+                let org = normalized_org(org);
+                fetch_quota(&self.client, &token, &org, devin_urls(&org)?).await
             }
             SourceMode::Web | SourceMode::Cli => {
                 Err(ProviderError::UnsupportedSource(ctx.source_mode))
@@ -108,48 +91,147 @@ impl Provider for DevinProvider {
     }
 }
 
-fn devin_url(org: &str) -> Result<Url, ProviderError> {
-    let org = normalized_org(org);
-    Url::parse(BASE_URL)
-        .and_then(|u| u.join(&format!("{org}/billing/quota/usage")))
-        .map_err(|e| ProviderError::Other(format!("Invalid Devin quota URL: {e}")))
-}
-
-fn normalized_org(raw: &str) -> String {
-    let trimmed = raw.trim().trim_matches('/');
-    if trimmed.starts_with("org/") || trimmed.starts_with("organizations/") {
-        trimmed.to_string()
-    } else {
-        format!("org/{trimmed}")
+async fn fetch_quota(
+    client: &Client,
+    token: &str,
+    org: &str,
+    urls: Vec<Url>,
+) -> Result<ProviderFetchResult, ProviderError> {
+    let mut last_non_auth_error: Option<ProviderError> = None;
+    let mut auth_failures = 0usize;
+    for url in urls {
+        let response = match client
+            .get(url)
+            .bearer_auth(token)
+            // Auth1 sessions resolve their organization context from this
+            // header; without it the gateway answers 401 "No organizations
+            // found for auth1 user" even for a valid session token.
+            .header("x-cog-org-id", org)
+            .header("Accept", "application/json")
+            .send()
+            .await
+        {
+            Ok(response) => response,
+            Err(error) => {
+                last_non_auth_error = Some(ProviderError::Network(error));
+                continue;
+            }
+        };
+        let status = response.status();
+        let body = match response.bytes().await {
+            Ok(body) => body,
+            Err(error) => {
+                last_non_auth_error = Some(ProviderError::Network(error));
+                continue;
+            }
+        };
+        if status.is_success() {
+            let value: Value = match serde_json::from_slice(&body) {
+                Ok(value) => value,
+                Err(error) => {
+                    last_non_auth_error = Some(ProviderError::Parse(format!(
+                        "Failed to parse Devin quota: {error}"
+                    )));
+                    continue;
+                }
+            };
+            return fetch_result_from_quota(&value, org);
+        }
+        if let Some(error) = auth_response_error(status, &body) {
+            if matches!(error, ProviderError::AuthRequired) {
+                auth_failures += 1;
+            } else {
+                last_non_auth_error = Some(error);
+            }
+        } else {
+            last_non_auth_error = Some(ProviderError::Other(format!(
+                "Devin quota returned status {}",
+                status
+            )));
+        }
+    }
+    // Every candidate rejecting auth means the credential itself is stale;
+    // a mixed result (one host 401, the other failing differently) reports
+    // the more specific non-auth failure instead of masking it.
+    match last_non_auth_error {
+        Some(error) => Err(error),
+        None => Err(ProviderError::AuthRequired),
     }
 }
 
-fn snapshot_from_quota(value: &Value, org: &str) -> UsageSnapshot {
+fn devin_urls(org: &str) -> Result<Vec<Url>, ProviderError> {
+    BASE_URLS
+        .iter()
+        .map(|base| Url::parse(&format!("{base}/{org}/billing/quota/usage")))
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| ProviderError::Other(format!("Invalid Devin quota URL: {e}")))
+}
+
+fn auth_response_error(status: reqwest::StatusCode, body: &[u8]) -> Option<ProviderError> {
+    if status != reqwest::StatusCode::UNAUTHORIZED && status != reqwest::StatusCode::FORBIDDEN {
+        return None;
+    }
+
+    let is_missing_organization = serde_json::from_slice::<Value>(body)
+        .ok()
+        .is_some_and(|value| {
+            value.get("detail").and_then(Value::as_str) == Some(MISSING_ORGANIZATION_DETAIL)
+        });
+    if is_missing_organization {
+        Some(ProviderError::Other(
+            MISSING_ORGANIZATION_MESSAGE.to_string(),
+        ))
+    } else {
+        Some(ProviderError::AuthRequired)
+    }
+}
+
+fn normalized_org(raw: &str) -> String {
+    // Both hosts serve the quota at /{org}/billing/quota/usage with the bare
+    // organization id (org_...); a prefixed path 404s server-side.
+    let trimmed = raw.trim().trim_matches('/');
+    trimmed
+        .strip_prefix("organizations/")
+        .or_else(|| trimmed.strip_prefix("org/"))
+        .unwrap_or(trimmed)
+        .to_string()
+}
+
+fn snapshot_from_quota(value: &Value, org: &str) -> Result<UsageSnapshot, ProviderError> {
     let daily = percent(value, &["daily_percentage", "dailyPercentage"])
-        .unwrap_or_else(|| percent(value, &["used_percent", "usedPercent"]).unwrap_or(0.0));
+        .or_else(|| percent(value, &["used_percent", "usedPercent"]))
+        .ok_or_else(|| {
+            ProviderError::Parse("Devin quota response missing daily usage".to_string())
+        })?;
     let mut snapshot =
         UsageSnapshot::new(RateWindow::new(daily)).with_organization(org.to_string());
     if let Some(weekly) = percent(value, &["weekly_percentage", "weeklyPercentage"]) {
         snapshot = snapshot.with_secondary(RateWindow::new(weekly));
     }
-    snapshot
+    Ok(snapshot)
 }
 
-fn fetch_result_from_quota(value: &Value, org: &str) -> ProviderFetchResult {
-    let mut result = ProviderFetchResult::new(snapshot_from_quota(value, org), "api");
+fn fetch_result_from_quota(value: &Value, org: &str) -> Result<ProviderFetchResult, ProviderError> {
+    let mut result = ProviderFetchResult::new(snapshot_from_quota(value, org)?, "api");
     if let Some(balance) = extra_usage_balance(value) {
         result = result.with_cost(CostSnapshot::new(balance, "USD", "Extra usage balance"));
     }
-    result
+    Ok(result)
 }
 
 fn percent(value: &Value, keys: &[&str]) -> Option<f64> {
     for key in keys {
         if let Some(v) = value.get(*key).and_then(Value::as_f64) {
-            // Percent values are already 0–100 scaled; sub-integer values
-            // (e.g. 0.1% or 0.25%) must not be amplified to 10% or 25%.
             return Some(v.clamp(0.0, 100.0));
         }
+    }
+    // Remaining-form fields invert into used percent (token-monitor parity).
+    if let Some(remaining) = ["remaining_percentage", "remainingPercentage"]
+        .iter()
+        .find_map(|k| value.get(*k).and_then(Value::as_f64))
+        .filter(|value| value.is_finite())
+    {
+        return Some((100.0 - remaining).clamp(0.0, 100.0));
     }
     let used = ["used", "usage", "used_count", "usedCount", "consumed"]
         .iter()
@@ -187,25 +269,67 @@ mod tests {
     use super::*;
 
     #[test]
+    fn org_normalizes_to_bare_id_for_host_paths() {
+        assert_eq!(normalized_org("org_abc123"), "org_abc123");
+        assert_eq!(normalized_org("org/org_abc123"), "org_abc123");
+        assert_eq!(normalized_org("organizations/org_abc123/"), "org_abc123");
+    }
+
+    // Percent values are already 0–100 scaled; sub-integer values (e.g. 0.1%
+    // or 0.25%) must not be amplified. Divergence from upstream (which scales
+    // <1.0 ×100) is a documented fork decision pending live-account evidence.
+    #[test]
     fn parses_fractional_sub_integer_percent() {
         let snapshot =
-            snapshot_from_quota(&serde_json::json!({"daily_percentage":0.25}), "org/demo");
+            snapshot_from_quota(&serde_json::json!({"daily_percentage":0.25}), "org_abc").unwrap();
         assert_eq!(snapshot.primary.used_percent, 0.25);
     }
 
     #[test]
     fn parses_exact_one_as_one_percent() {
         let snapshot =
-            snapshot_from_quota(&serde_json::json!({"daily_percentage":1.0}), "org/demo");
+            snapshot_from_quota(&serde_json::json!({"daily_percentage":1.0}), "org_abc").unwrap();
         assert_eq!(snapshot.primary.used_percent, 1.0);
+    }
+
+    #[test]
+    fn quota_urls_cover_both_hosts() {
+        let urls = devin_urls("org_abc").unwrap();
+        assert_eq!(urls.len(), 2);
+        assert_eq!(
+            urls[0].as_str(),
+            "https://api.devin.ai/org_abc/billing/quota/usage"
+        );
+        assert_eq!(
+            urls[1].as_str(),
+            "https://app.devin.ai/api/org_abc/billing/quota/usage"
+        );
+    }
+
+    #[test]
+    fn missing_daily_usage_is_a_parse_error_not_zero_percent() {
+        let err =
+            snapshot_from_quota(&serde_json::json!({}), "org_abc").expect_err("no daily usage");
+        assert!(matches!(err, ProviderError::Parse(_)));
+    }
+
+    #[test]
+    fn parses_remaining_percentage_as_used() {
+        let snapshot = snapshot_from_quota(
+            &serde_json::json!({"remaining_percentage": 75.0}),
+            "org_abc",
+        )
+        .unwrap();
+        assert!((snapshot.primary.used_percent - 25.0).abs() < 0.001);
     }
 
     #[test]
     fn parses_extra_usage_balance() {
         let result = fetch_result_from_quota(
             &serde_json::json!({"daily_percentage": 0.2, "overage_balance": 12.34}),
-            "org/demo",
-        );
+            "org_abc",
+        )
+        .unwrap();
 
         let cost = result.cost.unwrap();
         assert_eq!(cost.used, 12.34);
@@ -216,9 +340,29 @@ mod tests {
     fn parses_extra_usage_balance_cents() {
         let result = fetch_result_from_quota(
             &serde_json::json!({"daily_percentage": 0.2, "overage_balance_cents": 7087}),
-            "org/demo",
-        );
+            "org_abc",
+        )
+        .unwrap();
 
         assert_eq!(result.cost.unwrap().used, 70.87);
+    }
+
+    #[test]
+    fn missing_organization_401_maps_to_actionable_message() {
+        let body = serde_json::to_vec(&serde_json::json!({
+            "detail": "No organizations found for auth1 user"
+        }))
+        .unwrap();
+        let error = auth_response_error(reqwest::StatusCode::UNAUTHORIZED, &body).unwrap();
+        assert!(
+            matches!(error, ProviderError::Other(ref message) if message.contains("organization context is missing"))
+        );
+    }
+
+    #[test]
+    fn plain_401_maps_to_auth_required() {
+        let body = serde_json::to_vec(&serde_json::json!({"detail": "invalid token"})).unwrap();
+        let error = auth_response_error(reqwest::StatusCode::UNAUTHORIZED, &body).unwrap();
+        assert!(matches!(error, ProviderError::AuthRequired));
     }
 }

@@ -563,6 +563,8 @@ export const ALL_LOCALE_KEYS = [
   "PanelForecastHoursUnit",
   "PanelForecastLessThanHour",
   "PanelForecastUntilReset",
+  "ProviderPlanPending",
+  "ProviderPlanStartsAt",
   "PanelResetCreditsTitle",
   "PanelResetCreditsRemaining",
   "PanelResetCreditsUnit",

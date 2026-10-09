@@ -661,6 +661,24 @@ describe("TrayPanel provider grid (core read model)", () => {
     });
   });
 
+  it("renders Grok output speed through the provider-id mapping into its card", async () => {
+    speedMap.set("grok", {
+      providerId: "grok",
+      status: "recent",
+      tokensPerSecond: 42.5,
+      outputTokens: 850,
+      updatedAtMs: 1,
+      approximate: true,
+      recentSamples: [],
+    });
+    const { container } = renderTrayPanel([
+      { ...provider("grok", "Grok", 35), capabilities: caps({ outputSpeed: true }) },
+    ]);
+    await waitFor(() => {
+      expect(container.querySelector('[data-slot="speed"]')?.textContent).toBe("42.5 t/s");
+    });
+  });
+
   it("renders providers in settings catalog order instead of fetch completion order", async () => {
     const catalog: ProviderCatalogEntry[] = [
       { id: "codex", displayName: "Codex", cookieDomain: null },

@@ -129,6 +129,8 @@ pub(super) struct RawSettings {
     minimax_api_region: Option<String>,
     #[serde(default)]
     claude_avoid_keychain_prompts: Option<bool>,
+    #[serde(default)]
+    mimo_cookie_source: Option<String>,
 
     disable_keychain_access: bool,
     hide_personal_info: bool,
@@ -391,6 +393,7 @@ impl Default for RawSettings {
             minimax_api_token: None,
             minimax_api_region: None,
             claude_avoid_keychain_prompts: None,
+            mimo_cookie_source: None,
             disable_keychain_access: s.disable_keychain_access,
             hide_personal_info: s.hide_personal_info,
             update_channel: s.update_channel,
@@ -561,6 +564,11 @@ impl From<RawSettings> for Settings {
             &mut provider_configs,
             ProviderId::Ollama,
             raw.ollama_cookie_source,
+        );
+        set_cookie_source(
+            &mut provider_configs,
+            ProviderId::MiMo,
+            raw.mimo_cookie_source,
         );
 
         set_usage_source(

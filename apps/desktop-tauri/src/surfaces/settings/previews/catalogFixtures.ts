@@ -31,9 +31,23 @@ function rateWindow(
 }
 
 function snapshotCapabilities(providerId: string): ProviderCapabilitiesSnapshot {
-  const localLog = ["codex", "claude", "grok"].includes(providerId);
+  const localLog = [
+    "codex",
+    "claude",
+    "grok",
+    "gemini",
+    "copilot",
+    "kimi",
+    "amp",
+    "opencode",
+    "opencodego",
+    "antigravity",
+  ].includes(providerId);
+  const speed = ["codex", "claude", "grok", "kimi", "opencode", "opencodego"].includes(
+    providerId,
+  );
   return {
-    outputSpeed: localLog,
+    outputSpeed: speed,
     localUsage: localLog,
     providerDashboard: true,
     statusPage: false,

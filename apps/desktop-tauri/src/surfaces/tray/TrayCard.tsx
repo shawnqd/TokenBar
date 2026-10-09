@@ -42,6 +42,9 @@ import {
 import { localizeProviderError } from "../../lib/providerErrorText";
 import { coreSnapshotToBridge } from "../../lib/trayProviders";
 import { ProviderIcon } from "../../components/providers/ProviderIcon";
+import UpcomingPlanList, {
+  type UpcomingPlanItem,
+} from "../../components/UpcomingPlanList";
 import {
   quotaWindowLabel,
 } from "../../components/ProviderQuotaBlock";
@@ -1274,6 +1277,15 @@ export default function TrayCard({
     () => (isCoreSnapshot(provider) ? coreSnapshotToBridge(provider) : provider),
     [provider],
   );
+  const upcomingPlans = useMemo<UpcomingPlanItem[]>(
+    () =>
+      core.windows.flatMap((window) =>
+        typeof window.activationAt === "string" && window.activationAt.trim()
+          ? [{ id: window.id, label: window.label, activationAt: window.activationAt }]
+          : [],
+      ),
+    [core.windows],
+  );
 
   const displayWindows = useMemo(
     () => core.windows.filter((window) => !isLegacyHiddenWindow(window)),
@@ -1472,6 +1484,12 @@ export default function TrayCard({
           quotaMissing={quotaUnavailableText}
           errorReason={errorReason}
         />
+        {upcomingPlans.length > 0 && (
+          <UpcomingPlanList
+            items={upcomingPlans}
+            className="upcoming-plan-list--minimal"
+          />
+        )}
       </div>
     );
   }
@@ -1719,6 +1737,12 @@ export default function TrayCard({
                 />
               </div>
             )}
+          </div>
+        )}
+
+        {upcomingPlans.length > 0 && (
+          <div className="modular-section modular-section--bordered">
+            <UpcomingPlanList items={upcomingPlans} />
           </div>
         )}
 

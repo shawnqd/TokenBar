@@ -1,12 +1,18 @@
 //! OpenCode Go provider implementation
 //!
 //! Separate workspace surface that shares the `opencode.ai` cookie domain with
-//! the OpenCode provider. Resolves the workspace ID, then scrapes the `/go`
-//! usage page for rolling/weekly/monthly windows.
+//! the OpenCode provider. Auto mode uses the upstream local SQLite estimate →
+//! authenticated usage API → web Cookie ladder; the web parser remains the
+//! defensive SSR-aware implementation used by TokenBar.
+
+pub(crate) mod local;
+pub use local::{MessageSpeed, recent_message_speeds};
+mod usage_api;
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use reqwest::Client;
+use std::time::Duration;
 use uuid::Uuid;
 
 use crate::core::{
@@ -18,7 +24,13 @@ const BASE_URL: &str = "https://opencode.ai";
 const SERVER_URL: &str = "https://opencode.ai/_server";
 const WORKSPACES_SERVER_ID: &str =
     "def39973159c7f0483d8793a822b8dbb10d067e12c65455fcb4608459ba0234f";
+const BILLING_SERVER_ID: &str = "c83b78a614689c38ebee981f9b39a8b377716db85c1fd7dbab604adc02d3313d";
 const USER_AGENT: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36";
+
+pub(crate) const LOCAL_ESTIMATE_SOURCE_LABEL: &str = "local estimate";
+const ZEN_BALANCE_TIMEOUT: Duration = Duration::from_secs(5);
+const ZEN_BALANCE_START_DELAY: Duration = Duration::from_millis(25);
+const ZEN_BALANCE_JOIN_GRACE: Duration = Duration::from_millis(250);
 
 #[derive(Debug, Clone)]
 struct WindowCandidate {
@@ -62,9 +74,15 @@ impl OpenCodeGoProvider {
     }
 
     async fn fetch_workspace_id(&self, cookie_header: &str) -> Result<String, ProviderError> {
+        Self::fetch_workspace_id_with_client(&self.client, cookie_header).await
+    }
+
+    async fn fetch_workspace_id_with_client(
+        client: &Client,
+        cookie_header: &str,
+    ) -> Result<String, ProviderError> {
         let url = format!("{}?id={}", SERVER_URL, WORKSPACES_SERVER_ID);
-        let response = self
-            .client
+        let response = client
             .get(&url)
             .header("Cookie", cookie_header)
             .header("X-Server-Id", WORKSPACES_SERVER_ID)
@@ -603,28 +621,393 @@ impl OpenCodeGoProvider {
 
     async fn fetch_with_cookies(
         &self,
+        ctx: &FetchContext,
         cookie_header: &str,
-        workspace_id_override: Option<&str>,
     ) -> Result<ProviderFetchResult, ProviderError> {
-        let workspace_id = match Self::workspace_id_from_context(workspace_id_override) {
+        let workspace_id = match Self::workspace_id_from_context(ctx.workspace_id.as_deref()) {
             Some(workspace_id) => workspace_id.to_string(),
             None => self.fetch_workspace_id(cookie_header).await?,
         };
-        let page = self.fetch_usage_page(&workspace_id, cookie_header).await?;
-        let mut usage = Self::parse_usage_text(&page)?;
-        let balance = Self::parse_zen_balance(&page);
-        if let Some(balance) = balance {
-            usage = usage.with_extra_rate_window(
-                "zen-balance",
-                "Zen balance",
-                RateWindow::with_details(0.0, None, None, Some(format!("${balance:.2}"))),
+        let balance_task = ctx.include_credits.then(|| {
+            self.spawn_zen_balance_task(cookie_header, Some(&workspace_id), ctx.web_timeout)
+        });
+        let page = match self.fetch_usage_page(&workspace_id, cookie_header).await {
+            Ok(page) => page,
+            Err(error) => {
+                if let Some((task, _)) = balance_task {
+                    task.abort();
+                }
+                return Err(error);
+            }
+        };
+        let usage = match Self::parse_usage_text(&page) {
+            Ok(usage) => usage,
+            Err(error) => {
+                if let Some((task, _)) = balance_task {
+                    task.abort();
+                }
+                return Err(error);
+            }
+        };
+        let balance = match Self::parse_zen_balance(&page) {
+            Some(balance) => {
+                if let Some((task, _)) = balance_task {
+                    task.abort();
+                }
+                Some(balance)
+            }
+            None => match balance_task {
+                Some((task, started_at)) => {
+                    Self::join_zen_balance(
+                        task,
+                        started_at,
+                        ctx.requires_optional_usage_completeness,
+                    )
+                    .await
+                }
+                None => None,
+            },
+        };
+        Ok(Self::with_zen_balance(usage, "web", balance))
+    }
+
+    async fn fetch_page_text(
+        client: &Client,
+        url: &str,
+        cookie_header: &str,
+        timeout: Option<Duration>,
+        label: &str,
+    ) -> Result<String, ProviderError> {
+        let mut request = client
+            .get(url)
+            .header("Cookie", cookie_header)
+            .header("User-Agent", USER_AGENT)
+            .header("Origin", BASE_URL)
+            .header("Referer", BASE_URL)
+            .header(
+                "Accept",
+                "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
             );
+        if let Some(timeout) = timeout {
+            request = request.timeout(timeout);
         }
-        let mut result = ProviderFetchResult::new(usage, "web");
-        if let Some(balance) = balance {
-            result = result.with_cost(CostSnapshot::new(balance, "USD", "Zen balance"));
+        let response = request.send().await?;
+        let status = response.status();
+        if status.as_u16() == 401 || status.as_u16() == 403 {
+            return Err(ProviderError::AuthRequired);
         }
-        Ok(result)
+        if !status.is_success() {
+            return Err(ProviderError::Other(format!(
+                "OpenCode Go {label} returned {status}"
+            )));
+        }
+        let text = response.text().await?;
+        if Self::looks_signed_out(&text) {
+            return Err(ProviderError::AuthRequired);
+        }
+        Ok(text)
+    }
+
+    async fn fetch_server_text(
+        client: &Client,
+        server_id: &str,
+        args: Option<&str>,
+        referer: &str,
+        cookie_header: &str,
+        timeout: Option<Duration>,
+    ) -> Result<String, ProviderError> {
+        let mut url = reqwest::Url::parse(SERVER_URL)
+            .map_err(|e| ProviderError::Parse(format!("Invalid OpenCode server URL: {e}")))?;
+        url.query_pairs_mut().append_pair("id", server_id);
+        if let Some(args) = args {
+            url.query_pairs_mut().append_pair("args", args);
+        }
+        let mut request = client
+            .get(url)
+            .header("Cookie", cookie_header)
+            .header("X-Server-Id", server_id)
+            .header("X-Server-Instance", format!("server-fn:{}", Uuid::new_v4()))
+            .header("User-Agent", USER_AGENT)
+            .header("Origin", BASE_URL)
+            .header("Referer", referer)
+            .header(
+                "Accept",
+                "text/javascript, application/json;q=0.9, */*;q=0.8",
+            );
+        if let Some(timeout) = timeout {
+            request = request.timeout(timeout);
+        }
+        let response = request.send().await?;
+        let status = response.status();
+        if status.as_u16() == 401 || status.as_u16() == 403 {
+            return Err(ProviderError::AuthRequired);
+        }
+        if !status.is_success() {
+            return Err(ProviderError::Other(format!(
+                "OpenCode Go server returned {status}"
+            )));
+        }
+        let text = response.text().await?;
+        if Self::looks_signed_out(&text) {
+            return Err(ProviderError::AuthRequired);
+        }
+        Ok(text)
+    }
+
+    async fn fetch_zen_balance(
+        client: &Client,
+        workspace_id: &str,
+        cookie_header: &str,
+        timeout: Duration,
+    ) -> Option<f64> {
+        let request_timeout = timeout.min(ZEN_BALANCE_TIMEOUT);
+        let referer = format!("{BASE_URL}/workspace/{workspace_id}/billing");
+        let page = Self::fetch_page_text(
+            client,
+            &referer,
+            cookie_header,
+            Some(request_timeout),
+            "Zen dashboard page",
+        )
+        .await
+        .ok()?;
+        if let Some(balance) = Self::parse_zen_balance(&page) {
+            return Some(balance);
+        }
+
+        let args = serde_json::json!([workspace_id]).to_string();
+        let billing = Self::fetch_server_text(
+            client,
+            BILLING_SERVER_ID,
+            Some(&args),
+            &referer,
+            cookie_header,
+            Some(request_timeout),
+        )
+        .await
+        .ok()?;
+        parse_billing_server_balance(&billing)
+    }
+
+    fn spawn_zen_balance_task(
+        &self,
+        cookie_header: &str,
+        workspace_id_override: Option<&str>,
+        web_timeout: u64,
+    ) -> (tokio::task::JoinHandle<Option<f64>>, std::time::Instant) {
+        let client = self.client.clone();
+        let cookie_header = cookie_header.to_string();
+        let workspace_id_override = workspace_id_override.map(str::to_string);
+        let timeout = Duration::from_secs(web_timeout.max(1));
+        let started_at = std::time::Instant::now();
+        let task = tokio::spawn(async move {
+            tokio::time::sleep(ZEN_BALANCE_START_DELAY).await;
+            let workspace_id = match workspace_id_override {
+                Some(id) => id,
+                None => Self::fetch_workspace_id_with_client(&client, &cookie_header)
+                    .await
+                    .ok()?,
+            };
+            Self::fetch_zen_balance(&client, &workspace_id, &cookie_header, timeout).await
+        });
+        (task, started_at)
+    }
+
+    async fn join_zen_balance(
+        mut task: tokio::task::JoinHandle<Option<f64>>,
+        started_at: std::time::Instant,
+        requires_optional_usage_completeness: bool,
+    ) -> Option<f64> {
+        let budget = zen_balance_join_budget(started_at, requires_optional_usage_completeness);
+        match tokio::time::timeout(budget, &mut task).await {
+            Ok(Ok(balance)) => balance,
+            Ok(Err(_)) | Err(_) => {
+                task.abort();
+                None
+            }
+        }
+    }
+
+    fn with_zen_balance(
+        mut usage: UsageSnapshot,
+        source: &str,
+        balance: Option<f64>,
+    ) -> ProviderFetchResult {
+        let Some(balance) = balance else {
+            return ProviderFetchResult::new(usage, source);
+        };
+        usage = usage.with_extra_rate_window(
+            "zen-balance",
+            "Zen balance",
+            RateWindow::with_details(0.0, None, None, Some(format!("${balance:.2}"))),
+        );
+        ProviderFetchResult::new(usage, source).with_cost(CostSnapshot::new(
+            balance,
+            "USD",
+            "Zen balance",
+        ))
+    }
+
+    async fn fetch_local_with_balance(
+        &self,
+        ctx: &FetchContext,
+    ) -> Result<ProviderFetchResult, ProviderError> {
+        let snap = local::fetch_local_usage(Utc::now())?;
+        let mut result = snap.to_fetch_result();
+        if let Some(api_key) = usage_api::resolve_api_key(ctx)
+            && let Ok(api_result) = usage_api::fetch(&self.client, ctx, &api_key, "local+api").await
+        {
+            result = api_result;
+        }
+        Ok(self.include_zen_balance(ctx, result).await)
+    }
+
+    async fn fetch_local_estimate_with_balance(
+        &self,
+        ctx: &FetchContext,
+    ) -> Result<ProviderFetchResult, ProviderError> {
+        let snap = local::fetch_local_usage(Utc::now())?;
+        Ok(self.include_zen_balance(ctx, snap.to_fetch_result()).await)
+    }
+
+    async fn include_zen_balance(
+        &self,
+        ctx: &FetchContext,
+        mut result: ProviderFetchResult,
+    ) -> ProviderFetchResult {
+        if !ctx.include_credits {
+            return result;
+        }
+        let cookie_header = match ctx.manual_cookie_header.clone() {
+            Some(header) => Some(header),
+            None if ctx.allow_browser_cookie => {
+                crate::providers::browser_cookie_header(&["opencode.ai"]).ok()
+            }
+            None => None,
+        };
+        let Some(cookie_header) = cookie_header else {
+            return result;
+        };
+        let (task, started_at) = self.spawn_zen_balance_task(
+            &cookie_header,
+            ctx.workspace_id.as_deref(),
+            ctx.web_timeout,
+        );
+        if let Some(balance) =
+            Self::join_zen_balance(task, started_at, ctx.requires_optional_usage_completeness).await
+        {
+            let source = result.source_label.clone();
+            result = Self::with_zen_balance(result.usage, &source, Some(balance));
+        }
+        result
+    }
+
+    fn auto_prefers_web_first(ctx: &FetchContext) -> bool {
+        ctx.workspace_id
+            .as_deref()
+            .is_some_and(|id| !id.trim().is_empty())
+            || ctx.auto_prefer_web
+    }
+
+    fn web_error_allows_local_fallback(ctx: &FetchContext, error: &ProviderError) -> bool {
+        if matches!(
+            error,
+            ProviderError::AuthRequired | ProviderError::NoCookies
+        ) && (ctx.manual_cookie_header.is_some() || ctx.auto_prefer_web)
+        {
+            return false;
+        }
+        matches!(
+            error,
+            ProviderError::AuthRequired
+                | ProviderError::NoCookies
+                | ProviderError::Timeout
+                | ProviderError::Network(_)
+                | ProviderError::Parse(_)
+                | ProviderError::Other(_)
+        )
+    }
+
+    async fn fetch_web(&self, ctx: &FetchContext) -> Result<ProviderFetchResult, ProviderError> {
+        if let Some(cookie_header) = &ctx.manual_cookie_header {
+            return self.fetch_with_cookies(ctx, cookie_header).await;
+        }
+
+        if !ctx.allow_browser_cookie {
+            return Err(ProviderError::AuthRequired);
+        }
+
+        match crate::providers::browser_cookie_header(&["opencode.ai"]) {
+            Ok(cookie_header) => self.fetch_with_cookies(ctx, &cookie_header).await,
+            Err(ProviderError::NoCookies) => Err(ProviderError::AuthRequired),
+            Err(error) => Err(error),
+        }
+    }
+}
+
+fn zen_balance_join_budget(
+    started_at: std::time::Instant,
+    requires_optional_usage_completeness: bool,
+) -> Duration {
+    if !requires_optional_usage_completeness {
+        return ZEN_BALANCE_JOIN_GRACE;
+    }
+    ZEN_BALANCE_TIMEOUT.saturating_sub(started_at.elapsed())
+}
+
+/// The billing server function reports raw 1e-8 USD units and only becomes a
+/// balance when the response carries a non-empty customer marker.
+fn parse_billing_server_balance(text: &str) -> Option<f64> {
+    const BILLING_SCALE: f64 = 100_000_000.0;
+    if let Ok(json) = serde_json::from_str::<serde_json::Value>(text)
+        && let Some(raw) = find_raw_billing_balance(&json)
+    {
+        return Some(raw / BILLING_SCALE);
+    }
+    let customer_re = regex_lite::Regex::new(
+        r#"(?:"customerID"|customerID)\s*:\s*(?:\$R\[\d+\]\s*=\s*)?"[^"]+""#,
+    )
+    .ok()?;
+    customer_re.find(text)?;
+    let balance_re = regex_lite::Regex::new(
+        r#"(?:"balance"|balance)\s*:\s*(?:\$R\[\d+\]\s*=\s*)?(-?[0-9]+(?:\.[0-9]+)?)"#,
+    )
+    .ok()?;
+    let raw: f64 = balance_re
+        .captures(text)?
+        .get(1)?
+        .as_str()
+        .replace(',', "")
+        .parse()
+        .ok()?;
+    Some(raw / BILLING_SCALE)
+}
+
+fn find_raw_billing_balance(value: &serde_json::Value) -> Option<f64> {
+    match value {
+        serde_json::Value::Object(map) => {
+            if let Some(balance) = map.get("balance") {
+                let customer_ok = map
+                    .get("customerID")
+                    .and_then(|value| value.as_str())
+                    .is_some_and(|id| !id.is_empty());
+                if !customer_ok {
+                    return None;
+                }
+                return billing_numeric_value(balance);
+            }
+            map.values().find_map(find_raw_billing_balance)
+        }
+        serde_json::Value::Array(items) => items.iter().find_map(find_raw_billing_balance),
+        _ => None,
+    }
+}
+
+fn billing_numeric_value(value: &serde_json::Value) -> Option<f64> {
+    match value {
+        serde_json::Value::Number(number) => number.as_f64(),
+        serde_json::Value::String(text) => text.trim().replace(',', "").parse().ok(),
+        _ => None,
     }
 }
 
@@ -648,35 +1031,80 @@ impl Provider for OpenCodeGoProvider {
         tracing::debug!("Fetching OpenCode Go usage");
 
         match ctx.source_mode {
-            SourceMode::Auto | SourceMode::Web => {
-                if let Some(ref cookie_header) = ctx.manual_cookie_header {
-                    return self
-                        .fetch_with_cookies(cookie_header, ctx.workspace_id.as_deref())
-                        .await;
+            SourceMode::Auto => {
+                let mut api_error = None;
+                if let Some(api_key) = usage_api::resolve_api_key(ctx) {
+                    match usage_api::fetch(&self.client, ctx, &api_key, "api").await {
+                        Ok(result) => {
+                            return Ok(self.include_zen_balance(ctx, result).await);
+                        }
+                        Err(error) => {
+                            if usage_api::is_entitlement_error(&error) {
+                                return Err(error);
+                            }
+                            tracing::debug!(
+                                "OpenCode Go usage API failed; trying web/local fallback: {error}"
+                            );
+                            api_error = Some(error);
+                        }
+                    }
                 }
 
-                match crate::providers::browser_cookie_header(&["opencode.ai"]) {
-                    Ok(cookie_header) => match self
-                        .fetch_with_cookies(&cookie_header, ctx.workspace_id.as_deref())
-                        .await
-                    {
+                // In Auto, a resolved API key always gets the first attempt:
+                // a saved web cookie/workspace is only a fallback preference.
+                // This avoids a stale or structurally changed console page
+                // preventing a working authoritative Go usage API from being
+                // queried. When the API is unavailable, match Token Monitor's
+                // API -> web -> local-estimate order.
+                let web_first = api_error.is_some() || Self::auto_prefers_web_first(ctx);
+                let mut web_error = None;
+                if web_first {
+                    match self.fetch_web(ctx).await {
                         Ok(result) => return Ok(result),
-                        Err(ProviderError::AuthRequired) => {}
-                        Err(e) => return Err(e),
-                    },
-                    Err(ProviderError::NoCookies) => {}
-                    Err(e) => return Err(e),
+                        Err(error) if Self::web_error_allows_local_fallback(ctx, &error) => {
+                            tracing::debug!(
+                                "OpenCode Go fallback web fetch failed; trying local estimate: {error}"
+                            );
+                            web_error = Some(error);
+                        }
+                        Err(error) => return Err(api_error.unwrap_or(error)),
+                    }
                 }
 
-                Err(ProviderError::AuthRequired)
+                match self.fetch_local_estimate_with_balance(ctx).await {
+                    Ok(result) => return Ok(result),
+                    Err(error) => {
+                        tracing::debug!("OpenCode Go local estimate failed: {error}");
+                    }
+                }
+
+                if !web_first {
+                    match self.fetch_web(ctx).await {
+                        Ok(result) => return Ok(result),
+                        Err(error) => return Err(api_error.or(web_error).unwrap_or(error)),
+                    }
+                }
+
+                Err(api_error
+                    .or(web_error)
+                    .unwrap_or(ProviderError::AuthRequired))
             }
-            SourceMode::Cli => Err(ProviderError::UnsupportedSource(SourceMode::Cli)),
-            SourceMode::OAuth => Err(ProviderError::UnsupportedSource(SourceMode::OAuth)),
+            SourceMode::Web => self.fetch_web(ctx).await,
+            SourceMode::Cli => self.fetch_local_with_balance(ctx).await,
+            SourceMode::OAuth => {
+                let api_key = usage_api::resolve_api_key(ctx).ok_or_else(|| {
+                    ProviderError::NotInstalled(
+                        "Missing OpenCode Go API key. Add one in Settings or set OPENCODE_API_KEY."
+                            .to_string(),
+                    )
+                })?;
+                usage_api::fetch(&self.client, ctx, &api_key, "api").await
+            }
         }
     }
 
     fn available_sources(&self) -> Vec<SourceMode> {
-        vec![SourceMode::Auto, SourceMode::Web]
+        vec![SourceMode::Auto, SourceMode::Web, SourceMode::Cli]
     }
 
     fn supports_web(&self) -> bool {
@@ -684,7 +1112,7 @@ impl Provider for OpenCodeGoProvider {
     }
 
     fn supports_cli(&self) -> bool {
-        false
+        true
     }
 }
 
@@ -820,5 +1248,27 @@ mod tests {
             renewal.window.resets_at.unwrap().to_rfc3339(),
             "2026-06-01T12:00:00+00:00"
         );
+    }
+
+    #[test]
+    fn billing_balance_requires_customer_marker_and_scales_raw_units() {
+        assert_eq!(
+            parse_billing_server_balance(r#"{"balance":3373000000,"customerID":"cus_go"}"#),
+            Some(33.73)
+        );
+        assert_eq!(
+            parse_billing_server_balance(r#"{"balance":3373000000}"#),
+            None
+        );
+        assert_eq!(
+            parse_billing_server_balance(r#"{"balance":true,"customerID":"cus_go"}"#),
+            None
+        );
+    }
+
+    #[test]
+    fn billing_balance_parses_rsc_stream_fallback() {
+        let text = r#"1:{"customerID":"cus_go","balance":1500000000}"#;
+        assert_eq!(parse_billing_server_balance(text), Some(15.0));
     }
 }

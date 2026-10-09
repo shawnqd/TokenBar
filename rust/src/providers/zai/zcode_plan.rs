@@ -48,6 +48,8 @@ struct BillingEnvelope {
 #[derive(Debug, Default, Deserialize)]
 struct BillingData {
     #[serde(default)]
+    server_time: Option<Value>,
+    #[serde(default)]
     plans: Vec<BillingPlan>,
     #[serde(default)]
     balances: Vec<BillingBalance>,
@@ -62,6 +64,8 @@ struct BillingPlan {
     #[serde(default)]
     status: Option<String>,
     #[serde(default)]
+    starts_at: Option<Value>,
+    #[serde(default)]
     ends_at: Option<Value>,
     #[serde(default)]
     entitlements: Vec<BillingEntitlement>,
@@ -75,6 +79,8 @@ struct BillingEntitlement {
     show_name: Option<String>,
     #[serde(default)]
     period: Option<String>,
+    #[serde(default)]
+    capabilities: Vec<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -186,8 +192,13 @@ pub(super) fn parse_start_plan_windows(body: &Value) -> Vec<NamedRateWindow> {
         return Vec::new();
     }
     let data = envelope.data.unwrap_or_default();
+    let now = data
+        .server_time
+        .as_ref()
+        .and_then(|value| timestamp(Some(value)))
+        .unwrap_or_else(Utc::now);
     let active_ids = active_start_plan_ids(&data.plans);
-    let mut windows = Vec::new();
+    let mut windows = upcoming_start_plan_windows(&data.plans, &now);
     for (index, balance) in data.balances.iter().enumerate() {
         let plan_id = balance.plan_id.as_deref().unwrap_or("");
         let allowed = if active_ids.is_empty() {
@@ -202,11 +213,100 @@ pub(super) fn parse_start_plan_windows(body: &Value) -> Vec<NamedRateWindow> {
             .plans
             .iter()
             .find(|plan| plan.plan_id.as_deref() == Some(plan_id));
+        if plan.is_some_and(|plan| is_future_start_plan(plan, &now)) {
+            continue;
+        }
         if let Some(window) = balance_window(index, balance, plan) {
             windows.push(window);
         }
     }
     windows
+}
+
+fn upcoming_start_plan_windows(plans: &[BillingPlan], now: &DateTime<Utc>) -> Vec<NamedRateWindow> {
+    let mut windows = Vec::new();
+    for (plan_index, plan) in plans.iter().enumerate() {
+        if !is_start_plan_identity(
+            plan.plan_id.as_deref().unwrap_or(""),
+            plan.name.as_deref().unwrap_or(""),
+        ) || plan.status.as_deref().is_some_and(is_terminal_plan_status)
+        {
+            continue;
+        }
+        let Some(activation_at) = plan
+            .starts_at
+            .as_ref()
+            .and_then(|value| timestamp(Some(value)))
+            .filter(|activation_at| activation_at > now)
+        else {
+            continue;
+        };
+
+        if plan.entitlements.is_empty() {
+            windows.push(upcoming_plan_window(
+                plan_index,
+                0,
+                START_PLAN_TITLE.to_string(),
+                activation_at,
+            ));
+            continue;
+        }
+
+        for (entitlement_index, entitlement) in plan.entitlements.iter().enumerate() {
+            let model = entitlement
+                .show_name
+                .as_deref()
+                .map(str::trim)
+                .filter(|name| !name.is_empty())
+                .or_else(|| model_from_capabilities(&entitlement.capabilities));
+            let title = model.map_or_else(
+                || START_PLAN_TITLE.to_string(),
+                |name| format!("{START_PLAN_TITLE} · {name}"),
+            );
+            windows.push(upcoming_plan_window(
+                plan_index,
+                entitlement_index,
+                title,
+                activation_at,
+            ));
+        }
+    }
+    windows
+}
+
+fn upcoming_plan_window(
+    plan_index: usize,
+    entitlement_index: usize,
+    title: String,
+    activation_at: DateTime<Utc>,
+) -> NamedRateWindow {
+    let mut window = RateWindow::new(0.0);
+    window.is_informational = true;
+    NamedRateWindow::new(
+        format!("zai-zcode-upcoming-{plan_index}-{entitlement_index}"),
+        title,
+        window,
+    )
+    .with_usage_known(false)
+    .with_activation_at(activation_at)
+}
+
+fn is_future_start_plan(plan: &BillingPlan, now: &DateTime<Utc>) -> bool {
+    is_start_plan_identity(
+        plan.plan_id.as_deref().unwrap_or(""),
+        plan.name.as_deref().unwrap_or(""),
+    ) && plan
+        .starts_at
+        .as_ref()
+        .and_then(|value| timestamp(Some(value)))
+        .is_some_and(|activation_at| activation_at > *now)
+}
+
+fn is_terminal_plan_status(status: &str) -> bool {
+    matches!(
+        status.trim().to_ascii_lowercase().as_str(),
+        "cancelled" | "canceled" | "expired" | "revoked" | "deleted" | "refunded" | "failed"
+    )
 }
 
 fn active_start_plan_ids(plans: &[BillingPlan]) -> Vec<String> {
@@ -266,8 +366,8 @@ fn balance_window(
     };
     let period = entitlement_period(plan, balance.entitlement_id.as_deref());
     let window_minutes = period.and_then(window_minutes_for_period);
-    let resets_at = unix_seconds(balance.expires_at.as_ref())
-        .or_else(|| plan.and_then(|plan| unix_seconds(plan.ends_at.as_ref())));
+    let resets_at = timestamp(balance.expires_at.as_ref())
+        .or_else(|| plan.and_then(|plan| timestamp(plan.ends_at.as_ref())));
     let mut parts = Vec::new();
     if let Some(period) = period.filter(|value| !value.eq_ignore_ascii_case("one_time")) {
         parts.push(period.to_string());
@@ -363,17 +463,20 @@ fn finite_nonnegative(value: Option<&Value>) -> Option<f64> {
     (number.is_finite() && number >= 0.0).then_some(number)
 }
 
-fn unix_seconds(value: Option<&Value>) -> Option<DateTime<Utc>> {
+fn timestamp(value: Option<&Value>) -> Option<DateTime<Utc>> {
     let value = value?;
     let seconds = value
         .as_i64()
         .or_else(|| value.as_u64().and_then(|n| i64::try_from(n).ok()))
         .or_else(|| value.as_f64().map(|n| n as i64))
-        .or_else(|| value.as_str().and_then(|text| text.trim().parse().ok()))?;
-    if seconds <= 0 {
-        return None;
+        .or_else(|| value.as_str().and_then(|text| text.trim().parse().ok()));
+    if let Some(seconds) = seconds {
+        if seconds <= 0 {
+            return None;
+        }
+        return DateTime::<Utc>::from_timestamp(seconds, 0);
     }
-    DateTime::<Utc>::from_timestamp(seconds, 0)
+    value.as_str()?.trim().parse::<DateTime<Utc>>().ok()
 }
 
 fn resolve_zcode_jwt(env: &EnvMap) -> Option<String> {
@@ -599,6 +702,51 @@ mod tests {
             Some("剩余 3.00亿")
         );
         assert!(window.window.resets_at.is_some());
+    }
+
+    #[test]
+    fn future_start_plan_is_shown_as_pending_without_inventing_quota() {
+        let body = serde_json::json!({
+            "code": 0,
+            "data": {
+                "server_time": 1788575999,
+                "plans": [{
+                    "plan_id": "zcode-v3-start-plan-wk-future",
+                    "name": "ZCode Weekend Build",
+                    "status": "active",
+                    "starts_at": 1789000000,
+                    "ends_at": 1789200000,
+                    "entitlements": [{
+                        "entitlement_id": "ent-future",
+                        "show_name": "GLM-5.3-Flash",
+                        "period": "one_time",
+                        "capabilities": ["model:glm-5.3-flash"]
+                    }]
+                }],
+                "balances": [{
+                    "plan_id": "zcode-v3-start-plan-wk-future",
+                    "entitlement_id": "ent-future",
+                    "show_name": "GLM-5.3-Flash",
+                    "total_units": 300000000,
+                    "used_units": 0,
+                    "remaining_units": 300000000
+                }]
+            }
+        });
+
+        let windows = parse_start_plan_windows(&body);
+        assert_eq!(windows.len(), 1);
+        let upcoming = &windows[0];
+        assert_eq!(upcoming.id, "zai-zcode-upcoming-0-0");
+        assert_eq!(upcoming.title, "体验套餐 · GLM-5.3-Flash");
+        assert_eq!(
+            upcoming.activation_at,
+            DateTime::from_timestamp(1789000000, 0)
+        );
+        assert!(!upcoming.usage_known);
+        assert!(upcoming.window.is_informational);
+        assert_eq!(upcoming.window.window_minutes, None);
+        assert_eq!(upcoming.window.reset_description, None);
     }
 
     #[test]

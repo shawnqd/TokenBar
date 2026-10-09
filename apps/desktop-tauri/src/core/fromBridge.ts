@@ -25,6 +25,7 @@ type BridgeWindowSlot = {
   label: string | null | undefined;
   window: BridgeRateWindow;
   usageKnown?: boolean;
+  activationAt?: string | null;
   role: WindowRole;
   order: number;
   inventoryExpiresAt?: string[];
@@ -164,6 +165,7 @@ function collectWindows(model: ProviderDisplayModel): RateWindowSnapshot[] {
       label: extra.title,
       window: extra.window,
       usageKnown: extra.usageKnown,
+      activationAt: extra.activationAt,
       role: "additional",
       order: 4 + index,
       inventoryExpiresAt: extra.inventoryExpiresAt,
@@ -194,6 +196,7 @@ function adaptWindow(slot: BridgeWindowSlot): RateWindowSnapshot {
     windowMinutes: window.windowMinutes,
     resetsAt: window.resetsAt,
     resetDescription: window.resetDescription,
+    activationAt: slot.activationAt ?? null,
     isExhausted: window.isExhausted,
     isInformational: Boolean(window.isInformational) || !usageKnown || displayKind !== "quota",
     usageKnown,

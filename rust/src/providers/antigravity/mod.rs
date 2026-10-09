@@ -3,13 +3,16 @@
 //! Fetches usage data from Antigravity's local language server probe
 //! Uses Windows process detection to find CSRF token
 
+mod cli_fallback;
+pub(crate) mod local_history;
+
 use async_trait::async_trait;
 use regex_lite::Regex;
 use serde::Deserialize;
-#[cfg(windows)]
-use std::os::windows::process::CommandExt;
-use std::process::Command;
 use std::sync::OnceLock;
+use std::time::Duration;
+use tokio::process::Command;
+use tokio::time::timeout;
 
 use crate::core::{
     FetchContext, NamedRateWindow, Provider, ProviderError, ProviderFetchResult, ProviderId,
@@ -18,6 +21,27 @@ use crate::core::{
 
 const NOT_RUNNING_MESSAGE: &str =
     "Antigravity language server not running. Start Google Antigravity and sign in, then retry.";
+
+const PROCESS_DISCOVERY_TIMEOUT: Duration = Duration::from_secs(8);
+const PORT_ENUMERATION_TIMEOUT: Duration = Duration::from_secs(3);
+/// Wall-clock budget for listing candidate ports and probing the local API.
+const PORT_DISCOVERY_BUDGET: Duration = Duration::from_secs(15);
+const QUOTA_SUMMARY_REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
+const USER_STATUS_REQUEST_TIMEOUT: Duration = Duration::from_secs(8);
+const LOCAL_FETCH_TIMEOUT: Duration = Duration::from_secs(55);
+const MAX_CSRF_TOKEN_ATTEMPTS: u64 = 2;
+const PROVIDER_FETCH_TIMEOUT_PADDING_SECS: u64 = 10;
+const LOCAL_FETCH_WORST_CASE_SECS: u64 = PROCESS_DISCOVERY_TIMEOUT.as_secs()
+    + PORT_DISCOVERY_BUDGET.as_secs()
+    + MAX_CSRF_TOKEN_ATTEMPTS * QUOTA_SUMMARY_REQUEST_TIMEOUT.as_secs()
+    + MAX_CSRF_TOKEN_ATTEMPTS * USER_STATUS_REQUEST_TIMEOUT.as_secs();
+
+/// The desktop wrapper must leave room for the entire bounded local route and
+/// then both bounded agy subprocesses; the last 10s are scheduling/startup headroom.
+pub const PROVIDER_FETCH_TIMEOUT_SECS: u64 = LOCAL_FETCH_TIMEOUT.as_secs()
+    + cli_fallback::VERSION_TIMEOUT.as_secs()
+    + cli_fallback::USAGE_TIMEOUT.as_secs()
+    + PROVIDER_FETCH_TIMEOUT_PADDING_SECS;
 
 /// Antigravity provider
 pub struct AntigravityProvider {
@@ -52,7 +76,7 @@ impl AntigravityProvider {
     }
 
     /// Detect running Antigravity language server and extract connection info
-    fn detect_process_info() -> Result<ProcessInfo, ProviderError> {
+    async fn detect_process_info() -> Result<ProcessInfo, ProviderError> {
         // Use PowerShell to get process command lines
         #[cfg(windows)]
         const CREATE_NO_WINDOW: u32 = 0x08000000;
@@ -65,9 +89,11 @@ impl AntigravityProvider {
             ]);
         #[cfg(windows)]
         cmd.creation_flags(CREATE_NO_WINDOW);
+        cmd.kill_on_drop(true);
 
-        let output = cmd
-            .output()
+        let output = timeout(PROCESS_DISCOVERY_TIMEOUT, cmd.output())
+            .await
+            .map_err(|_| ProviderError::Timeout)?
             .map_err(|e| ProviderError::Other(format!("Failed to run PowerShell: {}", e)))?;
 
         if !output.status.success() {
@@ -137,6 +163,7 @@ impl AntigravityProvider {
         extension_port: Option<u16>,
         pid: Option<u32>,
     ) -> Result<u16, ProviderError> {
+        let discovery_started = std::time::Instant::now();
         // The language server binds a RANDOM localhost port at startup; --extension_server_port
         // is only a reference point (and belongs to a separate HTTP extension server), so the
         // real gRPC/Connect API port is not guaranteed to be within a small window above it.
@@ -159,21 +186,29 @@ impl AntigravityProvider {
         // few known ports as a last resort.
         let mut candidates: Vec<u16> = Vec::new();
         if let Some(pid) = pid {
-            candidates.extend(Self::listening_ports_for_pid(pid));
+            candidates.extend(Self::listening_ports_for_pid(pid).await);
         }
         if let Some(ep) = extension_port.filter(|&p| p > 0) {
             candidates.extend((0..20u16).map(|offset| ep.saturating_add(offset)));
         }
         candidates.extend([53835, 53836, 53837, 53838, 53845, 53849]);
 
+        // The budget covers PowerShell port enumeration and localhost probes.
+        // Limit the final probe by the remaining time as well.
         let mut probed: Vec<u16> = Vec::new();
         for port in candidates {
             if probed.contains(&port) {
                 continue; // probe each port at most once
             }
             probed.push(port);
-            if Self::probe_api_port(&client, port).await {
-                return Ok(port);
+            let remaining = PORT_DISCOVERY_BUDGET.saturating_sub(discovery_started.elapsed());
+            if remaining.is_zero() {
+                break;
+            }
+            match timeout(remaining, Self::probe_api_port(&client, port)).await {
+                Ok(true) => return Ok(port),
+                Ok(false) => {}
+                Err(_) => break,
             }
         }
 
@@ -209,7 +244,7 @@ impl AntigravityProvider {
     /// On Windows this uses `Get-NetTCPConnection`; it returns an empty list on any failure
     /// so the caller deterministically falls back to the heuristic candidate ports.
     #[cfg(windows)]
-    fn listening_ports_for_pid(pid: u32) -> Vec<u16> {
+    async fn listening_ports_for_pid(pid: u32) -> Vec<u16> {
         const CREATE_NO_WINDOW: u32 = 0x08000000;
 
         let mut cmd = Command::new("powershell.exe");
@@ -223,8 +258,9 @@ impl AntigravityProvider {
             ),
         ]);
         cmd.creation_flags(CREATE_NO_WINDOW);
+        cmd.kill_on_drop(true);
 
-        let Ok(output) = cmd.output() else {
+        let Ok(Ok(output)) = timeout(PORT_ENUMERATION_TIMEOUT, cmd.output()).await else {
             return Vec::new();
         };
         if !output.status.success() {
@@ -244,7 +280,7 @@ impl AntigravityProvider {
     /// Non-Windows platforms have no `Get-NetTCPConnection`; return an empty list by design so
     /// the caller falls back to the heuristic candidate ports.
     #[cfg(not(windows))]
-    fn listening_ports_for_pid(_pid: u32) -> Vec<u16> {
+    async fn listening_ports_for_pid(_pid: u32) -> Vec<u16> {
         Vec::new()
     }
 
@@ -256,7 +292,7 @@ impl AntigravityProvider {
     ) -> Result<UsageSnapshot, ProviderError> {
         // SECURITY: TLS verification disabled for local language server (see find_api_port)
         let client = crate::core::credentialed_http_client_builder()
-            .timeout(std::time::Duration::from_secs(8))
+            .timeout(USER_STATUS_REQUEST_TIMEOUT)
             .danger_accept_invalid_certs(true)
             .redirect(reqwest::redirect::Policy::none())
             .build()
@@ -344,7 +380,7 @@ impl AntigravityProvider {
     ) -> Result<UsageSnapshot, ProviderError> {
         // SECURITY: TLS verification disabled for local language server (see find_api_port)
         let client = crate::core::credentialed_http_client_builder()
-            .timeout(std::time::Duration::from_secs(5))
+            .timeout(QUOTA_SUMMARY_REQUEST_TIMEOUT)
             .danger_accept_invalid_certs(true)
             .redirect(reqwest::redirect::Policy::none())
             .build()
@@ -411,6 +447,72 @@ impl AntigravityProvider {
             .map_err(|e| ProviderError::Other(format!("Failed to parse response: {}", e)))?;
 
         self.parse_quota_summary(json)
+    }
+
+    /// Local desktop source: probe the running Antigravity language server and
+    /// read its quota summary (falling back to the model-status endpoint for
+    /// older servers). Callers that use this in Auto mode fall back to the
+    /// signed-in `agy` CLI when the service is absent or unusable.
+    async fn fetch_local_usage(&self) -> Result<ProviderFetchResult, ProviderError> {
+        timeout(LOCAL_FETCH_TIMEOUT, self.fetch_local_usage_within_budget())
+            .await
+            .map_err(|_| ProviderError::Timeout)?
+    }
+
+    async fn fetch_local_usage_within_budget(&self) -> Result<ProviderFetchResult, ProviderError> {
+        tracing::debug!("Fetching Antigravity usage via local probe");
+
+        let process_info = match Self::detect_process_info().await {
+            Ok(info) => info,
+            Err(e) => {
+                tracing::warn!("Antigravity probe failed: {}", e);
+                return Err(e);
+            }
+        };
+        let api_port =
+            match Self::find_api_port(process_info.extension_port, process_info.pid).await {
+                Ok(port) => port,
+                Err(e) => {
+                    tracing::warn!("Antigravity probe failed: {}", e);
+                    return Err(e);
+                }
+            };
+
+        // Preferred source: RetrieveUserQuotaSummary (the two-group payload the
+        // official Models screen shows). Old IDE servers answer 404; fall back
+        // to GetUserStatus and aggregate by family there.
+        match self.fetch_quota_summary(&process_info, api_port).await {
+            Ok(usage) if quota_summary_is_complete(&usage) => {
+                tracing::debug!("Antigravity quota summary accepted");
+                return Ok(ProviderFetchResult::new(usage, "local"));
+            }
+            Ok(_) => {
+                // A language server can answer 200 with only one family while
+                // it is still warming up.  Treat that as an incomplete probe,
+                // not as a valid success: otherwise a Gemini-only snapshot
+                // replaces the previous two-family reading until the next
+                // refresh.  The model-status endpoint is the authoritative
+                // fallback and still exposes both family representatives when
+                // the summary buckets are partial/disabled.
+                tracing::warn!(
+                    "Antigravity quota summary incomplete; falling back to model status"
+                );
+            }
+            Err(summary_err) => {
+                tracing::debug!(
+                    "Antigravity quota summary unavailable; falling back to user status: {}",
+                    summary_err
+                );
+            }
+        }
+
+        match self.fetch_user_status(&process_info, api_port).await {
+            Ok(usage) => Ok(ProviderFetchResult::new(usage, "local")),
+            Err(e) => {
+                tracing::warn!("Antigravity probe failed: {}", e);
+                Err(e)
+            }
+        }
     }
 
     fn parse_user_status(
@@ -559,106 +661,151 @@ impl AntigravityProvider {
             .payload()
             .ok_or_else(|| ProviderError::Other("Missing quota summary".to_string()))?;
 
-        // Build one named window per group bucket, keeping the upstream sort
-        // (Gemini before Claude/GPT, five-hour before weekly).
-        let mut natural_order = 0usize;
-        let mut named: Vec<(usize, NamedRateWindow)> = Vec::new();
-        let mut groups = payload.groups.into_iter().enumerate().collect::<Vec<_>>();
-        groups.sort_by(|a, b| {
-            group_sort_rank(&a.1)
-                .cmp(&group_sort_rank(&b.1))
+        quota_summary_from_payload(payload)
+    }
+}
+
+/// Convert a quota-summary payload into the named Gemini/Claude-GPT windows.
+///
+/// Both quota sources feed this same converter: the local language server's
+/// `RetrieveUserQuotaSummary` response and the installed `agy` CLI's
+/// structured `/usage` report (see `cli_fallback`). Keeping one converter
+/// means the CLI path preserves the local Gemini and Claude/GPT pools instead
+/// of inventing a second window vocabulary. A payload with no buckets, or with
+/// only unknown/disabled buckets, is rejected so no source can publish a
+/// fabricated quota reading.
+fn quota_summary_from_payload(
+    payload: QuotaSummaryPayload,
+) -> Result<UsageSnapshot, ProviderError> {
+    let QuotaSummaryPayload { groups, .. } = payload;
+
+    // Build one named window per group bucket, keeping the upstream sort
+    // (Gemini before Claude/GPT, five-hour before weekly).
+    let mut natural_order = 0usize;
+    let mut named: Vec<(usize, NamedRateWindow)> = Vec::new();
+    let mut groups = groups.into_iter().enumerate().collect::<Vec<_>>();
+    groups.sort_by(|a, b| {
+        group_sort_rank(&a.1)
+            .cmp(&group_sort_rank(&b.1))
+            .then_with(|| a.0.cmp(&b.0))
+    });
+    for (_group_index, group) in groups {
+        let group_title = group_display_title(&group);
+        let mut buckets = group.buckets.into_iter().enumerate().collect::<Vec<_>>();
+        buckets.sort_by(|a, b| {
+            bucket_sort_rank(&a.1)
+                .cmp(&bucket_sort_rank(&b.1))
                 .then_with(|| a.0.cmp(&b.0))
         });
-        for (_group_index, group) in groups {
-            let group_title = group_display_title(&group);
-            let mut buckets = group.buckets.into_iter().enumerate().collect::<Vec<_>>();
-            buckets.sort_by(|a, b| {
-                bucket_sort_rank(&a.1)
-                    .cmp(&bucket_sort_rank(&b.1))
-                    .then_with(|| a.0.cmp(&b.0))
-            });
-            for (_bucket_index, bucket) in buckets {
-                let Some(bucket_id) = bucket
-                    .bucket_id
-                    .as_deref()
-                    .map(str::trim)
-                    .filter(|s| !s.is_empty())
-                else {
-                    continue;
-                };
-                let bucket_title = bucket_display_title(&bucket);
-                let remaining_fraction = bucket
-                    .remaining_fraction
-                    .or_else(|| bucket.remaining.as_ref().and_then(|r| r.remaining_fraction));
-                let usage_known = !bucket.disabled && remaining_fraction.is_some();
-                let window_minutes = bucket_window_minutes(&bucket);
-                let resets_at = bucket.reset_time.as_deref().and_then(parse_reset_time);
-                let reset_description = bucket.description.clone().or_else(|| {
-                    // A reset time that did not parse as a timestamp keeps its
-                    // raw text so the user still sees the provider's wording.
-                    if resets_at.is_none() {
-                        bucket.reset_time.clone()
-                    } else {
-                        None
-                    }
-                });
-                let window = if usage_known {
-                    let remaining = remaining_fraction.unwrap_or(0.0).clamp(0.0, 1.0);
-                    RateWindow::with_details(
-                        (1.0 - remaining) * 100.0,
-                        window_minutes,
-                        resets_at,
-                        reset_description,
-                    )
+        for (_bucket_index, bucket) in buckets {
+            let Some(bucket_id) = bucket
+                .bucket_id
+                .as_deref()
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+            else {
+                continue;
+            };
+            let bucket_title = bucket_display_title(&bucket);
+            let remaining_fraction = bucket
+                .remaining_fraction
+                .or_else(|| bucket.remaining.as_ref().and_then(|r| r.remaining_fraction));
+            let usage_known = !bucket.disabled && remaining_fraction.is_some();
+            let window_minutes = bucket_window_minutes(&bucket);
+            let resets_at = bucket.reset_time.as_deref().and_then(parse_reset_time);
+            let reset_description = bucket.description.clone().or_else(|| {
+                // A reset time that did not parse as a timestamp keeps its
+                // raw text so the user still sees the provider's wording.
+                if resets_at.is_none() {
+                    bucket.reset_time.clone()
                 } else {
-                    let description =
-                        reset_description.unwrap_or_else(|| LIMITS_UNAVAILABLE.to_string());
-                    RateWindow::informational(description)
-                };
-                let id = format!("antigravity-quota-summary-{}", slugify(bucket_id));
-                let title = format!("{} {}", group_title, bucket_title);
-                let named_window =
-                    NamedRateWindow::new(id, title, window).with_usage_known(usage_known);
-                named.push((natural_order, named_window));
-                natural_order += 1;
-            }
+                    None
+                }
+            });
+            let window = if usage_known {
+                let remaining = remaining_fraction.unwrap_or(0.0).clamp(0.0, 1.0);
+                RateWindow::with_details(
+                    (1.0 - remaining) * 100.0,
+                    window_minutes,
+                    resets_at,
+                    reset_description,
+                )
+            } else {
+                let description =
+                    reset_description.unwrap_or_else(|| LIMITS_UNAVAILABLE.to_string());
+                RateWindow::informational(description)
+            };
+            let id = format!("antigravity-quota-summary-{}", slugify(bucket_id));
+            let title = format!("{} {}", group_title, bucket_title);
+            let named_window =
+                NamedRateWindow::new(id, title, window).with_usage_known(usage_known);
+            named.push((natural_order, named_window));
+            natural_order += 1;
         }
-
-        if named.is_empty() {
-            return Err(ProviderError::Other(
-                "Quota summary has no usable quota buckets".to_string(),
-            ));
-        }
-        if !named.iter().any(|(_, w)| w.usage_known) {
-            return Err(ProviderError::Other(
-                "Quota summary has no usable quota buckets".to_string(),
-            ));
-        }
-
-        // Keep the upstream order (Gemini before Claude/GPT, five-hour before
-        // weekly) so grouped surfaces read exactly like the official Models
-        // screen: one family's 5h+weekly pair on top, the next family's pair
-        // below. The most-restricted reading for compact/native surfaces is
-        // resolved independently from these named windows
-        // (`tray_bridge::most_restricted_known_window`), so no consumer needs
-        // this list pre-sorted by tightness.
-
-        // The primary slot is a placeholder that the detailed UI skips; the
-        // real buckets live in `extra_rate_windows`, so no window is ever
-        // rendered twice. The native tray resolves the most restricted known
-        // bucket from the same named windows (see `tray_bridge.rs`).
-        let mut snapshot = UsageSnapshot::new(RateWindow::informational(""));
-        for (_, named_window) in named {
-            snapshot = snapshot.with_named_rate_window(named_window);
-        }
-        Ok(snapshot)
     }
+
+    if named.is_empty() {
+        return Err(ProviderError::Other(
+            "Quota summary has no usable quota buckets".to_string(),
+        ));
+    }
+    if !named.iter().any(|(_, w)| w.usage_known) {
+        return Err(ProviderError::Other(
+            "Quota summary has no usable quota buckets".to_string(),
+        ));
+    }
+
+    // Keep the upstream order (Gemini before Claude/GPT, five-hour before
+    // weekly) so grouped surfaces read exactly like the official Models
+    // screen: one family's 5h+weekly pair on top, the next family's pair
+    // below. The most-restricted reading for compact/native surfaces is
+    // resolved independently from these named windows
+    // (`tray_bridge::most_restricted_known_window`), so no consumer needs
+    // this list pre-sorted by tightness.
+
+    // The primary slot is a placeholder that the detailed UI skips; the
+    // real buckets live in `extra_rate_windows`, so no window is ever
+    // rendered twice. The native tray resolves the most restricted known
+    // bucket from the same named windows (see `tray_bridge.rs`).
+    let mut snapshot = UsageSnapshot::new(RateWindow::informational(""));
+    for (_, named_window) in named {
+        snapshot = snapshot.with_named_rate_window(named_window);
+    }
+    Ok(snapshot)
 }
 
 impl Default for AntigravityProvider {
     fn default() -> Self {
         Self::new()
     }
+}
+
+/// How a requested source mode maps onto Antigravity's two usable sources:
+/// the local desktop language server and the installed `agy` CLI.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AntigravityFetchRoute {
+    /// Auto: try the running local service first, then the signed-in CLI.
+    LocalThenCli,
+    /// Explicit CLI selection: never probe the desktop service.
+    CliOnly,
+}
+
+fn antigravity_fetch_route(mode: SourceMode) -> Result<AntigravityFetchRoute, ProviderError> {
+    match mode {
+        SourceMode::Auto => Ok(AntigravityFetchRoute::LocalThenCli),
+        SourceMode::Cli => Ok(AntigravityFetchRoute::CliOnly),
+        other => Err(ProviderError::UnsupportedSource(other)),
+    }
+}
+
+/// Combine the two Auto-mode source failures without discarding either one.
+/// Both messages are provider-owned text (no raw CLI output or credentials),
+/// so the user can tell whether the desktop service, the CLI install or the
+/// signed-in session is the thing to fix.
+fn combine_auto_failures(local: ProviderError, cli: ProviderError) -> ProviderError {
+    ProviderError::Other(format!(
+        "Antigravity local service unavailable: {local}; agy CLI fallback failed: {cli}"
+    ))
 }
 
 #[async_trait]
@@ -671,59 +818,25 @@ impl Provider for AntigravityProvider {
         &self.metadata
     }
 
-    async fn fetch_usage(&self, _ctx: &FetchContext) -> Result<ProviderFetchResult, ProviderError> {
-        tracing::debug!("Fetching Antigravity usage via local probe");
-
-        let process_info = match Self::detect_process_info() {
-            Ok(info) => info,
-            Err(e) => {
-                tracing::warn!("Antigravity probe failed: {}", e);
-                return Err(e);
-            }
-        };
-        let api_port =
-            match Self::find_api_port(process_info.extension_port, process_info.pid).await {
-                Ok(port) => port,
-                Err(e) => {
-                    tracing::warn!("Antigravity probe failed: {}", e);
-                    return Err(e);
+    async fn fetch_usage(&self, ctx: &FetchContext) -> Result<ProviderFetchResult, ProviderError> {
+        match antigravity_fetch_route(ctx.source_mode)? {
+            AntigravityFetchRoute::CliOnly => cli_fallback::fetch_cli_usage().await,
+            AntigravityFetchRoute::LocalThenCli => match self.fetch_local_usage().await {
+                Ok(result) => Ok(result),
+                Err(local_error) => {
+                    // The desktop app is closed or its language server is
+                    // unusable. The signed-in installed `agy` CLI is the
+                    // documented fallback and still reports structured quota
+                    // while keeping both model-family pools.
+                    tracing::warn!(
+                        "Antigravity local service unavailable ({}); trying signed-in agy CLI",
+                        local_error
+                    );
+                    cli_fallback::fetch_cli_usage()
+                        .await
+                        .map_err(|cli_error| combine_auto_failures(local_error, cli_error))
                 }
-            };
-
-        // Preferred source: RetrieveUserQuotaSummary (the two-group payload the
-        // official Models screen shows). Old IDE servers answer 404; fall back
-        // to GetUserStatus and aggregate by family there.
-        match self.fetch_quota_summary(&process_info, api_port).await {
-            Ok(usage) if quota_summary_is_complete(&usage) => {
-                tracing::debug!("Antigravity quota summary accepted");
-                return Ok(ProviderFetchResult::new(usage, "local"));
-            }
-            Ok(_) => {
-                // A language server can answer 200 with only one family while
-                // it is still warming up.  Treat that as an incomplete probe,
-                // not as a valid success: otherwise a Gemini-only snapshot
-                // replaces the previous two-family reading until the next
-                // refresh.  The model-status endpoint is the authoritative
-                // fallback and still exposes both family representatives when
-                // the summary buckets are partial/disabled.
-                tracing::warn!(
-                    "Antigravity quota summary incomplete; falling back to model status"
-                );
-            }
-            Err(summary_err) => {
-                tracing::debug!(
-                    "Antigravity quota summary unavailable; falling back to user status: {}",
-                    summary_err
-                );
-            }
-        }
-
-        match self.fetch_user_status(&process_info, api_port).await {
-            Ok(usage) => Ok(ProviderFetchResult::new(usage, "local")),
-            Err(e) => {
-                tracing::warn!("Antigravity probe failed: {}", e);
-                Err(e)
-            }
+            },
         }
     }
 
@@ -904,6 +1017,10 @@ struct QuotaSummaryPayload {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct QuotaSummaryGroupPayload {
+    /// The language server serializes camelCase; structured CLI reports use
+    /// proto-style snake_case or upstream's short `name`. All name the same
+    /// group.
+    #[serde(alias = "display_name", alias = "name")]
     display_name: Option<String>,
     #[allow(dead_code)]
     description: Option<String>,
@@ -914,13 +1031,17 @@ struct QuotaSummaryGroupPayload {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct QuotaSummaryBucketPayload {
+    #[serde(alias = "bucket_id", alias = "id")]
     bucket_id: Option<String>,
+    #[serde(alias = "display_name", alias = "name")]
     display_name: Option<String>,
     description: Option<String>,
     #[serde(default)]
     disabled: bool,
+    #[serde(alias = "remaining_fraction")]
     remaining_fraction: Option<f64>,
     remaining: Option<QuotaSummaryRemainingPayload>,
+    #[serde(alias = "reset_time")]
     reset_time: Option<String>,
 }
 
@@ -939,6 +1060,7 @@ impl<'de> Deserialize<'de> for QuotaSummaryRemainingPayload {
         #[derive(Deserialize)]
         #[serde(rename_all = "camelCase")]
         struct Raw {
+            #[serde(alias = "remaining_fraction")]
             remaining_fraction: Option<f64>,
             #[serde(rename = "case")]
             oneof_case: Option<String>,
@@ -2147,5 +2269,96 @@ mod tests {
         let provider = AntigravityProvider::new();
         let result = provider.parse_user_status(resp);
         assert!(result.is_ok(), "quota_info=None should not panic");
+    }
+
+    // ── Source routing ────────────────────────────────────────────────
+
+    #[test]
+    fn auto_route_tries_the_local_service_before_the_cli() {
+        assert_eq!(
+            antigravity_fetch_route(SourceMode::Auto).unwrap(),
+            AntigravityFetchRoute::LocalThenCli
+        );
+    }
+
+    #[test]
+    fn outer_deadline_covers_bounded_local_retries_then_both_cli_probes() {
+        assert!(LOCAL_FETCH_TIMEOUT.as_secs() >= LOCAL_FETCH_WORST_CASE_SECS);
+        assert_eq!(
+            PROVIDER_FETCH_TIMEOUT_SECS,
+            LOCAL_FETCH_TIMEOUT.as_secs()
+                + cli_fallback::VERSION_TIMEOUT.as_secs()
+                + cli_fallback::USAGE_TIMEOUT.as_secs()
+                + PROVIDER_FETCH_TIMEOUT_PADDING_SECS
+        );
+        assert_eq!(PROVIDER_FETCH_TIMEOUT_SECS, 200);
+    }
+
+    #[test]
+    fn explicit_cli_route_never_probes_the_desktop_service() {
+        assert_eq!(
+            antigravity_fetch_route(SourceMode::Cli).unwrap(),
+            AntigravityFetchRoute::CliOnly
+        );
+    }
+
+    #[test]
+    fn unsupported_sources_report_the_requested_mode() {
+        assert!(matches!(
+            antigravity_fetch_route(SourceMode::OAuth),
+            Err(ProviderError::UnsupportedSource(SourceMode::OAuth))
+        ));
+        assert!(matches!(
+            antigravity_fetch_route(SourceMode::Web),
+            Err(ProviderError::UnsupportedSource(SourceMode::Web))
+        ));
+    }
+
+    #[test]
+    fn auto_failure_keeps_both_source_failures_and_never_reads_as_success() {
+        let combined = combine_auto_failures(
+            ProviderError::NotInstalled(NOT_RUNNING_MESSAGE.to_string()),
+            ProviderError::NotInstalled(
+                "agy was not found. Install the Antigravity CLI and sign in.".to_string(),
+            ),
+        );
+        let text = combined.to_string();
+        assert!(text.contains("local service unavailable"));
+        assert!(text.contains("agy CLI fallback failed"));
+        assert!(text.contains("Start Google Antigravity"));
+    }
+
+    #[test]
+    fn cli_payload_preserves_both_family_pools() {
+        let payload: QuotaSummaryPayload = serde_json::from_value(serde_json::json!({
+            "description": "usage",
+            "groups": [
+                {
+                    "displayName": "Gemini Models",
+                    "buckets": [
+                        {
+                            "bucketId": "gemini-models-five-hour-limit",
+                            "displayName": "Five Hour Limit Remaining",
+                            "remainingFraction": 0.8,
+                        }
+                    ]
+                },
+                {
+                    "displayName": "Claude and GPT models",
+                    "buckets": [
+                        {
+                            "bucketId": "claude-gpt-models-weekly-limit",
+                            "displayName": "Weekly Limit Remaining",
+                            "remainingFraction": 0.4,
+                        }
+                    ]
+                }
+            ]
+        }))
+        .unwrap();
+        let snap = quota_summary_from_payload(payload).unwrap();
+        assert_eq!(snap.extra_rate_windows.len(), 2);
+        assert_eq!(snap.extra_rate_windows[0].title, "Gemini 5-hour");
+        assert_eq!(snap.extra_rate_windows[1].title, "Claude/GPT weekly");
     }
 }

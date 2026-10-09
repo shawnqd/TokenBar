@@ -236,6 +236,7 @@ export function coreSnapshotToBridge(
       id: window.id,
       title: window.label,
       window: toBridgeRateWindow(window),
+      activationAt: window.activationAt ?? undefined,
       usageKnown: window.usageKnown || undefined,
       inventoryExpiresAt: window.inventoryExpiresAt,
     }));

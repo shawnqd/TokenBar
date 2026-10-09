@@ -5414,6 +5414,13 @@ body:has(.menu-surface--popout) .popout-scale-shell,
 [data-theme="light"] .menu-surface__footer-row:focus-visible {
   background: rgba(0, 0, 0, 0.06);
 }
+/* Same fallback as the settings titlebar control: `:focus-visible` alone
+   leaves Chromium's default ring drawn when the row receives programmatic
+   focus without it (automation or window-focus restore), which reads as a
+   rendering fault. Keyboard users keep the tinted focus-visible state. */
+.menu-surface__footer-row:focus:not(:focus-visible) {
+  outline: none;
+}
 .menu-surface__footer-row .menu-surface__footer-icon {
   width: 18px;
   display: inline-flex;
@@ -7864,8 +7871,8 @@ body:has(.tray-panel-reveal) #root {
      RECTANGLE and ignores `SetWindowRgn`, so the only way to round it is
      `DWMWA_WINDOW_CORNER_PREFERENCE` — a fixed ~8px that cannot be
      configured. Keeping a frosted backdrop therefore meant giving up the
-     corner radius entirely. The measurements stay documented with the native
-     popup recipe so both rendering paths remain aligned. */
+     corner radius entirely. The shared geometry constants document the
+     accepted measurements. */
   border-radius: var(--flyout-radius);
   clip-path: inset(0 round var(--flyout-radius));
   background: #161618;

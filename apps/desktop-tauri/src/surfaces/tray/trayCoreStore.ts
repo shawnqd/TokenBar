@@ -181,7 +181,7 @@ async function triggerEnrichment(
 ): Promise<boolean> {
   if (!scheduler) return false;
   const ok = await scheduler.trigger(kind, key, opts);
-  rebuild();
+  if (ok) rebuild();
   return ok;
 }
 

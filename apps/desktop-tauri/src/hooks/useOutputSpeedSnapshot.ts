@@ -11,9 +11,9 @@ import type { OutputSpeedSnapshot } from "../types/bridge";
  * Compose the bridge-shaped speed snapshot from per-provider enrichment
  * results committed into the tray core store.
  *
- * The bridge type declares all three provider keys, but the backend contract
- * only carries providers that actually have a reading; consumers must read
- * via `snapshot?.[providerId]`, which is what every call site does today.
+ * The bridge type declares every provider key, but the backend contract only
+ * carries providers that actually have a reading; consumers must read via
+ * `snapshot?.[providerId]`, which is what every call site does today.
  * Returns null when no provider has an enrichment result (no fake static
  * speed is ever produced).
  */
@@ -37,20 +37,16 @@ export function readOutputSpeedFromTray(
 }
 
 /**
- * Subscribe to core-driven output-speed enrichment results.
- *
- * The signature stays compatible with the pre-core hook (an enabled flag plus
- * an interval that the core scheduler now owns — local polling is gone, so
- * the interval parameter is accepted and ignored). While enabled, the hook
- * asks the tray enrichment scheduler to run the output-speed runner for every
- * provider whose core record declares the capability; the runner commits its
- * result into the store and this hook re-reads it after the scheduler runs.
+ * Subscribe to core-driven output-speed enrichment results. While enabled,
+ * refresh at the shared output-speed TTL so a session that becomes available
+ * after the first render is picked up without reopening the surface. The
+ * scheduler remains the single gate for capability and freshness; the timer
+ * only asks it to run and does not create a second read path.
  */
 export function useOutputSpeedSnapshot(
   enabled: boolean,
-  intervalMs = 1000,
+  intervalMs = 1_000,
 ): OutputSpeedSnapshot | null {
-  void intervalMs;
   const trayState = useTrayCoreState();
   const capableSignature = useMemo(
     () =>
@@ -69,14 +65,24 @@ export function useOutputSpeedSnapshot(
 
   useEffect(() => {
     if (!enabled) return;
-    const keys = trayCoreStore.speedCapableKeys();
-    for (const key of keys) {
-      void trayCoreStore
-        .triggerEnrichment("outputSpeed", key, { manual: true })
-        .catch(() => {});
-    }
+    let refreshPending = false;
+    const refresh = () => {
+      if (refreshPending) return;
+      refreshPending = true;
+      const keys = trayCoreStore.speedCapableKeys();
+      void Promise.all(
+        keys.map((key) =>
+          trayCoreStore.triggerEnrichment("outputSpeed", key).catch(() => false),
+        ),
+      ).finally(() => {
+        refreshPending = false;
+      });
+    };
+    refresh();
+    const timer = window.setInterval(refresh, Math.max(1_000, intervalMs));
+    return () => window.clearInterval(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [enabled, capableSignature]);
+  }, [enabled, capableSignature, intervalMs]);
 
   return enabled ? readOutputSpeedFromTray(trayState) : null;
 }

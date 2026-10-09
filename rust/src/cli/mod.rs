@@ -35,7 +35,7 @@ pub mod exit_codes {
 /// menubar shell now lives in `apps/desktop-tauri/`; this binary is CLI-only.
 #[derive(Parser, Debug)]
 #[command(name = "codexbar")]
-#[command(author, version, about, long_about = None)]
+#[command(author, version = crate::core::display_version(), about, long_about = None)]
 pub struct Cli {
     // === Global flags ===
     /// Enable verbose logging

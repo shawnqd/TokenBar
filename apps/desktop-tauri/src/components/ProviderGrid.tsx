@@ -75,6 +75,27 @@ export default function ProviderGrid({
     });
     return () => sortable.destroy();
   }, [canReorder, onGestureStart, onGestureEnd, providers, onReorder]);
+
+  // The tray flyout turns this grid into a single horizontal strip
+  // (overflow-x: auto with the scrollbar hidden). A vertical mouse wheel
+  // does not pan an overflow-x container on its own, so map deltaY to
+  // scrollLeft. Only take over when the strip actually overflows, so sparse
+  // grids keep native wheel chaining to the card stack; pure deltaX input
+  // (trackpad horizontal pan) is left to the browser's native panning.
+  useEffect(() => {
+    const el = gridRef.current;
+    if (!el) return;
+    const onWheel = (event: WheelEvent) => {
+      const maxScroll = el.scrollWidth - el.clientWidth;
+      if (maxScroll <= 0 || event.deltaY === 0) return;
+      const delta = event.deltaMode === 1 ? event.deltaY * 40 : event.deltaY;
+      el.scrollLeft = Math.max(0, Math.min(maxScroll, el.scrollLeft + delta));
+      event.preventDefault();
+      event.stopPropagation();
+    };
+    el.addEventListener("wheel", onWheel, { passive: false });
+    return () => el.removeEventListener("wheel", onWheel);
+  }, []);
   const isExpanded = expanded ?? uncontrolledExpanded;
   const setExpanded = (next: boolean) => {
     if (expanded === undefined) setUncontrolledExpanded(next);

@@ -248,8 +248,8 @@ impl ProviderId {
             ProviderId::DeepSeek => "DeepSeek",
             ProviderId::Windsurf => "Windsurf",
             ProviderId::Manus => "Manus",
-            ProviderId::MiMo => "Xiaomi MiMo Token Plan",
-            ProviderId::MiMoApi => "Xiaomi MiMo API",
+            ProviderId::MiMo => "MiMo",
+            ProviderId::MiMoApi => "MiMo API",
             ProviderId::Doubao => "Doubao",
             ProviderId::ArkCodingPlan => "Volcengine Ark Coding Plan",
             ProviderId::ArkAgentPlan => "Volcengine Ark Agent Plan",
@@ -399,6 +399,7 @@ impl ProviderId {
             "mimo"
             | "mimoplan"
             | "mimo-plan"
+            | "mimo token plan"
             | "xiaomi"
             | "xiaomimimo"
             | "xiaomi-mimo"
@@ -408,6 +409,7 @@ impl ProviderId {
             "mimoapi"
             | "mimo-api"
             | "mimo-api-key"
+            | "mimo api"
             | "xiaomi-mimo-api"
             | "xiaomi mimo api"
             | "xiaomi-mimo-api-key" => Some(ProviderId::MiMoApi),
@@ -505,19 +507,41 @@ pub struct ProviderCapabilities {
 
 impl ProviderCapabilities {
     /// Providers whose CLI session logs we parse for output speed.
+    ///
+    /// Kimi Code pairs `llm.request` rows with turn `usage.record` rows for a
+    /// real response duration; the OpenCode family's local database carries
+    /// per-message created/completed times (wall-clock, so approximate). The
+    /// Gemini/Copilot/Amp logs carry no per-response duration at all.
     fn has_output_speed_parser(id: ProviderId) -> bool {
         matches!(
             id,
-            ProviderId::Codex | ProviderId::Claude | ProviderId::Grok
+            ProviderId::Codex
+                | ProviderId::Claude
+                | ProviderId::Grok
+                | ProviderId::Kimi
+                | ProviderId::OpenCode
+                | ProviderId::OpenCodeGo
         )
     }
 
     /// Providers whose local session logs we scan for recent usage, plus the
-    /// OpenAI-family hosted dashboard charts.
+    /// OpenAI-family hosted dashboard charts. Gemini CLI chats, Copilot CLI
+    /// session state, Kimi wire logs, Amp thread ledgers, the OpenCode
+    /// family's local database and Antigravity's conversation databases round
+    /// out the local set.
     fn has_local_usage_source(id: ProviderId) -> bool {
         matches!(
             id,
-            ProviderId::Codex | ProviderId::Claude | ProviderId::Grok
+            ProviderId::Codex
+                | ProviderId::Claude
+                | ProviderId::Grok
+                | ProviderId::Gemini
+                | ProviderId::Copilot
+                | ProviderId::Kimi
+                | ProviderId::Amp
+                | ProviderId::OpenCode
+                | ProviderId::OpenCodeGo
+                | ProviderId::Antigravity
         )
     }
 
@@ -613,6 +637,13 @@ pub enum ProviderError {
     #[error("No cookies available for web API")]
     NoCookies,
 
+    /// Authentication is the remedy, but the immediate cause is something the
+    /// user must act on first (a locked browser database, an unreadable
+    /// profile, a rejected saved session). Carries the actionable cause so a
+    /// bare "authentication required" never hides it.
+    #[error("Authentication unavailable: {0}")]
+    AuthUnavailable(String),
+
     #[error("{0}")]
     Other(String),
 }
@@ -635,6 +666,17 @@ pub struct FetchContext {
     /// Manual cookie header (for testing)
     pub manual_cookie_header: Option<String>,
 
+    /// Fallback cookie header (used by browser-first providers like MiMo when
+    /// browser cookie extraction/validation or request fails).
+    pub fallback_cookie_header: Option<String>,
+
+    /// Whether a provider may discover a browser cookie when no explicit
+    /// cookie header was supplied. Providers that distinguish an explicit
+    /// cookie choice from an automatic browser lookup can use this to keep
+    /// `cookie_source=off` and an empty manual source from importing another
+    /// account.
+    pub allow_browser_cookie: bool,
+
     /// API key for providers that require authentication
     pub api_key: Option<String>,
 
@@ -646,6 +688,15 @@ pub struct FetchContext {
 
     /// Optional provider gateway URL, used by local gateway-backed providers.
     pub gateway_url: Option<String>,
+
+    /// When true, Auto mode tries the scoped web session before device-local
+    /// estimates. This is set for an explicitly selected token account or a
+    /// manually supplied cookie.
+    pub auto_prefer_web: bool,
+
+    /// Foreground usage reads may wait for bounded optional enrichment such as
+    /// an OpenCode Go Zen balance; background/UI refreshes use a short grace.
+    pub requires_optional_usage_completeness: bool,
 }
 
 impl Default for FetchContext {
@@ -656,10 +707,14 @@ impl Default for FetchContext {
             web_timeout: 60,
             verbose: false,
             manual_cookie_header: None,
+            fallback_cookie_header: None,
+            allow_browser_cookie: true,
             api_key: None,
             workspace_id: None,
             api_region: None,
             gateway_url: None,
+            auto_prefer_web: false,
+            requires_optional_usage_completeness: false,
         }
     }
 }
@@ -842,6 +897,8 @@ mod tests {
         assert_eq!(ProviderId::Claude.display_name(), "Claude");
         assert_eq!(ProviderId::Factory.display_name(), "Factory");
         assert_eq!(ProviderId::Zai.display_name(), "z.ai");
+        assert_eq!(ProviderId::MiMo.display_name(), "MiMo");
+        assert_eq!(ProviderId::MiMoApi.display_name(), "MiMo API");
     }
 
     #[test]

@@ -503,7 +503,13 @@ fn fallback_for_window(
             continue;
         }
         if let Some(window) = window_by_kind(snapshot, kind) {
-            return Some(named_entry(snapshot, window, settings, window_label(kind), kind));
+            return Some(named_entry(
+                snapshot,
+                window,
+                settings,
+                window_label(kind),
+                kind,
+            ));
         }
     }
 
@@ -764,6 +770,7 @@ mod tests {
             id: "zai-account-balance".into(),
             title: "Account balance".into(),
             window: wallet,
+            activation_at: None,
             usage_known: false,
             inventory_expires_at: Vec::new(),
         }];
@@ -949,6 +956,7 @@ mod tests {
             id: "zai-account-balance".into(),
             title: "Account balance".into(),
             window: extra,
+            activation_at: None,
             usage_known: false,
             inventory_expires_at: Vec::new(),
         }];
@@ -1166,6 +1174,7 @@ mod tests {
                 id: "zai-zcode-0".into(),
                 title: "体验套餐 · GLM-5.3-Flash".into(),
                 window: extra,
+                activation_at: None,
                 usage_known: true,
                 inventory_expires_at: Vec::new(),
             },
@@ -1173,6 +1182,7 @@ mod tests {
                 id: "zai-account-balance".into(),
                 title: "Account balance".into(),
                 window: wallet,
+                activation_at: None,
                 usage_known: false,
                 inventory_expires_at: Vec::new(),
             },
@@ -1240,7 +1250,10 @@ mod tests {
         let snaps = vec![snapshot("codex", "Codex")];
         let settings = settings_with(vec![("codex", "weekly")]);
         let out = resolve_entries(&settings, &snaps, None, &localized, &no_speed);
-        assert_eq!(out[0].window, "周额度", "direct path keeps the localized label");
+        assert_eq!(
+            out[0].window, "周额度",
+            "direct path keeps the localized label"
+        );
 
         // Main window informational-only (expired trial): the primary
         // resolver moves onto the surviving real window (weekly), and its

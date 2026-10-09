@@ -63,6 +63,33 @@ describe("fromBridge", () => {
     expect(snapshot.capabilities.hasQuota).toBe(false);
   });
 
+  it("preserves scheduled activation without treating it as quota", () => {
+    const activationAt = "2026-09-25T09:30:00.000Z";
+    const source = FIXTURE_BRIDGES.unknownUsage;
+    const snapshot = fromBridge(
+      {
+        ...source,
+        extraRateWindows: [
+          {
+            ...source.extraRateWindows[0],
+            id: "zai-zcode-upcoming-0-0",
+            title: "体验套餐 · GLM-5.3-Flash",
+            activationAt,
+          },
+        ],
+      },
+      NOW,
+    );
+    const upcoming = snapshot.windows.find(
+      (window) => window.id === "zai-zcode-upcoming-0-0",
+    );
+
+    expect(upcoming?.activationAt).toBe(activationAt);
+    expect(upcoming?.isInformational).toBe(true);
+    expect(upcoming?.usageKnown).toBe(false);
+    expect(isRealQuotaWindow(upcoming!)).toBe(false);
+  });
+
   it("marks 4+ real windows as overflow shape", () => {
     const snapshot = FIXTURE_SNAPSHOTS.overflowFourPlus;
     expect(snapshot.windows.filter(isRealQuotaWindow).length).toBeGreaterThanOrEqual(5);

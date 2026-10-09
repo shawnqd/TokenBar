@@ -8,6 +8,7 @@
 use super::{codex_routed_pricing, models_dev_pricing};
 use chrono::NaiveDate;
 use std::collections::HashMap;
+use std::path::Path;
 use std::sync::LazyLock;
 
 /// Whole-request Codex rates for input above the model context threshold.
@@ -202,7 +203,8 @@ static CODEX_PRICING: LazyLock<HashMap<&'static str, CodexPricing>> = LazyLock::
         },
     );
 
-    // GPT-5.4 pricing (updated to match upstream 0.22)
+    // GPT-5.4 pricing (updated to match upstream 0.22; long-context rates
+    // from OpenAI official pricing, 2026-10-01: 5/0.50/22.50 above 272K)
     m.insert(
         "gpt-5.4",
         CodexPricing {
@@ -210,7 +212,11 @@ static CODEX_PRICING: LazyLock<HashMap<&'static str, CodexPricing>> = LazyLock::
             output_cost_per_token: 1.5e-5,
             cache_read_input_cost_per_token: 2.5e-7,
             display_label: None,
-            long_context: None,
+            long_context: Some(CodexLongContextRates {
+                input_cost_per_token: 5e-6,
+                output_cost_per_token: 2.25e-5,
+                cache_read_input_cost_per_token: 5e-7,
+            }),
         },
     );
     m.insert(
@@ -286,7 +292,12 @@ static CODEX_PRICING: LazyLock<HashMap<&'static str, CodexPricing>> = LazyLock::
             output_cost_per_token: 3e-5,
             cache_read_input_cost_per_token: 5e-7,
             display_label: None,
-            long_context: None,
+            // OpenAI official long-context pricing, 2026-10-01: 10/1/45.
+            long_context: Some(CodexLongContextRates {
+                input_cost_per_token: 1e-5,
+                output_cost_per_token: 4.5e-5,
+                cache_read_input_cost_per_token: 1e-6,
+            }),
         },
     );
     m.insert(
@@ -294,22 +305,35 @@ static CODEX_PRICING: LazyLock<HashMap<&'static str, CodexPricing>> = LazyLock::
         CodexPricing {
             input_cost_per_token: 3e-5,
             output_cost_per_token: 1.8e-4,
+            // OpenAI lists no cached-input discount for Pro; cache reads price
+            // at the input rate.
             cache_read_input_cost_per_token: 3e-5,
             display_label: None,
-            long_context: None,
+            // OpenAI official long-context pricing, 2026-10-01: 60/-/270.
+            long_context: Some(CodexLongContextRates {
+                input_cost_per_token: 6e-5,
+                output_cost_per_token: 2.7e-4,
+                cache_read_input_cost_per_token: 6e-5,
+            }),
         },
     );
     m.insert(
         "gpt-5.6-sol",
         CodexPricing {
-            input_cost_per_token: 5e-6,
-            output_cost_per_token: 3e-5,
-            cache_read_input_cost_per_token: 5e-7,
+            // OpenAI official pricing (developers.openai.com, 2026-10-01):
+            // short context 4/0.40/20, long context 8/0.80/30 — promotional
+            // rates per OpenAI's footnote, offered through at least
+            // 2026-11-21. Usage before the 2026-07-30 price cutover prices at
+            // the historical 5/30 short and 10/45/1 long rates (see
+            // `codex_cost_usd_at_date`).
+            input_cost_per_token: 4e-6,
+            output_cost_per_token: 2e-5,
+            cache_read_input_cost_per_token: 4e-7,
             display_label: None,
             long_context: Some(CodexLongContextRates {
-                input_cost_per_token: 1e-5,
-                output_cost_per_token: 4.5e-5,
-                cache_read_input_cost_per_token: 1e-6,
+                input_cost_per_token: 8e-6,
+                output_cost_per_token: 3e-5,
+                cache_read_input_cost_per_token: 8e-7,
             }),
         },
     );
@@ -727,6 +751,8 @@ impl CostUsagePricing {
                 ("gpt-5.6-terra", true) => Some((5e-6, 5e-7, 2.25e-5)),
                 ("gpt-5.6-luna", false) => Some((1e-6, 1e-7, 6e-6)),
                 ("gpt-5.6-luna", true) => Some((2e-6, 2e-7, 9e-6)),
+                ("gpt-5.6-sol", false) => Some((5e-6, 5e-7, 3e-5)),
+                ("gpt-5.6-sol", true) => Some((1e-5, 1e-6, 4.5e-5)),
                 _ => None,
             };
             if let Some((input_rate, cache_rate, output_rate)) = rates {
@@ -756,6 +782,55 @@ impl CostUsagePricing {
         if key == Self::CODEX_UNATTRIBUTED_MODEL {
             return None;
         }
+
+        // A fresh daily catalog outranks the built-in table: promotional or
+        // revised upstream prices self-correct within a day of models.dev
+        // tracking them, with no release required. The catalog does not carry
+        // OpenAI long-context tiers, so the built-in long-context table (when
+        // present) still applies on top of the fresh base rates. Unit tests
+        // pin the built-in tables deterministically and skip this path; the
+        // rate application is shared and covered below.
+        #[cfg(not(test))]
+        if let Some(dynamic) = models_dev_pricing::lookup("openai", model) {
+            let cache_rate = dynamic
+                .cache_read_input_cost_per_token
+                .unwrap_or(dynamic.input_cost_per_token);
+            let long_context = CODEX_PRICING
+                .get(key.as_str())
+                .and_then(|pricing| pricing.long_context);
+            let (input_rate, cache_read_rate, output_rate) =
+                if input_tokens > CODEX_LONG_CONTEXT_THRESHOLD {
+                    long_context.map_or(
+                        (
+                            dynamic.input_cost_per_token,
+                            cache_rate,
+                            dynamic.output_cost_per_token,
+                        ),
+                        |lc| {
+                            (
+                                lc.input_cost_per_token,
+                                lc.cache_read_input_cost_per_token,
+                                lc.output_cost_per_token,
+                            )
+                        },
+                    )
+                } else {
+                    (
+                        dynamic.input_cost_per_token,
+                        cache_rate,
+                        dynamic.output_cost_per_token,
+                    )
+                };
+            return Some(codex_cost_from_rates(
+                input_tokens,
+                cached_input_tokens,
+                output_tokens,
+                input_rate,
+                cache_read_rate,
+                output_rate,
+            ));
+        }
+
         if let Some(pricing) = CODEX_PRICING.get(key.as_str()) {
             let (input_rate, cache_read_rate, output_rate) =
                 if input_tokens > CODEX_LONG_CONTEXT_THRESHOLD {
@@ -855,6 +930,28 @@ impl CostUsagePricing {
         output_tokens: i32,
     ) -> Option<f64> {
         let key = Self::normalize_claude_model(model);
+
+        // Fresh daily catalog first (production builds): the same precedence
+        // rule as the Codex path — promotional or revised prices self-correct
+        // without a release. Unit tests pin the built-in table and skip this
+        // path; the application helper is shared with the stale-catalog
+        // fallback below.
+        #[cfg(not(test))]
+        if let Some(pricing) = models_dev_pricing::lookup("anthropic", model)
+            .or_else(|| models_dev_pricing::lookup_model_anywhere(model))
+        {
+            // GLM/DeepSeek/Kimi token lines routed through Claude Code are not
+            // Anthropic models: the cross-provider lookup prices them at their
+            // own vendor rates instead of the Sonnet fallback.
+            return Some(Self::claude_cost_from_dynamic_pricing(
+                pricing,
+                input_tokens,
+                cache_read_input_tokens,
+                cache_creation_input_tokens,
+                output_tokens,
+            ));
+        }
+
         if let Some(pricing) = CLAUDE_PRICING.get(key.as_str()) {
             /// Calculate tiered cost
             fn tiered(tokens: i32, base: f64, above: Option<f64>, threshold: Option<i32>) -> f64 {
@@ -894,7 +991,27 @@ impl CostUsagePricing {
             return Some(cost);
         }
 
-        let pricing = models_dev_pricing::lookup("anthropic", model)?;
+        let pricing = models_dev_pricing::lookup("anthropic", model)
+            .or_else(|| models_dev_pricing::lookup_model_anywhere(model))?;
+        Some(Self::claude_cost_from_dynamic_pricing(
+            pricing,
+            input_tokens,
+            cache_read_input_tokens,
+            cache_creation_input_tokens,
+            output_tokens,
+        ))
+    }
+
+    /// Apply a dynamic-catalog price to Claude token counts. Shared by the
+    /// fresh-catalog path (production, runs before the built-in table) and
+    /// the stale-catalog fallback after a built-in miss.
+    fn claude_cost_from_dynamic_pricing(
+        pricing: crate::core::models_dev_pricing::DynamicModelPricing,
+        input_tokens: i32,
+        cache_read_input_tokens: i32,
+        cache_creation_input_tokens: i32,
+        output_tokens: i32,
+    ) -> f64 {
         let input_tokens = input_tokens.max(0);
         let cache_read_input_tokens = cache_read_input_tokens.max(0);
         let cache_creation_input_tokens = cache_creation_input_tokens.max(0);
@@ -939,12 +1056,10 @@ impl CostUsagePricing {
         } else {
             pricing.output_cost_per_token
         };
-        Some(
-            (input_tokens as f64) * input_rate
-                + (cache_read_input_tokens as f64) * cache_read_rate
-                + (cache_creation_input_tokens as f64) * cache_write_rate
-                + (output_tokens as f64) * output_rate,
-        )
+        (input_tokens as f64) * input_rate
+            + (cache_read_input_tokens as f64) * cache_read_rate
+            + (cache_creation_input_tokens as f64) * cache_write_rate
+            + (output_tokens as f64) * output_rate
     }
 
     /// Base per-token input rate for a Claude model. Exposed for callers that
@@ -956,6 +1071,77 @@ impl CostUsagePricing {
             return Some(pricing.input_cost_per_token);
         }
         models_dev_pricing::lookup("anthropic", model).map(|p| p.input_cost_per_token)
+    }
+
+    /// Price a token bundle for an arbitrary provider/model pair.
+    ///
+    /// Order: the canonical embedded OpenAI/Anthropic tables first (exact and
+    /// offline), then the models.dev catalog through the supplied provider
+    /// candidates. `None` means no canonical rate is known; callers must mark
+    /// the model unpriced instead of guessing a dollar value. `input_tokens`
+    /// is the non-cached portion, `cached_input_tokens` the read/cache portion
+    /// and `output_tokens` the generated portion.
+    pub(crate) fn generic_model_cost_usd_with_root(
+        provider_candidates: &[&str],
+        model: &str,
+        input_tokens: u64,
+        cached_input_tokens: u64,
+        output_tokens: u64,
+        cache_root: Option<&Path>,
+    ) -> Option<f64> {
+        let model = model.trim();
+        if model.is_empty() {
+            return None;
+        }
+        let lower = model.to_ascii_lowercase();
+        let clamp = |value: u64| value.min(i32::MAX as u64) as i32;
+
+        // Family-routed models stay on the canonical tables so Codex/Claude
+        // costs remain identical no matter which provider's logs carried them
+        // (e.g. the same Claude model appearing through Copilot).
+        if lower.contains("claude")
+            && let Some(cost) = Self::claude_cost_usd(
+                model,
+                clamp(input_tokens),
+                clamp(cached_input_tokens),
+                0,
+                clamp(output_tokens),
+            )
+        {
+            return Some(cost);
+        }
+
+        let openai_family = lower.starts_with("gpt-")
+            || lower.starts_with("o1")
+            || lower.starts_with("o3")
+            || lower.starts_with("o4")
+            || lower.contains("codex");
+        if openai_family
+            && let Some(cost) = Self::codex_cost_usd(
+                model,
+                // The Codex path expects an input count inclusive of cached
+                // tokens and subtracts the cached portion itself, while this
+                // API takes the non-cached portion separately.
+                input_tokens.saturating_add(cached_input_tokens),
+                cached_input_tokens,
+                output_tokens,
+            )
+        {
+            return Some(cost);
+        }
+
+        for provider in provider_candidates {
+            if let Some(pricing) = models_dev_pricing::lookup_with_root(provider, model, cache_root)
+            {
+                return Some(dynamic_pricing_cost(
+                    &pricing,
+                    input_tokens,
+                    cached_input_tokens,
+                    output_tokens,
+                ));
+            }
+        }
+        None
     }
 
     /// Format model name for display (e.g., "claude-3.5-sonnet" → "Sonnet 3.5")
@@ -1010,3 +1196,43 @@ impl CostUsagePricing {
 #[cfg(test)]
 #[path = "cost_pricing_tests.rs"]
 mod tests;
+
+/// Cost of one token bundle at catalog rates, honouring the >200k context
+/// tier when the catalog publishes one.
+fn dynamic_pricing_cost(
+    pricing: &models_dev_pricing::DynamicModelPricing,
+    input_tokens: u64,
+    cached_input_tokens: u64,
+    output_tokens: u64,
+) -> f64 {
+    let use_tier = pricing
+        .threshold_tokens
+        .is_some_and(|threshold| input_tokens > threshold);
+    let input_rate = if use_tier {
+        pricing
+            .input_cost_per_token_above_threshold
+            .unwrap_or(pricing.input_cost_per_token)
+    } else {
+        pricing.input_cost_per_token
+    };
+    let cache_read_rate = if use_tier {
+        pricing
+            .cache_read_input_cost_per_token_above_threshold
+            .or(pricing.cache_read_input_cost_per_token)
+            .unwrap_or(input_rate)
+    } else {
+        pricing
+            .cache_read_input_cost_per_token
+            .unwrap_or(input_rate)
+    };
+    let output_rate = if use_tier {
+        pricing
+            .output_cost_per_token_above_threshold
+            .unwrap_or(pricing.output_cost_per_token)
+    } else {
+        pricing.output_cost_per_token
+    };
+    (input_tokens as f64) * input_rate
+        + (cached_input_tokens as f64) * cache_read_rate
+        + (output_tokens as f64) * output_rate
+}

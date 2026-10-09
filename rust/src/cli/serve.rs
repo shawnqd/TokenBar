@@ -60,7 +60,7 @@ async fn route_request(request: &ServeRequest) -> String {
     match request.path.as_str() {
         "/health" => json_response(
             200,
-            serde_json::json!({ "status": "ok", "version": env!("CARGO_PKG_VERSION") }),
+            serde_json::json!({ "status": "ok", "version": crate::core::display_version() }),
         ),
         "/usage" => usage_response(request.query.get("provider").map(String::as_str)).await,
         "/cost" => cost_response(request.query.get("provider").map(String::as_str)).await,
@@ -81,10 +81,14 @@ async fn usage_response(provider: Option<&str>) -> String {
         web_timeout: 60,
         verbose: false,
         manual_cookie_header: None,
+        fallback_cookie_header: None,
         api_key: None,
         workspace_id: None,
         api_region: None,
         gateway_url: None,
+        allow_browser_cookie: true,
+        auto_prefer_web: false,
+        requires_optional_usage_completeness: false,
     };
 
     let mut results = Vec::new();
@@ -116,12 +120,23 @@ async fn cost_response(provider: Option<&str>) -> String {
     let scanner = CostScanner::new(30);
     let mut results = Vec::new();
     for provider_id in selection.as_list() {
-        let (supported, summary) = match provider_id {
-            ProviderId::Codex => (true, scanner.scan_codex()),
-            ProviderId::Claude => (true, scanner.scan_claude()),
-            _ => (false, Default::default()),
+        // Kept in step with the CLI `cost` command and the desktop
+        // `chart.rs::scan_local_cost` — the same providers are locally
+        // scannable from every surface.
+        let summary = match provider_id {
+            ProviderId::Codex => Some(scanner.scan_codex()),
+            ProviderId::Claude => Some(scanner.scan_claude()),
+            ProviderId::Grok => Some(scanner.scan_grok()),
+            ProviderId::Gemini => Some(scanner.scan_gemini()),
+            ProviderId::Copilot => Some(scanner.scan_copilot()),
+            ProviderId::Kimi => Some(scanner.scan_kimi()),
+            ProviderId::Amp => Some(scanner.scan_amp()),
+            ProviderId::OpenCode => Some(scanner.scan_opencode()),
+            ProviderId::OpenCodeGo => Some(scanner.scan_opencodego()),
+            ProviderId::Antigravity => Some(scanner.scan_antigravity()),
+            _ => None,
         };
-        if supported {
+        if let Some(summary) = summary {
             results.push(serde_json::json!({
                 "provider": provider_id.cli_name(),
                 "supported": true,

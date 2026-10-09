@@ -122,6 +122,9 @@ pub struct NamedRateWindowSnapshot {
     pub id: String,
     pub title: String,
     pub window: RateWindowSnapshot,
+    /// When a scheduled plan becomes usable; distinct from the quota reset.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub activation_at: Option<String>,
     /// False when the provider published the window without a known remaining
     /// fraction (reset-only or disabled buckets). The window itself is
     /// informational in that case; surfaces must show it as unavailable rather
@@ -211,6 +214,7 @@ impl ProviderUsageSnapshot {
         result: &ProviderFetchResult,
     ) -> Self {
         let usage = &result.usage;
+        let allows_pace = result.pace_authoritative;
 
         // The pace block answers "how far through the WEEKLY budget am I,
         // versus how far through the week?", so it must read the weekly
@@ -228,8 +232,16 @@ impl ProviderUsageSnapshot {
             .flatten()
             .find(|w| w.window_minutes.is_none_or(|m| m >= WEEKLY_WINDOW_MINUTES));
 
-        let weekly_pace = weekly_window
-            .and_then(|w| codexbar::core::UsagePace::weekly(w, None, WEEKLY_WINDOW_MINUTES));
+        let weekly_pace = allows_pace.then(|| {
+            weekly_window
+                .and_then(|w| codexbar::core::UsagePace::weekly(w, None, WEEKLY_WINDOW_MINUTES))
+        });
+        let weekly_pace = weekly_pace.flatten();
+
+        // Grok's CLI-proxy may return weekly, monthly, or no recognizable
+        // period. Its static metadata is intentionally neutral; only label a
+        // cycle when this response declares a duration in a known band.
+        let primary_label = primary_label_for(id, metadata, usage.primary.window_minutes);
 
         let pace = weekly_pace.as_ref().map(|p| PaceSnapshot {
             stage: pace_stage_str(p.stage),
@@ -242,20 +254,21 @@ impl ProviderUsageSnapshot {
         });
 
         // Compute pace for secondary window (weekly) to derive reserve info
-        let secondary_pace = usage
-            .secondary
-            .as_ref()
-            .and_then(|sw| codexbar::core::UsagePace::weekly(sw, None, 10080));
+        let secondary_pace = allows_pace.then(|| {
+            usage
+                .secondary
+                .as_ref()
+                .and_then(|sw| codexbar::core::UsagePace::weekly(sw, None, 10080))
+        });
+        let secondary_pace = secondary_pace.flatten();
 
         // The slot labels are the provider's own names for these two windows,
         // and they are the only identification a provider that publishes no
         // length has. They are already sent as `primary_label`/`secondary_label`
         // below; classifying with them here is what lets every surface read the
         // answer instead of recomputing it.
-        let primary_snap = RateWindowSnapshot::from_rate_window_labelled(
-            &usage.primary,
-            Some(metadata.session_label),
-        );
+        let primary_snap =
+            RateWindowSnapshot::from_rate_window_labelled(&usage.primary, Some(primary_label));
 
         let secondary_snap = usage.secondary.as_ref().map(|sw| {
             let mut s =
@@ -270,7 +283,7 @@ impl ProviderUsageSnapshot {
             provider_id: id.cli_name().to_string(),
             display_name: id.display_name().to_string(),
             primary: primary_snap,
-            primary_label: Some(metadata.session_label.to_string()),
+            primary_label: Some(primary_label.to_string()),
             secondary: secondary_snap,
             secondary_label: usage
                 .secondary
@@ -294,6 +307,7 @@ impl ProviderUsageSnapshot {
                         &extra.window,
                         Some(extra.title.as_str()),
                     ),
+                    activation_at: extra.activation_at.as_ref().map(|dt| dt.to_rfc3339()),
                     usage_known: extra.usage_known,
                     inventory_expires_at: extra
                         .inventory_expires_at
@@ -353,7 +367,7 @@ impl ProviderUsageSnapshot {
                 reserve_will_last_to_reset: false,
                 reserve_eta_seconds: None,
             },
-            primary_label: Some(metadata.session_label.to_string()),
+            primary_label: Some(primary_label_for(id, metadata, None).to_string()),
             secondary: None,
             secondary_label: None,
             model_specific: None,
@@ -374,6 +388,23 @@ impl ProviderUsageSnapshot {
             wayfinder_usage: None,
             capabilities: codexbar::core::ProviderCapabilities::for_provider(id, metadata),
         }
+    }
+}
+
+fn primary_label_for(
+    id: ProviderId,
+    metadata: &ProviderMetadata,
+    window_minutes: Option<u32>,
+) -> &'static str {
+    if id != ProviderId::Grok {
+        return metadata.session_label;
+    }
+    match crate::quota_cycle::classify(window_minutes, None) {
+        Some("weekly") => "Weekly",
+        Some("monthly") => "Monthly",
+        Some("daily") => "Daily",
+        Some("session") => "Session",
+        _ => "Credits",
     }
 }
 
@@ -871,6 +902,92 @@ pub(super) fn parse_metric_preference(s: &str) -> Option<MetricPreference> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn scheduled_plan_activation_survives_fetch_bridge_and_serialization() {
+        let activation_at = chrono::DateTime::from_timestamp(1_789_000_000, 0).unwrap();
+        let activation_at_rfc3339 = activation_at.to_rfc3339();
+        let metadata = codexbar::core::ProviderMetadata {
+            id: ProviderId::Zai,
+            display_name: "z.ai",
+            session_label: "5h",
+            weekly_label: "weekly",
+            supports_opus: false,
+            supports_credits: false,
+            default_enabled: true,
+            is_primary: true,
+            dashboard_url: None,
+            status_page_url: None,
+        };
+        let mut usage = codexbar::core::UsageSnapshot::new(codexbar::core::RateWindow::new(0.0));
+        let mut pending_window = codexbar::core::RateWindow::new(0.0);
+        pending_window.is_informational = true;
+        usage.extra_rate_windows.push(
+            codexbar::core::NamedRateWindow::new(
+                "zai-zcode-upcoming-0-0",
+                "体验套餐 · GLM-5.3-Flash",
+                pending_window,
+            )
+            .with_usage_known(false)
+            .with_activation_at(activation_at),
+        );
+        let fetch_result = codexbar::core::ProviderFetchResult::new(usage, "oauth");
+
+        let snapshot =
+            ProviderUsageSnapshot::from_fetch_result(ProviderId::Zai, &metadata, &fetch_result);
+        let upcoming = &snapshot.extra_rate_windows[0];
+        assert_eq!(
+            upcoming.activation_at.as_deref(),
+            Some(activation_at_rfc3339.as_str())
+        );
+        assert!(!upcoming.usage_known);
+        assert!(upcoming.window.is_informational);
+
+        let serialized = serde_json::to_value(snapshot).unwrap();
+        assert_eq!(
+            serialized["extraRateWindows"][0]["activationAt"],
+            activation_at_rfc3339
+        );
+    }
+
+    #[test]
+    fn grok_cycle_label_uses_declared_period_and_keeps_unknown_generic() {
+        let metadata = codexbar::core::ProviderMetadata {
+            id: ProviderId::Grok,
+            display_name: "Grok",
+            session_label: "Credits",
+            weekly_label: "On-demand",
+            supports_opus: false,
+            supports_credits: false,
+            default_enabled: false,
+            is_primary: false,
+            dashboard_url: None,
+            status_page_url: None,
+        };
+
+        for (window_minutes, expected_label, expected_kind) in [
+            (Some(7 * 24 * 60), "Weekly", Some("weekly")),
+            (Some(30 * 24 * 60), "Monthly", Some("monthly")),
+            (None, "Credits", None),
+        ] {
+            let usage = codexbar::core::UsageSnapshot::new(
+                codexbar::core::RateWindow::with_details(12.0, window_minutes, None, None),
+            );
+            let result = codexbar::core::ProviderFetchResult::new(usage, "grok-cli");
+            let snapshot =
+                ProviderUsageSnapshot::from_fetch_result(ProviderId::Grok, &metadata, &result);
+
+            assert_eq!(snapshot.primary_label.as_deref(), Some(expected_label));
+            assert_eq!(snapshot.primary.kind, expected_kind);
+        }
+
+        let error = ProviderUsageSnapshot::from_error(
+            ProviderId::Grok,
+            &metadata,
+            "billing unavailable".to_string(),
+        );
+        assert_eq!(error.primary_label.as_deref(), Some("Credits"));
+    }
 
     fn snapshot_window_with(
         used_percent: f64,

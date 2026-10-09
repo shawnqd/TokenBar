@@ -859,7 +859,7 @@ fn open_or_focus_inner(
     let (width, height) = remembered_size(&props);
     let url = WebviewUrl::App("index.html?window=flyout".into());
     let mut builder = tauri::WebviewWindowBuilder::new(app, FLYOUT_LABEL, url)
-        .title("CodexBar")
+        .title(codexbar::core::dev_window_title("CodexBar"))
         .inner_size(width, height)
         .decorations(props.decorations)
         .shadow(true)

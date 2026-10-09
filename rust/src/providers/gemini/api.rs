@@ -353,17 +353,35 @@ impl GeminiApi {
             return Err(ProviderError::Parse("Empty quota buckets".to_string()));
         }
 
-        // Group quotas by model, keeping lowest per model
+        // Group quotas by model, keeping lowest per model. Buckets without a
+        // remaining fraction (reset-only rows) cannot contribute a percentage.
         let mut model_quotas: std::collections::HashMap<String, (f64, Option<String>)> =
             std::collections::HashMap::new();
 
-        for bucket in buckets {
-            if let (Some(model_id), Some(fraction)) = (bucket.model_id, bucket.remaining_fraction) {
-                let entry = model_quotas.entry(model_id).or_insert((1.0, None));
-                if fraction < entry.0 {
-                    *entry = (fraction, bucket.reset_time);
-                }
+        for bucket in &buckets {
+            let Some(model_id) = bucket.model_id.clone() else {
+                continue;
+            };
+            let Some(fraction) = bucket.remaining_fraction else {
+                continue;
+            };
+            let entry = model_quotas.entry(model_id).or_insert((1.0, None));
+            if fraction < entry.0 {
+                *entry = (fraction, bucket.reset_time.clone());
             }
+        }
+
+        // A payload that reports no remaining fractions at all carries unknown
+        // usage, not untouched quota. Rendering the default 1.0 fraction as a
+        // fresh 0%-used bar would hide real consumption from a paying user.
+        if model_quotas.is_empty() {
+            return Ok((
+                RateWindow::informational("Quota usage unavailable (reset-only windows)"),
+                None,
+                creds
+                    .and_then(|c| c.id_token.as_ref())
+                    .and_then(|token| extract_email_from_jwt(token)),
+            ));
         }
 
         // Find Flash and Pro quotas
@@ -519,4 +537,93 @@ fn extract_email_from_jwt(token: &str) -> Option<String> {
     json.get("email")
         .and_then(|v| v.as_str())
         .map(|s| s.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn bucket(model: &str, fraction: Option<f64>, reset: Option<&str>) -> QuotaBucket {
+        QuotaBucket {
+            remaining_fraction: fraction,
+            reset_time: reset.map(str::to_string),
+            model_id: Some(model.to_string()),
+            token_type: None,
+        }
+    }
+
+    // A payload that publishes reset windows but no remaining fractions carries
+    // unknown usage. It must never render as a fresh 0%-used quota bar.
+    #[test]
+    fn reset_only_payload_yields_informational_window() {
+        let response = QuotaResponse {
+            buckets: Some(vec![
+                bucket("gemini-3-pro-high", None, Some("2026-09-28T00:00:00Z")),
+                bucket("gemini-3-flash", None, Some("2026-09-27T18:00:00Z")),
+            ]),
+        };
+        let (primary, model_specific, _) = GeminiApi::new()
+            .parse_quota_response(response, None)
+            .unwrap();
+        assert!(primary.is_informational);
+        assert!(model_specific.is_none());
+    }
+
+    #[test]
+    fn empty_buckets_stay_a_parse_error() {
+        let response = QuotaResponse {
+            buckets: Some(Vec::new()),
+        };
+        assert!(
+            GeminiApi::new()
+                .parse_quota_response(response, None)
+                .is_err()
+        );
+        let response = QuotaResponse { buckets: None };
+        assert!(
+            GeminiApi::new()
+                .parse_quota_response(response, None)
+                .is_err()
+        );
+    }
+
+    // Known fractions keep the lowest-remaining selection, with the percent
+    // direction used = (1 - remaining) * 100.
+    #[test]
+    fn known_fractions_select_lowest_and_convert_direction() {
+        let response = QuotaResponse {
+            buckets: Some(vec![
+                bucket(
+                    "gemini-3-pro-high",
+                    Some(0.75),
+                    Some("2026-09-28T00:00:00Z"),
+                ),
+                bucket("gemini-3-pro-low", Some(0.25), Some("2026-09-28T00:00:00Z")),
+                bucket("gemini-3-flash", Some(0.5), Some("2026-09-27T18:00:00Z")),
+            ]),
+        };
+        let (primary, model_specific, _) = GeminiApi::new()
+            .parse_quota_response(response, None)
+            .unwrap();
+        assert!((primary.used_percent - 75.0).abs() < 0.001);
+        assert!(!primary.is_informational);
+        let flash = model_specific.expect("flash window");
+        assert!((flash.used_percent - 50.0).abs() < 0.001);
+    }
+
+    // Mixed payloads keep the known fractions and ignore fraction-less rows.
+    #[test]
+    fn mixed_payload_ignores_fractionless_rows() {
+        let response = QuotaResponse {
+            buckets: Some(vec![
+                bucket("gemini-3-pro-high", Some(0.9), Some("2026-09-28T00:00:00Z")),
+                bucket("gemini-3-flash", None, Some("2026-09-27T18:00:00Z")),
+            ]),
+        };
+        let (primary, _, _) = GeminiApi::new()
+            .parse_quota_response(response, None)
+            .unwrap();
+        assert!((primary.used_percent - 10.0).abs() < 0.001);
+        assert!(!primary.is_informational);
+    }
 }
