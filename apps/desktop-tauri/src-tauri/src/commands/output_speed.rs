@@ -105,42 +105,117 @@ pub struct OutputSpeedSnapshot {
     pub opencodego: ProviderOutputSpeed,
 }
 
+impl OutputSpeedSnapshot {
+    pub fn unavailable() -> Self {
+        Self {
+            codex: ProviderOutputSpeed::unavailable("codex"),
+            claude: ProviderOutputSpeed::unavailable("claude"),
+            grok: ProviderOutputSpeed::unavailable("grok"),
+            kimi: ProviderOutputSpeed::unavailable("kimi"),
+            opencode: ProviderOutputSpeed::unavailable("opencode"),
+            opencodego: ProviderOutputSpeed::unavailable("opencodego"),
+        }
+    }
+}
+
 /// One resolved snapshot, kept briefly so repeated callers do not each pay
 /// the session-file scan.
 ///
 /// Building a snapshot walks Codex/Claude/Grok session roots and reads file
-/// tails — real disk I/O. It is requested from the tray icon/tooltip/strip
-/// update after every provider refresh *and* by the frontend speed hook, so
-/// an uncached read ran several times per refresh round. The frontend
-/// scheduler gates its own reads behind a 15s TTL; this short backend TTL
-/// only collapses the burst of reads within one refresh/update cycle.
-static SNAPSHOT_CACHE: std::sync::Mutex<Option<(std::time::Instant, OutputSpeedSnapshot)>> =
-    std::sync::Mutex::new(None);
+/// tails — real disk I/O. Background tasks coalesce multiple requests so the
+/// UI thread and tray updates are never blocked by directory traversals.
+struct OutputSpeedServiceState {
+    snapshot: Option<OutputSpeedSnapshot>,
+    updated_at: Option<std::time::Instant>,
+    in_flight: bool,
+    failure_backoff_until: Option<std::time::Instant>,
+}
+
+static SPEED_STATE: std::sync::Mutex<OutputSpeedServiceState> =
+    std::sync::Mutex::new(OutputSpeedServiceState {
+        snapshot: None,
+        updated_at: None,
+        in_flight: false,
+        failure_backoff_until: None,
+    });
 const SNAPSHOT_TTL: std::time::Duration = std::time::Duration::from_secs(3);
 
-#[tauri::command]
-pub fn get_output_speed_snapshot() -> OutputSpeedSnapshot {
-    if let Ok(guard) = SNAPSHOT_CACHE.lock()
-        && let Some((built_at, snapshot)) = guard.as_ref()
-        && built_at.elapsed() < SNAPSHOT_TTL
-    {
-        return snapshot.clone();
-    }
+fn record_scan_failure(state: &mut OutputSpeedServiceState) {
+    state.in_flight = false;
+    state.failure_backoff_until =
+        Some(std::time::Instant::now() + std::time::Duration::from_secs(5));
+}
 
+pub fn resolve_full_snapshot() -> OutputSpeedSnapshot {
     let settings = codexbar::settings::Settings::load();
-    let snapshot = OutputSpeedSnapshot {
+    OutputSpeedSnapshot {
         codex: resolve_codex_speed(&settings.codex_custom_sessions_dirs),
         claude: resolve_claude_speed(),
         grok: resolve_grok_speed(),
         kimi: resolve_kimi_speed(),
         opencode: resolve_opencode_speed(),
         opencodego: resolve_opencodego_speed(),
+    }
+}
+
+#[tauri::command]
+pub fn get_output_speed_snapshot(app: tauri::AppHandle) -> OutputSpeedSnapshot {
+    let mut should_spawn = false;
+    let cached = {
+        let mut guard = SPEED_STATE.lock().unwrap_or_else(|p| p.into_inner());
+        let is_fresh = guard
+            .updated_at
+            .map(|t| t.elapsed() < SNAPSHOT_TTL)
+            .unwrap_or(false);
+        let in_backoff = guard
+            .failure_backoff_until
+            .map(|t| std::time::Instant::now() < t)
+            .unwrap_or(false);
+
+        if !is_fresh && !guard.in_flight && !in_backoff {
+            guard.in_flight = true;
+            should_spawn = true;
+        }
+        guard.snapshot.clone()
     };
 
-    if let Ok(mut guard) = SNAPSHOT_CACHE.lock() {
-        *guard = Some((std::time::Instant::now(), snapshot.clone()));
+    if should_spawn {
+        let app_for_refresh = app.clone();
+        std::thread::Builder::new()
+            .name("output-speed-scan".into())
+            .spawn(move || {
+                let start = std::time::Instant::now();
+                let result = std::panic::catch_unwind(resolve_full_snapshot);
+                let elapsed = start.elapsed();
+                tracing::debug!(
+                    ?elapsed,
+                    ok = result.is_ok(),
+                    "output_speed: background scan finished"
+                );
+
+                let mut guard = SPEED_STATE.lock().unwrap_or_else(|p| p.into_inner());
+                match result {
+                    Ok(new_snapshot) => {
+                        guard.in_flight = false;
+                        guard.snapshot = Some(new_snapshot);
+                        guard.updated_at = Some(std::time::Instant::now());
+                        guard.failure_backoff_until = None;
+                        let callback_app = app_for_refresh.clone();
+                        let _ = app_for_refresh.run_on_main_thread(move || {
+                            crate::tray_bridge::refresh_tray_presentation(&callback_app);
+                        });
+                    }
+                    Err(_) => record_scan_failure(&mut guard),
+                }
+            })
+            .map(|_| ())
+            .unwrap_or_else(|_| {
+                let mut guard = SPEED_STATE.lock().unwrap_or_else(|p| p.into_inner());
+                record_scan_failure(&mut guard);
+            });
     }
-    snapshot
+
+    cached.unwrap_or_else(OutputSpeedSnapshot::unavailable)
 }
 
 fn resolve_codex_speed(custom_dirs: &[String]) -> ProviderOutputSpeed {
@@ -450,6 +525,34 @@ fn recent_matching_files_in_roots(
     recent_matching_files_with_extensions(roots, accept, limit, &["jsonl"])
 }
 
+const MAX_SCAN_DEPTH: usize = 4;
+const MAX_CANDIDATE_FILES: usize = 100;
+const SCAN_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(500);
+
+fn should_skip_dir(name: &str) -> bool {
+    matches!(
+        name,
+        "node_modules" | ".git" | "target" | "cache" | ".cache" | "build" | "dist"
+    )
+}
+
+fn retain_newest_candidate(
+    candidates: &mut Vec<(SystemTime, PathBuf)>,
+    modified: SystemTime,
+    path: PathBuf,
+) {
+    candidates.push((modified, path));
+    if candidates.len() > MAX_CANDIDATE_FILES {
+        if let Some((oldest_index, _)) = candidates
+            .iter()
+            .enumerate()
+            .min_by(|(_, left), (_, right)| left.0.cmp(&right.0))
+        {
+            candidates.swap_remove(oldest_index);
+        }
+    }
+}
+
 /// Extension-parameterized variant used by the OpenCode resolver, whose legacy
 /// storage tree is one `.json` document per message rather than JSONL.
 fn recent_matching_files_with_extensions(
@@ -458,13 +561,18 @@ fn recent_matching_files_with_extensions(
     limit: usize,
     extensions: &[&str],
 ) -> Vec<PathBuf> {
+    let deadline = std::time::Instant::now() + SCAN_TIMEOUT;
     let mut candidates: Vec<(SystemTime, PathBuf)> = Vec::new();
     for root in roots {
-        visit_files_with_extensions(root, extensions, &mut |path, modified| {
+        if std::time::Instant::now() >= deadline {
+            break;
+        }
+        visit_files_with_extensions(root, extensions, deadline, 0, &mut |path, modified| {
             if !accept(path) {
-                return;
+                return true;
             }
-            candidates.push((modified, path.to_path_buf()));
+            retain_newest_candidate(&mut candidates, modified, path.to_path_buf());
+            true
         });
     }
     candidates.sort_by(|(a, _), (b, _)| b.cmp(a));
@@ -476,31 +584,54 @@ fn recent_matching_files_with_extensions(
 }
 
 fn visit_jsonl_files(root: &Path, visit: &mut impl FnMut(&Path, SystemTime)) {
-    visit_files_with_extensions(root, &["jsonl"], visit);
+    let deadline = std::time::Instant::now() + SCAN_TIMEOUT;
+    visit_files_with_extensions(root, &["jsonl"], deadline, 0, &mut |path, time| {
+        visit(path, time);
+        true
+    });
 }
 
 fn visit_files_with_extensions(
     root: &Path,
     extensions: &[&str],
-    visit: &mut impl FnMut(&Path, SystemTime),
-) {
+    deadline: std::time::Instant,
+    current_depth: usize,
+    visit: &mut impl FnMut(&Path, SystemTime) -> bool,
+) -> bool {
+    if current_depth > MAX_SCAN_DEPTH || std::time::Instant::now() >= deadline {
+        return true;
+    }
     let Ok(entries) = fs::read_dir(root) else {
-        return;
+        return true;
     };
     for entry in entries.flatten() {
+        if std::time::Instant::now() >= deadline {
+            return true;
+        }
         let path = entry.path();
         let Ok(metadata) = entry.metadata() else {
             continue;
         };
         if metadata.is_dir() {
-            visit_files_with_extensions(&path, extensions, visit);
+            if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+                if should_skip_dir(name) {
+                    continue;
+                }
+            }
+            if !visit_files_with_extensions(&path, extensions, deadline, current_depth + 1, visit) {
+                return false;
+            }
         } else if path
             .extension()
             .is_some_and(|extension| extensions.contains(&extension.to_string_lossy().as_ref()))
         {
-            visit(&path, metadata.modified().unwrap_or(SystemTime::UNIX_EPOCH));
+            let keep_going = visit(&path, metadata.modified().unwrap_or(SystemTime::UNIX_EPOCH));
+            if !keep_going {
+                return false;
+            }
         }
     }
+    true
 }
 
 fn read_tail(path: &Path) -> std::io::Result<String> {
@@ -1150,5 +1281,70 @@ mod tests {
             (result.tokens_per_second.unwrap() - 100.0).abs() < 1e-9,
             "200 tokens / 2s: {result:?}"
         );
+    }
+
+    #[test]
+    fn should_skip_dir_recognizes_heavy_directories() {
+        assert!(should_skip_dir("node_modules"));
+        assert!(should_skip_dir(".git"));
+        assert!(should_skip_dir("target"));
+        assert!(should_skip_dir("cache"));
+        assert!(should_skip_dir(".cache"));
+        assert!(should_skip_dir("build"));
+        assert!(should_skip_dir("dist"));
+        assert!(!should_skip_dir("sessions"));
+        assert!(!should_skip_dir("projects"));
+    }
+
+    #[test]
+    fn candidate_cap_retains_newest_files_across_enumeration_order() {
+        let base = SystemTime::UNIX_EPOCH;
+        let mut candidates = Vec::new();
+        for index in 0..(MAX_CANDIDATE_FILES + 25) {
+            retain_newest_candidate(
+                &mut candidates,
+                base + std::time::Duration::from_secs(index as u64),
+                PathBuf::from(format!("session-{index}.jsonl")),
+            );
+        }
+
+        assert_eq!(candidates.len(), MAX_CANDIDATE_FILES);
+        assert!(
+            candidates
+                .iter()
+                .any(|(_, path)| path == &PathBuf::from("session-124.jsonl"))
+        );
+        assert!(
+            !candidates
+                .iter()
+                .any(|(_, path)| path == &PathBuf::from("session-0.jsonl"))
+        );
+    }
+
+    #[test]
+    fn unavailable_snapshot_has_all_providers_unavailable() {
+        let snap = OutputSpeedSnapshot::unavailable();
+        assert_eq!(snap.codex.status, "unavailable");
+        assert_eq!(snap.claude.status, "unavailable");
+        assert_eq!(snap.grok.status, "unavailable");
+        assert_eq!(snap.kimi.status, "unavailable");
+        assert_eq!(snap.opencode.status, "unavailable");
+        assert_eq!(snap.opencodego.status, "unavailable");
+        assert_eq!(snap.codex.tokens_per_second, None);
+    }
+
+    #[test]
+    fn scan_failure_releases_single_flight_latch() {
+        let mut state = OutputSpeedServiceState {
+            snapshot: None,
+            updated_at: None,
+            in_flight: true,
+            failure_backoff_until: None,
+        };
+
+        record_scan_failure(&mut state);
+
+        assert!(!state.in_flight);
+        assert!(state.failure_backoff_until.is_some());
     }
 }

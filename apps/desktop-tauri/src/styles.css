@@ -7871,8 +7871,7 @@ body:has(.tray-panel-reveal) #root {
      RECTANGLE and ignores `SetWindowRgn`, so the only way to round it is
      `DWMWA_WINDOW_CORNER_PREFERENCE` — a fixed ~8px that cannot be
      configured. Keeping a frosted backdrop therefore meant giving up the
-     corner radius entirely. The shared geometry constants document the
-     accepted measurements. */
+     corner radius entirely. See the design notes for the measurements. */
   border-radius: var(--flyout-radius);
   clip-path: inset(0 round var(--flyout-radius));
   background: #161618;

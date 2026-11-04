@@ -69,8 +69,15 @@ export default function TrayPanel({ state }: { state: BootstrapState }) {
   const { settings } = useSettings(state.settings);
   const trayState = useTrayCoreState();
   const records = useTrayCoreRecords();
+  const [revealPhase, setRevealPhase] = useState<
+    "parked" | "opening" | "closing"
+  >("parked");
+  const revealPhaseRef = useRef(revealPhase);
+  const isPanelVisible = revealPhase === "opening";
   const outputSpeed = useOutputSpeedSnapshot(
     settings.outputSpeedEnabled !== false,
+    1_000,
+    isPanelVisible,
   );
   // The tray flyout and the PopOut dashboard share the "dashboard" component's
   // settings — they render the same cards from the same snapshot.
@@ -154,9 +161,6 @@ export default function TrayPanel({ state }: { state: BootstrapState }) {
     };
   }, []);
   const [gridExpanded, setGridExpanded] = useState(false);
-  const [revealPhase, setRevealPhase] = useState<
-    "parked" | "opening" | "closing"
-  >("parked");
   /** True once the opening animation has played. The reveal keyframes use
    *  fill-mode `both`, which would otherwise hold a transform on the panel
    *  forever and keep the whole tree on a composited layer — the source of
@@ -263,27 +267,78 @@ export default function TrayPanel({ state }: { state: BootstrapState }) {
 
   useEffect(() => {
     let disposed = false;
+    let lastFrostGeneration = -1;
+    let pendingVisibleFrost: { generation: number; css: string } | null = null;
     const unlisteners: Array<() => void> = [];
+    const applyVisibleFrost = (payload: { generation: number; css: string }) => {
+      if (payload.generation < lastFrostGeneration) return;
+      lastFrostGeneration = payload.generation;
+      if (payload.css.startsWith("url(")) {
+        document.documentElement.style.setProperty("--tray-frost", payload.css);
+      } else {
+        document.documentElement.style.removeProperty("--tray-frost");
+      }
+    };
     const replayReveal = () => {
+      revealPhaseRef.current = "opening";
       setRevealPhase("opening");
       const body = document.querySelector<HTMLElement>(
         ".tray-panel-reveal .flyout-body",
       );
       if (body) body.scrollTop = 0;
+      if (pendingVisibleFrost) {
+        applyVisibleFrost(pendingVisibleFrost);
+        pendingVisibleFrost = null;
+      }
     };
-    const replayClose = () => setRevealPhase("closing");
-    const parkReveal = () => setRevealPhase("parked");
+    const replayClose = () => {
+      revealPhaseRef.current = "closing";
+      pendingVisibleFrost = null;
+      setRevealPhase("closing");
+    };
+    const parkReveal = () => {
+      revealPhaseRef.current = "parked";
+      pendingVisibleFrost = null;
+      setRevealPhase("parked");
+      document.documentElement.style.removeProperty("--tray-frost");
+    };
 
     void (async () => {
       unlisteners.push(await listen(TRAY_PANEL_REVEALED_EVENT, replayReveal));
       unlisteners.push(await listen(TRAY_PANEL_CLOSING_EVENT, replayClose));
       unlisteners.push(await listen(TRAY_PANEL_HIDDEN_EVENT, parkReveal));
       unlisteners.push(
-        await listen<string>(TRAY_PANEL_FROST_EVENT, (event) => {
-          if (typeof event.payload === "string" && event.payload.startsWith("url(")) {
-            document.documentElement.style.setProperty("--tray-frost", event.payload);
-          }
-        }),
+        await listen<
+          string | { generation: number; css: string; visible?: boolean }
+        >(
+          TRAY_PANEL_FROST_EVENT,
+          (event) => {
+            const payload = event.payload;
+            if (typeof payload === "string" && payload.startsWith("url(")) {
+              if (revealPhaseRef.current === "opening") {
+                document.documentElement.style.setProperty("--tray-frost", payload);
+              }
+            } else if (
+              payload &&
+              typeof payload === "object" &&
+              typeof payload.css === "string" &&
+              typeof payload.generation === "number"
+            ) {
+              const visiblePayload = {
+                generation: payload.generation,
+                css: payload.css,
+              };
+              if (payload.visible === false) {
+                applyVisibleFrost(visiblePayload);
+                pendingVisibleFrost = null;
+              } else if (revealPhaseRef.current === "opening") {
+                applyVisibleFrost(visiblePayload);
+              } else if (payload.generation >= lastFrostGeneration) {
+                pendingVisibleFrost = visiblePayload;
+              }
+            }
+          },
+        ),
       );
       if (disposed) {
         for (const unlisten of unlisteners) unlisten();

@@ -15,11 +15,15 @@ pub(crate) fn codex_sessions_dir_candidates(
 
     if let Some(sessions_dir) = codex_home.as_deref().and_then(normalize_codex_sessions_dir) {
         push_unique_path(&mut dirs, &mut seen, sessions_dir);
-    } else if codex_home
-        .as_deref()
-        .is_none_or(|value| value.trim().is_empty())
-        && let Some(home) = home_dir
-    {
+    }
+
+    // Keep the default home sessions dir as a candidate even when `CODEX_HOME`
+    // points elsewhere (matching upstream CodexBar). The cost scanner treats an
+    // inspected directory list with no matching files as a real zero, so
+    // dropping the default home on a home switch would suddenly report the
+    // user's existing history as empty. Real zero now requires both the
+    // explicit and the default home to be empty.
+    if let Some(home) = home_dir {
         push_unique_path(&mut dirs, &mut seen, home.join(".codex").join("sessions"));
     }
 
@@ -151,5 +155,79 @@ mod tests {
             codex_sessions_dir_candidates(Some(home.clone()), Some("  ".to_string()), &[], &[]);
 
         assert_eq!(dirs, vec![home.join(".codex").join("sessions")]);
+    }
+
+    #[test]
+    fn missing_codex_home_falls_back_to_default_home_sessions_dir() {
+        let home = PathBuf::from(r"C:\Users\me");
+        let dirs = codex_sessions_dir_candidates(Some(home.clone()), None, &[], &[]);
+
+        assert_eq!(dirs, vec![home.join(".codex").join("sessions")]);
+    }
+
+    #[test]
+    fn explicit_codex_home_keeps_default_home_sessions_dir() {
+        let home = PathBuf::from(r"C:\Users\me");
+        let dirs = codex_sessions_dir_candidates(
+            Some(home.clone()),
+            Some(r"D:\work\codex-home".to_string()),
+            &[],
+            &[],
+        );
+
+        assert_eq!(
+            dirs,
+            vec![
+                PathBuf::from(r"D:\work\codex-home\sessions"),
+                home.join(".codex").join("sessions"),
+            ]
+        );
+    }
+
+    #[test]
+    fn explicit_codex_home_equal_to_default_home_is_deduped() {
+        let home = PathBuf::from(r"C:\Users\me");
+        let dirs = codex_sessions_dir_candidates(
+            Some(home.clone()),
+            Some(r"C:\Users\me\.codex\sessions".to_string()),
+            &[],
+            &[],
+        );
+
+        assert_eq!(dirs, vec![home.join(".codex").join("sessions")]);
+    }
+
+    #[test]
+    fn explicit_codex_home_dedupes_paths_with_different_case_and_separators() {
+        let home = PathBuf::from(r"C:\Users\me");
+        let dirs = codex_sessions_dir_candidates(
+            Some(home.clone()),
+            Some(r"C:/Users/ME/.codex/Sessions".to_string()),
+            &[],
+            &[],
+        );
+
+        assert_eq!(dirs.len(), 1, "same path in another spelling: {dirs:?}");
+        assert_eq!(dirs, vec![PathBuf::from(r"C:/Users/ME/.codex/Sessions")]);
+    }
+
+    #[test]
+    fn explicit_codex_home_keeps_default_and_custom_dirs_in_order() {
+        let home = PathBuf::from(r"C:\Users\me");
+        let dirs = codex_sessions_dir_candidates(
+            Some(home.clone()),
+            Some(r"D:\work\codex-home\sessions".to_string()),
+            &[r"E:\extra-codex".to_string()],
+            &[],
+        );
+
+        assert_eq!(
+            dirs,
+            vec![
+                PathBuf::from(r"D:\work\codex-home\sessions"),
+                home.join(".codex").join("sessions"),
+                PathBuf::from(r"E:\extra-codex\sessions"),
+            ]
+        );
     }
 }

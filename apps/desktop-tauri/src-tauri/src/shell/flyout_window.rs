@@ -44,6 +44,7 @@ struct FlyoutController {
     phase: FlyoutPhase,
     close_generation: u64,
     input_generation: u64,
+    frost_generation: u64,
 }
 
 impl Default for FlyoutController {
@@ -52,6 +53,7 @@ impl Default for FlyoutController {
             phase: FlyoutPhase::Hidden,
             close_generation: 0,
             input_generation: 0,
+            frost_generation: 0,
         }
     }
 }
@@ -85,6 +87,15 @@ impl FlyoutController {
 
     fn input_generation_is_current(&self, generation: u64) -> bool {
         self.input_generation == generation
+    }
+
+    fn next_frost_generation(&mut self) -> u64 {
+        self.frost_generation = self.frost_generation.wrapping_add(1);
+        self.frost_generation
+    }
+
+    fn frost_generation_is_current(&self, generation: u64) -> bool {
+        self.frost_generation == generation
     }
 
     fn begin_close(&mut self) -> Option<u64> {
@@ -144,6 +155,32 @@ fn begin_close_transition() -> Option<u64> {
 
 fn close_transition_is_current(generation: u64) -> bool {
     with_controller(|controller| controller.close_is_current(generation))
+}
+
+fn next_frost_generation() -> u64 {
+    with_controller(FlyoutController::next_frost_generation)
+}
+
+fn frost_generation_is_current(generation: u64) -> bool {
+    with_controller(|controller| controller.frost_generation_is_current(generation))
+}
+
+#[cfg(windows)]
+pub fn invalidate_frost(app: &AppHandle) {
+    #[derive(Clone, serde::Serialize)]
+    #[serde(rename_all = "camelCase")]
+    struct FrostPayload {
+        generation: u64,
+        css: String,
+        visible: bool,
+    }
+
+    let payload = FrostPayload {
+        generation: next_frost_generation(),
+        css: String::new(),
+        visible: false,
+    };
+    let _ = app.emit_to(FLYOUT_LABEL, TRAY_PANEL_FROST_EVENT, payload);
 }
 
 /// The tray-v5 chrome gutter rooms the CSS contact shadow inside the HWND
@@ -717,14 +754,28 @@ pub fn is_open(app: &AppHandle) -> bool {
 }
 
 #[cfg(windows)]
-fn spawn_frost_finish(app: &AppHandle, snap: Option<super::frost::Snapshot>) {
-    let Some(snap) = snap else {
+fn spawn_frost_finish(app: &AppHandle, snap: Option<(u64, super::frost::Snapshot, bool)>) {
+    let Some((generation_id, snap, apply_when_visible)) = snap else {
         return;
     };
     let app = app.clone();
     std::thread::spawn(move || {
         if let Some(css) = super::frost::finish(snap) {
-            let _ = app.emit_to(FLYOUT_LABEL, TRAY_PANEL_FROST_EVENT, css);
+            if frost_generation_is_current(generation_id) {
+                #[derive(Clone, serde::Serialize)]
+                #[serde(rename_all = "camelCase")]
+                struct FrostPayload {
+                    generation: u64,
+                    css: String,
+                    visible: bool,
+                }
+                let payload = FrostPayload {
+                    generation: generation_id,
+                    css,
+                    visible: apply_when_visible,
+                };
+                let _ = app.emit_to(FLYOUT_LABEL, TRAY_PANEL_FROST_EVENT, payload);
+            }
         }
     });
 }
@@ -742,13 +793,14 @@ fn show_window(app: &AppHandle, window: &tauri::WebviewWindow) -> Result<(), Str
         let (width, height) = remembered_size(&props);
         let _ = window.set_size(tauri::LogicalSize::new(width, height));
     }
+    let frost_gen = next_frost_generation();
     super::dwm::force_flyout_shell(window);
     // Grab a tiny desktop snapshot while hidden (~1ms). Blur/BMP stay off
     // this thread so click-to-show matches FluentFlyout / Telegram: the
     // window appears first.
     #[cfg(windows)]
     let frost_snap = if !was_visible {
-        super::frost::snapshot(window)
+        super::frost::snapshot(window).map(|snap| (frost_gen, snap, true))
     } else {
         None
     };
@@ -840,10 +892,10 @@ fn open_or_focus_inner(
 ) -> Result<(), String> {
     invalidate_pending_input();
     if let Some(window) = app.get_webview_window(FLYOUT_LABEL) {
-        cancel_pending_close();
+        let is_closing = phase_is(FlyoutPhase::Closing);
         if let Some((x, y)) = position {
             let _ = window.set_position(PhysicalPosition::new(x, y));
-        } else if !window.is_visible().unwrap_or(false) {
+        } else if !window.is_visible().unwrap_or(false) || is_closing {
             reanchor(app)?;
         }
         if !frontend_ready(app) {
@@ -901,7 +953,13 @@ fn open_or_focus_inner(
     }
     set_phase(FlyoutPhase::Hidden);
     #[cfg(windows)]
-    spawn_frost_finish(app, super::frost::snapshot(&window));
+    {
+        let frost_gen = next_frost_generation();
+        spawn_frost_finish(
+            app,
+            super::frost::snapshot(&window).map(|s| (frost_gen, s, false)),
+        );
+    }
     if reveal_when_ready {
         arm_reveal(app)?;
     }
@@ -974,7 +1032,13 @@ pub fn request_close(app: &AppHandle) -> Result<(), String> {
                     published::set_hidden();
                     let _ = main_handle.emit_to(FLYOUT_LABEL, TRAY_PANEL_HIDDEN_EVENT, ());
                     #[cfg(windows)]
-                    spawn_frost_finish(&main_handle, super::frost::snapshot(&window));
+                    {
+                        let frost_gen = next_frost_generation();
+                        spawn_frost_finish(
+                            &main_handle,
+                            super::frost::snapshot(&window).map(|s| (frost_gen, s, false)),
+                        );
+                    }
                 } else {
                     set_phase(FlyoutPhase::Visible);
                     let _ = main_handle.emit_to(FLYOUT_LABEL, TRAY_PANEL_REVEALED_EVENT, ());
@@ -1010,18 +1074,25 @@ pub fn handle_window_event(window: &tauri::Window, event: &tauri::WindowEvent) -
         // and All-button clicks from disappearing the panel.
         tauri::WindowEvent::Focused(false) => true,
         tauri::WindowEvent::Focused(true) => {
-            cancel_pending_close();
+            let was_closing = cancel_pending_close();
             #[cfg(windows)]
             if let Some(w) = app.get_webview_window(FLYOUT_LABEL) {
                 reassert_drag_resize_child(&w);
             }
+            if was_closing {
+                let _ = app.emit_to(FLYOUT_LABEL, TRAY_PANEL_REVEALED_EVENT, ());
+            }
             true
         }
         tauri::WindowEvent::Moved(_) => {
+            #[cfg(windows)]
+            invalidate_frost(app);
             publish_flyout_geometry(app);
             true
         }
         tauri::WindowEvent::Resized(_) => {
+            #[cfg(windows)]
+            invalidate_frost(app);
             publish_flyout_geometry(app);
             #[cfg(windows)]
             if let Some(w) = app.get_webview_window(FLYOUT_LABEL) {
@@ -1161,7 +1232,28 @@ mod tests {
         assert!(controller.cancel_pending_close());
         assert_eq!(controller.phase, FlyoutPhase::Visible);
         assert!(!controller.close_is_current(generation));
+        // cancel_pending_close on already-Visible phase returns false (consumed once)
+        assert!(!controller.cancel_pending_close());
         assert!(controller.begin_close().is_some());
+    }
+
+    #[test]
+    fn frost_generation_is_invalidated_across_transitions() {
+        let mut controller = FlyoutController {
+            phase: FlyoutPhase::Showing,
+            ..FlyoutController::default()
+        };
+        let g1 = controller.next_frost_generation();
+        assert!(controller.frost_generation_is_current(g1));
+
+        controller.set_phase(FlyoutPhase::Visible);
+        assert!(controller.frost_generation_is_current(g1));
+
+        // Next transition generates a higher monotonic generation which invalidates g1
+        let g2 = controller.next_frost_generation();
+        assert!(g2 > g1);
+        assert!(controller.frost_generation_is_current(g2));
+        assert!(!controller.frost_generation_is_current(g1));
     }
 
     #[test]

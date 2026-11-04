@@ -711,7 +711,7 @@ mod tests {
     fn usage_selects_the_month_total_token_item() {
         let snapshot = snapshot_from_plan(
             detail_response(
-                r#"{"code": 0, "data": {"planCode": "mimo_pro", "currentPeriodEnd": "2026-10-14 23:59:59"}}"#,
+                r#"{"code": 0, "data": {"planCode": "mimo_pro", "currentPeriodEnd": "2099-10-14 23:59:59"}}"#,
             ),
             usage_response(
                 r#"{"code": 0, "data": {"monthUsage": {"items": [
@@ -737,7 +737,7 @@ mod tests {
     fn usage_without_total_item_is_unknown_not_first_item() {
         let snapshot = snapshot_from_plan(
             detail_response(
-                r#"{"code": 0, "data": {"planCode": "mimo_pro", "currentPeriodEnd": "2026-10-14 23:59:59"}}"#,
+                r#"{"code": 0, "data": {"planCode": "mimo_pro", "currentPeriodEnd": "2099-10-14 23:59:59"}}"#,
             ),
             usage_response(
                 r#"{"code": 0, "data": {"monthUsage": {"items": [
@@ -771,7 +771,7 @@ mod tests {
     fn active_plan_uses_calendar_month_window_and_utc8_reset() {
         let snapshot = snapshot_from_plan(
             detail_response(
-                r#"{"code": 0, "data": {"planCode": "mimo_pro", "currentPeriodEnd": "2026-10-14 23:59:59"}}"#,
+                r#"{"code": 0, "data": {"planCode": "mimo_pro", "currentPeriodEnd": "2099-10-14 23:59:59"}}"#,
             ),
             usage_response(
                 r#"{"code": 0, "data": {"monthUsage": {"items": [
@@ -782,10 +782,10 @@ mod tests {
         );
 
         assert!(!snapshot.primary.is_informational);
-        // 2026-10-14 23:59:59 +08:00 == 2026-10-14 15:59:59 UTC.
+        // 2099-10-14 23:59:59 +08:00 == 2099-10-14 15:59:59 UTC.
         assert_eq!(
             snapshot.primary.resets_at,
-            Utc.with_ymd_and_hms(2026, 10, 14, 15, 59, 59).single()
+            Utc.with_ymd_and_hms(2099, 10, 14, 15, 59, 59).single()
         );
         // Sep 14 → Oct 14 (UTC) spans exactly 30 calendar days; the window
         // derives from the reset instant, not a fixed 30-day bucket.

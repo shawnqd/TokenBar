@@ -663,9 +663,12 @@ function RemainingProgressBar({
           />
         )}
       </div>
+      {/* The white capsule marks where the bar actually ends (the selected
+          used/remaining value). The reserve/gap segments still span the
+          expected pace boundary to that actual edge, so pace stays visible. */}
       <div
         className={`progress-notch ${notchClass}`.trim()}
-        style={{ left: `${notch}%` } as CSSProperties}
+        style={{ left: `${pct}%` } as CSSProperties}
       />
     </div>
   );

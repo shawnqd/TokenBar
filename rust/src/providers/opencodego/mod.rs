@@ -7,6 +7,8 @@
 
 pub(crate) mod local;
 pub use local::{MessageSpeed, recent_message_speeds};
+mod cli_credential;
+mod console;
 mod usage_api;
 
 use async_trait::async_trait;
@@ -31,6 +33,9 @@ pub(crate) const LOCAL_ESTIMATE_SOURCE_LABEL: &str = "local estimate";
 const ZEN_BALANCE_TIMEOUT: Duration = Duration::from_secs(5);
 const ZEN_BALANCE_START_DELAY: Duration = Duration::from_millis(25);
 const ZEN_BALANCE_JOIN_GRACE: Duration = Duration::from_millis(250);
+/// Console JSON endpoints are small; a short timeout keeps a slow Console from
+/// holding up the legacy `/_server` + SSR fallback behind it.
+const CONSOLE_REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 
 #[derive(Debug, Clone)]
 struct WindowCandidate {
@@ -69,8 +74,33 @@ impl OpenCodeGoProvider {
         }
     }
 
-    fn workspace_id_from_context(workspace_id: Option<&str>) -> Option<&str> {
-        workspace_id.filter(|id| !id.is_empty())
+    /// Normalized workspace pin from settings.
+    ///
+    /// Settings accept whatever the user pasted, including the console URL from
+    /// the address bar, so the value is reduced to the bare `wrk_`/`org_` id the
+    /// console and legacy endpoints expect. A `None` here means "absent or
+    /// unusable", which is why the fetch path must not use this directly to
+    /// decide between a pinned id and discovery.
+    fn workspace_id_from_context(workspace_id: Option<&str>) -> Option<String> {
+        console::normalize_workspace_id(workspace_id)
+    }
+
+    /// Pinned workspace for the fetch paths.
+    ///
+    /// An absent or blank pin means "discover the workspace from the cookie". A
+    /// pin the user actually set but that cannot be normalized is an error: the
+    /// user asked for a specific workspace, so silently falling back to discovery
+    /// would report usage for a workspace they did not choose.
+    fn pinned_workspace_id(workspace_id: Option<&str>) -> Result<Option<String>, ProviderError> {
+        let raw = workspace_id.map(str::trim).filter(|raw| !raw.is_empty());
+        match raw {
+            None => Ok(None),
+            Some(raw) => Self::workspace_id_from_context(Some(raw))
+                .map(Some)
+                .ok_or_else(|| {
+                    ProviderError::Parse("Invalid OpenCode Go workspace ID".to_string())
+                }),
+        }
     }
 
     async fn fetch_workspace_id(&self, cookie_header: &str) -> Result<String, ProviderError> {
@@ -78,6 +108,29 @@ impl OpenCodeGoProvider {
     }
 
     async fn fetch_workspace_id_with_client(
+        client: &Client,
+        cookie_header: &str,
+    ) -> Result<String, ProviderError> {
+        // The migrated Console exposes organization discovery as JSON; the
+        // legacy `/_server` workspace function is kept as a fallback for
+        // deployments that have not shipped `/console/api` yet. Both paths use
+        // the same cookie, so a Console failure never costs auth semantics:
+        // the legacy error (401 → AuthRequired; 403 → Other (WAF/permission))
+        // is what surfaces.
+        match console::fetch_workspace_id(client, BASE_URL, cookie_header, CONSOLE_REQUEST_TIMEOUT)
+            .await
+        {
+            Ok(workspace_id) => return Ok(workspace_id),
+            Err(error) => {
+                tracing::debug!(
+                    "OpenCode Console org discovery failed; falling back to the legacy server function: {error}"
+                );
+            }
+        }
+        Self::fetch_workspace_id_legacy(client, cookie_header).await
+    }
+
+    async fn fetch_workspace_id_legacy(
         client: &Client,
         cookie_header: &str,
     ) -> Result<String, ProviderError> {
@@ -98,13 +151,15 @@ impl OpenCodeGoProvider {
             .await?;
 
         let status = response.status();
+        // 401 is the only "cookie is not signed in" signal. 403 is typically a
+        // WAF/proxy/workspace-permission refusal in front of the legacy
+        // `/_server` endpoint and must not surface as an expired login.
+        if status.as_u16() == 401 {
+            return Err(ProviderError::AuthRequired);
+        }
         if !status.is_success() {
-            if status.as_u16() == 401 || status.as_u16() == 403 {
-                return Err(ProviderError::AuthRequired);
-            }
             return Err(ProviderError::Other(format!(
-                "OpenCode workspace API returned {}",
-                status
+                "OpenCode workspace API returned {status}"
             )));
         }
 
@@ -139,13 +194,12 @@ impl OpenCodeGoProvider {
             .await?;
 
         let status = response.status();
+        if status.as_u16() == 401 {
+            return Err(ProviderError::AuthRequired);
+        }
         if !status.is_success() {
-            if status.as_u16() == 401 || status.as_u16() == 403 {
-                return Err(ProviderError::AuthRequired);
-            }
             return Err(ProviderError::Other(format!(
-                "OpenCode Go usage page returned {}",
-                status
+                "OpenCode Go usage page returned {status}"
             )));
         }
 
@@ -624,32 +678,71 @@ impl OpenCodeGoProvider {
         ctx: &FetchContext,
         cookie_header: &str,
     ) -> Result<ProviderFetchResult, ProviderError> {
-        let workspace_id = match Self::workspace_id_from_context(ctx.workspace_id.as_deref()) {
-            Some(workspace_id) => workspace_id.to_string(),
+        let workspace_id = match Self::pinned_workspace_id(ctx.workspace_id.as_deref())? {
+            Some(workspace_id) => workspace_id,
             None => self.fetch_workspace_id(cookie_header).await?,
         };
         let balance_task = ctx.include_credits.then(|| {
             self.spawn_zen_balance_task(cookie_header, Some(&workspace_id), ctx.web_timeout)
         });
-        let page = match self.fetch_usage_page(&workspace_id, cookie_header).await {
-            Ok(page) => page,
+
+        // The migrated Console answers Go usage as JSON and is tried first.
+        // `NoSubscription` deliberately falls back to the legacy SSR page as
+        // well: new and old deployments differ in which surface knows about Go,
+        // so trusting a Console that reports "no subscription" for an account
+        // the page still shows would turn a deployment difference into a false
+        // negative. Console failures (parse, timeout, network, auth) likewise
+        // fall back, and the legacy error keeps its 401/403 semantics.
+        let mut console_usage = None;
+        let mut console_error = None;
+        match console::fetch_usage(
+            &self.client,
+            BASE_URL,
+            &workspace_id,
+            cookie_header,
+            CONSOLE_REQUEST_TIMEOUT,
+        )
+        .await
+        {
+            Ok(console::ConsoleUsage::Snapshot(snapshot)) => console_usage = Some(*snapshot),
+            Ok(console::ConsoleUsage::NoSubscription) => {
+                tracing::debug!(
+                    "OpenCode Console reports no Go subscription; falling back to the legacy usage page"
+                );
+            }
             Err(error) => {
-                if let Some((task, _)) = balance_task {
-                    task.abort();
-                }
-                return Err(error);
+                tracing::debug!(
+                    "OpenCode Console Go status failed; falling back to the legacy usage page: {error}"
+                );
+                console_error = Some(error);
+            }
+        }
+
+        let (usage, page) = match console_usage {
+            Some(usage) => (usage, None),
+            None => {
+                let page = match self.fetch_usage_page(&workspace_id, cookie_header).await {
+                    Ok(page) => page,
+                    Err(error) => {
+                        if let Some((task, _)) = balance_task {
+                            task.abort();
+                        }
+                        return Err(Self::merge_console_error(console_error, error));
+                    }
+                };
+                let usage = match Self::parse_usage_text(&page) {
+                    Ok(usage) => usage,
+                    Err(error) => {
+                        if let Some((task, _)) = balance_task {
+                            task.abort();
+                        }
+                        return Err(Self::merge_console_error(console_error, error));
+                    }
+                };
+                (usage, Some(page))
             }
         };
-        let usage = match Self::parse_usage_text(&page) {
-            Ok(usage) => usage,
-            Err(error) => {
-                if let Some((task, _)) = balance_task {
-                    task.abort();
-                }
-                return Err(error);
-            }
-        };
-        let balance = match Self::parse_zen_balance(&page) {
+        let balance = match page.as_deref().and_then(Self::parse_zen_balance) {
             Some(balance) => {
                 if let Some((task, _)) = balance_task {
                     task.abort();
@@ -669,6 +762,22 @@ impl OpenCodeGoProvider {
             },
         };
         Ok(Self::with_zen_balance(usage, "web", balance))
+    }
+
+    /// Keep an authentication verdict from the Console when the legacy page
+    /// failed for an unrelated reason; the legacy error is the fallback answer.
+    fn merge_console_error(
+        console_error: Option<ProviderError>,
+        legacy_error: ProviderError,
+    ) -> ProviderError {
+        match console_error {
+            Some(error @ ProviderError::AuthRequired)
+                if !matches!(legacy_error, ProviderError::AuthRequired) =>
+            {
+                error
+            }
+            _ => legacy_error,
+        }
     }
 
     async fn fetch_page_text(
@@ -693,7 +802,7 @@ impl OpenCodeGoProvider {
         }
         let response = request.send().await?;
         let status = response.status();
-        if status.as_u16() == 401 || status.as_u16() == 403 {
+        if status.as_u16() == 401 {
             return Err(ProviderError::AuthRequired);
         }
         if !status.is_success() {
@@ -739,7 +848,7 @@ impl OpenCodeGoProvider {
         }
         let response = request.send().await?;
         let status = response.status();
-        if status.as_u16() == 401 || status.as_u16() == 403 {
+        if status.as_u16() == 401 {
             return Err(ProviderError::AuthRequired);
         }
         if !status.is_success() {
@@ -761,6 +870,20 @@ impl OpenCodeGoProvider {
         timeout: Duration,
     ) -> Option<f64> {
         let request_timeout = timeout.min(ZEN_BALANCE_TIMEOUT);
+        // The migrated Console reports the prepaid balance directly; the
+        // dashboard/`_server` scrape below stays as the best-effort fallback.
+        if let Ok(Some(balance)) = console::fetch_balance(
+            client,
+            BASE_URL,
+            workspace_id,
+            cookie_header,
+            request_timeout,
+        )
+        .await
+        {
+            return Some(balance);
+        }
+
         let referer = format!("{BASE_URL}/workspace/{workspace_id}/billing");
         let page = Self::fetch_page_text(
             client,
@@ -854,8 +977,15 @@ impl OpenCodeGoProvider {
     ) -> Result<ProviderFetchResult, ProviderError> {
         let snap = local::fetch_local_usage(Utc::now())?;
         let mut result = snap.to_fetch_result();
-        if let Some(api_key) = usage_api::resolve_api_key(ctx)
-            && let Ok(api_result) = usage_api::fetch(&self.client, ctx, &api_key, "local+api").await
+        if let Some(credential) = usage_api::resolve_credential(ctx)
+            && let Ok(api_result) = usage_api::fetch(
+                &self.client,
+                ctx,
+                &credential.token,
+                credential.org_id.as_deref(),
+                "local+api",
+            )
+            .await
         {
             result = api_result;
         }
@@ -1033,8 +1163,20 @@ impl Provider for OpenCodeGoProvider {
         match ctx.source_mode {
             SourceMode::Auto => {
                 let mut api_error = None;
-                if let Some(api_key) = usage_api::resolve_api_key(ctx) {
-                    match usage_api::fetch(&self.client, ctx, &api_key, "api").await {
+                if let Some(credential) = usage_api::resolve_credential(ctx) {
+                    tracing::debug!(
+                        credential_source = credential.source,
+                        "OpenCode Go usage API credential resolved"
+                    );
+                    match usage_api::fetch(
+                        &self.client,
+                        ctx,
+                        &credential.token,
+                        credential.org_id.as_deref(),
+                        "api",
+                    )
+                    .await
+                    {
                         Ok(result) => {
                             return Ok(self.include_zen_balance(ctx, result).await);
                         }
@@ -1092,13 +1234,20 @@ impl Provider for OpenCodeGoProvider {
             SourceMode::Web => self.fetch_web(ctx).await,
             SourceMode::Cli => self.fetch_local_with_balance(ctx).await,
             SourceMode::OAuth => {
-                let api_key = usage_api::resolve_api_key(ctx).ok_or_else(|| {
+                let credential = usage_api::resolve_credential(ctx).ok_or_else(|| {
                     ProviderError::NotInstalled(
                         "Missing OpenCode Go API key. Add one in Settings or set OPENCODE_API_KEY."
                             .to_string(),
                     )
                 })?;
-                usage_api::fetch(&self.client, ctx, &api_key, "api").await
+                usage_api::fetch(
+                    &self.client,
+                    ctx,
+                    &credential.token,
+                    credential.org_id.as_deref(),
+                    "api",
+                )
+                .await
             }
         }
     }
@@ -1134,12 +1283,180 @@ mod tests {
     fn uses_context_workspace_id_before_discovery() {
         assert_eq!(
             OpenCodeGoProvider::workspace_id_from_context(Some("wrk_override")),
-            Some("wrk_override")
+            Some("wrk_override".to_string())
         );
         assert_eq!(
             OpenCodeGoProvider::workspace_id_from_context(Some("")),
             None
         );
+        // A pasted console URL is reduced to the bare id the endpoints expect.
+        assert_eq!(
+            OpenCodeGoProvider::workspace_id_from_context(Some(
+                "https://opencode.ai/console/wrk_pinned/go"
+            )),
+            Some("wrk_pinned".to_string())
+        );
+        assert_eq!(
+            OpenCodeGoProvider::workspace_id_from_context(Some(" org_team-1 ")),
+            Some("org_team-1".to_string())
+        );
+        assert_eq!(
+            OpenCodeGoProvider::workspace_id_from_context(Some("not-a-workspace")),
+            None
+        );
+    }
+
+    #[test]
+    fn invalid_non_empty_pin_is_an_error_instead_of_a_discovery_fallback() {
+        // Absent or blank pins keep the discovery fallback…
+        assert_eq!(
+            OpenCodeGoProvider::pinned_workspace_id(None).expect("absent pin"),
+            None
+        );
+        assert_eq!(
+            OpenCodeGoProvider::pinned_workspace_id(Some("")).expect("blank pin"),
+            None
+        );
+        assert_eq!(
+            OpenCodeGoProvider::pinned_workspace_id(Some("   ")).expect("whitespace pin"),
+            None
+        );
+        // …and usable pins are normalized exactly like the settings helper.
+        assert_eq!(
+            OpenCodeGoProvider::pinned_workspace_id(Some("wrk_override")).expect("bare id"),
+            Some("wrk_override".to_string())
+        );
+        assert_eq!(
+            OpenCodeGoProvider::pinned_workspace_id(Some(
+                "https://opencode.ai/console/wrk_pinned/go"
+            ))
+            .expect("console url"),
+            Some("wrk_pinned".to_string())
+        );
+        assert_eq!(
+            OpenCodeGoProvider::pinned_workspace_id(Some(" org_team-1 ")).expect("org id"),
+            Some("org_team-1".to_string())
+        );
+        // A pin the user set but that cannot be normalized is reported, not
+        // silently replaced by whichever workspace discovery happens to find.
+        for invalid in ["not-a-workspace", "zen.design", "https://example.com/wrk_x"] {
+            match OpenCodeGoProvider::pinned_workspace_id(Some(invalid)) {
+                Err(ProviderError::Parse(message)) => {
+                    assert_eq!(message, "Invalid OpenCode Go workspace ID", "{invalid}")
+                }
+                other => panic!("{invalid:?} must be rejected, got {other:?}"),
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn fetch_with_cookies_rejects_an_invalid_pin_without_discovery() {
+        // The cookie-borrowing fetch path must not reach the network here: an
+        // invalid pin is rejected before any workspace lookup happens.
+        let provider = OpenCodeGoProvider::new();
+        let ctx = FetchContext {
+            workspace_id: Some("not-a-workspace".to_string()),
+            ..FetchContext::default()
+        };
+
+        let error = provider
+            .fetch_with_cookies(&ctx, "session=abc")
+            .await
+            .expect_err("invalid pin must not fall back to discovery");
+
+        match error {
+            ProviderError::Parse(message) => {
+                assert_eq!(message, "Invalid OpenCode Go workspace ID")
+            }
+            other => panic!("expected Parse, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn page_403_is_not_reported_as_a_signed_out_session() {
+        let mut server = mockito::Server::new_async().await;
+        let page = server
+            .mock("GET", mockito::Matcher::Any)
+            .with_status(403)
+            .with_body("blocked")
+            .create_async()
+            .await;
+
+        let client = crate::core::credentialed_http_client_builder()
+            .timeout(Duration::from_secs(10))
+            .build()
+            .unwrap_or_else(|_| Client::new());
+        let error = OpenCodeGoProvider::fetch_page_text(
+            &client,
+            &server.url(),
+            "session=abc",
+            None,
+            "Go usage page",
+        )
+        .await
+        .expect_err("403 must not succeed");
+
+        assert!(
+            matches!(error, ProviderError::Other(_)),
+            "403 should stay a diagnostic, got {error:?}"
+        );
+        if let ProviderError::Other(message) = &error {
+            assert!(
+                message.contains("403"),
+                "message keeps the status: {message}"
+            );
+            assert!(
+                !message.contains("blocked"),
+                "response body must not leak into the error: {message}"
+            );
+        }
+        page.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn page_401_still_requires_auth() {
+        let mut server = mockito::Server::new_async().await;
+        let page = server
+            .mock("GET", mockito::Matcher::Any)
+            .with_status(401)
+            .create_async()
+            .await;
+
+        let client = crate::core::credentialed_http_client_builder()
+            .timeout(Duration::from_secs(10))
+            .build()
+            .unwrap_or_else(|_| Client::new());
+        let error = OpenCodeGoProvider::fetch_page_text(
+            &client,
+            &server.url(),
+            "session=abc",
+            None,
+            "Go usage page",
+        )
+        .await
+        .expect_err("401 must not succeed");
+
+        assert!(
+            matches!(error, ProviderError::AuthRequired),
+            "401 must still map to AuthRequired, got {error:?}"
+        );
+        page.assert_async().await;
+    }
+
+    #[test]
+    fn page_403_helper_classification_is_shared_by_the_non_injectable_paths() {
+        // `fetch_workspace_id_legacy`, `fetch_usage_page` and
+        // `fetch_server_text` pin their URLs to `opencode.ai`, so their 401/403
+        // branches cannot be pointed at a mock; they reuse the same
+        // "401 -> AuthRequired, everything else non-2xx -> Other" shape asserted
+        // above via `fetch_page_text`. This test only guards that the signed-out
+        // text detector did not change.
+        assert!(OpenCodeGoProvider::looks_signed_out(
+            "<a href=\"/auth/authorize\">Please sign in</a>"
+        ));
+        assert!(!OpenCodeGoProvider::looks_signed_out(
+            "<html><body>rollingUsage: {}</body></html>"
+        ));
     }
 
     #[test]

@@ -61,7 +61,7 @@ with the provider CLI first.
 
 ## Latest Release
 
-**v0.57.3** is the current Windows release, with isolated development/stable startup identities and a Simplified Chinese installer aligned to the TokenBar repository.
+**v0.57.7** is the current Windows release, with OpenCode v2 usage support, the tray pace-capsule fix and a Simplified Chinese installer aligned to the TokenBar repository.
 
 See the full history in [CHANGELOG.md](CHANGELOG.md).
 
@@ -215,7 +215,7 @@ Installer builds include `codexbar.exe` as the tray app and `codexbar-cli.exe` a
 For local Windows release builds, use the cached release builder:
 
 ```powershell
-.\scripts\windows-release-build.ps1 -Ref v0.57.3 -SmokeInstall
+.\scripts\windows-release-build.ps1 -Ref v0.57.7 -SmokeInstall
 ```
 
 The script builds the real Tauri release binary plus the console CLI, verifies signed installer dependencies, packages with Inno Setup, writes installer/portable assets, writes SHA-256 sidecars, and can run a silent install/uninstall smoke test.

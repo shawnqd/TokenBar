@@ -405,6 +405,25 @@ describe("TrayCard Archetype Template Alignment", () => {
       fetchDurationMs: null,
     };
 
+    it("puts the white capsule at the actual fill edge instead of the expected pace position", async () => {
+      const { container } = renderCard(weeklyWithPace, "detailed");
+      await waitFor(() => {
+        expect(container.querySelector(".quota-tile--full")).not.toBeNull();
+      });
+      const tile = container.querySelector(".quota-tile--full")!;
+      const bar = tile.querySelector(".progress-bar")!;
+      const fill = bar.querySelector(".progress-fill") as HTMLElement;
+      const notch = bar.querySelector(".progress-notch") as HTMLElement;
+
+      expect(parseFloat(fill.style.width)).toBeCloseTo(82, 1);
+      expect(parseFloat(notch.style.left)).toBeCloseTo(82, 1);
+
+      // The expected pace boundary is still visible as the deficit segment start.
+      const gap = bar.querySelector(".bar-segment--deficit-gap") as HTMLElement;
+      expect(parseFloat(gap.style.left)).toBeCloseTo(69.6, 1);
+      expect(parseFloat(gap.style.width)).toBeCloseTo(12.4, 1);
+    });
+
     it("does not render any tip on unobscured elements (tile, notch, reset, unobscured label)", async () => {
       const { container } = renderCard(weeklyWithPace, "detailed");
       await waitFor(() => {

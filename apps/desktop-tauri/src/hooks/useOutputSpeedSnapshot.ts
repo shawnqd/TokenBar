@@ -37,20 +37,21 @@ export function readOutputSpeedFromTray(
 }
 
 /**
- * Subscribe to core-driven output-speed enrichment results. While enabled,
- * refresh at the shared output-speed TTL so a session that becomes available
- * after the first render is picked up without reopening the surface. The
- * scheduler remains the single gate for capability and freshness; the timer
- * only asks it to run and does not create a second read path.
+ * Subscribe to core-driven output-speed enrichment results. While enabled and
+ * active, refresh at the shared output-speed TTL so a session that becomes
+ * available after the first render is picked up without reopening the surface.
+ * When active is false (e.g. flyout panel is parked/closing), the background
+ * timer is suspended to eliminate idle IPC and disk wakeups.
  */
 export function useOutputSpeedSnapshot(
   enabled: boolean,
   intervalMs = 1_000,
+  active = true,
 ): OutputSpeedSnapshot | null {
   const trayState = useTrayCoreState();
   const capableSignature = useMemo(
     () =>
-      enabled
+      enabled && active
         ? trayCoreStore
             .speedCapableKeys()
             .map(
@@ -60,11 +61,11 @@ export function useOutputSpeedSnapshot(
         : "",
     // Re-derive only when new records (or a re-render cycle) change the set.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [enabled, trayState.version],
+    [enabled, active, trayState.version],
   );
 
   useEffect(() => {
-    if (!enabled) return;
+    if (!enabled || !active) return;
     let refreshPending = false;
     const refresh = () => {
       if (refreshPending) return;
@@ -82,7 +83,7 @@ export function useOutputSpeedSnapshot(
     const timer = window.setInterval(refresh, Math.max(1_000, intervalMs));
     return () => window.clearInterval(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [enabled, capableSignature, intervalMs]);
+  }, [enabled, active, capableSignature, intervalMs]);
 
   return enabled ? readOutputSpeedFromTray(trayState) : null;
 }

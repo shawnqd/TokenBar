@@ -17,9 +17,8 @@ pub fn validate_provider_workspace_value(
         ProviderId::OpenAIApi => validate_id(trimmed, "OpenAI project ID", |value| {
             value.starts_with("proj_") && has_safe_id_chars(value)
         }),
-        ProviderId::OpenCodeGo => validate_id(trimmed, "OpenCode Go workspace ID", |value| {
-            value.starts_with("wrk_") && has_safe_id_chars(value)
-        }),
+        ProviderId::OpenCodeGo => validate_opencode_workspace(trimmed, "OpenCode Go workspace ID"),
+        ProviderId::OpenCode => validate_opencode_workspace(trimmed, "OpenCode workspace ID"),
         ProviderId::Devin => validate_id(trimmed, "Devin organization", |value| {
             let Some((prefix, org)) = value.split_once('/') else {
                 return false;
@@ -52,6 +51,53 @@ fn has_safe_id_chars(value: &str) -> bool {
         && value
             .chars()
             .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+}
+
+/// OpenCode and OpenCode Go share one workspace shape: a bare `wrk_`/`org_` id
+/// (Zen workspaces are `wrk_…`, personal orgs `org_…`) or the console URL users
+/// copy from the address bar. Both console normalizers expect the bare id, so
+/// settings store what they expect.
+fn validate_opencode_workspace(raw: &str, label: &str) -> Result<String, String> {
+    if raw.chars().any(char::is_control) {
+        return Err(format!("{label} is invalid"));
+    }
+    normalize_opencode_workspace(raw).ok_or_else(|| format!("{label} is invalid"))
+}
+
+fn normalize_opencode_workspace(raw: &str) -> Option<String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    if trimmed.contains("://") {
+        return opencode_workspace_id_from_url(trimmed);
+    }
+    is_opencode_workspace_id(trimmed).then(|| trimmed.to_string())
+}
+
+fn opencode_workspace_id_from_url(raw: &str) -> Option<String> {
+    let url = url::Url::parse(raw).ok()?;
+    if url.scheme() != "https" || !url.username().is_empty() || url.password().is_some() {
+        return None;
+    }
+    let host = url.host_str()?.to_ascii_lowercase();
+    if host != "opencode.ai" && host != "www.opencode.ai" {
+        return None;
+    }
+    let segments: Vec<&str> = url
+        .path_segments()?
+        .filter(|segment| !segment.is_empty())
+        .collect();
+    for pair in segments.windows(2) {
+        if matches!(pair[0], "console" | "workspace") && is_opencode_workspace_id(pair[1]) {
+            return Some(pair[1].to_string());
+        }
+    }
+    None
+}
+
+fn is_opencode_workspace_id(value: &str) -> bool {
+    (value.starts_with("wrk_") || value.starts_with("org_")) && has_safe_id_chars(value)
 }
 
 fn validate_zed_url(raw: &str) -> Result<String, String> {
@@ -160,6 +206,97 @@ mod tests {
             validate_provider_workspace_value(ProviderId::Devin, "https://api.devin.ai").is_err()
         );
         assert!(validate_provider_workspace_value(ProviderId::OpenCodeGo, "wrk_abc/123").is_err());
+    }
+
+    #[test]
+    fn validates_opencode_workspace_ids() {
+        assert_eq!(
+            validate_provider_workspace_value(ProviderId::OpenCode, " wrk_abc-123 ").unwrap(),
+            "wrk_abc-123"
+        );
+        assert_eq!(
+            validate_provider_workspace_value(ProviderId::OpenCode, "org_team_1").unwrap(),
+            "org_team_1"
+        );
+        assert_eq!(
+            validate_provider_workspace_value(ProviderId::OpenCode, "   ").unwrap(),
+            ""
+        );
+        // Settings now accept the address-bar URL and store the bare id, the
+        // same shape both console normalizers produce.
+        assert_eq!(
+            validate_provider_workspace_value(
+                ProviderId::OpenCode,
+                "https://opencode.ai/console/wrk_abc-123/billing"
+            )
+            .unwrap(),
+            "wrk_abc-123"
+        );
+        assert_eq!(
+            validate_provider_workspace_value(
+                ProviderId::OpenCode,
+                "https://www.opencode.ai/workspace/org_team_1/go"
+            )
+            .unwrap(),
+            "org_team_1"
+        );
+        for value in ["wrk_abc/123", "abc123", "wrk_"] {
+            assert!(
+                validate_provider_workspace_value(ProviderId::OpenCode, value).is_err(),
+                "accepted {value}"
+            );
+        }
+    }
+
+    #[test]
+    fn validates_opencode_go_workspace_ids_like_opencode() {
+        assert_eq!(
+            validate_provider_workspace_value(ProviderId::OpenCodeGo, " wrk_abc-123 ").unwrap(),
+            "wrk_abc-123"
+        );
+        // Go shares the console normalizer, so `org_` scopes and pasted URLs
+        // must save instead of being rejected by a narrower `wrk_`-only rule.
+        assert_eq!(
+            validate_provider_workspace_value(ProviderId::OpenCodeGo, "org_team_1").unwrap(),
+            "org_team_1"
+        );
+        assert_eq!(
+            validate_provider_workspace_value(
+                ProviderId::OpenCodeGo,
+                "https://opencode.ai/console/wrk_abc123/go"
+            )
+            .unwrap(),
+            "wrk_abc123"
+        );
+        assert_eq!(
+            validate_provider_workspace_value(ProviderId::OpenCodeGo, "  ").unwrap(),
+            ""
+        );
+    }
+
+    #[test]
+    fn rejects_unsafe_opencode_workspace_inputs() {
+        let long_id = format!("wrk_{}", "a".repeat(200));
+        let cases = [
+            "http://opencode.ai/console/wrk_abc123/billing".to_string(),
+            "https://evil.test/console/wrk_abc123".to_string(),
+            "https://opencode.ai.evil.test/console/wrk_abc123".to_string(),
+            "https://opencode.ai/console/abc123".to_string(),
+            "https://opencode.ai/console/wrk_abc123%20x/go".to_string(),
+            "https://user@opencode.ai/console/wrk_abc123/go".to_string(),
+            "https://opencode.ai/other/wrk_abc123/go".to_string(),
+            "wrk_abc 123".to_string(),
+            "wrk_abc\u{0}123".to_string(),
+            long_id,
+        ];
+        for provider in [ProviderId::OpenCode, ProviderId::OpenCodeGo] {
+            for value in &cases {
+                assert!(
+                    validate_provider_workspace_value(provider, value).is_err(),
+                    "{provider:?} accepted {value:?}"
+                );
+            }
+        }
     }
 
     #[test]

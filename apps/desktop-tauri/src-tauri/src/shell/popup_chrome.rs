@@ -18,8 +18,7 @@
 //!
 //! This is the deliberate boundary of the hybrid approach: one window recipe,
 //! two rendering pipelines. Going further (drawing panel content natively)
-//! was evaluated and rejected for now; the current design keeps this boundary
-//! explicit.
+//! was evaluated and rejected for now; see the design notes for the hybrid trade-offs.
 
 // ── Corner radius ───────────────────────────────────────────────────────────
 

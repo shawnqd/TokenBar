@@ -725,6 +725,90 @@ fn fetch_context_opencode_go_manual_without_cookie_keeps_api_key_auto_route() {
 }
 
 #[test]
+fn fetch_context_opencode_manual_without_cookie_blocks_browser_identity() {
+    let mut settings = Settings::default();
+    settings.set_cookie_source(ProviderId::OpenCode, "manual");
+    let cookies = ManualCookies::default();
+    let api_keys = ApiKeys::default();
+    let token_accounts = HashMap::new();
+
+    let ctx = super::build_fetch_context(
+        ProviderId::OpenCode,
+        &settings,
+        &cookies,
+        &api_keys,
+        &token_accounts,
+    );
+
+    assert!(ctx.manual_cookie_header.is_none());
+    assert!(!ctx.allow_browser_cookie);
+}
+
+#[test]
+fn fetch_context_opencode_cookie_off_blocks_browser_identity() {
+    let mut settings = Settings::default();
+    settings.set_cookie_source(ProviderId::OpenCode, "off");
+    let cookies = ManualCookies::default();
+    let api_keys = ApiKeys::default();
+    let token_accounts = HashMap::new();
+
+    let ctx = super::build_fetch_context(
+        ProviderId::OpenCode,
+        &settings,
+        &cookies,
+        &api_keys,
+        &token_accounts,
+    );
+
+    assert!(ctx.manual_cookie_header.is_none());
+    assert!(!ctx.allow_browser_cookie);
+}
+
+#[test]
+fn fetch_context_opencode_cookie_auto_may_read_browser() {
+    let mut settings = Settings::default();
+    settings.set_cookie_source(ProviderId::OpenCode, "auto");
+    let cookies = ManualCookies::default();
+    let api_keys = ApiKeys::default();
+    let token_accounts = HashMap::new();
+
+    let ctx = super::build_fetch_context(
+        ProviderId::OpenCode,
+        &settings,
+        &cookies,
+        &api_keys,
+        &token_accounts,
+    );
+
+    assert!(ctx.manual_cookie_header.is_none());
+    assert!(ctx.allow_browser_cookie);
+}
+
+#[test]
+fn fetch_context_opencode_saved_cookie_keeps_manual_session() {
+    let mut settings = Settings::default();
+    settings.set_cookie_source(ProviderId::OpenCode, "manual");
+    let mut cookies = ManualCookies::default();
+    cookies.set("opencode", "session=zen-test");
+    let api_keys = ApiKeys::default();
+    let token_accounts = HashMap::new();
+
+    let ctx = super::build_fetch_context(
+        ProviderId::OpenCode,
+        &settings,
+        &cookies,
+        &api_keys,
+        &token_accounts,
+    );
+
+    assert_eq!(
+        ctx.manual_cookie_header.as_deref(),
+        Some("session=zen-test")
+    );
+    assert!(ctx.allow_browser_cookie);
+}
+
+#[test]
 fn fetch_context_api_key_provider_uses_auto_without_cookie_import() {
     let settings = Settings::default();
     let cookies = ManualCookies::default();

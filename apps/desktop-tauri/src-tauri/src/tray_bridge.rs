@@ -593,7 +593,7 @@ pub fn update_tray_icon_and_tooltip(
                 },
             )
         };
-        let speed_snapshot = crate::commands::get_output_speed_snapshot();
+        let speed_snapshot = crate::commands::get_output_speed_snapshot(app.clone());
         let speed_for = |provider_id: &str| match provider_id {
             "codex" => speed_snapshot.codex.tokens_per_second,
             "claude" => speed_snapshot.claude.tokens_per_second,

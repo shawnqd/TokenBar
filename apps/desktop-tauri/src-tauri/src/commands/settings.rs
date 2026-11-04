@@ -581,13 +581,14 @@ fn parse_language(s: &str) -> Option<Language> {
 /// resolves with, so the menu and the strip cannot disagree.
 #[tauri::command]
 pub fn get_taskbar_window_availability(
+    app: tauri::AppHandle,
     state: tauri::State<'_, Mutex<AppState>>,
 ) -> std::collections::HashMap<String, Vec<String>> {
     let snapshots = state
         .lock()
         .map(|guard| guard.provider_cache.clone())
         .unwrap_or_default();
-    let speed = crate::commands::get_output_speed_snapshot();
+    let speed = crate::commands::get_output_speed_snapshot(app.clone());
     snapshots
         .iter()
         .map(|snapshot| {
@@ -866,6 +867,7 @@ pub async fn update_settings(
         // broadcast cannot update it. Keep the global Appearance → Theme
         // preference in the same owner-thread-safe cache used by WM_PAINT.
         crate::taskbar_widget::set_theme(settings.theme);
+        crate::shell::flyout_window::invalidate_frost(&app);
     }
     if rebuild_tray_menu {
         crate::tray_bridge::rebuild_tray_menu(&app);

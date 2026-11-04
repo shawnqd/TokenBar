@@ -331,13 +331,23 @@ impl OpenCodeUsageFetcher {
             if Self::looks_signed_out(&text) {
                 return Err(OpenCodeError::InvalidCredentials);
             }
-            if status.as_u16() == 401 || status.as_u16() == 403 {
-                return Err(OpenCodeError::InvalidCredentials);
-            }
-            return Err(OpenCodeError::ApiError(format!("HTTP {}", status)));
+            return Err(Self::classify_http_status(status));
         }
 
         Ok(text)
+    }
+
+    /// Classify a non-success HTTP status.
+    ///
+    /// Only 401 means "this cookie is not signed in". A 403 here is a
+    /// WAF/proxy/workspace-permission refusal in front of opencode.ai, so it
+    /// stays a diagnostic `ApiError` that keeps the status and never echoes the
+    /// response body.
+    fn classify_http_status(status: reqwest::StatusCode) -> OpenCodeError {
+        match status.as_u16() {
+            401 => OpenCodeError::InvalidCredentials,
+            _ => OpenCodeError::ApiError(format!("HTTP {}", status)),
+        }
     }
 
     /// Build server request URL
@@ -671,6 +681,27 @@ mod tests {
         assert!(!OpenCodeUsageFetcher::looks_signed_out(
             "Welcome to OpenCode"
         ));
+    }
+
+    #[test]
+    fn test_http_status_classification_separates_auth_from_forbidden() {
+        // 401 still means the stored cookie is dead…
+        assert!(matches!(
+            OpenCodeUsageFetcher::classify_http_status(reqwest::StatusCode::UNAUTHORIZED),
+            OpenCodeError::InvalidCredentials
+        ));
+        // …while 403 (WAF / workspace permission) is a diagnostic that keeps the
+        // status and never turns into a "please sign in again" verdict.
+        match OpenCodeUsageFetcher::classify_http_status(reqwest::StatusCode::FORBIDDEN) {
+            OpenCodeError::ApiError(message) => {
+                assert!(message.contains("403"), "{message}");
+            }
+            other => panic!("403 must stay an ApiError, got {other:?}"),
+        }
+        match OpenCodeUsageFetcher::classify_http_status(reqwest::StatusCode::BAD_GATEWAY) {
+            OpenCodeError::ApiError(message) => assert!(message.contains("502"), "{message}"),
+            other => panic!("non-auth failures must stay an ApiError, got {other:?}"),
+        }
     }
 
     #[test]

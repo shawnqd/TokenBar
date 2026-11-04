@@ -3,6 +3,7 @@
 //! Fetches usage data from OpenCode (opencode.ai)
 //! Uses browser cookies for authentication
 
+mod console_api;
 pub mod scraper;
 
 // Re-exports for advanced scraping
@@ -22,6 +23,10 @@ use crate::core::{
 
 const BASE_URL: &str = "https://opencode.ai";
 const SERVER_URL: &str = "https://opencode.ai/_server";
+/// Console calls (`org list`, `go/status`) get their own budget so the legacy
+/// `_server` fallback still has time left in the same refresh. Matches the Go
+/// console chain's 10s console timeout.
+const CONSOLE_REQUEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 const MAX_RESET_SECONDS: i64 = 366 * 24 * 60 * 60;
 const WORKSPACES_SERVER_ID: &str =
     "def39973159c7f0483d8793a822b8dbb10d067e12c65455fcb4608459ba0234f";
@@ -56,26 +61,104 @@ impl OpenCodeProvider {
         }
     }
 
-    /// Fetch usage with cookie header
+    /// Fetch usage with cookie header.
+    ///
+    /// `workspace_id` is the workspace pinned in settings. When it is usable the
+    /// legacy chain scopes to it directly; only an absent or blank pin falls back
+    /// to discovering the cookie's first workspace, which may not be the
+    /// workspace the console chain just reported. A non-empty pin that cannot be
+    /// normalized is an error rather than a silent discovery fallback.
     async fn fetch_with_cookies(
         &self,
         cookie_header: &str,
+        workspace_id: Option<&str>,
     ) -> Result<UsageSnapshot, ProviderError> {
-        // First get workspace ID
-        let workspace_id = self.fetch_workspace_id(cookie_header).await?;
+        self.fetch_with_cookies_at(SERVER_URL, cookie_header, workspace_id)
+            .await
+    }
+
+    /// `fetch_with_cookies` against an explicit `_server` base, so tests can
+    /// point the legacy chain at a local mock without reaching opencode.ai.
+    async fn fetch_with_cookies_at(
+        &self,
+        server_url: &str,
+        cookie_header: &str,
+        workspace_id: Option<&str>,
+    ) -> Result<UsageSnapshot, ProviderError> {
+        let workspace_id = match Self::pinned_workspace(workspace_id)? {
+            Some(workspace_id) => workspace_id,
+            None => {
+                self.fetch_workspace_id_at(server_url, cookie_header)
+                    .await?
+            }
+        };
 
         // Then fetch subscription info
         let subscription = self
-            .fetch_subscription(&workspace_id, cookie_header)
+            .fetch_subscription_at(server_url, &workspace_id, cookie_header)
             .await?;
 
         // Parse the response
         self.parse_subscription(&subscription)
     }
 
+    /// Normalized workspace pinned in settings.
+    ///
+    /// `None` means "absent or blank": both chains then discover the cookie's
+    /// workspace. A non-empty pin that cannot be normalized is an error — the
+    /// user asked for a specific workspace, so neither the console nor the legacy
+    /// chain may quietly report a different one found by discovery.
+    fn pinned_workspace(workspace_id: Option<&str>) -> Result<Option<String>, ProviderError> {
+        let raw = workspace_id.map(str::trim).filter(|raw| !raw.is_empty());
+        match raw {
+            None => Ok(None),
+            Some(raw) => console_api::normalize_workspace_id(raw)
+                .map(Some)
+                .ok_or_else(|| ProviderError::Parse("Invalid OpenCode workspace ID".to_string())),
+        }
+    }
+
+    /// Fetch Zen Go usage from the console JSON API (first-party endpoints).
+    ///
+    /// The workspace comes from settings when the user pinned one, otherwise
+    /// from the cookie's org list — the console scopes `go/status` by
+    /// `x-org-id`, so the id must be resolved first.
+    async fn fetch_console(
+        &self,
+        cookie_header: &str,
+        pinned: Option<&str>,
+    ) -> Result<UsageSnapshot, ProviderError> {
+        let workspace_id = match pinned {
+            Some(workspace_id) => workspace_id.to_string(),
+            None => {
+                console_api::fetch_workspace_id(
+                    &self.client,
+                    console_api::DEFAULT_ORIGIN,
+                    cookie_header,
+                    CONSOLE_REQUEST_TIMEOUT,
+                )
+                .await?
+            }
+        };
+
+        console_api::fetch_usage(
+            &self.client,
+            console_api::DEFAULT_ORIGIN,
+            &workspace_id,
+            cookie_header,
+            CONSOLE_REQUEST_TIMEOUT,
+        )
+        .await
+        .map(|usage| usage.into_snapshot())
+    }
+
     /// Fetch workspace ID from server
-    async fn fetch_workspace_id(&self, cookie_header: &str) -> Result<String, ProviderError> {
-        let url = format!("{}?id={}", SERVER_URL, WORKSPACES_SERVER_ID);
+    async fn fetch_workspace_id_at(
+        &self,
+        server_url: &str,
+        cookie_header: &str,
+    ) -> Result<String, ProviderError> {
+        let url = format!("{}?id={}", server_url, WORKSPACES_SERVER_ID);
 
         let response = self
             .client
@@ -96,13 +179,17 @@ impl OpenCodeProvider {
             .send()
             .await?;
 
-        if !response.status().is_success() {
-            if response.status().as_u16() == 401 || response.status().as_u16() == 403 {
-                return Err(ProviderError::AuthRequired);
-            }
+        // Only 401 means "this cookie is not signed in". A 403 from the legacy
+        // endpoint is usually a WAF/proxy/workspace-permission refusal, so it
+        // must not be reported as an expired login (the console chain classifies
+        // 403 the same way).
+        let status = response.status();
+        if status.as_u16() == 401 {
+            return Err(ProviderError::AuthRequired);
+        }
+        if !status.is_success() {
             return Err(ProviderError::Other(format!(
-                "OpenCode API returned {}",
-                response.status()
+                "OpenCode API returned {status}"
             )));
         }
 
@@ -123,8 +210,9 @@ impl OpenCodeProvider {
     }
 
     /// Fetch subscription info for a workspace
-    async fn fetch_subscription(
+    async fn fetch_subscription_at(
         &self,
+        server_url: &str,
         workspace_id: &str,
         cookie_header: &str,
     ) -> Result<String, ProviderError> {
@@ -133,7 +221,7 @@ impl OpenCodeProvider {
         let encoded_args = Self::url_encode(&args.to_string());
         let url = format!(
             "{}?id={}&args={}",
-            SERVER_URL, SUBSCRIPTION_SERVER_ID, encoded_args
+            server_url, SUBSCRIPTION_SERVER_ID, encoded_args
         );
 
         let response = self
@@ -155,13 +243,13 @@ impl OpenCodeProvider {
             .send()
             .await?;
 
-        if !response.status().is_success() {
-            if response.status().as_u16() == 401 || response.status().as_u16() == 403 {
-                return Err(ProviderError::AuthRequired);
-            }
+        let status = response.status();
+        if status.as_u16() == 401 {
+            return Err(ProviderError::AuthRequired);
+        }
+        if !status.is_success() {
             return Err(ProviderError::Other(format!(
-                "OpenCode subscription API returned {}",
-                response.status()
+                "OpenCode subscription API returned {status}"
             )));
         }
 
@@ -504,23 +592,48 @@ impl Provider for OpenCodeProvider {
 
         match ctx.source_mode {
             SourceMode::Auto | SourceMode::Web => {
-                // Check for manual cookie header first
-                if let Some(ref cookie_header) = ctx.manual_cookie_header {
-                    let usage = self.fetch_with_cookies(cookie_header).await?;
-                    return Ok(ProviderFetchResult::new(usage, "web"));
-                }
+                let cookie_header = match ctx.manual_cookie_header.as_deref() {
+                    Some(cookie_header) => cookie_header.to_string(),
+                    None => {
+                        // An explicit manual cookie source with nothing saved,
+                        // or a disabled cookie source, must not silently borrow
+                        // the signed-in browser identity.
+                        if !ctx.allow_browser_cookie {
+                            return Err(ProviderError::NoCookies);
+                        }
+                        match crate::providers::browser_cookie_header(&["opencode.ai"]) {
+                            Ok(cookie_header) => cookie_header,
+                            Err(ProviderError::NoCookies) => {
+                                return Err(ProviderError::AuthRequired);
+                            }
+                            Err(e) => return Err(e),
+                        }
+                    }
+                };
 
-                match crate::providers::browser_cookie_header(&["opencode.ai"]) {
-                    Ok(cookie_header) => match self.fetch_with_cookies(&cookie_header).await {
-                        Ok(usage) => return Ok(ProviderFetchResult::new(usage, "web")),
-                        Err(ProviderError::AuthRequired) => {}
-                        Err(e) => return Err(e),
-                    },
-                    Err(ProviderError::NoCookies) => {}
-                    Err(e) => return Err(e),
-                }
+                // Newer deployments serve the console JSON API; older ones only
+                // expose the `_server` SSR endpoints. The legacy chain stays as
+                // the fallback so both deployment shapes keep working, and both
+                // chains share one pinned workspace so they cannot disagree. An
+                // invalid non-empty pin fails here, before either chain can fall
+                // back to discovery.
+                let pinned = Self::pinned_workspace(ctx.workspace_id.as_deref())?;
+                let console_error =
+                    match self.fetch_console(&cookie_header, pinned.as_deref()).await {
+                        Ok(usage) => return Ok(ProviderFetchResult::new(usage, "console")),
+                        Err(error) => error,
+                    };
 
-                Err(ProviderError::AuthRequired)
+                match self
+                    .fetch_with_cookies(&cookie_header, pinned.as_deref())
+                    .await
+                {
+                    Ok(usage) => Ok(ProviderFetchResult::new(usage, "web")),
+                    // The console error explains why the new chain was
+                    // unavailable (expired session, no workspace, no Zen
+                    // subscription), so it is the more actionable report.
+                    Err(legacy_error) => Err(merge_console_error(console_error, legacy_error)),
+                }
             }
             SourceMode::Cli => Err(ProviderError::UnsupportedSource(SourceMode::Cli)),
             SourceMode::OAuth => Err(ProviderError::UnsupportedSource(SourceMode::OAuth)),
@@ -537,6 +650,14 @@ impl Provider for OpenCodeProvider {
 
     fn supports_cli(&self) -> bool {
         false
+    }
+}
+
+fn merge_console_error(console: ProviderError, legacy: ProviderError) -> ProviderError {
+    match (console, legacy) {
+        (console @ ProviderError::AuthRequired, _) => console,
+        (_, legacy @ ProviderError::AuthRequired) => legacy,
+        (console, _) => console,
     }
 }
 
@@ -616,5 +737,222 @@ mod tests {
         let text = r#"weeklyUsage: { usagePercent: 55, resetInSec: 99 } not-json"#;
         let snap = provider.parse_subscription(text).expect("snapshot");
         assert!((snap.primary.used_percent - 55.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn normalizer_accepts_settings_ids_and_console_urls() {
+        // The pinned-workspace shortcut reuses the console normalizer, so a
+        // pasted console URL must resolve to the same bare id.
+        assert_eq!(
+            console_api::normalize_workspace_id("https://opencode.ai/console/wrk_abc123/billing")
+                .as_deref(),
+            Some("wrk_abc123")
+        );
+        assert_eq!(
+            console_api::normalize_workspace_id(" org_team-1 ").as_deref(),
+            Some("org_team-1")
+        );
+        assert_eq!(console_api::normalize_workspace_id("zen.design"), None);
+    }
+
+    #[test]
+    fn pinned_workspace_short_circuits_discovery() {
+        // A usable pin is authoritative for both chains: no org-list request is
+        // made and the console URL form is reduced to its bare id.
+        assert_eq!(
+            OpenCodeProvider::pinned_workspace(Some(
+                "https://opencode.ai/console/wrk_pinned/billing"
+            ))
+            .expect("usable pin")
+            .as_deref(),
+            Some("wrk_pinned")
+        );
+        assert_eq!(
+            OpenCodeProvider::pinned_workspace(Some(" org_team_1 "))
+                .expect("usable pin")
+                .as_deref(),
+            Some("org_team_1")
+        );
+        // No pin (or a blank one) keeps the discovery fallback available.
+        assert_eq!(
+            OpenCodeProvider::pinned_workspace(None).expect("no pin"),
+            None
+        );
+        assert_eq!(
+            OpenCodeProvider::pinned_workspace(Some("  ")).expect("blank pin"),
+            None
+        );
+        // An explicitly set pin that cannot be normalized must not fall back to
+        // discovery behind the user's back.
+        match OpenCodeProvider::pinned_workspace(Some("zen.design")) {
+            Err(ProviderError::Parse(message)) => {
+                assert_eq!(message, "Invalid OpenCode workspace ID")
+            }
+            other => panic!("invalid pin must be rejected, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn invalid_pin_is_rejected_before_any_chain_or_discovery() {
+        let provider = OpenCodeProvider::new();
+        let ctx = FetchContext {
+            source_mode: SourceMode::Web,
+            manual_cookie_header: Some("session=abc".to_string()),
+            workspace_id: Some("not-a-workspace".to_string()),
+            ..FetchContext::default()
+        };
+
+        // No mock server: reaching console or legacy discovery would mean the
+        // invalid pin was silently ignored, and the returned error would not be
+        // `Parse`.
+        let error = provider
+            .fetch_usage(&ctx)
+            .await
+            .expect_err("invalid pin must not fall back to discovery");
+
+        match error {
+            ProviderError::Parse(message) => assert_eq!(message, "Invalid OpenCode workspace ID"),
+            other => panic!("expected Parse, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn legacy_chain_uses_the_pinned_workspace_instead_of_discovering_one() {
+        let mut server = mockito::Server::new_async().await;
+        // Only the billing call is mocked. Discovery would use the workspaces
+        // server id, so a discovery attempt has no mock and fails the request.
+        let subscription = server
+            .mock("GET", mockito::Matcher::Any)
+            .match_query(mockito::Matcher::Regex("wrk_pinned".to_string()))
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(r#"{"rollingUsage":{"usagePercent":42,"resetInSec":600}}"#)
+            .expect(1)
+            .create_async()
+            .await;
+
+        let provider = OpenCodeProvider::new();
+        let snapshot = provider
+            .fetch_with_cookies_at(
+                &server.url(),
+                "session=abc",
+                Some("https://opencode.ai/console/wrk_pinned/billing"),
+            )
+            .await
+            .expect("pinned workspace should be used without discovery");
+
+        assert!(
+            (snapshot.primary.used_percent - 42.0).abs() < f64::EPSILON,
+            "parsed the pinned workspace subscription: {}",
+            snapshot.primary.used_percent
+        );
+        subscription.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn legacy_workspace_403_is_not_reported_as_a_signed_out_session() {
+        let mut server = mockito::Server::new_async().await;
+        // Discovery answers 403 (WAF/proxy style). That is a diagnostic, not an
+        // expired cookie, so the caller must not be told to sign in again.
+        let workspace = server
+            .mock("GET", mockito::Matcher::Any)
+            .with_status(403)
+            .with_body("blocked")
+            .create_async()
+            .await;
+
+        let provider = OpenCodeProvider::new();
+        let error = provider
+            .fetch_with_cookies_at(&server.url(), "session=abc", None)
+            .await
+            .expect_err("403 must not succeed");
+
+        assert!(
+            matches!(error, ProviderError::Other(_)),
+            "403 should stay a diagnostic, got {error:?}"
+        );
+        if let ProviderError::Other(message) = &error {
+            assert!(
+                message.contains("403"),
+                "message keeps the status: {message}"
+            );
+            assert!(
+                !message.contains("blocked"),
+                "response body must not leak into the error: {message}"
+            );
+        }
+        workspace.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn legacy_subscription_403_is_not_reported_as_a_signed_out_session() {
+        let mut server = mockito::Server::new_async().await;
+        let subscription = server
+            .mock("GET", mockito::Matcher::Any)
+            .match_query(mockito::Matcher::Regex("wrk_pinned".to_string()))
+            .with_status(403)
+            .with_body("blocked")
+            .create_async()
+            .await;
+
+        let provider = OpenCodeProvider::new();
+        let error = provider
+            .fetch_with_cookies_at(&server.url(), "session=abc", Some("wrk_pinned"))
+            .await
+            .expect_err("403 must not succeed");
+
+        assert!(
+            matches!(error, ProviderError::Other(_)),
+            "subscription 403 should stay a diagnostic, got {error:?}"
+        );
+        subscription.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn legacy_401_still_requires_auth() {
+        let mut server = mockito::Server::new_async().await;
+        let subscription = server
+            .mock("GET", mockito::Matcher::Any)
+            .match_query(mockito::Matcher::Regex("wrk_pinned".to_string()))
+            .with_status(401)
+            .create_async()
+            .await;
+
+        let provider = OpenCodeProvider::new();
+        let error = provider
+            .fetch_with_cookies_at(&server.url(), "session=abc", Some("wrk_pinned"))
+            .await
+            .expect_err("401 must not succeed");
+
+        assert!(
+            matches!(error, ProviderError::AuthRequired),
+            "401 must still map to AuthRequired, got {error:?}"
+        );
+        subscription.assert_async().await;
+    }
+
+    #[test]
+    fn console_requests_keep_their_own_timeout_budget() {
+        // The console chain must not consume the legacy chain's budget: 10s per
+        // console call, matching the Go console constant, not `web_timeout`.
+        assert_eq!(CONSOLE_REQUEST_TIMEOUT, std::time::Duration::from_secs(10));
+    }
+
+    #[tokio::test]
+    async fn manual_or_off_cookie_source_never_borrows_the_browser_cookie() {
+        let provider = OpenCodeProvider::new();
+        let ctx = FetchContext {
+            source_mode: SourceMode::Web,
+            manual_cookie_header: None,
+            allow_browser_cookie: false,
+            ..FetchContext::default()
+        };
+
+        let error = provider
+            .fetch_usage(&ctx)
+            .await
+            .expect_err("browser identity must not be borrowed");
+
+        assert!(matches!(error, ProviderError::NoCookies), "got {error:?}");
     }
 }

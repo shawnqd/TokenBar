@@ -330,6 +330,85 @@ describe("TrayPanel provider grid (core read model)", () => {
     expect(container.querySelector(".tray-panel-reveal--opening")).not.toBeNull();
   });
 
+  it("recovers to opening state on rapid reopen during close transition", async () => {
+    const { container } = renderTrayPanel([provider("claude", "Claude", 35)]);
+    await waitFor(() =>
+      expect(tauriMocks.revealTrayPanelWindow).toHaveBeenCalledTimes(1),
+    );
+    expect(container.querySelector(".tray-panel-reveal--parked")).not.toBeNull();
+
+    // 1. First reveal
+    act(() => emitEvent("tray-panel-revealed", undefined));
+    expect(container.querySelector(".tray-panel-reveal--opening")).not.toBeNull();
+
+    // 2. User/outside click begins close
+    act(() => emitEvent("tray-panel-closing", undefined));
+    expect(container.querySelector(".tray-panel-reveal--closing")).not.toBeNull();
+
+    // 3. User rapidly clicks tray icon again before hidden: revealed event fired
+    act(() => emitEvent("tray-panel-revealed", undefined));
+    expect(container.querySelector(".tray-panel-reveal--opening")).not.toBeNull();
+    expect(container.querySelector(".tray-panel-reveal--closing")).toBeNull();
+  });
+
+  it("handles frost event with monotonic generation and clears on hidden", async () => {
+    renderTrayPanel([provider("claude", "Claude", 35)]);
+    await waitFor(() =>
+      expect(tauriMocks.revealTrayPanelWindow).toHaveBeenCalledTimes(1),
+    );
+
+    // Initial reveal
+    act(() => emitEvent("tray-panel-revealed", undefined));
+
+    // Generation 2 arrives
+    act(() =>
+      emitEvent("tray-panel-frost", {
+        generation: 2,
+        css: 'url("data:image/bmp;base64,gen2")',
+        visible: true,
+      }),
+    );
+    expect(document.documentElement.style.getPropertyValue("--tray-frost")).toBe(
+      'url("data:image/bmp;base64,gen2")',
+    );
+
+    // Stale generation 1 arrives later -> ignored
+    act(() =>
+      emitEvent("tray-panel-frost", {
+        generation: 1,
+        css: 'url("data:image/bmp;base64,gen1")',
+        visible: true,
+      }),
+    );
+    expect(document.documentElement.style.getPropertyValue("--tray-frost")).toBe(
+      'url("data:image/bmp;base64,gen2")',
+    );
+
+    // Native geometry/theme invalidation clears the old image immediately.
+    act(() =>
+      emitEvent("tray-panel-frost", {
+        generation: 3,
+        css: "",
+        visible: false,
+      }),
+    );
+    expect(document.documentElement.style.getPropertyValue("--tray-frost")).toBe("");
+
+    // A stale completion cannot restore the invalidated image.
+    act(() =>
+      emitEvent("tray-panel-frost", {
+        generation: 2,
+        css: 'url("data:image/bmp;base64=stale")',
+        visible: true,
+      }),
+    );
+    expect(document.documentElement.style.getPropertyValue("--tray-frost")).toBe("");
+
+    // Window hidden -> cleared
+    act(() => emitEvent("tray-panel-hidden", undefined));
+    expect(document.documentElement.style.getPropertyValue("--tray-frost")).toBe("");
+  });
+
   it("reveals before the first provider refresh completes", async () => {
     const { container } = renderTrayPanel([]);
     await waitFor(() =>

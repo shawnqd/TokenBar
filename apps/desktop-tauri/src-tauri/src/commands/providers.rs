@@ -216,8 +216,13 @@ pub(crate) fn build_fetch_context(
                 _ => (usage_source, stored_cookie),
             }
         };
-        let allow_browser = !(id == ProviderId::OpenCodeGo
-            && (cookie_source == "off" || (cookie_source == "manual" && cookie_header.is_none()))
+        // Providers whose web session is the only account identity (OpenCode,
+        // OpenCode Go) must not fall back to the signed-in browser profile when
+        // the user turned cookies off or chose a manual session without saving
+        // one. Grok additionally reserves the browser profile for Auto only.
+        let cookie_identity_gate = matches!(id, ProviderId::OpenCode | ProviderId::OpenCodeGo)
+            && (cookie_source == "off" || (cookie_source == "manual" && cookie_header.is_none()));
+        let allow_browser = !(cookie_identity_gate
             || id == ProviderId::Grok && matches!(cookie_source, "off" | "manual"));
         (source_mode, cookie_header, allow_browser)
     };

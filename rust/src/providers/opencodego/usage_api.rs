@@ -1,6 +1,5 @@
 use chrono::{DateTime, Utc};
 use reqwest::Client;
-use std::path::PathBuf;
 
 use crate::core::{FetchContext, ProviderError, ProviderFetchResult, RateWindow, UsageSnapshot};
 
@@ -33,22 +32,74 @@ pub(super) fn normalized_api_key(raw: Option<&str>) -> Option<String> {
     }
     (!value.is_empty()).then(|| value.to_string())
 }
-pub(super) fn resolve_api_key(ctx: &FetchContext) -> Option<String> {
-    normalized_api_key(ctx.api_key.as_deref())
-        .or_else(|| {
-            std::env::var("OPENCODE_API_KEY")
-                .ok()
-                .and_then(|value| normalized_api_key(Some(&value)))
-        })
-        .or_else(resolve_native_api_key)
+
+/// A resolved native credential plus the account scope it belongs to.
+///
+/// `source` is diagnostic only: provider call sites keep their own
+/// `source_label` ("api" / "local+api") so the visible source chain does not
+/// change.
+pub(super) struct NativeCredential {
+    pub(super) token: String,
+    /// `metadata.orgID` of a modern OAuth login; sent as `x-opencode-org-id`.
+    pub(super) org_id: Option<String>,
+    pub(super) source: &'static str,
 }
 
-fn resolve_native_api_key() -> Option<String> {
+/// Backwards-compatible token-only view of [`resolve_credential`].
+#[allow(dead_code, reason = "kept for call sites that only need the token")]
+pub(super) fn resolve_api_key(ctx: &FetchContext) -> Option<String> {
+    resolve_credential(ctx).map(|credential| credential.token)
+}
+
+/// Resolve the Go usage API credential in strict precedence order:
+///
+/// 1. an explicit configured key (`ctx.api_key` / `OPENCODE_API_KEY`);
+/// 2. `OPENCODE_AUTH_CONTENT` when it is valid JSON (OpenCode treats that as
+///    the complete auth store, so nothing else is merged);
+/// 3. the modern `credential` table, which is authoritative once it exists;
+/// 4. the legacy `auth.json` (`opencode-go` / `type: "api"`), only when the
+///    database or the table is absent.
+///
+/// A modern store that exists but is logged out, expired, ambiguous or
+/// malformed yields `None`; it must never resurrect a stale legacy entry.
+pub(super) fn resolve_credential(ctx: &FetchContext) -> Option<NativeCredential> {
+    if let Some(token) = normalized_api_key(ctx.api_key.as_deref()).or_else(|| {
+        std::env::var("OPENCODE_API_KEY")
+            .ok()
+            .and_then(|value| normalized_api_key(Some(&value)))
+    }) {
+        return Some(NativeCredential {
+            token,
+            org_id: None,
+            source: "api",
+        });
+    }
+
     let auth_content = std::env::var("OPENCODE_AUTH_CONTENT").ok();
-    let auth_files = auth_file_paths()
-        .into_iter()
-        .filter_map(|path| std::fs::read_to_string(path).ok());
-    resolve_auth_credentials(auth_content.as_deref(), auth_files)
+    // A valid `OPENCODE_AUTH_CONTENT` is the complete auth store for OpenCode:
+    // it is exclusive, so neither the modern table nor a legacy file may add to
+    // it. Only a malformed value is ignored and lets the store lookup happen.
+    let content_is_store = auth_content
+        .as_deref()
+        .is_some_and(|content| serde_json::from_str::<serde_json::Value>(content).is_ok());
+    if content_is_store {
+        return resolve_auth_credentials(auth_content.as_deref(), std::iter::empty()).map(
+            |token| NativeCredential {
+                token,
+                org_id: None,
+                source: "cli",
+            },
+        );
+    }
+
+    match super::cli_credential::load_cli_credential() {
+        Ok(Some(credential)) => Some(NativeCredential {
+            token: credential.token,
+            org_id: credential.org_id,
+            source: "cli",
+        }),
+        Ok(None) | Err(_) => None,
+    }
 }
 
 fn resolve_auth_credentials(
@@ -78,37 +129,25 @@ fn api_key_from_auth_value(value: &serde_json::Value) -> Option<String> {
     normalized_api_key(entry.get("key").and_then(serde_json::Value::as_str))
 }
 
-fn auth_file_paths() -> Vec<PathBuf> {
-    let mut paths = Vec::new();
-    if let Ok(xdg_data_home) = std::env::var("XDG_DATA_HOME") {
-        paths.push(
-            PathBuf::from(xdg_data_home)
-                .join("opencode")
-                .join("auth.json"),
-        );
-    }
-    for (auth_path, _) in super::local::candidate_paths() {
-        if !paths.contains(&auth_path) {
-            paths.push(auth_path);
-        }
-    }
-    paths
-}
-
 pub(super) async fn fetch(
     client: &Client,
     ctx: &FetchContext,
     api_key: &str,
+    org_id: Option<&str>,
     source_label: &str,
 ) -> Result<ProviderFetchResult, ProviderError> {
-    let response = client
+    let mut request = client
         .get(USAGE_API_URL)
         .timeout(std::time::Duration::from_secs(ctx.web_timeout.max(1)))
         .header("Authorization", format!("Bearer {api_key}"))
         .header("Accept", "application/json")
-        .header("User-Agent", "CodexBar")
-        .send()
-        .await?;
+        .header("User-Agent", "CodexBar");
+    // Modern OAuth logins are scoped to an organization; plain API keys are
+    // not. The header only changes identity scoping, not the endpoint.
+    if let Some(org_id) = org_id.filter(|value| !value.trim().is_empty()) {
+        request = request.header("x-opencode-org-id", org_id.trim());
+    }
+    let response = request.send().await?;
     let status = response.status();
     let body = response.text().await?;
     if status == reqwest::StatusCode::UNAUTHORIZED {

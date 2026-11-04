@@ -133,4 +133,56 @@ describe("useOutputSpeedSnapshot refresh lifecycle", () => {
     expect(result.current?.kimi.tokensPerSecond).toBe(31.0);
     expect(result.current?.opencodego.tokensPerSecond).toBe(44.5);
   });
+
+  it("suspends interval when active is false and refreshes when active becomes true", async () => {
+    resetTrayCoreForTest({ outputSpeed: 15_000 });
+    trayCoreStore.seed({
+      ...FIXTURE_SNAPSHOTS.deepseekBalance,
+      providerId: "grok",
+      displayName: "Grok",
+      accountKey: "default",
+      sourceKey: "cli",
+      capabilities: {
+        ...FIXTURE_SNAPSHOTS.deepseekBalance.capabilities,
+        supportsOutputSpeed: true,
+      },
+    });
+    let attempts = 0;
+    trayCoreStore.setEnrichmentRunner(async (kind, key) => {
+      attempts += 1;
+      trayCoreStore.commitRuntimeEnrichment(kind, key, {
+        ok: true,
+        outputSpeed: grokSpeed,
+      });
+    });
+
+    const { rerender } = renderHook(
+      ({ active }) => useOutputSpeedSnapshot(true, 1_000, active),
+      { initialProps: { active: false } },
+    );
+
+    // Inactive: no initial refresh and no interval ticks
+    expect(attempts).toBe(0);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(30_000);
+    });
+    expect(attempts).toBe(0);
+
+    // Active (panel opens): immediate refresh
+    rerender({ active: true });
+    expect(attempts).toBe(1);
+
+    // Subsequent tick after TTL
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(15_000);
+    });
+    expect(attempts).toBe(2);
+
+    // Inactive again (panel closes): interval suspended
+    rerender({ active: false });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(30_000);
+    });
+    expect(attempts).toBe(2);
+  });
 });

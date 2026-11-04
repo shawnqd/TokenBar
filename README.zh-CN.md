@@ -24,10 +24,10 @@
 - **CLI** — `codexbar usage`、`codexbar cost`、`codexbar config` 和本机回环 `codexbar serve`，便于脚本化、本地集成和 CI
 - **WSL 支持** — CLI 开箱即用，桌面壳层通过 WSLg 运行
 
-## v0.57.3 当前正式发布
+## v0.57.7 当前正式发布
 
 - 开发版与已安装正式版使用独立的单实例标识和 WebView 数据目录，开发链运行时不会拦截正式版启动或升级。
-- 当前本地发布候选已统一版本、安装器和 CLI，安装/卸载烟测通过；`0.57.3` 会作为 `0.57.2` 的补丁更新安装。
+- 当前本地发布候选已统一版本、安装器和 CLI，安装/卸载烟测通过；`0.57.7` 会作为 `0.57.6` 的补丁更新安装。
 - 自动更新只读取公开 TokenBar release feed；本地开发构建需先手动安装，公开 release 未同步前不会显示为线上更新。
 - 发布前仍需用户完成小型状态栏在切桌面、刷新、启停和极窄宽度下的真实验收。
 
@@ -173,7 +173,7 @@ TokenBar fork 目前尚未启用 Winget 分发，请不要使用历史 Win-Codex
 在 Windows 机器上做本地发布构建时，使用缓存版构建脚本：
 
 ```powershell
-.\scripts\windows-release-build.ps1 -Ref v0.57.3
+.\scripts\windows-release-build.ps1 -Ref v0.57.7
 ```
 
 脚本会在自身的工作目录下维护干净源码签出、Rust/pnpm 构建缓存和已签名的 WebView2/VC++ 引导程序下载。它仍会构建真实 release 二进制、校验 Microsoft 签名、用 Inno Setup 打包，并输出 GitHub Release 使用的四个资产。
@@ -181,11 +181,11 @@ TokenBar fork 目前尚未启用 Winget 分发，请不要使用历史 Win-Codex
 常用发布参数：
 
 ```powershell
-.\scripts\windows-release-build.ps1 -Ref v0.57.3 -WarmCacheOnly
-.\scripts\windows-release-build.ps1 -Ref v0.57.3 -WarmCliCache
-.\scripts\windows-release-build.ps1 -Ref v0.57.3 -SmokeInstall
-.\scripts\windows-release-build.ps1 -Ref v0.57.3 -UploadRelease v0.57.3
-.\scripts\release-doctor.ps1 -Version 0.57.3
+.\scripts\windows-release-build.ps1 -Ref v0.57.7 -WarmCacheOnly
+.\scripts\windows-release-build.ps1 -Ref v0.57.7 -WarmCliCache
+.\scripts\windows-release-build.ps1 -Ref v0.57.7 -SmokeInstall
+.\scripts\windows-release-build.ps1 -Ref v0.57.7 -UploadRelease v0.57.7
+.\scripts\release-doctor.ps1 -Version 0.57.7
 ```
 
 安装包和便携版资产以 Windows 构建服务器脚本为主发布路径。

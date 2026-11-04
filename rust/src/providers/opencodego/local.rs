@@ -3,6 +3,13 @@
 //! Mirrors upstream `OpenCodeGoLocalUsageReader`: sums `opencode-go` assistant
 //! message / step-finish costs from the local OpenCode database and maps them
 //! onto session ($12 / 5h), weekly ($30), and monthly ($60) windows.
+//!
+//! Dedupe contract (v1 `message`/`part` vs v2 `session_message`): a local
+//! install can hold both schemas for the same turn, so v1 keeps priority per
+//! **id** and all three passes (cost, tokens, output speed) use the same
+//! `v1_usable` id set, derived from the actual v1 cost rows. An id v1 owns is
+//! never read from v2 for *any* metric — when the v1 row lacks tokens or
+//! timing, that metric stays empty rather than mixing schemas within one turn.
 
 use chrono::{DateTime, Datelike, Duration, Local, NaiveDate, TimeZone, Timelike, Utc};
 use rusqlite::Connection;
@@ -17,8 +24,12 @@ const WEEKLY_LIMIT_USD: f64 = 30.0;
 const MONTHLY_LIMIT_USD: f64 = 60.0;
 const PROVIDER_ID: &str = "opencode-go";
 
-const MESSAGE_USAGE_SQL: &str = r#"
+// ---- v1 (`message` / `part`) -------------------------------------------------
+
+/// v1 usage rows from `message` alone (databases without a `part` table).
+const V1_MESSAGE_USAGE_SQL: &str = r#"
 SELECT
+  id AS id,
   CAST(COALESCE(json_extract(data, '$.time.created'), time_created) AS INTEGER) AS createdMs,
   CAST(json_extract(data, '$.cost') AS REAL) AS cost,
   1 AS requestCount,
@@ -30,8 +41,12 @@ WHERE json_valid(data)
   AND json_type(data, '$.cost') IN ('integer', 'real')
 "#;
 
-const MESSAGE_AND_PART_USAGE_SQL: &str = r#"
-WITH provider_messages AS (
+/// v1 usage rows for databases that also carry a `part` table. A message with
+/// priced `step-finish` parts is counted once per part; otherwise the message
+/// cost is used. Row ids are the message id, so a v2 copy of the same turn can
+/// be anti-joined away.
+const V1_PARTS_USAGE_CTE: &str = r#"
+provider_messages AS (
   SELECT
     id AS messageID,
     CAST(COALESCE(json_extract(data, '$.time.created'), time_created) AS INTEGER) AS createdMs,
@@ -42,48 +57,208 @@ WITH provider_messages AS (
   WHERE json_valid(data)
     AND json_extract(data, '$.providerID') = ?1
     AND json_extract(data, '$.role') = 'assistant'
-)
-SELECT
-  CAST(COALESCE(json_extract(p.data, '$.time.created'), p.time_created, m.createdMs) AS INTEGER)
-    AS createdMs,
-  CAST(json_extract(p.data, '$.cost') AS REAL) AS cost,
-  1 AS requestCount,
-  m.modelID AS modelID
-FROM part p
-JOIN provider_messages m ON m.messageID = p.message_id
-WHERE json_valid(p.data)
-  AND json_extract(p.data, '$.type') = 'step-finish'
-  AND json_type(p.data, '$.cost') IN ('integer', 'real')
-UNION ALL
-SELECT createdMs, cost, 1 AS requestCount, modelID
-FROM provider_messages m
-WHERE hasCost
-  AND NOT EXISTS (
-    SELECT 1
-    FROM part p
-    WHERE p.message_id = m.messageID
-      AND json_valid(p.data)
-      AND json_extract(p.data, '$.type') = 'step-finish'
-      AND json_type(p.data, '$.cost') IN ('integer', 'real')
-  )
+),
+v1_cost AS (
+  SELECT
+    m.messageID AS id,
+    CAST(COALESCE(json_extract(p.data, '$.time.created'), p.time_created, m.createdMs) AS INTEGER)
+      AS createdMs,
+    CAST(json_extract(p.data, '$.cost') AS REAL) AS cost,
+    1 AS requestCount,
+    m.modelID AS modelID
+  FROM part p
+  JOIN provider_messages m ON m.messageID = p.message_id
+  WHERE json_valid(p.data)
+    AND json_extract(p.data, '$.type') = 'step-finish'
+    AND json_type(p.data, '$.cost') IN ('integer', 'real')
+  UNION ALL
+  SELECT m.messageID AS id, m.createdMs AS createdMs, m.cost AS cost, 1 AS requestCount,
+         m.modelID AS modelID
+  FROM provider_messages m
+  WHERE m.hasCost
+    AND NOT EXISTS (
+      SELECT 1
+      FROM part p
+      WHERE p.message_id = m.messageID
+        AND json_valid(p.data)
+        AND json_extract(p.data, '$.type') = 'step-finish'
+        AND json_type(p.data, '$.cost') IN ('integer', 'real')
+    )
+)"#;
+
+/// Empty stand-in used when a v1 table is absent, so a single parameterised
+/// query can always be prepared (`?1` stays bound).
+const EMPTY_V1_USAGE_SQL: &str =
+    "SELECT NULL AS id, 0 AS createdMs, 0.0 AS cost, 0 AS requestCount, '' AS modelID WHERE 0";
+
+/// `v1_cost` CTE: the v1 rows the cost pass actually reads.
+///
+/// Parts-priced rows when the `part` table exists (that is the legacy
+/// "step-finish wins over message cost" rule), the message cost alone otherwise.
+/// Emitting this as a named CTE lets the `v1_usable` suppression set be derived
+/// from the same rows instead of re-deriving the rule in a second query.
+fn v1_cost_cte(has_message: bool, has_part: bool) -> String {
+    if has_message && has_part {
+        return V1_PARTS_USAGE_CTE.trim_end().to_string();
+    }
+    let mut cte = String::from("v1_cost AS (");
+    cte.push_str(if has_message {
+        V1_MESSAGE_USAGE_SQL
+    } else {
+        EMPTY_V1_USAGE_SQL
+    });
+    cte.push(')');
+    cte
+}
+
+/// `v1_usable` CTE: the ids whose **v1** rows are authoritative for a turn.
+///
+/// Derived from the actual `v1_cost` rows (`createdMs > 0`, numeric cost
+/// `>= 0`) so the suppression set and the emitted v1 cost rows cannot diverge.
+/// A turn whose v1 cost resolves to `0` through a priced `step-finish` part
+/// still owns its id (legacy priority: v2 must not take over), while a turn
+/// whose v1 cost row is negative is not owned at all, so the v2 copy keeps its
+/// cost/tokens/speed instead of the turn being dropped.
+///
+/// Legacy-first rule, shared by all three passes (cost, tokens, speed): an id
+/// present in both schemas is read from v1 only. Deriving the suppression set
+/// per metric made one turn contribute a v1 cost beside v2 tokens/speed, and a
+/// v1 row with tokens but no usable cost silently handed that id's *cost* to
+/// v2 while keeping its tokens. One id therefore gets one source per metric —
+/// and since the set is a whole id, a v1 row that lacks tokens or speed fields
+/// yields "no data" for that metric instead of borrowing the v2 copy.
+fn v1_usable_cte() -> &'static str {
+    "v1_usable AS (SELECT DISTINCT id FROM v1_cost WHERE createdMs > 0 AND cost >= 0)"
+}
+
+// ---- v2 (`session_message` / `session_part`) ---------------------------------
+
+/// v2 usage rows: the message kind lives in the `type` column (not in the JSON
+/// payload), `compaction` turns are billable like `assistant` ones, and the
+/// provider/model sit under `data.model`.
+const V2_USAGE_SQL: &str = r#"
+  SELECT
+    s.id AS id,
+    CAST(COALESCE(json_extract(s.data, '$.time.created'), s.time_created) AS INTEGER) AS createdMs,
+    CAST(json_extract(s.data, '$.cost') AS REAL) AS cost,
+    1 AS requestCount,
+    COALESCE(json_extract(s.data, '$.model.id'), '') AS modelID
+  FROM session_message s
+  WHERE json_valid(s.data)
+    AND s.type IN ('assistant', 'compaction')
+    AND json_extract(s.data, '$.model.providerID') = ?1
+    AND json_type(s.data, '$.cost') IN ('integer', 'real')
 "#;
 
 /// Token totals live on the message level only — step-finish parts carry cost
 /// without token counts — so the token pass reads message rows directly.
-const MESSAGE_TOKENS_SQL: &str = r#"
+const V1_MESSAGE_TOKENS_SQL: &str = r#"
 SELECT
   CAST(COALESCE(json_extract(data, '$.time.created'), time_created) AS INTEGER) AS createdMs,
   COALESCE(json_extract(data, '$.modelID'), '') AS modelID,
   CAST(COALESCE(json_extract(data, '$.tokens.input'), 0) AS INTEGER) AS inputTokens,
   CAST(COALESCE(json_extract(data, '$.tokens.output'), 0) AS INTEGER) AS outputTokens,
   CAST(COALESCE(json_extract(data, '$.tokens.cache.read'), 0) AS INTEGER) AS cacheRead,
-  CAST(COALESCE(json_extract(data, '$.tokens.cache.write'), 0) AS INTEGER) AS cacheWrite
+  CAST(COALESCE(json_extract(data, '$.tokens.cache.write'), 0) AS INTEGER) AS cacheWrite,
+  id AS id
 FROM message
 WHERE json_valid(data)
   AND json_extract(data, '$.providerID') = ?1
   AND json_extract(data, '$.role') = 'assistant'
   AND json_type(data, '$.tokens') = 'object'
 "#;
+
+const V2_TOKENS_SQL: &str = r#"
+  SELECT
+    CAST(COALESCE(json_extract(s.data, '$.time.created'), s.time_created) AS INTEGER) AS createdMs,
+    COALESCE(json_extract(s.data, '$.model.id'), '') AS modelID,
+    CAST(COALESCE(json_extract(s.data, '$.tokens.input'), 0) AS INTEGER) AS inputTokens,
+    CAST(COALESCE(json_extract(s.data, '$.tokens.output'), 0) AS INTEGER) AS outputTokens,
+    CAST(COALESCE(json_extract(s.data, '$.tokens.cache.read'), 0) AS INTEGER) AS cacheRead,
+    CAST(COALESCE(json_extract(s.data, '$.tokens.cache.write'), 0) AS INTEGER) AS cacheWrite,
+    s.id AS id
+  FROM session_message s
+  WHERE json_valid(s.data)
+    AND s.type IN ('assistant', 'compaction')
+    AND json_extract(s.data, '$.model.providerID') = ?1
+    AND json_type(s.data, '$.tokens') = 'object'
+"#;
+
+const EMPTY_V1_TOKENS_SQL: &str = "SELECT 0 AS createdMs, '' AS modelID, 0 AS inputTokens, \
+     0 AS outputTokens, 0 AS cacheRead, 0 AS cacheWrite, NULL AS id WHERE 0";
+
+/// Failure-close message: an unreadable schema must not look like "no usage".
+const NO_MESSAGE_TABLES: &str =
+    "no OpenCode message tables found (expected message/part or session_message)";
+
+/// v1 and v2 may coexist while a local install is mid-migration, so both
+/// branches are always attempted and v2 rows are anti-joined on id. The v1 side
+/// is `v1_cost` verbatim; `v1_usable` is derived from those same rows and is the
+/// suppression set the token and speed passes share, so one id never mixes
+/// schemas across metrics.
+fn usage_rows_sql(has_message: bool, has_part: bool, has_v2: bool) -> String {
+    let mut sql = String::from("WITH ");
+    sql.push_str(&v1_cost_cte(has_message, has_part));
+    if has_v2 {
+        sql.push_str(",\n");
+        sql.push_str(v1_usable_cte());
+        sql.push_str(",\nv2 AS (");
+        sql.push_str(V2_USAGE_SQL.trim_end());
+        sql.push_str(")\n");
+        // The v1 rows are emitted as-is. `read_rows_for` still drops a row it
+        // cannot use (negative/non-finite cost, missing timestamp); such an id
+        // is absent from `v1_usable`, so its v2 copy is kept and no cost is lost.
+        sql.push_str(
+            "SELECT createdMs, cost, requestCount, modelID FROM v1_cost\nUNION ALL\n\
+             SELECT createdMs, cost, requestCount, modelID FROM v2\n\
+             WHERE NOT EXISTS (SELECT 1 FROM v1_usable u WHERE u.id = v2.id)",
+        );
+    } else {
+        sql.push_str("\nSELECT createdMs, cost, requestCount, modelID FROM v1_cost");
+    }
+    sql
+}
+
+fn tokens_rows_sql(has_message: bool, has_part: bool, has_v2: bool) -> String {
+    let mut sql = String::from("WITH ");
+    if has_v2 {
+        // `v1_usable` is derived from the cost rows, not from the token CTE:
+        // whether v1 owns an id is a cost/timestamp question, so a v1 row
+        // without `tokens` must still suppress its v2 copy (see `v1_usable_cte`).
+        sql.push_str(&v1_cost_cte(has_message, has_part));
+        sql.push_str(",\n");
+        sql.push_str(v1_usable_cte());
+        sql.push_str(",\n");
+    }
+    sql.push_str("v1 AS (");
+    sql.push_str(if has_message {
+        V1_MESSAGE_TOKENS_SQL
+    } else {
+        EMPTY_V1_TOKENS_SQL
+    });
+    sql.push(')');
+    if has_v2 {
+        sql.push_str(",\nv2 AS (");
+        sql.push_str(V2_TOKENS_SQL.trim_end());
+        sql.push_str(")\n");
+        // Both sides are gated by `v1_usable`: v1 token rows only count for the
+        // ids v1 owns, so an id v1 loses to v2 cannot contribute twice.
+        sql.push_str(
+            "SELECT createdMs, modelID, inputTokens, outputTokens, cacheRead, cacheWrite\n\
+             FROM v1 AS v\n\
+             WHERE EXISTS (SELECT 1 FROM v1_usable u WHERE u.id = v.id)\n\
+             UNION ALL\n\
+             SELECT createdMs, modelID, inputTokens, outputTokens, cacheRead, cacheWrite\n\
+             FROM v2\n\
+             WHERE NOT EXISTS (SELECT 1 FROM v1_usable u WHERE u.id = v2.id)",
+        );
+    } else {
+        sql.push_str(
+            "\nSELECT createdMs, modelID, inputTokens, outputTokens, cacheRead, cacheWrite FROM v1",
+        );
+    }
+    sql
+}
 
 #[derive(Debug, Clone)]
 pub(crate) struct UsageRow {
@@ -142,7 +317,65 @@ impl LocalUsageSnapshot {
 /// `%LOCALAPPDATA%\opencode`), and every `opencode*.db` channel variant
 /// (`opencode.db`, `opencode-stable.db`, …) is offered per base — `-wal` /
 /// `-shm` sidecars never match the `.db` suffix filter.
+///
+/// `OPENCODE_DB` is an exclusive override: when it is set to a path, that path
+/// is the only candidate (absolute, or relative to an **absolute**
+/// `XDG_DATA_HOME`/`~/.local/share` `opencode` root) and the scanned installs
+/// are not consulted — a missing override must not silently read another
+/// account's database. `OPENCODE_DB=:memory:` yields no candidates at all, so
+/// local history reads report "not available" instead of touching files.
+/// Resolution never creates files or directories.
 pub fn candidate_paths() -> Vec<(PathBuf, PathBuf)> {
+    let home = std::env::var("USERPROFILE")
+        .or_else(|_| std::env::var("HOME"))
+        .ok()
+        .map(PathBuf::from)
+        .or_else(dirs::home_dir);
+    candidate_paths_with(|name| std::env::var(name).ok(), home)
+}
+
+fn candidate_paths_with<F>(read_env: F, home: Option<PathBuf>) -> Vec<(PathBuf, PathBuf)>
+where
+    F: Fn(&str) -> Option<String>,
+{
+    let env_value = |name: &str| {
+        read_env(name)
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty())
+    };
+
+    // Only an absolute `XDG_DATA_HOME` is a usable data root; a relative value
+    // would otherwise turn into a cwd-relative scan.
+    let xdg_base = env_value("XDG_DATA_HOME")
+        .map(PathBuf::from)
+        .filter(|xdg| xdg.is_absolute())
+        .map(|xdg| xdg.join("opencode"));
+
+    if let Some(spec) = env_value("OPENCODE_DB") {
+        if spec == ":memory:" {
+            return Vec::new();
+        }
+        let db = if Path::new(&spec).is_absolute() {
+            Some(PathBuf::from(&spec))
+        } else {
+            xdg_base
+                .clone()
+                .or_else(|| home.as_ref().map(|home| local_share_opencode(home)))
+                .map(|base| base.join(&spec))
+        };
+        return match db {
+            Some(db) => {
+                let auth = db
+                    .parent()
+                    .map(|parent| parent.join("auth.json"))
+                    .unwrap_or_else(|| PathBuf::from("auth.json"));
+                vec![(auth, db)]
+            }
+            // Nothing to fall back to: the override is exclusive by contract.
+            None => Vec::new(),
+        };
+    }
+
     let mut bases: Vec<PathBuf> = Vec::new();
 
     let push_base = |base: PathBuf, bases: &mut Vec<PathBuf>| {
@@ -151,35 +384,23 @@ pub fn candidate_paths() -> Vec<(PathBuf, PathBuf)> {
         }
     };
 
-    if let Ok(xdg) = std::env::var("XDG_DATA_HOME") {
-        let trimmed = xdg.trim();
-        if !trimmed.is_empty() {
-            push_base(PathBuf::from(trimmed).join("opencode"), &mut bases);
-        }
+    if let Some(base) = &xdg_base {
+        push_base(base.clone(), &mut bases);
     }
 
-    if let Ok(home) = std::env::var("USERPROFILE").or_else(|_| std::env::var("HOME")) {
-        push_base(
-            PathBuf::from(home)
-                .join(".local")
-                .join("share")
-                .join("opencode"),
-            &mut bases,
-        );
-    }
-
-    if let Ok(local) = std::env::var("LOCALAPPDATA") {
-        push_base(PathBuf::from(local).join("opencode"), &mut bases);
-    }
-
-    if let Some(home) = dirs::home_dir() {
+    if let Some(home) = &home {
         push_base(
             home.join(".local").join("share").join("opencode"),
             &mut bases,
         );
     }
 
-    let mut out = Vec::new();
+    if let Some(local) = env_value("LOCALAPPDATA") {
+        push_base(PathBuf::from(local).join("opencode"), &mut bases);
+    }
+
+    let mut out: Vec<(PathBuf, PathBuf)> = Vec::new();
+
     for base in bases {
         let auth = base.join("auth.json");
         let mut databases: Vec<PathBuf> = Vec::new();
@@ -202,14 +423,20 @@ pub fn candidate_paths() -> Vec<(PathBuf, PathBuf)> {
                 != Some("opencode.db".to_string())
         });
         if databases.is_empty() {
-            out.push((auth, base.join("opencode.db")));
-        } else {
-            for database in databases {
-                out.push((auth.clone(), database));
+            databases.push(base.join("opencode.db"));
+        }
+        for database in databases {
+            let entry = (auth.clone(), database);
+            if !out.contains(&entry) {
+                out.push(entry);
             }
         }
     }
     out
+}
+
+fn local_share_opencode(home: &Path) -> PathBuf {
+    home.join(".local").join("share").join("opencode")
 }
 
 pub fn fetch_local_usage(now: DateTime<Utc>) -> Result<LocalUsageSnapshot, ProviderError> {
@@ -289,28 +516,36 @@ fn read_rows_for(db_path: &Path, provider_filter: &str) -> Result<Vec<UsageRow>,
             ProviderError::Other(format!("SQLite error reading OpenCode Go usage: {e}"))
         })?;
 
-    let sql = if has_table(&conn, "part") {
-        MESSAGE_AND_PART_USAGE_SQL
-    } else {
-        MESSAGE_USAGE_SQL
-    };
+    let has_message = has_table(&conn, "message");
+    let has_part = has_table(&conn, "part");
+    let has_v2 = has_table(&conn, "session_message");
+    if !has_message && !has_v2 {
+        return Err(ProviderError::Other(format!(
+            "SQLite error reading OpenCode Go usage: {NO_MESSAGE_TABLES}"
+        )));
+    }
 
-    let mut stmt = conn.prepare(sql).map_err(|e| {
+    let sql = usage_rows_sql(has_message, has_part, has_v2);
+
+    let mut stmt = conn.prepare(&sql).map_err(|e| {
         ProviderError::Other(format!("SQLite error reading OpenCode Go usage: {e}"))
     })?;
     let rows = stmt
         .query_map(rusqlite::params![provider_filter], |row| {
-            Ok(UsageRow {
-                created_ms: row.get::<_, i64>(0)?,
-                cost: row.get::<_, f64>(1)?,
+            // A NULL `createdMs` (no JSON `time.created` and no `time_created`
+            // column) is a row that cannot be placed on the timeline — not a
+            // database error. Reading it as `Option` keeps a single unplaceable
+            // row from failing the whole pass; the row is dropped below.
+            Ok((
+                row.get::<_, Option<i64>>(0)?,
+                row.get::<_, Option<f64>>(1)?,
                 // Request counts from the DB are clamped to ≥1 and realistically
                 // far below u32::MAX; try_from guards the pathological case.
-                request_count: row
-                    .get::<_, i64>(2)
+                row.get::<_, i64>(2)
                     .map(|n| u32::try_from(n.max(1)).unwrap_or(u32::MAX))
                     .unwrap_or(1),
-                model: row.get::<_, String>(3).unwrap_or_default(),
-            })
+                row.get::<_, String>(3).unwrap_or_default(),
+            ))
         })
         .map_err(|e| {
             ProviderError::Other(format!("SQLite error reading OpenCode Go usage: {e}"))
@@ -318,11 +553,22 @@ fn read_rows_for(db_path: &Path, provider_filter: &str) -> Result<Vec<UsageRow>,
 
     let mut out = Vec::new();
     for row in rows {
-        let row = row.map_err(|e| {
+        let (created_ms, cost, request_count, model) = row.map_err(|e| {
             ProviderError::Other(format!("SQLite error reading OpenCode Go usage: {e}"))
         })?;
-        if row.created_ms > 0 && row.cost.is_finite() && row.cost >= 0.0 {
-            out.push(row);
+        let Some(created_ms) = created_ms else {
+            continue;
+        };
+        let Some(cost) = cost else {
+            continue;
+        };
+        if created_ms > 0 && cost.is_finite() && cost >= 0.0 {
+            out.push(UsageRow {
+                created_ms,
+                cost,
+                request_count,
+                model,
+            });
         }
     }
     Ok(out)
@@ -349,13 +595,25 @@ fn read_tokens_for(
             ProviderError::Other(format!("SQLite error reading OpenCode Go usage: {e}"))
         })?;
 
-    let mut stmt = conn.prepare(MESSAGE_TOKENS_SQL).map_err(|e| {
+    let has_message = has_table(&conn, "message");
+    let has_part = has_table(&conn, "part");
+    let has_v2 = has_table(&conn, "session_message");
+    if !has_message && !has_v2 {
+        return Err(ProviderError::Other(format!(
+            "SQLite error reading OpenCode Go usage: {NO_MESSAGE_TABLES}"
+        )));
+    }
+
+    let sql = tokens_rows_sql(has_message, has_part, has_v2);
+    let mut stmt = conn.prepare(&sql).map_err(|e| {
         ProviderError::Other(format!("SQLite error reading OpenCode Go usage: {e}"))
     })?;
     let rows = stmt
         .query_map(rusqlite::params![provider_filter], |row| {
             Ok((
-                row.get::<_, i64>(0).unwrap_or(0),
+                // `None` = no timestamp for this row; skipped below instead of
+                // failing the whole token pass.
+                row.get::<_, Option<i64>>(0)?,
                 row.get::<_, String>(1).unwrap_or_default(),
                 row.get::<_, i64>(2).unwrap_or(0),
                 row.get::<_, i64>(3).unwrap_or(0),
@@ -375,7 +633,10 @@ fn read_tokens_for(
         let (created_ms, model, input, output, cache_read, cache_write) = row.map_err(|e| {
             ProviderError::Other(format!("SQLite error reading OpenCode Go usage: {e}"))
         })?;
-        if created_ms < since_ms || created_ms > now_ms {
+        let Some(created_ms) = created_ms else {
+            continue;
+        };
+        if created_ms <= 0 || created_ms < since_ms || created_ms > now_ms {
             continue;
         }
         // The cached bucket sits alongside the raw input count (the row's
@@ -434,12 +695,13 @@ pub fn recent_message_speeds(provider_filter: &str, limit: usize) -> Vec<Message
     Vec::new()
 }
 
-const RECENT_MESSAGE_SPEEDS_SQL: &str = r#"
+const V1_RECENT_MESSAGE_SPEEDS_SQL: &str = r#"
 SELECT
   CAST(json_extract(data, '$.time.created') AS INTEGER) AS createdMs,
   CAST(json_extract(data, '$.time.completed') AS INTEGER) AS completedMs,
   CAST(json_extract(data, '$.tokens.output') AS INTEGER) AS outputTokens,
-  COALESCE(json_extract(data, '$.modelID'), '') AS modelID
+  COALESCE(json_extract(data, '$.modelID'), '') AS modelID,
+  id AS id
 FROM message
 WHERE json_valid(data)
   AND json_extract(data, '$.providerID') = ?1
@@ -447,9 +709,69 @@ WHERE json_valid(data)
   AND json_type(data, '$.time.created') IN ('integer', 'real')
   AND json_type(data, '$.time.completed') IN ('integer', 'real')
   AND json_type(data, '$.tokens.output') IN ('integer', 'real')
-ORDER BY completedMs DESC
-LIMIT ?2
 "#;
+
+const V2_RECENT_MESSAGE_SPEEDS_SQL: &str = r#"
+  SELECT
+    CAST(json_extract(s.data, '$.time.created') AS INTEGER) AS createdMs,
+    CAST(json_extract(s.data, '$.time.completed') AS INTEGER) AS completedMs,
+    CAST(json_extract(s.data, '$.tokens.output') AS INTEGER) AS outputTokens,
+    COALESCE(json_extract(s.data, '$.model.id'), '') AS modelID,
+    s.id AS id
+  FROM session_message s
+  WHERE json_valid(s.data)
+    AND s.type = 'assistant'
+    AND json_extract(s.data, '$.model.providerID') = ?1
+    AND json_type(s.data, '$.time.created') IN ('integer', 'real')
+    AND json_type(s.data, '$.time.completed') IN ('integer', 'real')
+    AND json_type(s.data, '$.tokens.output') IN ('integer', 'real')
+"#;
+
+const EMPTY_V1_SPEEDS_SQL: &str = "SELECT 0 AS createdMs, 0 AS completedMs, 0 AS outputTokens, \
+     '' AS modelID, NULL AS id WHERE 0";
+
+/// Speed rows use the same `v1_usable` suppression set as cost and tokens: a v1
+/// turn without `time.completed`/`tokens.output` yields no speed sample instead
+/// of borrowing the v2 copy's timing (see `v1_usable_cte`).
+fn speeds_rows_sql(has_message: bool, has_part: bool, has_v2: bool) -> String {
+    let mut sql = String::from("WITH ");
+    if has_v2 {
+        sql.push_str(&v1_cost_cte(has_message, has_part));
+        sql.push_str(",\n");
+        sql.push_str(v1_usable_cte());
+        sql.push_str(",\n");
+    }
+    sql.push_str("v1 AS (");
+    sql.push_str(if has_message {
+        V1_RECENT_MESSAGE_SPEEDS_SQL
+    } else {
+        EMPTY_V1_SPEEDS_SQL
+    });
+    sql.push(')');
+    if has_v2 {
+        sql.push_str(",\nv2 AS (");
+        sql.push_str(V2_RECENT_MESSAGE_SPEEDS_SQL.trim_end());
+        sql.push_str(")\n");
+        // Same gating as the token pass: one speed sample per id, from the
+        // schema that owns it.
+        sql.push_str(
+            "SELECT createdMs, completedMs, outputTokens, modelID\n\
+             FROM v1 AS v\n\
+             WHERE EXISTS (SELECT 1 FROM v1_usable u WHERE u.id = v.id)\n\
+             UNION ALL\n\
+             SELECT createdMs, completedMs, outputTokens, modelID\n\
+             FROM v2\n\
+             WHERE NOT EXISTS (SELECT 1 FROM v1_usable u WHERE u.id = v2.id)\n\
+             ORDER BY completedMs DESC\nLIMIT ?2",
+        );
+    } else {
+        sql.push_str(
+            "\nSELECT createdMs, completedMs, outputTokens, modelID FROM v1\n\
+             ORDER BY completedMs DESC\nLIMIT ?2",
+        );
+    }
+    sql
+}
 
 fn read_recent_message_speeds(
     db_path: &Path,
@@ -457,21 +779,28 @@ fn read_recent_message_speeds(
     limit: usize,
 ) -> Result<Vec<MessageSpeed>, ProviderError> {
     let conn = open_readonly_connection(db_path)?;
-    let mut stmt = conn.prepare(RECENT_MESSAGE_SPEEDS_SQL).map_err(|e| {
+    let has_message = has_table(&conn, "message");
+    let has_part = has_table(&conn, "part");
+    let has_v2 = has_table(&conn, "session_message");
+    if !has_message && !has_v2 {
+        return Err(ProviderError::Other(format!(
+            "SQLite error reading OpenCode message speeds: {NO_MESSAGE_TABLES}"
+        )));
+    }
+    let sql = speeds_rows_sql(has_message, has_part, has_v2);
+    let mut stmt = conn.prepare(&sql).map_err(|e| {
         ProviderError::Other(format!("SQLite error reading OpenCode message speeds: {e}"))
     })?;
     let rows = stmt
         .query_map(rusqlite::params![provider_filter, limit as i64], |row| {
-            Ok(MessageSpeed {
-                created_ms: row.get::<_, i64>(0)?,
-                completed_ms: row.get::<_, i64>(1)?,
-                output_tokens: row.get::<_, i64>(2).map(|n| n.max(0) as u64)?,
-                model: row
-                    .get::<_, String>(3)
-                    .ok()
-                    .map(|model| model.trim().to_string())
-                    .filter(|model| !model.is_empty()),
-            })
+            Ok((
+                // `None` = no timestamp for this row; skipped below instead of
+                // failing the whole speed read.
+                row.get::<_, Option<i64>>(0)?,
+                row.get::<_, i64>(1)?,
+                row.get::<_, i64>(2).map(|n| n.max(0) as u64)?,
+                row.get::<_, String>(3).ok(),
+            ))
         })
         .map_err(|e| {
             ProviderError::Other(format!("SQLite error reading OpenCode message speeds: {e}"))
@@ -479,9 +808,20 @@ fn read_recent_message_speeds(
 
     let mut out = Vec::new();
     for row in rows {
-        let row = row.map_err(|e| {
+        let (created_ms, completed_ms, output_tokens, model) = row.map_err(|e| {
             ProviderError::Other(format!("SQLite error reading OpenCode message speeds: {e}"))
         })?;
+        let Some(created_ms) = created_ms else {
+            continue;
+        };
+        let row = MessageSpeed {
+            created_ms,
+            completed_ms,
+            output_tokens,
+            model: model
+                .map(|model| model.trim().to_string())
+                .filter(|model| !model.is_empty()),
+        };
         if row.output_tokens > 0 && row.completed_ms >= row.created_ms {
             out.push(row);
         }
@@ -1037,6 +1377,171 @@ mod tests {
         chrono::DateTime::parse_from_rfc3339(iso)
             .unwrap()
             .timestamp_millis()
+    }
+
+    // ---- v2 (`session_message` / `session_part`) fixtures ----------------
+
+    /// One synthetic v2 `session_message` row.
+    #[derive(Clone, Copy)]
+    struct V2Row<'a> {
+        id: &'a str,
+        /// `session_message.type` — `assistant`, `compaction` or `user`.
+        kind: &'a str,
+        provider: &'a str,
+        model: Option<&'a str>,
+        cost: Option<f64>,
+        /// `(input, output, cache read, cache write)`.
+        tokens: Option<(i64, i64, i64, i64)>,
+        created: Option<i64>,
+        completed: Option<i64>,
+    }
+
+    impl Default for V2Row<'_> {
+        fn default() -> Self {
+            Self {
+                id: "",
+                kind: "assistant",
+                provider: "opencode-go",
+                model: None,
+                cost: None,
+                tokens: None,
+                created: None,
+                completed: None,
+            }
+        }
+    }
+
+    fn create_v2_tables(conn: &Connection) {
+        conn.execute_batch(
+            "CREATE TABLE session_message (
+                id TEXT PRIMARY KEY,
+                session_id TEXT,
+                type TEXT,
+                seq INTEGER,
+                time_created INTEGER,
+                time_updated INTEGER,
+                data TEXT
+            );
+            CREATE TABLE session_part (
+                message_id TEXT,
+                session_id TEXT,
+                ordinal INTEGER,
+                type TEXT,
+                call_id TEXT,
+                time_created INTEGER,
+                time_updated INTEGER,
+                data TEXT,
+                PRIMARY KEY (message_id, ordinal)
+            );",
+        )
+        .unwrap();
+    }
+
+    fn insert_v2(conn: &Connection, row: V2Row<'_>) {
+        let mut model = serde_json::Map::new();
+        model.insert(
+            "providerID".to_string(),
+            serde_json::Value::String(row.provider.to_string()),
+        );
+        if let Some(id) = row.model {
+            model.insert("id".to_string(), serde_json::Value::String(id.to_string()));
+        }
+        let mut data = serde_json::Map::new();
+        data.insert("model".to_string(), serde_json::Value::Object(model));
+        if let Some(cost) = row.cost {
+            data.insert("cost".to_string(), serde_json::json!(cost));
+        }
+        if let Some((input, output, cache_read, cache_write)) = row.tokens {
+            data.insert(
+                "tokens".to_string(),
+                serde_json::json!({
+                    "input": input,
+                    "output": output,
+                    "reasoning": 0,
+                    "cache": {"read": cache_read, "write": cache_write},
+                }),
+            );
+        }
+        let mut time = serde_json::Map::new();
+        if let Some(created) = row.created {
+            time.insert("created".to_string(), serde_json::json!(created));
+        }
+        if let Some(completed) = row.completed {
+            time.insert("completed".to_string(), serde_json::json!(completed));
+        }
+        if !time.is_empty() {
+            data.insert("time".to_string(), serde_json::Value::Object(time));
+        }
+        conn.execute(
+            "INSERT INTO session_message (id, session_id, type, seq, time_created, time_updated, data)
+             VALUES (?1, 'ses_test', ?2, 0, ?3, ?3, ?4)",
+            rusqlite::params![
+                row.id,
+                row.kind,
+                row.created.unwrap_or(0),
+                serde_json::Value::Object(data).to_string()
+            ],
+        )
+        .unwrap();
+    }
+
+    fn insert_v1_message(conn: &Connection, id: &str, data: &str, time_created: i64) {
+        conn.execute(
+            "INSERT INTO message (id, data, time_created) VALUES (?1, ?2, ?3)",
+            rusqlite::params![id, data, time_created],
+        )
+        .unwrap();
+    }
+
+    /// A v1 `message` row with an explicit `time_created` (NULL allowed), so the
+    /// timestamp-fallback / NULL-timestamp cases are expressible.
+    fn insert_v1_message_with_created(
+        conn: &Connection,
+        id: &str,
+        data: &str,
+        time_created: Option<i64>,
+    ) {
+        conn.execute(
+            "INSERT INTO message (id, data, time_created) VALUES (?1, ?2, ?3)",
+            rusqlite::params![id, data, time_created],
+        )
+        .unwrap();
+    }
+
+    fn create_v1_message_table(conn: &Connection) {
+        conn.execute_batch(
+            "CREATE TABLE message (id TEXT PRIMARY KEY, data TEXT, time_created INTEGER);",
+        )
+        .unwrap();
+    }
+
+    /// A v1 assistant message row plus a v2 copy under the **same** id, sharing
+    /// one fixture shape so cross-metric dedupe tests stay readable. Each v1
+    /// row's `time_created` column mirrors its JSON `time.created` (NULL when the
+    /// payload has none), matching how both paths resolve `createdMs`.
+    fn mixed_v1_v2_db(
+        label: &str,
+        v1: &[(&str, &str)],
+        v2: &[V2Row<'_>],
+    ) -> (tempfile::TempDir, PathBuf) {
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join(format!("opencode-{label}.db"));
+        let conn = Connection::open(&db).unwrap();
+        create_v1_message_table(&conn);
+        create_v2_tables(&conn);
+        for (id, data) in v1 {
+            // `time_created` mirrors the JSON timestamp so the column fallback
+            // agrees with the payload; callers that need NULL omit it.
+            let created: Option<i64> = serde_json::from_str::<serde_json::Value>(data)
+                .ok()
+                .and_then(|value| value.get("time")?.get("created")?.as_i64());
+            insert_v1_message_with_created(&conn, id, data, created);
+        }
+        for row in v2 {
+            insert_v2(&conn, *row);
+        }
+        drop(conn);
+        (dir, db)
     }
 
     #[test]
@@ -1603,5 +2108,969 @@ mod tests {
         let b2 = daily_model_costs(&rows, now, 30);
         assert_eq!(b1, b2, "pure aggregation must be deterministic");
         assert_eq!(b1.len(), 1);
+    }
+
+    // ---- v2 session history (session_message / session_part) -------------
+
+    #[test]
+    fn v2_only_database_supplies_cost_tokens_and_speeds() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("opencode.db");
+        let base = iso_ms("2026-03-06T11:00:00.000Z");
+        {
+            let conn = Connection::open(&db).unwrap();
+            create_v2_tables(&conn);
+            insert_v2(
+                &conn,
+                V2Row {
+                    id: "go-1",
+                    model: Some("claude-sonnet-4-5"),
+                    cost: Some(3.0),
+                    tokens: Some((100, 50, 10, 5)),
+                    created: Some(base),
+                    completed: Some(base + 2_000),
+                    ..V2Row::default()
+                },
+            );
+            insert_v2(
+                &conn,
+                V2Row {
+                    id: "go-2",
+                    model: Some("gpt-5.1-codex"),
+                    cost: Some(1.0),
+                    tokens: Some((7, 9, 0, 0)),
+                    created: Some(base + 60_000),
+                    completed: Some(base + 61_000),
+                    ..V2Row::default()
+                },
+            );
+            insert_v2(
+                &conn,
+                V2Row {
+                    id: "zen-1",
+                    provider: "opencode",
+                    model: Some("misc"),
+                    cost: Some(9.0),
+                    tokens: Some((1, 1, 1, 1)),
+                    created: Some(base),
+                    completed: Some(base + 1_000),
+                    ..V2Row::default()
+                },
+            );
+        }
+
+        let rows = read_rows_for(&db, "opencode-go").unwrap();
+        assert_eq!(rows.len(), 2, "{rows:?}");
+        let total: f64 = rows.iter().map(|row| row.cost).sum();
+        assert!((total - 4.0).abs() < 1e-6, "{rows:?}");
+        let models: Vec<&str> = rows.iter().map(|row| row.model.as_str()).collect();
+        assert!(models.contains(&"claude-sonnet-4-5"), "{rows:?}");
+        assert!(models.contains(&"gpt-5.1-codex"), "{rows:?}");
+
+        // Provider filtering must not leak the sibling Zen subscription.
+        let zen_rows = read_rows_for(&db, "opencode").unwrap();
+        assert_eq!(zen_rows.len(), 1, "{zen_rows:?}");
+        assert_eq!(zen_rows[0].model, "misc");
+        assert!((zen_rows[0].cost - 9.0).abs() < 1e-6);
+
+        let tokens_now = DateTime::from_timestamp_millis(base + 3_600_000).unwrap();
+        let (tokens, by_model) = read_tokens_for(&db, "opencode-go", tokens_now, 30).unwrap();
+        assert_eq!(tokens.input, 107);
+        assert_eq!(tokens.output, 59);
+        assert_eq!(tokens.cached, 15);
+        assert!(by_model.contains_key("claude-sonnet-4-5"), "{by_model:?}");
+        assert!(by_model.contains_key("gpt-5.1-codex"), "{by_model:?}");
+
+        let zen_tokens = read_tokens_for(&db, "opencode", tokens_now, 30).unwrap().0;
+        assert_eq!(zen_tokens.input, 1);
+
+        let speeds = read_recent_message_speeds(&db, "opencode-go", 20).unwrap();
+        assert_eq!(speeds.len(), 2, "{speeds:?}");
+        assert_eq!(speeds[0].completed_ms, base + 61_000);
+        assert_eq!(speeds[0].output_tokens, 9);
+        assert_eq!(speeds[0].model.as_deref(), Some("gpt-5.1-codex"));
+        assert_eq!(speeds[1].completed_ms, base + 2_000);
+    }
+
+    #[test]
+    fn v1_and_v2_rows_for_the_same_turn_count_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("opencode.db");
+        let at = iso_ms("2026-03-06T11:00:00.000Z");
+        {
+            let conn = Connection::open(&db).unwrap();
+            conn.execute_batch(
+                "CREATE TABLE message (id TEXT PRIMARY KEY, data TEXT, time_created INTEGER);",
+            )
+            .unwrap();
+            create_v2_tables(&conn);
+            insert_v1_message(
+                &conn,
+                "dup",
+                &format!(
+                    r#"{{"providerID":"opencode-go","role":"assistant","cost":2,"modelID":"v1-model","tokens":{{"input":5,"output":5,"cache":{{"read":1,"write":0}}}},"time":{{"created":{at},"completed":{}}}}}"#,
+                    at + 800
+                ),
+                at,
+            );
+            insert_v1_message(
+                &conn,
+                "v1-only",
+                &format!(
+                    r#"{{"providerID":"opencode-go","role":"assistant","cost":3,"modelID":"v1-only-model","time":{{"created":{}}}}}"#,
+                    at + 1_000
+                ),
+                at + 1_000,
+            );
+            insert_v2(
+                &conn,
+                V2Row {
+                    id: "dup",
+                    model: Some("v2-model"),
+                    cost: Some(2.0),
+                    tokens: Some((5, 5, 1, 0)),
+                    created: Some(at),
+                    completed: Some(at + 800),
+                    ..V2Row::default()
+                },
+            );
+            insert_v2(
+                &conn,
+                V2Row {
+                    id: "v2-only",
+                    cost: Some(4.0),
+                    tokens: Some((1, 1, 0, 0)),
+                    created: Some(at + 2_000),
+                    completed: Some(at + 3_000),
+                    ..V2Row::default()
+                },
+            );
+        }
+
+        let rows = read_rows_for(&db, "opencode-go").unwrap();
+        assert_eq!(rows.len(), 3, "{rows:?}");
+        let total: f64 = rows.iter().map(|row| row.cost).sum();
+        assert!(
+            (total - 9.0).abs() < 1e-6,
+            "duplicate turn double-counted: {rows:?}"
+        );
+        let models: Vec<&str> = rows.iter().map(|row| row.model.as_str()).collect();
+        assert!(models.contains(&"v1-model"), "{rows:?}");
+        assert!(!models.contains(&"v2-model"), "{rows:?}");
+
+        let (tokens, _) = read_tokens_for(
+            &db,
+            "opencode-go",
+            DateTime::from_timestamp_millis(at + 3_600_000).unwrap(),
+            30,
+        )
+        .unwrap();
+        assert_eq!(tokens.input, 6, "v2 duplicate must not double-count tokens");
+        assert_eq!(tokens.output, 6);
+        assert_eq!(tokens.cached, 1);
+
+        let speeds = read_recent_message_speeds(&db, "opencode-go", 20).unwrap();
+        assert_eq!(speeds.len(), 2, "{speeds:?}");
+        assert_eq!(speeds[0].completed_ms, at + 3_000);
+        assert!(
+            speeds
+                .iter()
+                .all(|speed| speed.model.as_deref() != Some("v2-model")),
+            "v2 duplicate must not duplicate speeds: {speeds:?}"
+        );
+    }
+
+    // ---- one id, one source (cost/tokens/speed dedupe) --------------------
+
+    #[test]
+    fn v1_same_id_wins_for_cost_tokens_and_speed() {
+        let at = iso_ms("2026-03-06T11:00:00.000Z");
+        let v1_data = format!(
+            r#"{{"providerID":"opencode-go","role":"assistant","cost":2,"modelID":"v1-model","tokens":{{"input":100,"output":50,"cache":{{"read":10,"write":5}}}},"time":{{"created":{at},"completed":{}}}}}"#,
+            at + 2_000
+        );
+        let (_dir, db) = mixed_v1_v2_db(
+            "same-id",
+            &[("turn-1", v1_data.as_str())],
+            &[V2Row {
+                id: "turn-1",
+                model: Some("v2-model"),
+                cost: Some(7.0),
+                tokens: Some((900, 900, 900, 900)),
+                created: Some(at),
+                completed: Some(at + 9_000),
+                ..V2Row::default()
+            }],
+        );
+
+        let rows = read_rows_for(&db, "opencode-go").unwrap();
+        assert_eq!(rows.len(), 1, "{rows:?}");
+        assert!(
+            (rows[0].cost - 2.0).abs() < 1e-6,
+            "cost must come from v1: {rows:?}"
+        );
+        assert_eq!(rows[0].model, "v1-model");
+
+        let now = DateTime::from_timestamp_millis(at + 3_600_000).unwrap();
+        let (tokens, by_model) = read_tokens_for(&db, "opencode-go", now, 30).unwrap();
+        assert_eq!(tokens.input, 100, "tokens must come from v1: {tokens:?}");
+        assert_eq!(tokens.output, 50, "{tokens:?}");
+        assert_eq!(tokens.cached, 15, "{tokens:?}");
+        assert!(by_model.contains_key("v1-model"), "{by_model:?}");
+        assert!(!by_model.contains_key("v2-model"), "{by_model:?}");
+
+        let speeds = read_recent_message_speeds(&db, "opencode-go", 20).unwrap();
+        assert_eq!(speeds.len(), 1, "{speeds:?}");
+        assert_eq!(speeds[0].output_tokens, 50, "speed must come from v1");
+        assert_eq!(speeds[0].completed_ms, at + 2_000);
+        assert_eq!(speeds[0].model.as_deref(), Some("v1-model"));
+    }
+
+    #[test]
+    fn v1_cost_row_without_tokens_or_timing_does_not_borrow_v2_metrics() {
+        let at = iso_ms("2026-03-06T11:00:00.000Z");
+        // v1 owns the id through a usable cost but records neither tokens nor a
+        // completion time: those metrics stay empty instead of mixing schemas.
+        let v1_data = format!(
+            r#"{{"providerID":"opencode-go","role":"assistant","cost":3,"modelID":"v1-model","time":{{"created":{at}}}}}"#
+        );
+        let (_dir, db) = mixed_v1_v2_db(
+            "v1-partial",
+            &[("turn-1", v1_data.as_str())],
+            &[V2Row {
+                id: "turn-1",
+                model: Some("v2-model"),
+                cost: Some(5.0),
+                tokens: Some((10, 20, 1, 1)),
+                created: Some(at),
+                completed: Some(at + 1_000),
+                ..V2Row::default()
+            }],
+        );
+
+        let rows = read_rows_for(&db, "opencode-go").unwrap();
+        assert_eq!(rows.len(), 1, "{rows:?}");
+        assert!((rows[0].cost - 3.0).abs() < 1e-6, "{rows:?}");
+
+        let now = DateTime::from_timestamp_millis(at + 3_600_000).unwrap();
+        let (tokens, by_model) = read_tokens_for(&db, "opencode-go", now, 30).unwrap();
+        assert_eq!(
+            tokens,
+            TokenSums::default(),
+            "v1 owns the id, so there is no v2 token fallback"
+        );
+        assert!(by_model.is_empty(), "{by_model:?}");
+
+        let speeds = read_recent_message_speeds(&db, "opencode-go", 20).unwrap();
+        assert!(
+            speeds.is_empty(),
+            "v1 owns the id, so there is no v2 speed fallback: {speeds:?}"
+        );
+    }
+
+    #[test]
+    fn v2_supplies_every_metric_when_v1_has_no_usable_cost() {
+        let at = iso_ms("2026-03-06T11:00:00.000Z");
+        // turn-1 is missing `cost` entirely, turn-2 carries a non-numeric one:
+        // neither makes v1 authoritative, so all three metrics come from v2.
+        let v1_missing_cost = format!(
+            r#"{{"providerID":"opencode-go","role":"assistant","modelID":"v1-model","tokens":{{"input":1,"output":1,"cache":{{"read":0,"write":0}}}},"time":{{"created":{at},"completed":{}}}}}"#,
+            at + 500
+        );
+        let v1_text_cost = format!(
+            r#"{{"providerID":"opencode-go","role":"assistant","cost":"n/a","modelID":"v1-model","time":{{"created":{}}}}}"#,
+            at + 10
+        );
+        let (_dir, db) = mixed_v1_v2_db(
+            "v1-no-cost",
+            &[
+                ("turn-1", v1_missing_cost.as_str()),
+                ("turn-2", v1_text_cost.as_str()),
+            ],
+            &[
+                V2Row {
+                    id: "turn-1",
+                    model: Some("v2-model"),
+                    cost: Some(4.0),
+                    tokens: Some((10, 20, 1, 1)),
+                    created: Some(at),
+                    completed: Some(at + 1_000),
+                    ..V2Row::default()
+                },
+                V2Row {
+                    id: "turn-2",
+                    model: Some("v2-model"),
+                    cost: Some(6.0),
+                    tokens: Some((100, 200, 10, 10)),
+                    created: Some(at + 10),
+                    completed: Some(at + 2_000),
+                    ..V2Row::default()
+                },
+            ],
+        );
+
+        let rows = read_rows_for(&db, "opencode-go").unwrap();
+        assert_eq!(rows.len(), 2, "{rows:?}");
+        let total: f64 = rows.iter().map(|row| row.cost).sum();
+        assert!((total - 10.0).abs() < 1e-6, "{rows:?}");
+        assert!(rows.iter().all(|row| row.model == "v2-model"), "{rows:?}");
+
+        let now = DateTime::from_timestamp_millis(at + 3_600_000).unwrap();
+        let (tokens, by_model) = read_tokens_for(&db, "opencode-go", now, 30).unwrap();
+        assert_eq!(
+            tokens.input, 110,
+            "v1 token row must not double-count: {tokens:?}"
+        );
+        assert_eq!(tokens.output, 220, "{tokens:?}");
+        assert_eq!(tokens.cached, 22, "{tokens:?}");
+        assert!(by_model.contains_key("v2-model"), "{by_model:?}");
+        assert!(!by_model.contains_key("v1-model"), "{by_model:?}");
+
+        let speeds = read_recent_message_speeds(&db, "opencode-go", 20).unwrap();
+        assert_eq!(speeds.len(), 2, "{speeds:?}");
+        assert!(
+            speeds
+                .iter()
+                .all(|speed| speed.model.as_deref() == Some("v2-model")),
+            "{speeds:?}"
+        );
+    }
+
+    #[test]
+    fn step_finish_only_v1_cost_keeps_legacy_priority_over_the_v2_copy() {
+        let at = iso_ms("2026-03-06T11:00:00.000Z");
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("opencode.db");
+        {
+            let conn = Connection::open(&db).unwrap();
+            conn.execute_batch(
+                "CREATE TABLE message (id TEXT PRIMARY KEY, data TEXT, time_created INTEGER);
+                 CREATE TABLE part (id TEXT PRIMARY KEY, message_id TEXT, data TEXT, time_created INTEGER);",
+            )
+            .unwrap();
+            create_v2_tables(&conn);
+            // Message carries no `cost`; only the step-finish part is priced.
+            insert_message(&conn, "turn-1", at, None, Some("v1-model"));
+            insert_step_finish_part(&conn, "p1", "turn-1", at, 3.0);
+            insert_v2(
+                &conn,
+                V2Row {
+                    id: "turn-1",
+                    model: Some("v2-model"),
+                    cost: Some(9.0),
+                    tokens: Some((10, 20, 1, 1)),
+                    created: Some(at),
+                    completed: Some(at + 1_000),
+                    ..V2Row::default()
+                },
+            );
+        }
+
+        let rows = read_rows_for(&db, "opencode-go").unwrap();
+        assert_eq!(
+            rows.len(),
+            1,
+            "parts-priced turn must not be double-counted: {rows:?}"
+        );
+        assert!((rows[0].cost - 3.0).abs() < 1e-6, "{rows:?}");
+
+        let now = DateTime::from_timestamp_millis(at + 3_600_000).unwrap();
+        let (tokens, _) = read_tokens_for(&db, "opencode-go", now, 30).unwrap();
+        assert_eq!(
+            tokens,
+            TokenSums::default(),
+            "the parts-priced v1 turn owns the id"
+        );
+        let speeds = read_recent_message_speeds(&db, "opencode-go", 20).unwrap();
+        assert!(speeds.is_empty(), "{speeds:?}");
+    }
+
+    /// Shared fixture: a v1 message priced at 5 with tokens/timing, one
+    /// `step-finish` part under the same id, and a v2 copy of that turn.
+    fn v1_message_with_priced_part_db(
+        label: &str,
+        part_cost: f64,
+    ) -> (tempfile::TempDir, PathBuf, i64) {
+        let at = iso_ms("2026-03-06T11:00:00.000Z");
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join(format!("opencode-{label}.db"));
+        let v1_data = format!(
+            r#"{{"providerID":"opencode-go","role":"assistant","cost":5,"modelID":"v1-model","tokens":{{"input":100,"output":50,"cache":{{"read":10,"write":5}}}},"time":{{"created":{at},"completed":{}}}}}"#,
+            at + 2_000
+        );
+        {
+            let conn = Connection::open(&db).unwrap();
+            conn.execute_batch(
+                "CREATE TABLE message (id TEXT PRIMARY KEY, data TEXT, time_created INTEGER);
+                 CREATE TABLE part (id TEXT PRIMARY KEY, message_id TEXT, data TEXT, time_created INTEGER);",
+            )
+            .unwrap();
+            create_v2_tables(&conn);
+            insert_v1_message(&conn, "turn-1", &v1_data, at);
+            insert_step_finish_part(&conn, "p1", "turn-1", at, part_cost);
+            insert_v2(
+                &conn,
+                V2Row {
+                    id: "turn-1",
+                    model: Some("v2-model"),
+                    cost: Some(9.0),
+                    tokens: Some((900, 900, 90, 90)),
+                    created: Some(at),
+                    completed: Some(at + 9_000),
+                    ..V2Row::default()
+                },
+            );
+        }
+        (dir, db, at)
+    }
+
+    #[test]
+    fn zero_cost_step_finish_part_keeps_v1_priority_over_the_v2_copy() {
+        // The v1 cost of this turn resolves to 0 through the priced part, which
+        // is exactly what the cost pass emits. `v1_usable` is derived from that
+        // same row, so the id stays v1-owned: v2 must not take over cost, tokens
+        // or speed even though its own cost is 9.
+        let (_dir, db, at) = v1_message_with_priced_part_db("part-zero", 0.0);
+
+        let rows = read_rows_for(&db, "opencode-go").unwrap();
+        assert_eq!(rows.len(), 1, "one row, from v1: {rows:?}");
+        assert_eq!(
+            rows[0].cost, 0.0,
+            "the priced part is the v1 cost: {rows:?}"
+        );
+        assert_eq!(rows[0].model, "v1-model");
+
+        let now = DateTime::from_timestamp_millis(at + 3_600_000).unwrap();
+        let (tokens, by_model) = read_tokens_for(&db, "opencode-go", now, 30).unwrap();
+        assert_eq!(tokens.input, 100, "tokens stay on the v1 side: {tokens:?}");
+        assert_eq!(tokens.output, 50, "{tokens:?}");
+        assert_eq!(tokens.cached, 15, "{tokens:?}");
+        assert!(by_model.contains_key("v1-model"), "{by_model:?}");
+        assert!(!by_model.contains_key("v2-model"), "{by_model:?}");
+
+        let speeds = read_recent_message_speeds(&db, "opencode-go", 20).unwrap();
+        assert_eq!(speeds.len(), 1, "{speeds:?}");
+        assert_eq!(speeds[0].output_tokens, 50, "speed stays on the v1 side");
+        assert_eq!(speeds[0].completed_ms, at + 2_000);
+        assert_eq!(speeds[0].model.as_deref(), Some("v1-model"));
+    }
+
+    #[test]
+    fn negative_v1_cost_row_is_not_usable_so_v2_supplies_every_metric() {
+        // A negative priced part makes the v1 cost row unusable. That id must
+        // not suppress v2 (which would lose the turn's cost entirely), and the
+        // negative row itself must not reach the totals.
+        let (_dir, db, at) = v1_message_with_priced_part_db("part-negative", -2.0);
+
+        let rows = read_rows_for(&db, "opencode-go").unwrap();
+        assert_eq!(rows.len(), 1, "only the v2 copy survives: {rows:?}");
+        assert!(
+            (rows[0].cost - 9.0).abs() < 1e-6,
+            "cost must come from v2: {rows:?}"
+        );
+        assert_eq!(rows[0].model, "v2-model");
+        assert!(
+            rows.iter().all(|row| row.cost >= 0.0),
+            "no negative v1 row may be emitted: {rows:?}"
+        );
+
+        let now = DateTime::from_timestamp_millis(at + 3_600_000).unwrap();
+        let (tokens, by_model) = read_tokens_for(&db, "opencode-go", now, 30).unwrap();
+        assert_eq!(tokens.input, 900, "tokens must come from v2: {tokens:?}");
+        assert_eq!(tokens.output, 900, "{tokens:?}");
+        assert_eq!(tokens.cached, 180, "{tokens:?}");
+        assert!(by_model.contains_key("v2-model"), "{by_model:?}");
+
+        let speeds = read_recent_message_speeds(&db, "opencode-go", 20).unwrap();
+        assert_eq!(speeds.len(), 1, "{speeds:?}");
+        assert_eq!(speeds[0].output_tokens, 900, "speed must come from v2");
+        assert_eq!(speeds[0].completed_ms, at + 9_000);
+        assert_eq!(speeds[0].model.as_deref(), Some("v2-model"));
+    }
+
+    #[test]
+    fn v1_rows_without_a_created_timestamp_are_skipped_not_fatal() {
+        let at = iso_ms("2026-03-06T11:00:00.000Z");
+        let v1_null_ts = r#"{"providerID":"opencode-go","role":"assistant","cost":5,"modelID":"null-ts","tokens":{"input":7,"output":7,"cache":{"read":0,"write":0}}}"#;
+        let v1_ok = format!(
+            r#"{{"providerID":"opencode-go","role":"assistant","cost":2,"modelID":"ok-model","tokens":{{"input":3,"output":4,"cache":{{"read":1,"write":0}}}},"time":{{"created":{at},"completed":{}}}}}"#,
+            at + 1_000
+        );
+
+        // Message-only v1: a NULL `createdMs` row must be dropped row by row, not
+        // turn the whole pass into an error.
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("opencode.db");
+        {
+            let conn = Connection::open(&db).unwrap();
+            create_v1_message_table(&conn);
+            insert_v1_message_with_created(&conn, "null-ts", v1_null_ts, None);
+            insert_v1_message_with_created(&conn, "ok", &v1_ok, Some(at));
+        }
+
+        let rows = read_rows_for(&db, "opencode-go").unwrap();
+        assert_eq!(rows.len(), 1, "unplaceable row skipped: {rows:?}");
+        assert_eq!(rows[0].model, "ok-model");
+
+        let now = DateTime::from_timestamp_millis(at + 3_600_000).unwrap();
+        let (tokens, by_model) = read_tokens_for(&db, "opencode-go", now, 30).unwrap();
+        assert_eq!(tokens.input, 3, "undated token row skipped: {tokens:?}");
+        assert_eq!(tokens.output, 4, "{tokens:?}");
+        assert_eq!(tokens.cached, 1, "{tokens:?}");
+        assert!(!by_model.contains_key("null-ts"), "{by_model:?}");
+
+        let speeds = read_recent_message_speeds(&db, "opencode-go", 20).unwrap();
+        assert_eq!(speeds.len(), 1, "{speeds:?}");
+        assert_eq!(speeds[0].output_tokens, 4, "{speeds:?}");
+
+        // With a v2 copy present the undated v1 row is simply not v1-owned, so
+        // v2 supplies that id — again with no whole-read failure.
+        let (_mixed_dir, mixed) = mixed_v1_v2_db(
+            "null-ts-mixed",
+            &[("null-ts", v1_null_ts), ("ok", v1_ok.as_str())],
+            &[V2Row {
+                id: "null-ts",
+                model: Some("v2-null-ts"),
+                cost: Some(1.0),
+                tokens: Some((11, 12, 1, 1)),
+                created: Some(at),
+                completed: Some(at + 500),
+                ..V2Row::default()
+            }],
+        );
+
+        let rows = read_rows_for(&mixed, "opencode-go").unwrap();
+        assert_eq!(rows.len(), 2, "{rows:?}");
+        let models: Vec<&str> = rows.iter().map(|row| row.model.as_str()).collect();
+        assert!(models.contains(&"ok-model"), "{rows:?}");
+        assert!(models.contains(&"v2-null-ts"), "{rows:?}");
+        let total: f64 = rows.iter().map(|row| row.cost).sum();
+        assert!((total - 3.0).abs() < 1e-6, "{rows:?}");
+
+        let (tokens, by_model) = read_tokens_for(&mixed, "opencode-go", now, 30).unwrap();
+        assert_eq!(tokens.input, 14, "{tokens:?}");
+        assert_eq!(tokens.output, 16, "{tokens:?}");
+        assert_eq!(tokens.cached, 3, "{tokens:?}");
+        assert!(by_model.contains_key("v2-null-ts"), "{by_model:?}");
+
+        let speeds = read_recent_message_speeds(&mixed, "opencode-go", 20).unwrap();
+        assert_eq!(speeds.len(), 2, "{speeds:?}");
+        assert!(
+            speeds
+                .iter()
+                .any(|speed| speed.model.as_deref() == Some("v2-null-ts")),
+            "{speeds:?}"
+        );
+    }
+
+    #[test]
+    fn v2_type_column_counts_assistant_and_compaction_but_not_user_turns() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("opencode.db");
+        let at = iso_ms("2026-03-06T11:00:00.000Z");
+        {
+            let conn = Connection::open(&db).unwrap();
+            create_v2_tables(&conn);
+            insert_v2(
+                &conn,
+                V2Row {
+                    id: "user-1",
+                    kind: "user",
+                    cost: Some(5.0),
+                    created: Some(at),
+                    ..V2Row::default()
+                },
+            );
+            insert_v2(
+                &conn,
+                V2Row {
+                    id: "assistant-1",
+                    cost: Some(2.0),
+                    created: Some(at + 1_000),
+                    ..V2Row::default()
+                },
+            );
+            insert_v2(
+                &conn,
+                V2Row {
+                    id: "compaction-1",
+                    kind: "compaction",
+                    cost: Some(1.0),
+                    created: Some(at + 2_000),
+                    ..V2Row::default()
+                },
+            );
+        }
+
+        let rows = read_rows_for(&db, "opencode-go").unwrap();
+        assert_eq!(rows.len(), 2, "user turns are not billable: {rows:?}");
+        let total: f64 = rows.iter().map(|row| row.cost).sum();
+        assert!((total - 3.0).abs() < 1e-6, "{rows:?}");
+    }
+
+    #[test]
+    fn v2_blank_model_and_missing_tokens_keep_the_cost_readable() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("opencode.db");
+        let at = a14_now().timestamp_millis();
+        {
+            let conn = Connection::open(&db).unwrap();
+            create_v2_tables(&conn);
+            insert_v2(
+                &conn,
+                V2Row {
+                    id: "blank-model",
+                    model: Some("   "),
+                    cost: Some(2.5),
+                    created: Some(at - 60_000),
+                    ..V2Row::default()
+                },
+            );
+            insert_v2(
+                &conn,
+                V2Row {
+                    id: "no-model",
+                    cost: Some(1.5),
+                    created: Some(at - 30_000),
+                    ..V2Row::default()
+                },
+            );
+        }
+
+        let rows = read_rows_for(&db, "opencode-go").unwrap();
+        assert_eq!(rows.len(), 2, "{rows:?}");
+        let buckets = daily_model_costs(&rows, a14_now_afternoon(), 30);
+        assert_eq!(buckets.len(), 1, "{buckets:?}");
+        assert_eq!(buckets[0].model, UNKNOWN_MODEL_NAME);
+        assert!((buckets[0].cost - 4.0).abs() < 1e-6);
+        assert_eq!(buckets[0].request_count, 2);
+
+        // Missing `data.tokens` leaves the cost untouched and the token pass at 0.
+        let (tokens, by_model) =
+            read_tokens_for(&db, "opencode-go", a14_now_afternoon(), 30).unwrap();
+        assert_eq!(tokens, TokenSums::default());
+        assert!(by_model.is_empty(), "{by_model:?}");
+    }
+
+    #[test]
+    fn v2_unfinished_messages_are_skipped_by_the_speed_reader() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("opencode.db");
+        {
+            let conn = Connection::open(&db).unwrap();
+            create_v2_tables(&conn);
+            insert_v2(
+                &conn,
+                V2Row {
+                    id: "done-old",
+                    model: Some("m-old"),
+                    tokens: Some((0, 100, 0, 0)),
+                    created: Some(1_000),
+                    completed: Some(2_000),
+                    ..V2Row::default()
+                },
+            );
+            insert_v2(
+                &conn,
+                V2Row {
+                    id: "done-new",
+                    model: Some("m-new"),
+                    tokens: Some((0, 200, 0, 0)),
+                    created: Some(3_000),
+                    completed: Some(4_000),
+                    ..V2Row::default()
+                },
+            );
+            insert_v2(
+                &conn,
+                V2Row {
+                    id: "in-progress",
+                    model: Some("m-progress"),
+                    tokens: Some((0, 300, 0, 0)),
+                    created: Some(5_000),
+                    ..V2Row::default()
+                },
+            );
+            insert_v2(
+                &conn,
+                V2Row {
+                    id: "no-output",
+                    model: Some("m-zero"),
+                    tokens: Some((0, 0, 0, 0)),
+                    created: Some(6_000),
+                    completed: Some(7_000),
+                    ..V2Row::default()
+                },
+            );
+        }
+
+        let speeds = read_recent_message_speeds(&db, "opencode-go", 20).unwrap();
+        assert_eq!(speeds.len(), 2, "{speeds:?}");
+        assert_eq!(speeds[0].model.as_deref(), Some("m-new"));
+        assert_eq!(speeds[1].model.as_deref(), Some("m-old"));
+        assert_eq!(speeds[0].completed_ms, 4_000);
+        assert_eq!(speeds[0].output_tokens, 200);
+    }
+
+    #[test]
+    fn databases_without_message_tables_fail_closed() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("opencode.db");
+        {
+            let conn = Connection::open(&db).unwrap();
+            conn.execute_batch("CREATE TABLE unrelated (id TEXT);")
+                .unwrap();
+        }
+
+        let errors = [
+            read_rows_for(&db, "opencode-go").unwrap_err().to_string(),
+            read_tokens_for(&db, "opencode-go", Utc::now(), 30)
+                .unwrap_err()
+                .to_string(),
+            read_recent_message_speeds(&db, "opencode-go", 10)
+                .unwrap_err()
+                .to_string(),
+        ];
+        for message in errors {
+            assert!(
+                message.contains("no OpenCode message tables found"),
+                "not diagnostic: {message}"
+            );
+        }
+    }
+
+    #[test]
+    fn opencode_db_env_resolves_without_creating_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path().join("home");
+        let xdg = dir.path().join("xdg");
+        std::fs::create_dir_all(&home).unwrap();
+        std::fs::create_dir_all(&xdg).unwrap();
+
+        // Absolute override is exclusive: the first (only) slot, no disk writes.
+        let absolute = dir.path().join("custom").join("history.db");
+        let candidates = candidate_paths_with(
+            |name| match name {
+                "OPENCODE_DB" => Some(absolute.to_string_lossy().to_string()),
+                _ => None,
+            },
+            Some(home.clone()),
+        );
+        assert_eq!(candidates.len(), 1, "{candidates:?}");
+        assert_eq!(candidates[0].1, absolute);
+        assert_eq!(
+            candidates[0].0,
+            absolute.parent().unwrap().join("auth.json")
+        );
+        assert!(!absolute.exists(), "override must not be created");
+        assert!(
+            !absolute.parent().unwrap().exists(),
+            "no parent dirs either"
+        );
+
+        // Relative override rides on an absolute XDG_DATA_HOME.
+        let candidates = candidate_paths_with(
+            |name| match name {
+                "OPENCODE_DB" => Some("custom.db".to_string()),
+                "XDG_DATA_HOME" => Some(xdg.to_string_lossy().to_string()),
+                _ => None,
+            },
+            Some(home.clone()),
+        );
+        assert_eq!(candidates.len(), 1, "{candidates:?}");
+        assert_eq!(candidates[0].1, xdg.join("opencode").join("custom.db"));
+        assert_eq!(candidates[0].0, xdg.join("opencode").join("auth.json"));
+        assert!(!xdg.join("opencode").exists(), "must not create the base");
+
+        // Without XDG the relative override falls back to ~/.local/share/opencode.
+        let candidates = candidate_paths_with(
+            |name| match name {
+                "OPENCODE_DB" => Some("nested/custom.db".to_string()),
+                _ => None,
+            },
+            Some(home.clone()),
+        );
+        assert_eq!(candidates.len(), 1, "{candidates:?}");
+        let expected = home
+            .join(".local")
+            .join("share")
+            .join("opencode")
+            .join("nested")
+            .join("custom.db");
+        assert_eq!(candidates[0].1, expected);
+        assert!(!home.join(".local").exists(), "must not create the base");
+
+        // `:memory:` is never treated as a database file or an install, and it
+        // suppresses scanning entirely.
+        let candidates = candidate_paths_with(
+            |name| match name {
+                "OPENCODE_DB" => Some(":memory:".to_string()),
+                _ => None,
+            },
+            Some(home.clone()),
+        );
+        assert!(candidates.is_empty(), "{candidates:?}");
+        assert!(
+            candidates
+                .iter()
+                .all(|(_, db)| db.as_path() != Path::new(":memory:")),
+            "{candidates:?}"
+        );
+        assert!(!Path::new(":memory:").exists());
+    }
+
+    #[test]
+    fn opencode_db_override_never_falls_back_to_a_scanned_install() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path().join("home");
+        let base = home.join(".local").join("share").join("opencode");
+        std::fs::create_dir_all(&base).unwrap();
+        // A readable-looking install that the override must not touch.
+        let scanned = base.join("opencode.db");
+        std::fs::write(&scanned, b"scanned install").unwrap();
+
+        let missing = dir.path().join("missing.db");
+        let candidates = candidate_paths_with(
+            |name| match name {
+                "OPENCODE_DB" => Some(missing.to_string_lossy().to_string()),
+                _ => None,
+            },
+            Some(home.clone()),
+        );
+
+        assert_eq!(candidates.len(), 1, "{candidates:?}");
+        assert_eq!(candidates[0].1, missing);
+        assert_eq!(candidates[0].0, dir.path().join("auth.json"));
+        assert!(
+            candidates.iter().all(|(_, db)| db != &scanned),
+            "override must not fall back to another account library: {candidates:?}"
+        );
+        assert!(!missing.exists(), "override must not be created");
+        // And the resulting read fails instead of reading the scanned database.
+        assert!(fetch_from_paths(&candidates[0].0, &candidates[0].1, Utc::now()).is_err());
+
+        // A relative override resolves inside the opencode root and still never
+        // lands on the scanned `opencode.db`.
+        let candidates = candidate_paths_with(
+            |name| match name {
+                "OPENCODE_DB" => Some("missing.db".to_string()),
+                _ => None,
+            },
+            Some(home.clone()),
+        );
+        assert_eq!(candidates.len(), 1, "{candidates:?}");
+        assert_eq!(candidates[0].1, base.join("missing.db"));
+        assert!(
+            candidates.iter().all(|(_, db)| db != &scanned),
+            "{candidates:?}"
+        );
+    }
+
+    #[test]
+    fn opencode_db_memory_disables_local_history() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path().join("home");
+        let base = home.join(".local").join("share").join("opencode");
+        std::fs::create_dir_all(&base).unwrap();
+        std::fs::write(base.join("opencode.db"), b"scanned install").unwrap();
+
+        let candidates = candidate_paths_with(
+            |name| match name {
+                "OPENCODE_DB" => Some(":memory:".to_string()),
+                _ => None,
+            },
+            Some(home),
+        );
+        assert!(
+            candidates.is_empty(),
+            "`:memory:` must not scan installs: {candidates:?}"
+        );
+    }
+
+    #[test]
+    fn relative_xdg_data_home_is_ignored() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path().join("home");
+        std::fs::create_dir_all(&home).unwrap();
+
+        let candidates = candidate_paths_with(
+            |name| match name {
+                "XDG_DATA_HOME" => Some("relative-xdg".to_string()),
+                _ => None,
+            },
+            Some(home.clone()),
+        );
+
+        assert!(
+            candidates.iter().all(|(_, db)| db.is_absolute()),
+            "relative XDG must not produce relative candidates: {candidates:?}"
+        );
+        assert!(
+            candidates
+                .iter()
+                .all(|(_, db)| !db.starts_with("relative-xdg")),
+            "{candidates:?}"
+        );
+        assert_eq!(candidates.len(), 1, "{candidates:?}");
+        assert_eq!(
+            candidates[0].1,
+            home.join(".local")
+                .join("share")
+                .join("opencode")
+                .join("opencode.db")
+        );
+        assert_eq!(
+            candidates[0].0,
+            home.join(".local")
+                .join("share")
+                .join("opencode")
+                .join("auth.json")
+        );
+    }
+
+    #[test]
+    fn idle_wal_v2_database_read_creates_no_sidecars() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("opencode.db");
+        let at = Utc::now().timestamp_millis() - 60_000;
+        {
+            let conn = Connection::open(&db).unwrap();
+            conn.execute_batch("PRAGMA journal_mode=WAL;").unwrap();
+            create_v2_tables(&conn);
+            insert_v2(
+                &conn,
+                V2Row {
+                    id: "go-1",
+                    model: Some("m"),
+                    cost: Some(3.0),
+                    tokens: Some((10, 20, 0, 0)),
+                    created: Some(at),
+                    completed: Some(at + 1_000),
+                    ..V2Row::default()
+                },
+            );
+            let _checkpointed = conn.query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |_| Ok(()));
+            drop(conn);
+        }
+
+        let wal = crate::core::sqlite_sidecar_path(&db, "-wal");
+        let shm = crate::core::sqlite_sidecar_path(&db, "-shm");
+        for side in [&wal, &shm] {
+            if side.exists() {
+                let parked = side.with_extension("parked");
+                let _parked = std::fs::rename(side, parked);
+            }
+        }
+        assert!(!wal.exists() && !shm.exists(), "precondition: no sidecars");
+
+        let rows = read_rows_for(&db, "opencode-go").expect("read v2 idle WAL db");
+        assert_eq!(rows.len(), 1, "{rows:?}");
+        let speeds = read_recent_message_speeds(&db, "opencode-go", 10).expect("read speeds");
+        assert_eq!(speeds.len(), 1, "{speeds:?}");
+
+        assert!(
+            !wal.exists() && !shm.exists(),
+            "reader must not create -wal/-shm sidecars"
+        );
     }
 }

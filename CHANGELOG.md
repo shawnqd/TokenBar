@@ -2,6 +2,29 @@
 
 ## [Unreleased]
 
+## [Windows] 0.57.7 - 2026-11-04
+
+### Fixed
+
+- The white pace capsule on tray quota bars now sits at the actual fill edge instead of the expected-pace boundary; reserve and deficit segments still show the pace difference.
+
+## [Windows] 0.57.6 - 2026-11-03
+
+### Added
+
+- OpenCode Go reads the active OpenCode CLI login from the modern SQLite credential store, including OAuth expiry and organization-scoped requests.
+- OpenCode and OpenCode Go read the migrated Console usage and balance APIs, with the legacy server page chain kept as a fallback.
+- OpenCode local history, token totals and output speed read the v2 session_message schema alongside the legacy message/part tables.
+- Kiro pins the /usage probe to the v2 agent engine and only retries without it after an explicit CLI rejection.
+- Codex cost history keeps the default ~/.codex/sessions coverage when CODEX_HOME points elsewhere.
+
+### Fixed
+
+- Missing Command Code monthly credits or allowances are reported as unknown instead of a false 100% or 0% quota.
+- Legacy OpenCode and OpenCode Go 403 responses are reported as API or WAF diagnostics rather than an expired login.
+- OpenCode workspace settings accept console URLs and org_ ids and store the bare id; invalid pins fail explicitly instead of silently switching workspace.
+- v1 and v2 local history rows are deduplicated per turn so cost, tokens and speed never mix schemas.
+
 ## [Windows] 0.57.5 — 2026-10-01
 
 ### Added

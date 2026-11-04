@@ -181,30 +181,26 @@ fn result_from_payloads(
     credits_payload: &Value,
     subscription_payload: Option<&Value>,
 ) -> Result<ProviderFetchResult, ProviderError> {
-    let credits = match credits_payload.get("credits") {
-        Some(c) => c,
-        None => {
-            tracing::warn!("Command Code credits object missing; returning empty result");
-            let empty = RateWindow::new(0.0);
-            return Ok(ProviderFetchResult::new(
-                UsageSnapshot::new(empty).with_secondary(RateWindow::new(0.0)),
-                "web",
-            ));
-        }
-    };
-    let monthly = number(credits.get("monthlyCredits")).unwrap_or_else(|| {
-        tracing::warn!("Command Code monthlyCredits missing; using 0.0");
-        0.0
-    });
+    let credits = credits_payload
+        .get("credits")
+        .ok_or_else(|| ProviderError::Parse("Command Code response missing credits".to_string()))?;
+    // A missing monthlyCredits value is unknown, not zero: treating it as 0 used to
+    // fabricate a 100% used quota whenever the plan allowance was known.
+    let monthly = number(credits.get("monthlyCredits"));
     let purchased = number(credits.get("purchasedCredits")).unwrap_or(0.0);
-    let premium = number(credits.get("premiumMonthlyCredits")).unwrap_or(0.0);
-    let open_source = number(credits.get("opensourceMonthlyCredits")).unwrap_or(0.0);
-    let total_monthly = premium + open_source;
-    let used_percent = if total_monthly > 0.0 {
-        ((total_monthly - monthly).max(0.0) / total_monthly * 100.0).clamp(0.0, 100.0)
-    } else {
-        0.0
+    // Either allowance field may be absent on plans that do not sell that credit
+    // kind; an absent field is unknown, not a zero-sized allowance.
+    let premium = number(credits.get("premiumMonthlyCredits"));
+    let open_source = number(credits.get("opensourceMonthlyCredits"));
+    let total_monthly = match (premium, open_source) {
+        (Some(premium), Some(open_source)) => Some(premium + open_source),
+        (Some(premium), None) => Some(premium),
+        (None, Some(open_source)) => Some(open_source),
+        (None, None) => None,
     };
+    // A zero or non-finite total cannot produce an honest percentage or cost,
+    // so 0/0 or contradictory allowance data stays "not reported".
+    let allowance = total_monthly.filter(|total| total.is_finite() && *total > 0.0);
     let period_end = subscription_payload
         .and_then(|root| root.get("data"))
         .and_then(|data| data.get("currentPeriodEnd"))
@@ -216,15 +212,37 @@ fn result_from_payloads(
         .and_then(|value| value.as_str())
         .filter(|value| !value.trim().is_empty());
 
-    let mut primary = RateWindow::with_details(
-        used_percent,
-        None,
-        period_end,
-        Some(format!("{monthly:.2} monthly credits remaining")),
-    );
-    if !primary.used_percent.is_finite() {
-        primary.used_percent = 0.0;
-    }
+    let primary = match (monthly, allowance) {
+        (Some(monthly), Some(total)) => {
+            let used_percent = ((total - monthly).max(0.0) / total * 100.0).clamp(0.0, 100.0);
+            let mut primary = RateWindow::with_details(
+                used_percent,
+                None,
+                period_end,
+                Some(format!("{monthly:.2} monthly credits remaining")),
+            );
+            if !primary.used_percent.is_finite() {
+                primary.used_percent = 0.0;
+            }
+            primary
+        }
+        (Some(_), None) => {
+            tracing::warn!(
+                "Command Code monthly allowance missing; reporting the monthly quota as unknown"
+            );
+            let mut primary = RateWindow::informational("Monthly credit allowance not reported");
+            primary.resets_at = period_end;
+            primary
+        }
+        (None, _) => {
+            tracing::warn!(
+                "Command Code monthlyCredits missing; reporting monthly credits as unknown"
+            );
+            let mut primary = RateWindow::informational("Monthly credit limit not reported");
+            primary.resets_at = period_end;
+            primary
+        }
+    };
     let mut secondary = RateWindow::new(0.0);
     secondary.reset_description = Some(format!("{purchased:.2} purchased credits"));
 
@@ -232,9 +250,15 @@ fn result_from_payloads(
     if let Some(plan) = plan {
         snapshot = snapshot.with_login_method(plan.to_string());
     }
-    let cost = CostSnapshot::new((total_monthly - monthly).max(0.0), "USD", "monthly credits")
-        .with_limit(total_monthly.max(0.0));
-    Ok(ProviderFetchResult::new(snapshot, "web").with_cost(cost))
+    let result = ProviderFetchResult::new(snapshot, "web");
+    let (Some(monthly), Some(total)) = (monthly, allowance) else {
+        // Without a monthly balance and a positive allowance no honest
+        // used/limit pair can be derived, so no cost is reported either.
+        return Ok(result);
+    };
+    let cost =
+        CostSnapshot::new((total - monthly).max(0.0), "USD", "monthly credits").with_limit(total);
+    Ok(result.with_cost(cost))
 }
 
 fn number(value: Option<&Value>) -> Option<f64> {
@@ -354,27 +378,118 @@ mod tests {
         )
         .unwrap();
         assert_eq!(result.usage.primary.used_percent, 75.0);
-    }
-
-    #[test]
-    fn command_code_result_missing_credits_object_degraded() {
-        let result = result_from_payloads(&json!({}), None);
-        assert!(
-            result.is_ok(),
-            "missing credits object should degrade, not error"
+        assert!(!result.usage.primary.is_informational);
+        assert_eq!(
+            result.cost.as_ref().map(|cost| cost.limit),
+            Some(Some(100.0))
         );
-        let fetch_result = result.unwrap();
-        assert_eq!(fetch_result.usage.primary.used_percent, 0.0);
     }
 
     #[test]
-    fn command_code_result_missing_monthly_credits_degraded() {
+    fn command_code_result_zero_monthly_credits_is_a_real_100_percent() {
         let result = result_from_payloads(
-            &json!({"credits":{"purchasedCredits":2,"premiumMonthlyCredits":100}}),
+            &json!({"credits":{"monthlyCredits":0,"purchasedCredits":2,"premiumMonthlyCredits":100}}),
             None,
         )
         .unwrap();
-        // monthlyCredits defaults to 0.0, so used_percent = (100-0)/100*100 = 100%
+        // Zero remaining credits are reported by the API, so 100% used is real
+        // data, unlike a missing monthlyCredits value.
+        assert!(!result.usage.primary.is_informational);
         assert_eq!(result.usage.primary.used_percent, 100.0);
+    }
+
+    #[test]
+    fn command_code_result_missing_allowances_is_informational() {
+        // monthlyCredits alone is not enough: without any allowance field the
+        // limit is unknown, so no percentage and no cost may be invented.
+        let result = result_from_payloads(
+            &json!({"credits":{"monthlyCredits":25,"purchasedCredits":2}}),
+            Some(&json!({
+                "data":{"planId":"pro","currentPeriodEnd":"2026-12-01T00:00:00Z"}
+            })),
+        )
+        .unwrap();
+        let primary = &result.usage.primary;
+        assert!(primary.is_informational);
+        assert_eq!(
+            primary.reset_description.as_deref(),
+            Some("Monthly credit allowance not reported")
+        );
+        assert!(primary.resets_at.is_some());
+        assert!(
+            result.cost.is_none(),
+            "unknown allowance must not carry cost"
+        );
+    }
+
+    #[test]
+    fn command_code_result_zero_allowance_is_informational() {
+        for credits in [
+            json!({"monthlyCredits":25,"premiumMonthlyCredits":0,"opensourceMonthlyCredits":0}),
+            json!({"monthlyCredits":0,"premiumMonthlyCredits":0}),
+        ] {
+            let result = result_from_payloads(&json!({"credits":credits}), None).unwrap();
+            let primary = &result.usage.primary;
+            assert!(primary.is_informational, "{credits}: 0/0 is not 0% used");
+            assert_eq!(
+                primary.reset_description.as_deref(),
+                Some("Monthly credit allowance not reported")
+            );
+            assert!(
+                result.cost.is_none(),
+                "{credits}: no allowance means no cost"
+            );
+        }
+    }
+
+    #[test]
+    fn command_code_result_accepts_a_single_allowance_field() {
+        // Only one credit kind is sold on some plans; that field alone is the
+        // allowance, not half of a pair.
+        let result = result_from_payloads(
+            &json!({"credits":{"monthlyCredits":25,"opensourceMonthlyCredits":100}}),
+            None,
+        )
+        .unwrap();
+        assert!(!result.usage.primary.is_informational);
+        assert_eq!(result.usage.primary.used_percent, 75.0);
+        assert_eq!(
+            result.cost.as_ref().map(|cost| cost.limit),
+            Some(Some(100.0))
+        );
+    }
+
+    #[test]
+    fn command_code_result_missing_credits_object_is_parse_error() {
+        let error = result_from_payloads(&json!({}), None).unwrap_err();
+        match error {
+            ProviderError::Parse(message) => assert!(
+                message.contains("missing credits"),
+                "unexpected parse message: {message}"
+            ),
+            other => panic!("expected parse error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn command_code_result_missing_monthly_credits_is_informational_not_100_percent() {
+        let result = result_from_payloads(
+            &json!({"credits":{"purchasedCredits":2,"premiumMonthlyCredits":100}}),
+            Some(&json!({
+                "data":{"planId":"pro","currentPeriodEnd":"2026-12-01T00:00:00Z"}
+            })),
+        )
+        .unwrap();
+        let primary = &result.usage.primary;
+        // Missing monthlyCredits means "unknown", never a 0%/100% quota.
+        assert!(primary.is_informational);
+        assert_ne!(primary.used_percent, 100.0);
+        assert_eq!(
+            primary.reset_description.as_deref(),
+            Some("Monthly credit limit not reported")
+        );
+        assert!(primary.resets_at.is_some());
+        assert_eq!(result.usage.login_method.as_deref(), Some("pro"));
+        assert!(result.cost.is_none(), "unknown credits must not carry cost");
     }
 }
